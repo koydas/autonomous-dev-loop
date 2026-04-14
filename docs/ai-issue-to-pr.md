@@ -29,9 +29,23 @@ If generation fails or no patch is produced, the workflow exits before PR creati
 Configure these in **Settings → Secrets and variables → Actions**:
 
 - **Secret**: `GROQ_API_KEY` (required) — API key for Groq.
+- **Secret**: `AI_PR_TOKEN` (recommended) — GitHub token used for PR creation/issue label cleanup.
+  - Use a fine-grained PAT or GitHub App token with at least **Contents: Read/Write**, **Pull requests: Read/Write**, and **Issues: Read/Write** on this repository.
+  - If `AI_PR_TOKEN` is not set, the workflow falls back to `GITHUB_TOKEN`.
 - **Variables** (optional):
   - `GROQ_MODEL` — model name (defaults to `llama-3.1-8b-instant` if unset).
   - `GROQ_API_URL` — endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
+
+## GitHub Actions PR Permission Requirement
+
+If the run fails with:
+
+`GitHub Actions is not permitted to create or approve pull requests.`
+
+you have two supported options:
+
+1. Enable repository setting **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests**.
+2. Set `AI_PR_TOKEN` and keep the setting disabled (recommended for stricter org policies).
 
 ## Required Label
 

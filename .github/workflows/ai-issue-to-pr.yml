@@ -46,7 +46,7 @@ jobs:
       - name: Create pull request
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
           branch: ai/issue-${{ github.event.issue.number }}
           base: ${{ github.event.repository.default_branch }}
           commit-message: "chore(ai): generate draft for issue #${{ github.event.issue.number }}"
@@ -65,7 +65,7 @@ jobs:
         if: always()
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const labels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
               owner: context.repo.owner,
