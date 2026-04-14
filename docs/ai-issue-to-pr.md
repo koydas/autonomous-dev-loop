@@ -16,7 +16,7 @@ When the `ai-task` label is added to an issue, the workflow:
 1. Runs only when the issue includes the `ai-task` label.
 2. Builds a deterministic prompt using issue number, title, and body.
 3. Calls the Groq API using repository secrets.
-4. Writes a minimal generated file at `ai-generated/issue-<number>.md`.
+4. Writes exactly one generated file at the AI-selected relative path (for example `helloworld.md`).
 5. Creates a branch named `ai/issue-<number>`.
 6. Uses `peter-evans/create-pull-request` to commit generated content on `ai/issue-<number>`.
 7. Opens a PR to the repository default branch with `Closes #<issue_number>`.
@@ -70,14 +70,14 @@ Only issues where this label is actively applied trigger the automation job.
 7. Confirm PR details:
    - title references the issue number/title
    - body includes generated summary and `Closes #<number>`
-   - changed file limited to `ai-generated/issue-<number>.md`
+   - changed files limited to a single AI-generated target file
 8. Confirm the issue label `ai-task` has been removed after the run completes.
 
 ## Limitations (MVP)
 
 - Triggers on issue label application events.
 - Only runs when the applied label name is exactly `ai-task`.
-- Applies a single small generated markdown file (safe scope).
+- Applies exactly one small generated file per run (safe scope).
 - Does not perform auto-merge.
 - Does not attempt multi-file or complex refactors.
 
@@ -86,6 +86,6 @@ Only issues where this label is actively applied trigger the automation job.
 - **Risk:** AI output may be low quality or off-target.
   - **Mitigation:** deterministic prompt template, temperature `0`, and small-scope generated file.
 - **Risk:** accidental broad modifications.
-  - **Mitigation:** generated patch is constrained to one predictable path (`ai-generated/issue-<number>.md`).
+  - **Mitigation:** generated patch is constrained to one validated relative path and one file write.
 - **Risk:** workflow secrets misconfiguration.
   - **Mitigation:** explicit secret checks and fail-fast logging before commit/PR steps.

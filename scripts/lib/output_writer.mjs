@@ -1,29 +1,36 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 export function validateAiOutput(aiOutput) {
   const summary = String(aiOutput.summary || '').trim();
-  const contentMarkdown = String(aiOutput.content_markdown || '').trim();
+  const targetPath = String(aiOutput.target_path || '').trim();
+  const fileContent = String(aiOutput.file_content || '');
 
   if (!summary) {
     throw new Error('AI response missing non-empty summary');
   }
-  if (!contentMarkdown) {
-    throw new Error('AI response missing non-empty content_markdown');
+  if (!targetPath) {
+    throw new Error('AI response missing non-empty target_path');
   }
-  if (contentMarkdown.length > 8000) {
-    throw new Error('AI response content_markdown too large (>8000 chars)');
+  if (!fileContent.trim()) {
+    throw new Error('AI response missing non-empty file_content');
+  }
+  if (targetPath.startsWith('/') || targetPath.includes('..')) {
+    throw new Error('AI response target_path must be a safe relative path');
+  }
+  if (fileContent.length > 16000) {
+    throw new Error('AI response file_content too large (>16000 chars)');
   }
 
-  return { summary, contentMarkdown };
+  return { summary, targetPath, fileContent };
 }
 
-export async function writeGeneratedFiles({ issueNumber, issueTitle, summary, contentMarkdown }) {
-  const outputPath = `ai-generated/issue-${issueNumber}.md`;
-  const fileContent = `# AI Draft for Issue #${issueNumber}\n\n**Title:** ${issueTitle}\n\n## Generated Proposal\n\n${contentMarkdown}\n`;
-
-  await fs.mkdir('ai-generated', { recursive: true });
+export async function writeGeneratedFiles({ targetPath, fileContent }) {
+  const outputPath = path.normalize(targetPath).replaceAll('\\', '/');
+  const parentDir = path.dirname(outputPath);
+  if (parentDir && parentDir !== '.') {
+    await fs.mkdir(parentDir, { recursive: true });
+  }
   await fs.writeFile(outputPath, fileContent, 'utf8');
-  await fs.writeFile('.ai-summary.txt', `${summary}\n`, 'utf8');
-
   return outputPath;
 }
