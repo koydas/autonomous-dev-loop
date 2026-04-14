@@ -24,6 +24,7 @@ jobs:
           node-version: '20'
 
       - name: Generate AI change
+        id: generate
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -32,16 +33,6 @@ jobs:
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
         run: node scripts/generate_issue_change.mjs
-
-      - name: Read generated summary
-        id: summary
-        shell: bash
-        run: |
-          {
-            echo "value<<EOF"
-            cat .ai-summary.txt
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@v6
@@ -54,12 +45,11 @@ jobs:
           body: |
             ## AI Generated Change
 
-            ${{ steps.summary.outputs.value }}
+            ${{ steps.generate.outputs.summary }}
 
             Closes #${{ github.event.issue.number }}
           add-paths: |
-            ai-generated/issue-${{ github.event.issue.number }}.md
-            .ai-summary.txt
+            ${{ steps.generate.outputs.generated_path }}
 
       - name: Remove ai-task label
         if: always()

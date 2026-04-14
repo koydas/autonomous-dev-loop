@@ -27,7 +27,7 @@ export function loadConfigFromEnv() {
 
 export function buildDeterministicPrompt({ issueNumber, issueTitle, issueBody }) {
   return [
-    'Create a minimal, safe markdown draft for a pull request based on a GitHub issue.',
+    'Create exactly one repository file change from a GitHub issue.',
     '',
     'Deterministic issue data:',
     `- issue_number: ${issueNumber}`,
@@ -36,13 +36,15 @@ export function buildDeterministicPrompt({ issueNumber, issueTitle, issueBody })
     '',
     'Requirements:',
     '1) Keep scope small and non-destructive.',
-    '2) Produce markdown content only suitable for a single file update.',
-    '3) Be concise and actionable.',
+    '2) Propose exactly one file creation or update (never multiple files).',
+    '3) The path must be relative (no ../ and no absolute paths).',
+    '4) Return only the final file content, no surrounding explanations.',
     '',
     'Output JSON only:',
     '{',
     '  "summary": "One sentence summary of the generated change",',
-    '  "content_markdown": "Markdown body for the generated file"',
+    '  "target_path": "relative/path/to/file.ext",',
+    '  "file_content": "Exact content to write in the file"',
     '}',
   ].join('\n');
 }

@@ -3,6 +3,7 @@
 import { buildDeterministicPrompt, loadConfigFromEnv } from './lib/config.mjs';
 import { callGroq } from './lib/groq_client.mjs';
 import { validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
+import fs from 'node:fs/promises';
 
 async function main() {
   const config = loadConfigFromEnv();
@@ -16,16 +17,18 @@ async function main() {
     apiUrl: config.apiUrl,
   });
 
-  const { summary, contentMarkdown } = validateAiOutput(aiOutput);
+  const { summary, targetPath, fileContent } = validateAiOutput(aiOutput);
   const outputPath = await writeGeneratedFiles({
-    issueNumber: config.issueNumber,
-    issueTitle: config.issueTitle,
-    summary,
-    contentMarkdown,
+    targetPath,
+    fileContent,
   });
 
+  if (process.env.GITHUB_OUTPUT) {
+    await fs.appendFile(process.env.GITHUB_OUTPUT, `summary<<EOF\n${summary}\nEOF\ngenerated_path=${outputPath}\n`, 'utf8');
+  }
+
   console.log(`[INFO] Wrote generated change: ${outputPath}`);
-  console.log('[INFO] Wrote PR summary helper: .ai-summary.txt');
+  console.log('[INFO] Exported workflow outputs: summary, generated_path');
 }
 
 main().catch((error) => {

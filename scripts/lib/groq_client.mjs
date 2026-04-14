@@ -7,7 +7,7 @@ export async function callGroq({ prompt, apiKey, model, apiUrl }) {
       {
         role: 'system',
         content:
-          'You generate small, safe repository changes. Return strict JSON with keys summary and content_markdown.',
+          'You generate one small, safe repository file change. Return strict JSON with keys summary, target_path, and file_content.',
       },
       { role: 'user', content: prompt },
     ],
