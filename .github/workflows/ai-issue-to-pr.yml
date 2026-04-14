@@ -1,0 +1,61 @@
+name: AI Issue to PR
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-pr:
+    if: contains(github.event.issue.labels.*.name, 'ai-task')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate AI change
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+        run: node scripts/generate_issue_change.mjs
+
+      - name: Read generated summary
+        id: summary
+        shell: bash
+        run: |
+          {
+            echo "value<<EOF"
+            cat .ai-summary.txt
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ai/issue-${{ github.event.issue.number }}
+          base: ${{ github.event.repository.default_branch }}
+          commit-message: chore(ai): generate draft for issue #${{ github.event.issue.number }}
+          title: "[AI] Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
+          body: |
+            ## AI Generated Change
+
+            ${{ steps.summary.outputs.value }}
+
+            Closes #${{ github.event.issue.number }}
+          add-paths: |
+            ai-generated/issue-${{ github.event.issue.number }}.md
+            .ai-summary.txt
