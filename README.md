@@ -12,7 +12,7 @@ The MVP issue-to-PR automation is now implemented (Groq-backed).
 - Setup and testing guide: `docs/ai-issue-to-pr.md`
 - MVP definition: `docs/mvp.md`
 
-See `docs/ai-issue-to-pr.md` for required Groq secret + optional variables, label configuration, end-to-end test steps, and risk/mitigation notes.
+See `docs/ai-issue-to-pr.md` for required Groq secret, recommended PR token (`AI_PR_TOKEN`), optional variables, label configuration, end-to-end test steps, and risk/mitigation notes.
 
 
 ## Architecture Decisions
