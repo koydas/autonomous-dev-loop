@@ -46,7 +46,7 @@ export async function callGroq({ prompt, apiKey, model, apiUrl }) {
     throw new Error('AI response was not valid JSON');
   }
 
-  if (!parsed || typeof parsed !== 'object') {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('AI response JSON must be an object');
   }
 
