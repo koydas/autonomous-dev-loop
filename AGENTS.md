@@ -2,6 +2,12 @@
 
 This file provides working conventions for AI agents contributing to this repository.
 
+Two distinct agent types operate here:
+- **Interactive agents** (e.g. Claude Code): assist developers directly on the codebase.
+- **Pipeline agent**: the automated `ai-issue-to-pr` workflow that generates file changes from issues.
+
+Rules marked _(pipeline only)_ apply exclusively to the automated pipeline. All other rules apply to both.
+
 ## Scope
 
 These instructions apply to the entire repository.
@@ -20,7 +26,14 @@ These instructions apply to the entire repository.
 - Keep generated output constrained to predictable locations.
 - Use repository secrets/variables for all external credentials/configuration.
 
-## Workflow Rules
+## Validation
+
+Before committing any change to `scripts/`:
+
+- Run `npm test` and ensure all 31 tests pass.
+- Never commit code that breaks an existing test without updating or replacing the test intentionally.
+
+## Workflow Rules _(pipeline only)_
 
 - Issue automation is opt-in by label (`ai-task`).
 - Branch naming must follow `ai/issue-<number>`.
