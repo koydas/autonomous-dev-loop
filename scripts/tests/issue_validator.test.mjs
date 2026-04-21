@@ -1,0 +1,313 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  VALIDATION_SYSTEM_PROMPT,
+  buildValidationUserPrompt,
+  parseClaudeResponse,
+  formatGitHubComment,
+  validateIssue,
+} from '../lib/issue_validator.mjs';
+
+// ---------------------------------------------------------------------------
+// VALIDATION_SYSTEM_PROMPT
+// ---------------------------------------------------------------------------
+
+describe('VALIDATION_SYSTEM_PROMPT', () => {
+  test('is a non-empty string', () => {
+    assert.equal(typeof VALIDATION_SYSTEM_PROMPT, 'string');
+    assert.ok(VALIDATION_SYSTEM_PROMPT.length > 0);
+  });
+
+  test('exceeds 4000 characters (proxy for >= 1024 tokens for caching)', () => {
+    assert.ok(
+      VALIDATION_SYSTEM_PROMPT.length > 4000,
+      `System prompt is ${VALIDATION_SYSTEM_PROMPT.length} chars — must exceed 4000 for caching`,
+    );
+  });
+
+  test('contains key validation criteria keywords', () => {
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('acceptance criteria'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('testable') || VALIDATION_SYSTEM_PROMPT.includes('Testable'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('score'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('blockers'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('suggested_ac'));
+  });
+
+  test('specifies the JSON output format', () => {
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('"valid"'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('"score"'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('"warnings"'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildValidationUserPrompt
+// ---------------------------------------------------------------------------
+
+describe('buildValidationUserPrompt', () => {
+  test('includes issue title', () => {
+    const prompt = buildValidationUserPrompt('Add login endpoint', 'Some body');
+    assert.ok(prompt.includes('Add login endpoint'));
+  });
+
+  test('includes issue body', () => {
+    const prompt = buildValidationUserPrompt('Title', 'Detailed body here');
+    assert.ok(prompt.includes('Detailed body here'));
+  });
+
+  test('uses fallback text when body is empty', () => {
+    const prompt = buildValidationUserPrompt('Title', '');
+    assert.ok(prompt.includes('(no body provided)'));
+  });
+
+  test('uses fallback text when body is null/undefined', () => {
+    const prompt = buildValidationUserPrompt('Title', null);
+    assert.ok(prompt.includes('(no body provided)'));
+  });
+
+  test('returns a non-empty string', () => {
+    const prompt = buildValidationUserPrompt('T', 'B');
+    assert.equal(typeof prompt, 'string');
+    assert.ok(prompt.length > 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseClaudeResponse
+// ---------------------------------------------------------------------------
+
+function makeRawResponse(overrides = {}) {
+  return JSON.stringify({
+    valid: true,
+    score: 80,
+    blockers: [],
+    warnings: [],
+    suggested_ac: ['Given X when Y then Z'],
+    ...overrides,
+  });
+}
+
+describe('parseClaudeResponse', () => {
+  test('returns correct structure for a passing issue', () => {
+    const result = parseClaudeResponse(makeRawResponse());
+    assert.equal(result.valid, true);
+    assert.equal(result.score, 80);
+    assert.deepEqual(result.blockers, []);
+    assert.deepEqual(result.warnings, []);
+    assert.equal(result.suggested_ac.length, 1);
+  });
+
+  test('forces valid=false when score < 70 even if Claude says valid=true', () => {
+    const raw = makeRawResponse({ valid: true, score: 65, blockers: [] });
+    const result = parseClaudeResponse(raw);
+    assert.equal(result.valid, false);
+  });
+
+  test('forces valid=false when blockers exist even if score >= 70', () => {
+    const raw = makeRawResponse({ valid: true, score: 85, blockers: ['Missing AC'] });
+    const result = parseClaudeResponse(raw);
+    assert.equal(result.valid, false);
+  });
+
+  test('valid=true only when score >= 70 AND blockers empty', () => {
+    const raw = makeRawResponse({ valid: true, score: 70, blockers: [] });
+    const result = parseClaudeResponse(raw);
+    assert.equal(result.valid, true);
+  });
+
+  test('clamps score to 0–100', () => {
+    const raw = makeRawResponse({ score: 150 });
+    assert.equal(parseClaudeResponse(raw).score, 100);
+
+    const raw2 = makeRawResponse({ score: -10 });
+    assert.equal(parseClaudeResponse(raw2).score, 0);
+  });
+
+  test('rounds score to integer', () => {
+    const raw = makeRawResponse({ score: 74.7 });
+    assert.equal(parseClaudeResponse(raw).score, 75);
+  });
+
+  test('coerces array items to strings', () => {
+    const raw = makeRawResponse({ blockers: [42, true], suggested_ac: [{ x: 1 }] });
+    const result = parseClaudeResponse(raw);
+    assert.equal(typeof result.blockers[0], 'string');
+    assert.equal(typeof result.suggested_ac[0], 'string');
+  });
+
+  test('extracts JSON when prefixed with prose text', () => {
+    const raw = 'Here is my evaluation:\n' + makeRawResponse({ score: 75 });
+    const result = parseClaudeResponse(raw);
+    assert.equal(result.score, 75);
+  });
+
+  test('extracts JSON when wrapped in markdown fences', () => {
+    const raw = '```json\n' + makeRawResponse({ score: 82 }) + '\n```';
+    const result = parseClaudeResponse(raw);
+    assert.equal(result.score, 82);
+  });
+
+  test('throws when no JSON object is present', () => {
+    assert.throws(() => parseClaudeResponse('No JSON here'), /No JSON object found/);
+  });
+
+  test('throws when JSON is malformed', () => {
+    assert.throws(() => parseClaudeResponse('{bad: json, stuff}'), /invalid JSON/);
+  });
+
+  test('throws when "valid" is missing', () => {
+    assert.throws(
+      () => parseClaudeResponse('{"score":80,"blockers":[],"warnings":[],"suggested_ac":[]}'),
+      /"valid"/,
+    );
+  });
+
+  test('throws when "score" is missing', () => {
+    assert.throws(
+      () => parseClaudeResponse('{"valid":true,"blockers":[],"warnings":[],"suggested_ac":[]}'),
+      /"score"/,
+    );
+  });
+
+  test('throws when "blockers" is not an array', () => {
+    assert.throws(
+      () => parseClaudeResponse('{"valid":true,"score":80,"blockers":"none","warnings":[],"suggested_ac":[]}'),
+      /"blockers"/,
+    );
+  });
+
+  test('throws when "suggested_ac" is missing', () => {
+    assert.throws(
+      () => parseClaudeResponse('{"valid":true,"score":80,"blockers":[],"warnings":[]}'),
+      /"suggested_ac"/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatGitHubComment
+// ---------------------------------------------------------------------------
+
+describe('formatGitHubComment', () => {
+  const validResult = {
+    valid: true,
+    score: 85,
+    blockers: [],
+    warnings: [],
+    suggested_ac: ['Given a valid user, when POST /login, then 200 with JWT'],
+  };
+
+  const invalidResult = {
+    valid: false,
+    score: 45,
+    blockers: ['No acceptance criteria found'],
+    warnings: ['Missing technical context'],
+    suggested_ac: ['Given X when Y then Z', 'Given A when B then C'],
+  };
+
+  test('includes the score', () => {
+    const comment = formatGitHubComment(validResult, 'Test Issue');
+    assert.ok(comment.includes('85'));
+  });
+
+  test('includes VALID status for passing issues', () => {
+    const comment = formatGitHubComment(validResult, 'Test Issue');
+    assert.ok(comment.toLowerCase().includes('valid'));
+  });
+
+  test('includes INVALID status for failing issues', () => {
+    const comment = formatGitHubComment(invalidResult, 'Test Issue');
+    assert.ok(comment.toLowerCase().includes('invalid'));
+  });
+
+  test('includes blockers section when blockers exist', () => {
+    const comment = formatGitHubComment(invalidResult, 'Test Issue');
+    assert.ok(comment.includes('No acceptance criteria found'));
+  });
+
+  test('does not include blockers section when blockers array is empty', () => {
+    const comment = formatGitHubComment(validResult, 'Test Issue');
+    assert.ok(!comment.includes('🚫 Blockers'));
+  });
+
+  test('includes warnings when present', () => {
+    const comment = formatGitHubComment(invalidResult, 'Test Issue');
+    assert.ok(comment.includes('Missing technical context'));
+  });
+
+  test('includes all suggested_ac items in a copy-pasteable block', () => {
+    const comment = formatGitHubComment(invalidResult, 'Test Issue');
+    assert.ok(comment.includes('Given X when Y then Z'));
+    assert.ok(comment.includes('Given A when B then C'));
+    assert.ok(comment.includes('## Acceptance Criteria'));
+  });
+
+  test('suggested_ac items are formatted as checkboxes', () => {
+    const comment = formatGitHubComment(invalidResult, 'Test Issue');
+    assert.ok(comment.includes('- [ ]'));
+  });
+
+  test('includes next-step instruction for invalid issues', () => {
+    const comment = formatGitHubComment(invalidResult, 'Test Issue');
+    assert.ok(comment.toLowerCase().includes('next step'));
+  });
+
+  test('does not include next-step instruction for valid issues', () => {
+    const comment = formatGitHubComment(validResult, 'Test Issue');
+    assert.ok(!comment.toLowerCase().includes('next step'));
+  });
+
+  test('returns a non-empty string', () => {
+    const comment = formatGitHubComment(validResult, 'Test Issue');
+    assert.equal(typeof comment, 'string');
+    assert.ok(comment.length > 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateIssue (integration — callClaude is mocked)
+// ---------------------------------------------------------------------------
+
+describe('validateIssue', () => {
+  test('calls callClaude with a userPrompt', async () => {
+    let capturedArgs = null;
+    const mockCallClaude = async (args) => {
+      capturedArgs = args;
+      return makeRawResponse({ score: 80 });
+    };
+
+    await validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude });
+
+    assert.ok(capturedArgs !== null);
+    assert.equal(typeof capturedArgs.userPrompt, 'string');
+    assert.ok(capturedArgs.userPrompt.includes('T'));
+    assert.ok(capturedArgs.userPrompt.includes('B'));
+  });
+
+  test('returns parsed result from callClaude response', async () => {
+    const mockCallClaude = async () =>
+      makeRawResponse({ valid: true, score: 90, blockers: [], suggested_ac: ['AC item'] });
+
+    const result = await validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.score, 90);
+    assert.equal(result.suggested_ac[0], 'AC item');
+  });
+
+  test('propagates errors from callClaude', async () => {
+    const mockCallClaude = async () => { throw new Error('API failure'); };
+
+    await assert.rejects(
+      () => validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude }),
+      /API failure/,
+    );
+  });
+
+  test('enforces hard score rule via parseClaudeResponse', async () => {
+    const mockCallClaude = async () => makeRawResponse({ valid: true, score: 60, blockers: [] });
+
+    const result = await validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude });
+    assert.equal(result.valid, false);
+  });
+});

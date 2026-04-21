@@ -1,0 +1,105 @@
+name: Issue Validation Agent
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate issue with Groq
+        id: validate
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+        run: node scripts/validate_issue.mjs
+
+      - name: Post validation comment
+        uses: actions/github-script@v7
+        env:
+          VALIDATION_COMMENT: ${{ steps.validate.outputs.comment }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const comment = process.env.VALIDATION_COMMENT;
+            if (comment) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment,
+              });
+            }
+
+      - name: Manage labels
+        uses: actions/github-script@v7
+        env:
+          IS_VALID: ${{ steps.validate.outputs.valid }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const isValid = process.env.IS_VALID === 'true';
+            const labelToAdd = isValid ? 'ready-for-dev' : 'needs-refinement';
+            const labelToRemove = isValid ? 'needs-refinement' : 'ready-for-dev';
+            const labelColors = { 'ready-for-dev': '0075ca', 'needs-refinement': 'e4e669' };
+
+            // Ensure both labels exist in the repo
+            for (const [name, color] of Object.entries(labelColors)) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (e) {
+                if (e.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color,
+                  });
+                }
+              }
+            }
+
+            // Remove the opposite label if present
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            if (currentLabels.some((l) => l.name === labelToRemove)) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: labelToRemove,
+              });
+            }
+
+            // Add the verdict label
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [labelToAdd],
+            });
