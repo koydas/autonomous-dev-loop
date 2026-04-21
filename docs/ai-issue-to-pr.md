@@ -89,3 +89,13 @@ Only issues where this label is actively applied trigger the automation job.
   - **Mitigation:** generated patch is constrained to one validated relative path and one file write.
 - **Risk:** workflow secrets misconfiguration.
   - **Mitigation:** explicit secret checks and fail-fast logging before commit/PR steps.
+
+## PR Review Workflow (Groq)
+
+File: `.github/workflows/pr-review.yml`
+
+Required secret:
+- **Secret**: `GROQ_API_KEY` (required) — used to review pull request diffs and post/update a structured PR comment.
+
+The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with `pull-requests: write` and `contents: read`.
+
