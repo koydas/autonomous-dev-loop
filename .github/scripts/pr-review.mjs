@@ -1,13 +1,32 @@
 import fs from 'node:fs';
 
-const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-const prNumber = event.pull_request?.number;
-if (!prNumber) throw new Error('Missing pull_request.number');
+// Fail fast with clear messages for required env vars
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
+const GITHUB_EVENT_PATH = process.env.GITHUB_EVENT_PATH;
 
-const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+if (!GITHUB_TOKEN) throw new Error('GITHUB_TOKEN is not set');
+if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY is not set');
+if (!GITHUB_REPOSITORY) throw new Error('GITHUB_REPOSITORY is not set');
+if (!GITHUB_EVENT_PATH) throw new Error('GITHUB_EVENT_PATH is not set');
+
+// Parse and validate the GitHub event payload
+let event;
+try {
+  event = JSON.parse(fs.readFileSync(GITHUB_EVENT_PATH, 'utf8'));
+} catch (err) {
+  throw new Error(`Failed to parse GitHub event payload: ${err.message}`);
+}
+if (!event || typeof event !== 'object') throw new Error('GitHub event payload is not a valid object');
+
+const prNumber = event.pull_request?.number;
+if (!prNumber) throw new Error('Missing pull_request.number in event payload');
+
+const [owner, repo] = GITHUB_REPOSITORY.split('/');
 
 const githubHeaders = {
-  Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+  Authorization: `Bearer ${GITHUB_TOKEN}`,
   'Content-Type': 'application/json',
   'X-GitHub-Api-Version': '2022-11-28',
 };
@@ -16,6 +35,8 @@ const ghFetch = (path, options = {}) =>
   fetch(`https://api.github.com${path}`, {
     ...options,
     headers: { ...githubHeaders, ...(options.headers || {}) },
+  }).catch((err) => {
+    throw new Error(`Network error calling GitHub API (${path}): ${err.message}`);
   });
 
 // Fetch the PR diff
@@ -48,21 +69,26 @@ const systemPrompt =
 const userPrompt = `Analyze this pull request diff:\n\n${diff}\n\nOutput:\n\n## 🔍 Automated Code Review\n\n### ✅ Summary\n(max 3 lines)\n\n### ⚠️ Issues Found\n- [High|Medium|Low] Description\n  File: <file>\n  Fix: <fix>\n\n### 💡 Suggestions\n(optional)\n\n### 🧪 Tests\n(missing or weak tests)\n\n### 🚀 Verdict\n(APPROVE | REQUEST_CHANGES | COMMENT)\n\nConstraints:\n- Max 300 words\n- No repetition`;
 
 // Call Groq
-const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-  },
-  body: JSON.stringify({
-    model: 'llama-3.3-70b-versatile',
-    temperature: 0.2,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-  }),
-});
+let groqRes;
+try {
+  groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+} catch (err) {
+  throw new Error(`Network error calling Groq API: ${err.message}`);
+}
 if (!groqRes.ok) throw new Error(`Groq failed: ${groqRes.status} ${await groqRes.text()}`);
 
 const rawReview = (await groqRes.json())?.choices?.[0]?.message?.content?.trim();
@@ -78,7 +104,7 @@ const commentsRes = await ghFetch(
 if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
 
 const comments = await commentsRes.json();
-const existing = comments.find((c) => c.body?.includes('## 🔍 Automated Code Review'));
+const existing = comments.find((c) => c.body?.includes(HEADING));
 
 const commentUrl = existing
   ? `/repos/${owner}/${repo}/issues/comments/${existing.id}`
