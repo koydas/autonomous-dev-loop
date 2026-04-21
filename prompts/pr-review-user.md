@@ -1,28 +1,22 @@
-Analyze this pull request diff:
+Review this pull request diff:
 
 {{diff}}
-
-Output:
 
 ## 🔍 Automated Code Review
 
 ### ✅ Summary
-(max 3 lines)
+(1–3 lines describing what the PR does)
 
 ### ⚠️ Issues Found
-- [High|Medium|Low] Description
-  File: <file>
-  Fix: <fix>
+Real bugs, broken logic, or security problems only.
+- [High|Medium|Low] Description — File: <path> Fix: <specific fix>
 
-### 💡 Suggestions
-(optional)
-
-### 🧪 Tests
-(missing or weak tests)
+If none found, write: None.
 
 ### 🚀 Verdict
 (APPROVE | REQUEST_CHANGES | COMMENT)
 
 Constraints:
-- Max 300 words
+- Max 200 words
+- No generic advice
 - No repetition
