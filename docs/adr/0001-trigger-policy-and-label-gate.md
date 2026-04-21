@@ -9,10 +9,10 @@ The MVP must run automatically from GitHub issues while avoiding accidental exec
 
 ## Decision
 
-Use a GitHub Actions workflow triggered on `issues.opened`, and run the job only when the issue includes label `ai-task`.
+Use a GitHub Actions workflow triggered on `issues.labeled`, and run the job only when the triggered label is `ai-task`.
 
 ## Consequences
 
 - ✅ Reduces unwanted runs and noisy PR generation.
 - ✅ Keeps activation explicit and predictable.
-- ⚠️ If the label is added after issue creation, this workflow run will not trigger (MVP limitation).
+- ✅ Triggering on `labeled` means the pipeline fires whenever the `ai-task` label is applied, whether at creation time or added later.

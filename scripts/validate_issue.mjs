@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { validateIssue, VALIDATION_SYSTEM_PROMPT, formatGitHubComment } from './lib/issue_validator.mjs';
-import { callClaude as callGroq } from './lib/claude_client.mjs';
+import { callGroq } from './lib/groq_client.mjs';
 import fs from 'node:fs/promises';
 
 function requireEnv(name) {
@@ -20,10 +20,10 @@ async function main() {
 
   console.log(`[INFO] Validating issue #${issueNumber}: "${issueTitle}" using model ${model}`);
 
-  const callClaude = ({ userPrompt }) =>
-    callGroq({ systemPrompt: VALIDATION_SYSTEM_PROMPT, userPrompt, apiKey, model, apiUrl });
+  const boundCallGroq = ({ prompt }) =>
+    callGroq({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl });
 
-  const result = await validateIssue({ issueTitle, issueBody, callClaude });
+  const result = await validateIssue({ issueTitle, issueBody, callGroq: boundCallGroq });
   const comment = formatGitHubComment(result, issueTitle);
 
   console.log(`[INFO] Result: valid=${result.valid}, score=${result.score}/100`);

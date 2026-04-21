@@ -18,13 +18,14 @@ function mockFetch(response) {
 
 afterEach(() => { delete globalThis.fetch; });
 
-test('callGroq returns parsed AI object on success', async () => {
+test('callGroq returns raw content string on success', async () => {
   const aiContent = { summary: 'S', target_path: 'a.md', file_content: 'hello' };
+  const contentStr = JSON.stringify(aiContent);
   mockFetch(makeResponse({
-    choices: [{ message: { content: JSON.stringify(aiContent) } }],
+    choices: [{ message: { content: contentStr } }],
   }));
   const result = await callGroq(BASE_ARGS);
-  assert.deepEqual(result, aiContent);
+  assert.equal(result, contentStr);
 });
 
 test('callGroq throws on HTTP error status', async () => {
@@ -47,22 +48,11 @@ test('callGroq throws when message content is missing', async () => {
   await assert.rejects(() => callGroq(BASE_ARGS), /Unexpected Groq API response format/);
 });
 
-test('callGroq throws when AI content is not valid JSON', async () => {
-  mockFetch(makeResponse({ choices: [{ message: { content: 'not json' } }] }));
-  await assert.rejects(() => callGroq(BASE_ARGS), /not valid JSON/);
-});
-
-test('callGroq throws when AI content is a JSON array (not object)', async () => {
-  mockFetch(makeResponse({ choices: [{ message: { content: '[]' } }] }));
-  await assert.rejects(() => callGroq(BASE_ARGS), /must be an object/);
-});
-
 test('callGroq sends correct Authorization header', async () => {
   let capturedHeaders;
-  const aiContent = { summary: 'S', target_path: 'a.md', file_content: 'x' };
   globalThis.fetch = async (_url, opts) => {
     capturedHeaders = opts.headers;
-    return makeResponse({ choices: [{ message: { content: JSON.stringify(aiContent) } }] });
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
   };
   await callGroq(BASE_ARGS);
   assert.equal(capturedHeaders['Authorization'], 'Bearer key');
@@ -70,10 +60,9 @@ test('callGroq sends correct Authorization header', async () => {
 
 test('callGroq sends temperature 0 in payload', async () => {
   let capturedBody;
-  const aiContent = { summary: 'S', target_path: 'a.md', file_content: 'x' };
   globalThis.fetch = async (_url, opts) => {
     capturedBody = JSON.parse(opts.body);
-    return makeResponse({ choices: [{ message: { content: JSON.stringify(aiContent) } }] });
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
   };
   await callGroq(BASE_ARGS);
   assert.equal(capturedBody.temperature, 0);
