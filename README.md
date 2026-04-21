@@ -9,6 +9,7 @@ The MVP issue-to-PR automation is now implemented (Groq-backed).
 - Workflow: `.github/workflows/ai-issue-to-pr.yml` (kept minimal/orchestration-only)
 - Generator script: `scripts/generate_issue_change.mjs`
 - Generator modules: `scripts/lib/*.mjs`
+- Prompt files: `prompts/*.txt` (one file per prompt, loaded at runtime)
 - Setup and testing guide: `docs/ai-issue-to-pr.md`
 - MVP definition: `docs/mvp.md`
 
@@ -23,7 +24,7 @@ The core Node.js modules are covered by unit tests using the built-in `node:test
 npm test
 ```
 
-- Test files: `scripts/tests/*.test.mjs`
+- Test files: `scripts/tests/*.test.mjs` (includes prompt file tests)
 - CI: `.github/workflows/test.yml` runs on every push/PR
 - Guide: `docs/testing.md`
 
