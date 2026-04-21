@@ -61,7 +61,8 @@ const filteredDiff = rawDiff
   })
   .join('\n');
 
-const diff = (filteredDiff || rawDiff).slice(0, 12000);
+const MAX_DIFF_CHARS = 12000;
+const diff = (filteredDiff || rawDiff).slice(0, MAX_DIFF_CHARS);
 
 // Build the review prompt
 const systemPrompt = loadPrompt('pr-review-system');
