@@ -18,20 +18,21 @@ Requires Node.js 20+. All tests should pass in under a second.
 | `scripts/lib/config.mjs` | 12 | `requireEnv` missing/empty vars, `loadConfigFromEnv` defaults and required fields, `buildDeterministicPrompt` output structure |
 | `scripts/lib/groq_client.mjs` | 9 | HTTP errors, non-JSON response, malformed `choices`, invalid AI JSON (array vs object), Authorization header, temperature payload |
 | `scripts/lib/issue_validator.mjs` | 39 | `VALIDATION_SYSTEM_PROMPT` structure, `buildValidationUserPrompt` edge cases, `parseClaudeResponse` hard rules and error cases, `formatGitHubComment` formatting, `validateIssue` integration |
-| `scripts/lib/prompts.mjs` + `prompts/*.txt` | 19 | `loadPrompt` for all 6 prompt files, `interpolatePrompt` placeholder substitution, per-file content assertions (keywords, placeholders, length) |
+| `scripts/lib/claude_client.mjs` | 10 | HTTP errors, non-JSON response, malformed `choices`, missing content, non-string content guard, Authorization header, temperature payload, default model, default API URL |
+| `scripts/lib/prompts.mjs` + `prompts/*.md` | 22 | `loadPrompt` for all 6 prompt files, `interpolatePrompt` placeholder substitution, per-file content assertions (keywords, placeholders, length) |
 
 ## Prompt Files
 
-All AI prompts live in `prompts/` as plain `.txt` files, one per prompt:
+All AI prompts live in `prompts/` as `.md` files, one per prompt:
 
 | File | Used by | Notes |
 |------|---------|-------|
-| `validation-system.txt` | `issue_validator.mjs` | Must exceed 4 000 chars for prompt caching |
-| `validation-user.txt` | `issue_validator.mjs` | Placeholders: `{{issueTitle}}`, `{{issueBody}}` |
-| `generation-system.txt` | `generate_issue_change.mjs` | System instruction for code generation |
-| `generation-user.txt` | `config.mjs` | Placeholders: `{{issueNumber}}`, `{{issueTitle}}`, `{{issueBody}}` |
-| `pr-review-system.txt` | `.github/scripts/pr-review.mjs` | Reviewer persona |
-| `pr-review-user.txt` | `.github/scripts/pr-review.mjs` | Placeholder: `{{diff}}` |
+| `validation-system.md` | `issue_validator.mjs` | Must exceed 4 000 chars for prompt caching |
+| `validation-user.md` | `issue_validator.mjs` | Placeholders: `{{issueTitle}}`, `{{issueBody}}` |
+| `generation-system.md` | `generate_issue_change.mjs` | System instruction for code generation |
+| `generation-user.md` | `config.mjs` | Placeholders: `{{issueNumber}}`, `{{issueTitle}}`, `{{issueBody}}` |
+| `pr-review-system.md` | `.github/scripts/pr-review.mjs` | Reviewer persona |
+| `pr-review-user.md` | `.github/scripts/pr-review.mjs` | Placeholder: `{{diff}}` |
 
 Template placeholders use the `{{variableName}}` syntax. `interpolatePrompt()` in `scripts/lib/prompts.mjs` handles substitution; unknown placeholders are left unchanged.
 
