@@ -55,7 +55,7 @@ const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
   },
   body: JSON.stringify({
-    model: 'llama3-70b-8192',
+    model: 'llama-3.3-70b-versatile',
     temperature: 0.2,
     messages: [
       { role: 'system', content: systemPrompt },
