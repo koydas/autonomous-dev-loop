@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { loadPrompt, interpolatePrompt } from '../../scripts/lib/prompts.mjs';
 
 // Fail fast with clear messages for required env vars
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
@@ -63,10 +64,8 @@ const filteredDiff = rawDiff
 const diff = (filteredDiff || rawDiff).slice(0, 12000);
 
 // Build the review prompt
-const systemPrompt =
-  'You are a strict senior code reviewer.\n- No fluff\n- Only actionable issues\n- Be concise';
-
-const userPrompt = `Analyze this pull request diff:\n\n${diff}\n\nOutput:\n\n## 🔍 Automated Code Review\n\n### ✅ Summary\n(max 3 lines)\n\n### ⚠️ Issues Found\n- [High|Medium|Low] Description\n  File: <file>\n  Fix: <fix>\n\n### 💡 Suggestions\n(optional)\n\n### 🧪 Tests\n(missing or weak tests)\n\n### 🚀 Verdict\n(APPROVE | REQUEST_CHANGES | COMMENT)\n\nConstraints:\n- Max 300 words\n- No repetition`;
+const systemPrompt = loadPrompt('pr-review-system');
+const userPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff });
 
 // Call Groq
 let groqRes;

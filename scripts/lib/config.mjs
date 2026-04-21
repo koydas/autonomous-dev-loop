@@ -1,3 +1,5 @@
+import { loadPrompt, interpolatePrompt } from './prompts.mjs';
+
 export function requireEnv(name) {
   const value = (process.env[name] || '').trim();
   if (!value) {
@@ -26,25 +28,6 @@ export function loadConfigFromEnv() {
 }
 
 export function buildDeterministicPrompt({ issueNumber, issueTitle, issueBody }) {
-  return [
-    'Create exactly one repository file change from a GitHub issue.',
-    '',
-    'Deterministic issue data:',
-    `- issue_number: ${issueNumber}`,
-    `- issue_title: ${issueTitle}`,
-    `- issue_body: ${issueBody}`,
-    '',
-    'Requirements:',
-    '1) Keep scope small and non-destructive.',
-    '2) Propose exactly one file creation or update (never multiple files).',
-    '3) The path must be relative (no ../ and no absolute paths).',
-    '4) Return only the final file content, no surrounding explanations.',
-    '',
-    'Output JSON only:',
-    '{',
-    '  "summary": "One sentence summary of the generated change",',
-    '  "target_path": "relative/path/to/file.ext",',
-    '  "file_content": "Exact content to write in the file"',
-    '}',
-  ].join('\n');
+  const template = loadPrompt('generation-user');
+  return interpolatePrompt(template, { issueNumber, issueTitle, issueBody });
 }

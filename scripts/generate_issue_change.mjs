@@ -2,16 +2,19 @@
 
 import { buildDeterministicPrompt, loadConfigFromEnv } from './lib/config.mjs';
 import { callGroq } from './lib/groq_client.mjs';
+import { loadPrompt } from './lib/prompts.mjs';
 import { validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import fs from 'node:fs/promises';
 
 async function main() {
   const config = loadConfigFromEnv();
   const prompt = buildDeterministicPrompt(config);
+  const systemPrompt = loadPrompt('generation-system');
 
   console.log('[INFO] Calling Groq model with deterministic prompt template...');
   const aiOutput = await callGroq({
     prompt,
+    systemPrompt,
     apiKey: config.apiKey,
     model: config.model,
     apiUrl: config.apiUrl,

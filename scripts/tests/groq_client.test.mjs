@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { callGroq } from '../lib/groq_client.mjs';
 
-const BASE_ARGS = { prompt: 'go', apiKey: 'key', model: 'llama-3.1-8b-instant', apiUrl: 'https://api.test' };
+const BASE_ARGS = { prompt: 'go', systemPrompt: 'You are a test assistant.', apiKey: 'key', model: 'llama-3.1-8b-instant', apiUrl: 'https://api.test' };
 
 function makeResponse(body, status = 200) {
   return {

@@ -1,14 +1,10 @@
-export async function callGroq({ prompt, apiKey, model, apiUrl }) {
+export async function callGroq({ prompt, systemPrompt, apiKey, model, apiUrl }) {
   const payload = {
     model,
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
-      {
-        role: 'system',
-        content:
-          'You generate one small, safe repository file change. Return strict JSON with keys summary, target_path, and file_content.',
-      },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: prompt },
     ],
   };
