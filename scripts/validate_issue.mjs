@@ -2,21 +2,16 @@
 
 import { validateIssue, VALIDATION_SYSTEM_PROMPT, formatGitHubComment } from './lib/issue_validator.mjs';
 import { callGroq } from './lib/groq_client.mjs';
+import { requireEnv, GROQ_MODEL_DEFAULTS, GROQ_API_URL_DEFAULT } from './lib/config.mjs';
 import fs from 'node:fs/promises';
-
-function requireEnv(name) {
-  const value = (process.env[name] || '').trim();
-  if (!value) throw new Error(`Missing required environment variable: ${name}`);
-  return value;
-}
 
 async function main() {
   const issueNumber = requireEnv('ISSUE_NUMBER');
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
   const apiKey = requireEnv('GROQ_API_KEY');
-  const model = (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim();
-  const apiUrl = (process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions').trim();
+  const model = (process.env.GROQ_MODEL || GROQ_MODEL_DEFAULTS.validation).trim();
+  const apiUrl = (process.env.GROQ_API_URL || GROQ_API_URL_DEFAULT).trim();
 
   console.log(`[INFO] Validating issue #${issueNumber}: "${issueTitle}" using model ${model}`);
 

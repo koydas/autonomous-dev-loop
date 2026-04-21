@@ -1,13 +1,23 @@
-export async function callGroq({ prompt, systemPrompt, apiKey, model, apiUrl }) {
+export async function callGroq({
+  prompt,
+  systemPrompt,
+  apiKey,
+  model,
+  apiUrl,
+  temperature = 0,
+  responseFormat = { type: 'json_object' },
+}) {
   const payload = {
     model,
-    temperature: 0,
-    response_format: { type: 'json_object' },
+    temperature,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: prompt },
     ],
   };
+  if (responseFormat) {
+    payload.response_format = responseFormat;
+  }
 
   const response = await fetch(apiUrl, {
     method: 'POST',

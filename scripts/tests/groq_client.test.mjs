@@ -58,7 +58,7 @@ test('callGroq sends correct Authorization header', async () => {
   assert.equal(capturedHeaders['Authorization'], 'Bearer key');
 });
 
-test('callGroq sends temperature 0 in payload', async () => {
+test('callGroq sends temperature 0 in payload by default', async () => {
   let capturedBody;
   globalThis.fetch = async (_url, opts) => {
     capturedBody = JSON.parse(opts.body);
@@ -66,4 +66,34 @@ test('callGroq sends temperature 0 in payload', async () => {
   };
   await callGroq(BASE_ARGS);
   assert.equal(capturedBody.temperature, 0);
+});
+
+test('callGroq sends custom temperature when provided', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  await callGroq({ ...BASE_ARGS, temperature: 0.2 });
+  assert.equal(capturedBody.temperature, 0.2);
+});
+
+test('callGroq omits response_format when responseFormat is null', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ choices: [{ message: { content: 'review text' } }] });
+  };
+  await callGroq({ ...BASE_ARGS, responseFormat: null });
+  assert.equal('response_format' in capturedBody, false);
+});
+
+test('callGroq includes response_format by default', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  await callGroq(BASE_ARGS);
+  assert.deepEqual(capturedBody.response_format, { type: 'json_object' });
 });
