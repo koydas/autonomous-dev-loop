@@ -1,4 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
+import { parseFlatYaml } from './yaml.mjs';
+
+const MODELS_FILE = resolve(dirname(fileURLToPath(import.meta.url)), '../../config/models.yaml');
+
+export const GROQ_MODEL_DEFAULTS = parseFlatYaml(readFileSync(MODELS_FILE, 'utf8'));
+
+export const GROQ_API_URL_DEFAULT = 'https://api.groq.com/openai/v1/chat/completions';
 
 export function requireEnv(name) {
   const value = (process.env[name] || '').trim();
@@ -7,14 +17,6 @@ export function requireEnv(name) {
   }
   return value;
 }
-
-export const GROQ_MODEL_DEFAULTS = {
-  validation: 'llama-3.3-70b-versatile',
-  generation: 'llama-3.1-8b-instant',
-  review: 'llama-3.3-70b-versatile',
-};
-
-export const GROQ_API_URL_DEFAULT = 'https://api.groq.com/openai/v1/chat/completions';
 
 export function loadConfigFromEnv() {
   const issueNumber = requireEnv('ISSUE_NUMBER');
