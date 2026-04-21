@@ -1,0 +1,69 @@
+name: Issue Validation Agent
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate issue with Groq
+        id: validate
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+        run: node scripts/validate_issue.mjs
+
+      - name: Post validation comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ steps.validate.outputs.comment }}
+        run: |
+          printf '%s' "$COMMENT_BODY" > /tmp/validation_comment.md
+          gh issue comment ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --body-file /tmp/validation_comment.md
+
+      - name: Manage labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_VALID: ${{ steps.validate.outputs.valid }}
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          REPO=${{ github.repository }}
+
+          gh label create "ready-for-dev" \
+            --color "0075ca" \
+            --description "Issue validated and ready for automated implementation" \
+            --repo "$REPO" --force
+
+          gh label create "needs-refinement" \
+            --color "e4e669" \
+            --description "Issue requires clearer acceptance criteria before automation" \
+            --repo "$REPO" --force
+
+          if [ "$IS_VALID" = "true" ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "ready-for-dev"
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "needs-refinement" 2>/dev/null || true
+          else
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "needs-refinement"
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "ready-for-dev" 2>/dev/null || true
+          fi
