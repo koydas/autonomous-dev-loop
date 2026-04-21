@@ -65,9 +65,11 @@ const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
 });
 if (!groqRes.ok) throw new Error(`Groq failed: ${groqRes.status} ${await groqRes.text()}`);
 
-const review = (await groqRes.json())?.choices?.[0]?.message?.content?.trim();
-if (!review?.includes('## 🔍 Automated Code Review'))
-  throw new Error('Groq output missing expected heading');
+const rawReview = (await groqRes.json())?.choices?.[0]?.message?.content?.trim();
+if (!rawReview) throw new Error('Groq returned empty content');
+
+const HEADING = '## 🔍 Automated Code Review';
+const review = rawReview.includes(HEADING) ? rawReview : `${HEADING}\n\n${rawReview}`;
 
 // Post or update the PR comment
 const commentsRes = await ghFetch(
