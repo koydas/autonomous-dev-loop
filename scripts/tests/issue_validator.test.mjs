@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   VALIDATION_SYSTEM_PROMPT,
   buildValidationUserPrompt,
-  parseClaudeResponse,
+  parseGroqResponse,
   formatGitHubComment,
   validateIssue,
 } from '../lib/issue_validator.mjs';
@@ -73,7 +73,7 @@ describe('buildValidationUserPrompt', () => {
 });
 
 // ---------------------------------------------------------------------------
-// parseClaudeResponse
+// parseGroqResponse
 // ---------------------------------------------------------------------------
 
 function makeRawResponse(overrides = {}) {
@@ -87,9 +87,9 @@ function makeRawResponse(overrides = {}) {
   });
 }
 
-describe('parseClaudeResponse', () => {
+describe('parseGroqResponse', () => {
   test('returns correct structure for a passing issue', () => {
-    const result = parseClaudeResponse(makeRawResponse());
+    const result = parseGroqResponse(makeRawResponse());
     assert.equal(result.valid, true);
     assert.equal(result.score, 80);
     assert.deepEqual(result.blockers, []);
@@ -99,86 +99,86 @@ describe('parseClaudeResponse', () => {
 
   test('forces valid=false when score < 70 even if Claude says valid=true', () => {
     const raw = makeRawResponse({ valid: true, score: 65, blockers: [] });
-    const result = parseClaudeResponse(raw);
+    const result = parseGroqResponse(raw);
     assert.equal(result.valid, false);
   });
 
   test('forces valid=false when blockers exist even if score >= 70', () => {
     const raw = makeRawResponse({ valid: true, score: 85, blockers: ['Missing AC'] });
-    const result = parseClaudeResponse(raw);
+    const result = parseGroqResponse(raw);
     assert.equal(result.valid, false);
   });
 
   test('valid=true only when score >= 70 AND blockers empty', () => {
     const raw = makeRawResponse({ valid: true, score: 70, blockers: [] });
-    const result = parseClaudeResponse(raw);
+    const result = parseGroqResponse(raw);
     assert.equal(result.valid, true);
   });
 
   test('clamps score to 0–100', () => {
     const raw = makeRawResponse({ score: 150 });
-    assert.equal(parseClaudeResponse(raw).score, 100);
+    assert.equal(parseGroqResponse(raw).score, 100);
 
     const raw2 = makeRawResponse({ score: -10 });
-    assert.equal(parseClaudeResponse(raw2).score, 0);
+    assert.equal(parseGroqResponse(raw2).score, 0);
   });
 
   test('rounds score to integer', () => {
     const raw = makeRawResponse({ score: 74.7 });
-    assert.equal(parseClaudeResponse(raw).score, 75);
+    assert.equal(parseGroqResponse(raw).score, 75);
   });
 
   test('coerces array items to strings', () => {
     const raw = makeRawResponse({ blockers: [42, true], suggested_ac: [{ x: 1 }] });
-    const result = parseClaudeResponse(raw);
+    const result = parseGroqResponse(raw);
     assert.equal(typeof result.blockers[0], 'string');
     assert.equal(typeof result.suggested_ac[0], 'string');
   });
 
   test('extracts JSON when prefixed with prose text', () => {
     const raw = 'Here is my evaluation:\n' + makeRawResponse({ score: 75 });
-    const result = parseClaudeResponse(raw);
+    const result = parseGroqResponse(raw);
     assert.equal(result.score, 75);
   });
 
   test('extracts JSON when wrapped in markdown fences', () => {
     const raw = '```json\n' + makeRawResponse({ score: 82 }) + '\n```';
-    const result = parseClaudeResponse(raw);
+    const result = parseGroqResponse(raw);
     assert.equal(result.score, 82);
   });
 
   test('throws when no JSON object is present', () => {
-    assert.throws(() => parseClaudeResponse('No JSON here'), /No JSON object found/);
+    assert.throws(() => parseGroqResponse('No JSON here'), /No JSON object found/);
   });
 
   test('throws when JSON is malformed', () => {
-    assert.throws(() => parseClaudeResponse('{bad: json, stuff}'), /invalid JSON/);
+    assert.throws(() => parseGroqResponse('{bad: json, stuff}'), /invalid JSON/);
   });
 
   test('throws when "valid" is missing', () => {
     assert.throws(
-      () => parseClaudeResponse('{"score":80,"blockers":[],"warnings":[],"suggested_ac":[]}'),
+      () => parseGroqResponse('{"score":80,"blockers":[],"warnings":[],"suggested_ac":[]}'),
       /"valid"/,
     );
   });
 
   test('throws when "score" is missing', () => {
     assert.throws(
-      () => parseClaudeResponse('{"valid":true,"blockers":[],"warnings":[],"suggested_ac":[]}'),
+      () => parseGroqResponse('{"valid":true,"blockers":[],"warnings":[],"suggested_ac":[]}'),
       /"score"/,
     );
   });
 
   test('throws when "blockers" is not an array', () => {
     assert.throws(
-      () => parseClaudeResponse('{"valid":true,"score":80,"blockers":"none","warnings":[],"suggested_ac":[]}'),
+      () => parseGroqResponse('{"valid":true,"score":80,"blockers":"none","warnings":[],"suggested_ac":[]}'),
       /"blockers"/,
     );
   });
 
   test('throws when "suggested_ac" is missing', () => {
     assert.throws(
-      () => parseClaudeResponse('{"valid":true,"score":80,"blockers":[],"warnings":[]}'),
+      () => parseGroqResponse('{"valid":true,"score":80,"blockers":[],"warnings":[]}'),
       /"suggested_ac"/,
     );
   });
@@ -265,49 +265,49 @@ describe('formatGitHubComment', () => {
 });
 
 // ---------------------------------------------------------------------------
-// validateIssue (integration — callClaude is mocked)
+// validateIssue (integration — callGroq is mocked)
 // ---------------------------------------------------------------------------
 
 describe('validateIssue', () => {
-  test('calls callClaude with a userPrompt', async () => {
+  test('calls callGroq with a prompt string', async () => {
     let capturedArgs = null;
     const mockCallClaude = async (args) => {
       capturedArgs = args;
       return makeRawResponse({ score: 80 });
     };
 
-    await validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude });
+    await validateIssue({ issueTitle: 'T', issueBody: 'B', callGroq: mockCallClaude });
 
     assert.ok(capturedArgs !== null);
-    assert.equal(typeof capturedArgs.userPrompt, 'string');
-    assert.ok(capturedArgs.userPrompt.includes('T'));
-    assert.ok(capturedArgs.userPrompt.includes('B'));
+    assert.equal(typeof capturedArgs.prompt, 'string');
+    assert.ok(capturedArgs.prompt.includes('T'));
+    assert.ok(capturedArgs.prompt.includes('B'));
   });
 
-  test('returns parsed result from callClaude response', async () => {
+  test('returns parsed result from callGroq response', async () => {
     const mockCallClaude = async () =>
       makeRawResponse({ valid: true, score: 90, blockers: [], suggested_ac: ['AC item'] });
 
-    const result = await validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude });
+    const result = await validateIssue({ issueTitle: 'T', issueBody: 'B', callGroq: mockCallClaude });
 
     assert.equal(result.valid, true);
     assert.equal(result.score, 90);
     assert.equal(result.suggested_ac[0], 'AC item');
   });
 
-  test('propagates errors from callClaude', async () => {
+  test('propagates errors from callGroq', async () => {
     const mockCallClaude = async () => { throw new Error('API failure'); };
 
     await assert.rejects(
-      () => validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude }),
+      () => validateIssue({ issueTitle: 'T', issueBody: 'B', callGroq: mockCallClaude }),
       /API failure/,
     );
   });
 
-  test('enforces hard score rule via parseClaudeResponse', async () => {
+  test('enforces hard score rule via parseGroqResponse', async () => {
     const mockCallClaude = async () => makeRawResponse({ valid: true, score: 60, blockers: [] });
 
-    const result = await validateIssue({ issueTitle: 'T', issueBody: 'B', callClaude: mockCallClaude });
+    const result = await validateIssue({ issueTitle: 'T', issueBody: 'B', callGroq: mockCallClaude });
     assert.equal(result.valid, false);
   });
 });

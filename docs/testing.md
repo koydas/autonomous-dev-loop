@@ -16,9 +16,8 @@ Requires Node.js 20+. All tests should pass in under a second.
 |------|-------|-----------------|
 | `scripts/lib/output_writer.mjs` | 10 | Field validation, path safety (absolute paths, `..` traversal), 16 000-char size limit, type coercion |
 | `scripts/lib/config.mjs` | 12 | `requireEnv` missing/empty vars, `loadConfigFromEnv` defaults and required fields, `buildDeterministicPrompt` output structure |
-| `scripts/lib/groq_client.mjs` | 9 | HTTP errors, non-JSON response, malformed `choices`, invalid AI JSON (array vs object), Authorization header, temperature payload |
-| `scripts/lib/issue_validator.mjs` | 39 | `VALIDATION_SYSTEM_PROMPT` structure, `buildValidationUserPrompt` edge cases, `parseClaudeResponse` hard rules and error cases, `formatGitHubComment` formatting, `validateIssue` integration |
-| `scripts/lib/claude_client.mjs` | 10 | HTTP errors, non-JSON response, malformed `choices`, missing content, non-string content guard, Authorization header, temperature payload, default model, default API URL |
+| `scripts/lib/groq_client.mjs` | 7 | HTTP errors, non-JSON response, malformed `choices`, Authorization header, temperature payload |
+| `scripts/lib/issue_validator.mjs` | 39 | `VALIDATION_SYSTEM_PROMPT` structure, `buildValidationUserPrompt` edge cases, `parseGroqResponse` hard rules and error cases, `formatGitHubComment` formatting, `validateIssue` integration |
 | `scripts/lib/prompts.mjs` + `prompts/*.md` | 22 | `loadPrompt` for all 6 prompt files, `interpolatePrompt` placeholder substitution, per-file content assertions (keywords, placeholders, length) |
 
 ## Prompt Files

@@ -12,13 +12,23 @@ async function main() {
   const systemPrompt = loadPrompt('generation-system');
 
   console.log('[INFO] Calling Groq model with deterministic prompt template...');
-  const aiOutput = await callGroq({
+  const raw = await callGroq({
     prompt,
     systemPrompt,
     apiKey: config.apiKey,
     model: config.model,
     apiUrl: config.apiUrl,
   });
+
+  let aiOutput;
+  try {
+    aiOutput = JSON.parse(raw);
+  } catch {
+    throw new Error('AI response was not valid JSON');
+  }
+  if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
+    throw new Error('AI response JSON must be an object');
+  }
 
   const { summary, targetPath, fileContent } = validateAiOutput(aiOutput);
   const outputPath = await writeGeneratedFiles({

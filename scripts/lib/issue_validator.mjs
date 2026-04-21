@@ -2,15 +2,14 @@
  * Issue validation logic for the autonomous dev-loop pipeline.
  *
  * All exports are pure functions or constants — no external I/O — so they can
- * be unit-tested without network access.  The callClaude dependency is injected
+ * be unit-tested without network access.  The callGroq dependency is injected
  * by the caller (validate_issue.mjs) to keep this module free of SDK imports.
  */
 
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
 
 // ---------------------------------------------------------------------------
-// System prompt  (stable — never changes between requests, enabling caching)
-// Must exceed 1024 tokens for the ephemeral cache to activate on claude-sonnet-4-5.
+// System prompt  (stable — never changes between requests)
 // ---------------------------------------------------------------------------
 
 export const VALIDATION_SYSTEM_PROMPT = loadPrompt('validation-system');
@@ -27,19 +26,19 @@ export function buildValidationUserPrompt(issueTitle, issueBody) {
   });
 }
 
-export function parseClaudeResponse(rawText) {
-  // Extract the JSON object — Claude may occasionally wrap it in markdown fences
+export function parseGroqResponse(rawText) {
+  // Extract the JSON object — the model may occasionally wrap it in markdown fences
   const start = rawText.indexOf('{');
   const end = rawText.lastIndexOf('}');
   if (start === -1 || end === -1 || end < start) {
-    throw new Error('No JSON object found in Claude response');
+    throw new Error('No JSON object found in Groq response');
   }
 
   let parsed;
   try {
     parsed = JSON.parse(rawText.slice(start, end + 1));
   } catch {
-    throw new Error('Claude response contained invalid JSON');
+    throw new Error('Groq response contained invalid JSON');
   }
 
   if (typeof parsed.valid !== 'boolean') throw new Error('Response missing "valid" boolean');
@@ -121,11 +120,11 @@ export function formatGitHubComment(result, issueTitle) {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestration (callClaude is injected by the caller for testability)
+// Orchestration (callGroq is injected by the caller for testability)
 // ---------------------------------------------------------------------------
 
-export async function validateIssue({ issueTitle, issueBody, callClaude }) {
-  const userPrompt = buildValidationUserPrompt(issueTitle, issueBody);
-  const rawResponse = await callClaude({ userPrompt });
-  return parseClaudeResponse(rawResponse);
+export async function validateIssue({ issueTitle, issueBody, callGroq }) {
+  const prompt = buildValidationUserPrompt(issueTitle, issueBody);
+  const rawResponse = await callGroq({ prompt });
+  return parseGroqResponse(rawResponse);
 }

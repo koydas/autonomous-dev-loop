@@ -35,16 +35,5 @@ export async function callGroq({ prompt, systemPrompt, apiKey, model, apiUrl }) 
     throw new Error('Unexpected Groq API response format');
   }
 
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    throw new Error('AI response was not valid JSON');
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('AI response JSON must be an object');
-  }
-
-  return parsed;
+  return content;
 }
