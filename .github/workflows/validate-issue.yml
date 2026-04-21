@@ -33,73 +33,37 @@ jobs:
         run: node scripts/validate_issue.mjs
 
       - name: Post validation comment
-        uses: actions/github-script@v7
         env:
-          VALIDATION_COMMENT: ${{ steps.validate.outputs.comment }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const comment = process.env.VALIDATION_COMMENT;
-            if (comment) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: comment,
-              });
-            }
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ steps.validate.outputs.comment }}
+        run: |
+          printf '%s' "$COMMENT_BODY" > /tmp/validation_comment.md
+          gh issue comment ${{ github.event.issue.number }} \
+            --repo ${{ github.repository }} \
+            --body-file /tmp/validation_comment.md
 
       - name: Manage labels
-        uses: actions/github-script@v7
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IS_VALID: ${{ steps.validate.outputs.valid }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const isValid = process.env.IS_VALID === 'true';
-            const labelToAdd = isValid ? 'ready-for-dev' : 'needs-refinement';
-            const labelToRemove = isValid ? 'needs-refinement' : 'ready-for-dev';
-            const labelColors = { 'ready-for-dev': '0075ca', 'needs-refinement': 'e4e669' };
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          REPO=${{ github.repository }}
 
-            // Ensure both labels exist in the repo
-            for (const [name, color] of Object.entries(labelColors)) {
-              try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name,
-                });
-              } catch (e) {
-                if (e.status === 404) {
-                  await github.rest.issues.createLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    name,
-                    color,
-                  });
-                }
-              }
-            }
+          gh label create "ready-for-dev" \
+            --color "0075ca" \
+            --description "Issue validated and ready for automated implementation" \
+            --repo "$REPO" --force
 
-            // Remove the opposite label if present
-            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            if (currentLabels.some((l) => l.name === labelToRemove)) {
-              await github.rest.issues.removeLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                name: labelToRemove,
-              });
-            }
+          gh label create "needs-refinement" \
+            --color "e4e669" \
+            --description "Issue requires clearer acceptance criteria before automation" \
+            --repo "$REPO" --force
 
-            // Add the verdict label
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: [labelToAdd],
-            });
+          if [ "$IS_VALID" = "true" ]; then
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "ready-for-dev"
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "needs-refinement" 2>/dev/null || true
+          else
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "needs-refinement"
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "ready-for-dev" 2>/dev/null || true
+          fi
