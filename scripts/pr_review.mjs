@@ -5,6 +5,7 @@ import { requireEnv, GROQ_MODEL_DEFAULTS, GROQ_API_URL_DEFAULT } from './lib/con
 import { callGroq } from './lib/groq_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
+import { log } from './lib/logger.mjs';
 
 const githubToken = requireEnv('GITHUB_TOKEN');
 const groqApiKey = requireEnv('GROQ_API_KEY');
@@ -86,4 +87,4 @@ const postRes = await ghFetch(commentUrl, {
 });
 if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${await postRes.text()}`);
 
-console.log(`[INFO] PR #${prNumber} review ${existing ? 'updated' : 'posted'}`);
+log(`PR review ${existing ? 'updated' : 'posted'}`, { prNumber });

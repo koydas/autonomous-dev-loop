@@ -224,3 +224,61 @@ test('upsert_issue_validation_comment exits 1 when GITHUB_REPOSITORY has invalid
     /GITHUB_REPOSITORY/,
   );
 });
+
+// manage_labels.mjs
+
+test('manage_labels exits 1 when ISSUE_NUMBER is missing', async () => {
+  assertFails(
+    await runScript('manage_labels.mjs', {
+      GITHUB_REPOSITORY: 'owner/repo',
+      GH_TOKEN: 'token',
+      IS_VALID: 'true',
+    }),
+    /ISSUE_NUMBER/,
+  );
+});
+
+test('manage_labels exits 1 when GITHUB_REPOSITORY is missing', async () => {
+  assertFails(
+    await runScript('manage_labels.mjs', {
+      ISSUE_NUMBER: '1',
+      GH_TOKEN: 'token',
+      IS_VALID: 'true',
+    }),
+    /GITHUB_REPOSITORY/,
+  );
+});
+
+test('manage_labels exits 1 when IS_VALID is missing', async () => {
+  assertFails(
+    await runScript('manage_labels.mjs', {
+      ISSUE_NUMBER: '1',
+      GITHUB_REPOSITORY: 'owner/repo',
+      GH_TOKEN: 'token',
+    }),
+    /IS_VALID/,
+  );
+});
+
+test('manage_labels exits 1 when both GH_TOKEN and GITHUB_TOKEN are missing', async () => {
+  assertFails(
+    await runScript('manage_labels.mjs', {
+      ISSUE_NUMBER: '1',
+      GITHUB_REPOSITORY: 'owner/repo',
+      IS_VALID: 'true',
+    }),
+    /GH_TOKEN|GITHUB_TOKEN/,
+  );
+});
+
+test('manage_labels exits 1 when GITHUB_REPOSITORY has invalid format', async () => {
+  assertFails(
+    await runScript('manage_labels.mjs', {
+      ISSUE_NUMBER: '1',
+      GITHUB_REPOSITORY: 'invalidrepo',
+      GH_TOKEN: 'token',
+      IS_VALID: 'true',
+    }),
+    /GITHUB_REPOSITORY/,
+  );
+});
