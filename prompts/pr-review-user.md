@@ -1,6 +1,14 @@
-Review this pull request diff:
+Review this pull request diff.
 
+Issue that triggered this PR:
+Title: {{issueTitle}}
+Body:
+{{issueBody}}
+
+Diff:
 {{diff}}
+
+Use the issue content to determine intent. Flag any diff behavior that contradicts or exceeds the stated scope of the issue.
 
 ## 🔍 Automated Code Review
 
@@ -19,6 +27,5 @@ If none found, write: None.
 
 Constraints:
 - Max 220 words
-- No analysis outside the provided diff
 - No generic advice
 - No repetition
