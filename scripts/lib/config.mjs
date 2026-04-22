@@ -37,7 +37,12 @@ export function loadConfigFromEnv() {
   };
 }
 
-export function buildDeterministicPrompt({ issueNumber, issueTitle, issueBody }) {
+export function buildDeterministicPrompt({
+  issueNumber,
+  issueTitle,
+  issueBody,
+  fileContents = 'No existing files identified as relevant to this issue.',
+}) {
   const template = loadPrompt('generation-user');
-  return interpolatePrompt(template, { issueNumber, issueTitle, issueBody });
+  return interpolatePrompt(template, { issueNumber, issueTitle, issueBody, fileContents });
 }
