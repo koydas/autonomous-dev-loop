@@ -3,6 +3,12 @@ name: AI Issue to PR
 on:
   issues:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to process'
+        required: true
+        type: number
 
 permissions:
   contents: write
@@ -11,7 +17,9 @@ permissions:
 
 jobs:
   generate-pr:
-    if: github.event.label.name == 'ready-for-dev'
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'ready-for-dev'
     runs-on: ubuntu-latest
 
     steps:
@@ -23,12 +31,31 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Resolve issue data
+        id: issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            NUMBER="${{ inputs.issue_number }}"
+          else
+            NUMBER="${{ github.event.issue.number }}"
+          fi
+          TITLE=$(gh issue view "$NUMBER" --repo "${{ github.repository }}" --json title -q '.title')
+          {
+            echo 'body<<__DELIM__'
+            gh issue view "$NUMBER" --repo "${{ github.repository }}" --json body -q '.body'
+            echo '__DELIM__'
+          } >> "$GITHUB_OUTPUT"
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+
       - name: Generate AI change
         id: generate
         env:
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
+          ISSUE_BODY: ${{ steps.issue.outputs.body }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
@@ -38,16 +65,16 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          branch: ai/issue-${{ github.event.issue.number }}
+          branch: ai/issue-${{ steps.issue.outputs.number }}
           base: ${{ github.event.repository.default_branch }}
-          commit-message: "chore(ai): generate draft for issue #${{ github.event.issue.number }}"
-          title: "[AI] Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}"
+          commit-message: "chore(ai): generate draft for issue #${{ steps.issue.outputs.number }}"
+          title: "[AI] Issue #${{ steps.issue.outputs.number }}: ${{ steps.issue.outputs.title }}"
           body: |
             ## AI Generated Change
 
             ${{ steps.generate.outputs.summary }}
 
-            Closes #${{ github.event.issue.number }}
+            Closes #${{ steps.issue.outputs.number }}
           add-paths: |
             ${{ steps.generate.outputs.generated_paths }}
 
