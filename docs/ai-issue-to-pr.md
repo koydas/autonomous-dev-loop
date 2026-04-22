@@ -1,6 +1,6 @@
 # AI Issue-to-PR MVP Setup (Groq)
 
-This repository includes an MVP workflow that converts issues labeled with `ai-task` into AI-generated draft pull requests using Groq.
+This repository includes an MVP workflow that converts issues labeled with `ai-task` into AI-generated draft pull requests using Groq, but only after the validation agent has added the `ready-for-dev` label.
 
 ## Workflow Overview
 
@@ -13,10 +13,10 @@ Node implementation:
 - Modules: `scripts/lib/config.mjs`, `scripts/lib/groq_client.mjs`, `scripts/lib/output_writer.mjs`
 
 When the `ai-task` label is added to an issue, the workflow:
-1. Runs only when the issue includes the `ai-task` label.
+1. Runs only when the applied label is `ai-task` **and** the issue already has `ready-for-dev` (set by the validation agent).
 2. Builds a deterministic prompt using issue number, title, and body.
 3. Calls the Groq API using repository secrets.
-4. Writes exactly one generated file at the AI-selected relative path (for example `helloworld.md`).
+4. Writes 1 to 3 generated files at AI-selected relative paths.
 5. Creates a branch named `ai/issue-<number>`.
 6. Uses `peter-evans/create-pull-request` to commit generated content on `ai/issue-<number>`.
 7. Opens a PR to the repository default branch with `Closes #<issue_number>`.
@@ -49,11 +49,12 @@ you have two supported options:
 
 ## Required Label
 
-Create and use this issue label:
+Create and use these issue labels:
 
+- `ready-for-dev` (applied by the validation workflow when issue quality is sufficient)
 - `ai-task`
 
-Only issues where this label is actively applied trigger the automation job.
+`AI Issue to PR` only runs when `ai-task` is applied to an issue that already has `ready-for-dev`.
 
 ## End-to-End Test
 
@@ -70,14 +71,14 @@ Only issues where this label is actively applied trigger the automation job.
 7. Confirm PR details:
    - title references the issue number/title
    - body includes generated summary and `Closes #<number>`
-   - changed files limited to a single AI-generated target file
+   - changed files are limited to the generated AI target paths (maximum 3 files)
 8. Confirm the issue label `ai-task` has been removed after the run completes.
 
 ## Limitations (MVP)
 
 - Triggers on issue label application events.
 - Only runs when the applied label name is exactly `ai-task`.
-- Applies exactly one small generated file per run (safe scope).
+- Applies 1 to 3 small generated files per run (safe scope).
 - Does not perform auto-merge.
 - Does not attempt multi-file or complex refactors.
 
@@ -86,7 +87,7 @@ Only issues where this label is actively applied trigger the automation job.
 - **Risk:** AI output may be low quality or off-target.
   - **Mitigation:** deterministic prompt template, temperature `0`, and small-scope generated file.
 - **Risk:** accidental broad modifications.
-  - **Mitigation:** generated patch is constrained to one validated relative path and one file write.
+  - **Mitigation:** generated patch is constrained to validated relative paths with a hard limit of 3 files per run.
 - **Risk:** workflow secrets misconfiguration.
   - **Mitigation:** explicit secret checks and fail-fast logging before commit/PR steps.
 

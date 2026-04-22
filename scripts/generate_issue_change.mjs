@@ -30,18 +30,19 @@ async function main() {
     throw new Error('AI response JSON must be an object');
   }
 
-  const { summary, targetPath, fileContent } = validateAiOutput(aiOutput);
-  const outputPath = await writeGeneratedFiles({
-    targetPath,
-    fileContent,
-  });
+  const { summary, changes } = validateAiOutput(aiOutput);
+  const outputPaths = await writeGeneratedFiles(changes);
 
   if (process.env.GITHUB_OUTPUT) {
-    await fs.appendFile(process.env.GITHUB_OUTPUT, `summary<<EOF\n${summary}\nEOF\ngenerated_path=${outputPath}\n`, 'utf8');
+    await fs.appendFile(
+      process.env.GITHUB_OUTPUT,
+      `summary<<EOF\n${summary}\nEOF\ngenerated_paths<<EOF\n${outputPaths.join('\n')}\nEOF\n`,
+      'utf8',
+    );
   }
 
-  console.log(`[INFO] Wrote generated change: ${outputPath}`);
-  console.log('[INFO] Exported workflow outputs: summary, generated_path');
+  console.log(`[INFO] Wrote generated changes: ${outputPaths.join(', ')}`);
+  console.log('[INFO] Exported workflow outputs: summary, generated_paths');
 }
 
 main().catch((error) => {

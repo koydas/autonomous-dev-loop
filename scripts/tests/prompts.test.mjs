@@ -92,6 +92,7 @@ describe('prompt file contents', () => {
   test('generation-system mentions the three required JSON output keys', () => {
     const content = loadPrompt('generation-system');
     assert.ok(content.includes('summary'));
+    assert.ok(content.includes('changes'));
     assert.ok(content.includes('target_path'));
     assert.ok(content.includes('file_content'));
   });
@@ -106,6 +107,7 @@ describe('prompt file contents', () => {
   test('generation-user contains the JSON output schema', () => {
     const content = loadPrompt('generation-user');
     assert.ok(content.includes('summary'));
+    assert.ok(content.includes('changes'));
     assert.ok(content.includes('target_path'));
     assert.ok(content.includes('file_content'));
   });

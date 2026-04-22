@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   generate-pr:
-    if: github.event.label.name == 'ai-task'
+    if: github.event.label.name == 'ai-task' && contains(github.event.issue.labels.*.name, 'ready-for-dev')
     runs-on: ubuntu-latest
 
     steps:
@@ -49,7 +49,7 @@ jobs:
 
             Closes #${{ github.event.issue.number }}
           add-paths: |
-            ${{ steps.generate.outputs.generated_path }}
+            ${{ steps.generate.outputs.generated_paths }}
 
       - name: Remove ai-task label
         if: always()
