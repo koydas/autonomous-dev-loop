@@ -86,6 +86,7 @@ test('buildDeterministicPrompt includes issue fields', () => {
 test('buildDeterministicPrompt contains JSON output schema keys', () => {
   const prompt = buildDeterministicPrompt({ issueNumber: '1', issueTitle: 'T', issueBody: 'B' });
   assert.ok(prompt.includes('summary'));
+  assert.ok(prompt.includes('changes'));
   assert.ok(prompt.includes('target_path'));
   assert.ok(prompt.includes('file_content'));
 });

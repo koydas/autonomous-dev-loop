@@ -1,36 +1,68 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+const MAX_FILE_COUNT = 3;
+const MAX_FILE_CONTENT_LENGTH = 16000;
+
+function validateSingleChange(change, index) {
+  if (!change || typeof change !== 'object' || Array.isArray(change)) {
+    throw new Error(`AI response changes[${index}] must be an object`);
+  }
+
+  const targetPath = String(change.target_path || '').trim();
+  const fileContent = String(change.file_content || '');
+
+  if (!targetPath) {
+    throw new Error(`AI response changes[${index}] missing non-empty target_path`);
+  }
+  if (!fileContent.trim()) {
+    throw new Error(`AI response changes[${index}] missing non-empty file_content`);
+  }
+  if (targetPath.startsWith('/') || targetPath.includes('..')) {
+    throw new Error(`AI response changes[${index}] target_path must be a safe relative path`);
+  }
+  if (fileContent.length > MAX_FILE_CONTENT_LENGTH) {
+    throw new Error(`AI response changes[${index}] file_content too large (>16000 chars)`);
+  }
+
+  return { targetPath, fileContent };
+}
+
 export function validateAiOutput(aiOutput) {
   const summary = String(aiOutput.summary || '').trim();
-  const targetPath = String(aiOutput.target_path || '').trim();
-  const fileContent = String(aiOutput.file_content || '');
+  const changes = aiOutput.changes;
 
   if (!summary) {
     throw new Error('AI response missing non-empty summary');
   }
-  if (!targetPath) {
-    throw new Error('AI response missing non-empty target_path');
+  if (!Array.isArray(changes) || changes.length === 0) {
+    throw new Error('AI response missing non-empty changes array');
   }
-  if (!fileContent.trim()) {
-    throw new Error('AI response missing non-empty file_content');
-  }
-  if (targetPath.startsWith('/') || targetPath.includes('..')) {
-    throw new Error('AI response target_path must be a safe relative path');
-  }
-  if (fileContent.length > 16000) {
-    throw new Error('AI response file_content too large (>16000 chars)');
+  if (changes.length > MAX_FILE_COUNT) {
+    throw new Error('AI response changes array too large (>3 files)');
   }
 
-  return { summary, targetPath, fileContent };
+  const normalizedChanges = changes.map((change, index) => validateSingleChange(change, index));
+  const uniquePathCount = new Set(normalizedChanges.map(({ targetPath }) => targetPath)).size;
+  if (uniquePathCount !== normalizedChanges.length) {
+    throw new Error('AI response changes contain duplicate target_path values');
+  }
+
+  return { summary, changes: normalizedChanges };
 }
 
-export async function writeGeneratedFiles({ targetPath, fileContent }) {
-  const outputPath = path.normalize(targetPath).replaceAll('\\', '/');
-  const parentDir = path.dirname(outputPath);
-  if (parentDir && parentDir !== '.') {
-    await fs.mkdir(parentDir, { recursive: true });
+export async function writeGeneratedFiles(changes) {
+  const writtenPaths = [];
+
+  for (const { targetPath, fileContent } of changes) {
+    const outputPath = path.normalize(targetPath).replaceAll('\\', '/');
+    const parentDir = path.dirname(outputPath);
+    if (parentDir && parentDir !== '.') {
+      await fs.mkdir(parentDir, { recursive: true });
+    }
+    await fs.writeFile(outputPath, fileContent, 'utf8');
+    writtenPaths.push(outputPath);
   }
-  await fs.writeFile(outputPath, fileContent, 'utf8');
-  return outputPath;
+
+  return writtenPaths;
 }
