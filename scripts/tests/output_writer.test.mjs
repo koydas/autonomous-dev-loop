@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateAiOutput } from '../lib/output_writer.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { validateAiOutput, writeGeneratedFiles } from '../lib/output_writer.mjs';
 
 test('validateAiOutput returns trimmed fields for valid input', () => {
   const result = validateAiOutput({
@@ -115,4 +118,90 @@ test('validateAiOutput rejects duplicate target paths', () => {
     }),
     /duplicate target_path/,
   );
+});
+
+// writeGeneratedFiles tests
+
+test('writeGeneratedFiles returns empty array for empty input', async () => {
+  const paths = await writeGeneratedFiles([]);
+  assert.deepEqual(paths, []);
+});
+
+test('writeGeneratedFiles writes a single flat file and returns its path', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-test-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(tmpDir);
+    const paths = await writeGeneratedFiles([{ targetPath: 'output.txt', fileContent: 'hello world' }]);
+    assert.deepEqual(paths, ['output.txt']);
+    const content = await fs.readFile(path.join(tmpDir, 'output.txt'), 'utf8');
+    assert.equal(content, 'hello world');
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('writeGeneratedFiles creates nested parent directories', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-test-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(tmpDir);
+    const paths = await writeGeneratedFiles([{ targetPath: 'src/lib/utils.js', fileContent: 'export {}' }]);
+    assert.deepEqual(paths, ['src/lib/utils.js']);
+    const content = await fs.readFile(path.join(tmpDir, 'src/lib/utils.js'), 'utf8');
+    assert.equal(content, 'export {}');
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('writeGeneratedFiles writes correct content for each file in a batch', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-test-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(tmpDir);
+    await writeGeneratedFiles([
+      { targetPath: 'alpha.txt', fileContent: 'alpha content' },
+      { targetPath: 'beta.txt', fileContent: 'beta content' },
+    ]);
+    assert.equal(await fs.readFile(path.join(tmpDir, 'alpha.txt'), 'utf8'), 'alpha content');
+    assert.equal(await fs.readFile(path.join(tmpDir, 'beta.txt'), 'utf8'), 'beta content');
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('writeGeneratedFiles returns all written paths in order', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-test-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(tmpDir);
+    const paths = await writeGeneratedFiles([
+      { targetPath: 'a.txt', fileContent: 'a' },
+      { targetPath: 'b.txt', fileContent: 'b' },
+      { targetPath: 'sub/c.txt', fileContent: 'c' },
+    ]);
+    assert.deepEqual(paths, ['a.txt', 'b.txt', 'sub/c.txt']);
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('writeGeneratedFiles overwrites an existing file', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-test-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(tmpDir);
+    await fs.writeFile(path.join(tmpDir, 'existing.txt'), 'old content');
+    await writeGeneratedFiles([{ targetPath: 'existing.txt', fileContent: 'new content' }]);
+    const content = await fs.readFile(path.join(tmpDir, 'existing.txt'), 'utf8');
+    assert.equal(content, 'new content');
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
 });
