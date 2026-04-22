@@ -2,7 +2,7 @@
 name: "✨ Feature request"
 about: "Propose a new feature with clear scope"
 title: "[FEATURE] "
-labels: ["ai-task"]
+labels: []
 assignees: []
 ---
 

@@ -35,7 +35,7 @@ Before committing any change to `scripts/` or `prompts/`:
 
 ## Workflow Rules _(pipeline only)_
 
-- Issue automation is opt-in by label (`ai-task`).
+- Issue automation triggers automatically when the validation agent applies the `ready-for-dev` label.
 - Branch naming must follow `ai/issue-<number>`.
 - PR descriptions should include `Closes #<issue_number>`.
 - Do not implement auto-merge in MVP.

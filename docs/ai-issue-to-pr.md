@@ -1,6 +1,6 @@
 # AI Issue-to-PR MVP Setup (Groq)
 
-This repository includes an MVP workflow that converts issues labeled with `ai-task` into AI-generated draft pull requests using Groq, but only after the validation agent has added the `ready-for-dev` label.
+This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests using Groq. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Workflow Overview
 
@@ -12,15 +12,13 @@ Node implementation:
 - Entrypoint: `scripts/generate_issue_change.mjs`
 - Modules: `scripts/lib/config.mjs`, `scripts/lib/groq_client.mjs`, `scripts/lib/output_writer.mjs`
 
-When the `ai-task` label is added to an issue, the workflow:
-1. Runs only when the applied label is `ai-task` **and** the issue already has `ready-for-dev` (set by the validation agent).
-2. Builds a deterministic prompt using issue number, title, and body.
-3. Calls the Groq API using repository secrets.
-4. Writes 1 to 3 generated files at AI-selected relative paths.
-5. Creates a branch named `ai/issue-<number>`.
-6. Uses `peter-evans/create-pull-request` to commit generated content on `ai/issue-<number>`.
-7. Opens a PR to the repository default branch with `Closes #<issue_number>`.
-8. Removes the `ai-task` label from the issue once the workflow run completes.
+When the `ready-for-dev` label is applied to an issue, the workflow:
+1. Builds a deterministic prompt using issue number, title, and body.
+2. Calls the Groq API using repository secrets.
+3. Writes 1 to 3 generated files at AI-selected relative paths.
+4. Creates a branch named `ai/issue-<number>`.
+5. Uses `peter-evans/create-pull-request` to commit generated content on `ai/issue-<number>`.
+6. Opens a PR to the repository default branch with `Closes #<issue_number>`.
 
 If generation fails or no patch is produced, the workflow exits before PR creation.
 
@@ -29,7 +27,7 @@ If generation fails or no patch is produced, the workflow exits before PR creati
 Configure these in **Settings → Secrets and variables → Actions**:
 
 - **Secret**: `GROQ_API_KEY` (required) — API key for Groq.
-- **Secret**: `AI_PR_TOKEN` (recommended) — GitHub token used for PR creation/issue label cleanup.
+- **Secret**: `AI_PR_TOKEN` (recommended) — GitHub token used for PR creation.
   - Use a fine-grained PAT or GitHub App token with at least **Contents: Read/Write**, **Pull requests: Read/Write**, and **Issues: Read/Write** on this repository.
   - If `AI_PR_TOKEN` is not set, the workflow falls back to `GITHUB_TOKEN`.
 - **Variables** (optional):
@@ -49,35 +47,30 @@ you have two supported options:
 
 ## Required Label
 
-Create and use these issue labels:
+The validation workflow creates and manages these labels automatically:
 
-- `ready-for-dev` (applied by the validation workflow when issue quality is sufficient)
-- `ai-task`
-
-`AI Issue to PR` only runs when `ai-task` is applied to an issue that already has `ready-for-dev`.
+- `ready-for-dev` — applied when issue quality is sufficient; triggers PR generation.
+- `needs-refinement` — applied when the issue requires clearer acceptance criteria.
 
 ## End-to-End Test
 
 1. Ensure secrets above are configured.
-2. Ensure the `ai-task` label exists.
-3. Create a new GitHub issue with a short title/body describing a small docs/code task.
-4. Add label `ai-task` to that issue.
-5. Open **Actions** and confirm run `AI Issue to PR` starts from the labeling event.
-6. Verify logs for:
+2. Create a new GitHub issue using the feature or bug template, with a clear title and body.
+3. Open **Actions** and confirm run `Issue Validation Agent` starts.
+4. Once validation passes, confirm `AI Issue to PR` starts automatically from the `ready-for-dev` label event.
+5. Verify logs for:
    - prompt construction
    - Groq API call success
    - branch creation (`ai/issue-<number>`)
    - PR creation
-7. Confirm PR details:
+6. Confirm PR details:
    - title references the issue number/title
    - body includes generated summary and `Closes #<number>`
    - changed files are limited to the generated AI target paths (maximum 3 files)
-8. Confirm the issue label `ai-task` has been removed after the run completes.
 
 ## Limitations (MVP)
 
-- Triggers on issue label application events.
-- Only runs when the applied label name is exactly `ai-task`.
+- Triggers on `ready-for-dev` label application event.
 - Applies 1 to 3 small generated files per run (safe scope).
 - Does not perform auto-merge.
 - Does not attempt multi-file or complex refactors.
@@ -99,4 +92,3 @@ Required secret:
 - **Secret**: `GROQ_API_KEY` (required) — used to review pull request diffs and post/update a structured PR comment.
 
 The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with `pull-requests: write` and `contents: read`.
-

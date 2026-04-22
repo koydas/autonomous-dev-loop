@@ -2,7 +2,7 @@
 name: "🐞 Bug report"
 about: "Report a bug with context and acceptance criteria"
 title: "[BUG] "
-labels: ["ai-task"]
+labels: []
 assignees: []
 ---
 
