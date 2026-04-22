@@ -9,7 +9,7 @@ The MVP issue-to-PR automation is now implemented (Groq-backed).
 - Workflow: `.github/workflows/ai-issue-to-pr.yml` (kept minimal/orchestration-only)
 - Generator script: `scripts/generate_issue_change.mjs`
 - Generator modules: `scripts/lib/*.mjs`
-- Prompt files: `prompts/*.txt` (one file per prompt, loaded at runtime)
+- Prompt files: `prompts/*.md` (one file per prompt, loaded at runtime)
 - Setup and testing guide: `docs/ai-issue-to-pr.md`
 - MVP definition: `docs/mvp.md`
 
