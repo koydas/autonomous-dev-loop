@@ -30,7 +30,7 @@ These instructions apply to the entire repository.
 
 Before committing any change to `scripts/` or `prompts/`:
 
-- Run `npm test` and ensure all tests pass.
+- Run `node --test scripts/tests/*.test.mjs` and ensure all tests pass.
 - Never commit code that breaks an existing test without updating or replacing the test intentionally.
 
 ## Workflow Rules _(pipeline only)_

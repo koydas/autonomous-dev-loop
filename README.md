@@ -1,5 +1,7 @@
 # autonomous-dev-loop
 
+[![Tests](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml/badge.svg)](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml)
+
 A fully autonomous GitHub-native dev loop: Issue → AI coder → PR → AI reviewer → iterative loop → human merge gate.
 
 ## MVP Automation Implemented
@@ -21,7 +23,7 @@ See `docs/ai-issue-to-pr.md` for required Groq secret, recommended PR token (`AI
 The core Node.js modules are covered by unit tests using the built-in `node:test` runner (no extra dependencies).
 
 ```bash
-npm test
+node --test scripts/tests/*.test.mjs
 ```
 
 - Test files: `scripts/tests/*.test.mjs` (includes prompt file tests)

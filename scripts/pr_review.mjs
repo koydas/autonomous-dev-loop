@@ -5,6 +5,7 @@ import { requireEnv, GROQ_MODEL_DEFAULTS, GROQ_API_URL_DEFAULT } from './lib/con
 import { callGroq } from './lib/groq_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
+import { log } from './lib/logger.mjs';
 
 const githubToken = requireEnv('GITHUB_TOKEN');
 const groqApiKey = requireEnv('GROQ_API_KEY');
@@ -30,13 +31,16 @@ const githubHeaders = {
   'X-GitHub-Api-Version': '2022-11-28',
 };
 
-const ghFetch = (path, options = {}) =>
-  fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: { ...githubHeaders, ...(options.headers || {}) },
-  }).catch((err) => {
+async function ghFetch(path, options = {}) {
+  try {
+    return await fetch(`https://api.github.com${path}`, {
+      ...options,
+      headers: { ...githubHeaders, ...(options.headers || {}) },
+    });
+  } catch (err) {
     throw new Error(`Network error calling GitHub API (${path}): ${err.message}`);
-  });
+  }
+}
 
 const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
   headers: { Accept: 'application/vnd.github.v3.diff' },
@@ -83,4 +87,4 @@ const postRes = await ghFetch(commentUrl, {
 });
 if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${await postRes.text()}`);
 
-console.log(`[INFO] PR #${prNumber} review ${existing ? 'updated' : 'posted'}`);
+log(`PR review ${existing ? 'updated' : 'posted'}`, { prNumber });

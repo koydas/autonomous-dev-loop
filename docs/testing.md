@@ -5,7 +5,7 @@ Unit tests cover all core Node.js modules using the built-in `node:test` runner 
 ## Running Tests
 
 ```bash
-npm test
+node --test scripts/tests/*.test.mjs
 ```
 
 Requires Node.js 20+. All tests should pass in under a second.
@@ -49,8 +49,8 @@ test('describes expected behavior', () => {
 });
 ```
 
-Per `AGENTS.md`: run `npm test` and ensure all tests pass before committing any change to `scripts/` or `prompts/`.
+Per `AGENTS.md`: run `node --test scripts/tests/*.test.mjs` and ensure all tests pass before committing any change to `scripts/` or `prompts/`.
 
 ## CI
 
-The workflow `.github/workflows/test.yml` runs `npm test` on every push and pull request targeting any branch.
+The workflow `.github/workflows/test.yml` runs `node --test scripts/tests/*.test.mjs` on every push and pull request targeting any branch.

@@ -4,6 +4,7 @@ import { buildDeterministicPrompt, loadConfigFromEnv } from './lib/config.mjs';
 import { callGroq } from './lib/groq_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
 import { validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
+import { log, error as logError } from './lib/logger.mjs';
 import fs from 'node:fs/promises';
 
 async function main() {
@@ -11,7 +12,7 @@ async function main() {
   const prompt = buildDeterministicPrompt(config);
   const systemPrompt = loadPrompt('generation-system');
 
-  console.log('[INFO] Calling Groq model with deterministic prompt template...');
+  log('Calling Groq model with deterministic prompt template');
   const raw = await callGroq({
     prompt,
     systemPrompt,
@@ -41,11 +42,11 @@ async function main() {
     );
   }
 
-  console.log(`[INFO] Wrote generated changes: ${outputPaths.join(', ')}`);
-  console.log('[INFO] Exported workflow outputs: summary, generated_paths');
+  log('Wrote generated changes', { paths: outputPaths.join(', ') });
+  log('Exported workflow outputs: summary, generated_paths');
 }
 
-main().catch((error) => {
-  console.error(`[ERROR] ${error.message}`);
+main().catch((err) => {
+  logError(err.message);
   process.exit(1);
 });

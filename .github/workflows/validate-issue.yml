@@ -44,28 +44,10 @@ jobs:
       - name: Manage labels
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           IS_VALID: ${{ steps.validate.outputs.valid }}
-        run: |
-          ISSUE_NUMBER=${{ github.event.issue.number }}
-          REPO=${{ github.repository }}
-
-          gh label create "ready-for-dev" \
-            --color "0075ca" \
-            --description "Issue validated and ready for automated implementation" \
-            --repo "$REPO" --force
-
-          gh label create "needs-refinement" \
-            --color "e4e669" \
-            --description "Issue requires clearer acceptance criteria before automation" \
-            --repo "$REPO" --force
-
-          if [ "$IS_VALID" = "true" ]; then
-            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "ready-for-dev"
-            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "needs-refinement" 2>/dev/null || true
-          else
-            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "needs-refinement"
-            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-label "ready-for-dev" 2>/dev/null || true
-          fi
+        run: node scripts/manage_labels.mjs
 
       - name: Trigger AI Issue to PR
         if: steps.validate.outputs.valid == 'true'

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { requireEnv } from './lib/config.mjs';
+import { log, error as logError } from './lib/logger.mjs';
 
 const COMMENT_MARKER = '<!-- issue-validation-report -->';
 
@@ -67,7 +68,7 @@ async function main() {
       token,
       body: { body },
     });
-    console.log(`[INFO] Updated validation comment ${existing.id} on issue #${issueNumber}`);
+    log('Updated validation comment', { commentId: existing.id, issueNumber });
     return;
   }
 
@@ -77,10 +78,10 @@ async function main() {
     token,
     body: { body },
   });
-  console.log(`[INFO] Created validation comment on issue #${issueNumber}`);
+  log('Created validation comment', { issueNumber });
 }
 
-main().catch((error) => {
-  console.error(`[ERROR] ${error.message}`);
+main().catch((err) => {
+  logError(err.message);
   process.exit(1);
 });
