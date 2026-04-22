@@ -30,13 +30,16 @@ const githubHeaders = {
   'X-GitHub-Api-Version': '2022-11-28',
 };
 
-const ghFetch = (path, options = {}) =>
-  fetch(`https://api.github.com${path}`, {
-    ...options,
-    headers: { ...githubHeaders, ...(options.headers || {}) },
-  }).catch((err) => {
+async function ghFetch(path, options = {}) {
+  try {
+    return await fetch(`https://api.github.com${path}`, {
+      ...options,
+      headers: { ...githubHeaders, ...(options.headers || {}) },
+    });
+  } catch (err) {
     throw new Error(`Network error calling GitHub API (${path}): ${err.message}`);
-  });
+  }
+}
 
 const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
   headers: { Accept: 'application/vnd.github.v3.diff' },
