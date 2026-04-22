@@ -2,5 +2,5 @@
 # Override at runtime with the GROQ_MODEL environment variable.
 
 validation: llama-3.3-70b-versatile
-generation: llama-3.1-8b-instant
+generation: llama-3.3-70b-versatile
 review:     llama-3.3-70b-versatile
