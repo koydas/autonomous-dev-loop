@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   generate-pr:
-    if: github.event.label.name == 'ai-task' && contains(github.event.issue.labels.*.name, 'ready-for-dev')
+    if: |
+      (github.event.label.name == 'ai-task' && contains(github.event.issue.labels.*.name, 'ready-for-dev')) ||
+      (github.event.label.name == 'ready-for-dev' && contains(github.event.issue.labels.*.name, 'ai-task'))
     runs-on: ubuntu-latest
 
     steps:
