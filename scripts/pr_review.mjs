@@ -25,6 +25,8 @@ if (!prNumber) throw new Error('Missing pull_request.number in event payload');
 
 const [owner, repo] = repository.split('/');
 
+const githubApiBase = (process.env.GITHUB_API_URL || 'https://api.github.com').trim();
+
 const githubHeaders = {
   Authorization: `Bearer ${githubToken}`,
   'Content-Type': 'application/json',
@@ -33,7 +35,7 @@ const githubHeaders = {
 
 async function ghFetch(path, options = {}) {
   try {
-    return await fetch(`https://api.github.com${path}`, {
+    return await fetch(`${githubApiBase}${path}`, {
       ...options,
       headers: { ...githubHeaders, ...(options.headers || {}) },
     });
