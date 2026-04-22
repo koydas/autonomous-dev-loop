@@ -18,6 +18,14 @@ export const VALIDATION_SYSTEM_PROMPT = loadPrompt('validation-system');
 // Pure helpers
 // ---------------------------------------------------------------------------
 
+// Returns false when the title is empty or contains only a [TAG] prefix with no
+// descriptive text — e.g. "[FEATURE]" alone is not a valid title.
+export function isMeaningfulTitle(title) {
+  if (!title || !title.trim()) return false;
+  const withoutPrefix = title.trim().replace(/^\[[^\]]+\]\s*/, '');
+  return withoutPrefix.length > 0;
+}
+
 export function buildValidationUserPrompt(issueTitle, issueBody) {
   const template = loadPrompt('validation-user');
   return interpolatePrompt(template, {
@@ -124,6 +132,15 @@ export function formatGitHubComment(result, issueTitle) {
 // ---------------------------------------------------------------------------
 
 export async function validateIssue({ issueTitle, issueBody, callGroq }) {
+  if (!isMeaningfulTitle(issueTitle)) {
+    return {
+      valid: false,
+      score: 0,
+      blockers: ['Issue title must contain a descriptive name beyond the type prefix (e.g. "[FEATURE] Add login endpoint")'],
+      warnings: [],
+      suggested_ac: [],
+    };
+  }
   const prompt = buildValidationUserPrompt(issueTitle, issueBody);
   const rawResponse = await callGroq({ prompt });
   return parseGroqResponse(rawResponse);

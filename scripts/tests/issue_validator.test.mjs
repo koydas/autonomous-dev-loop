@@ -6,6 +6,7 @@ import {
   parseGroqResponse,
   formatGitHubComment,
   validateIssue,
+  isMeaningfulTitle,
 } from '../lib/issue_validator.mjs';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,49 @@ describe('VALIDATION_SYSTEM_PROMPT', () => {
     assert.ok(VALIDATION_SYSTEM_PROMPT.includes('"valid"'));
     assert.ok(VALIDATION_SYSTEM_PROMPT.includes('"score"'));
     assert.ok(VALIDATION_SYSTEM_PROMPT.includes('"warnings"'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isMeaningfulTitle
+// ---------------------------------------------------------------------------
+
+describe('isMeaningfulTitle', () => {
+  test('returns false for empty string', () => {
+    assert.equal(isMeaningfulTitle(''), false);
+  });
+
+  test('returns false for whitespace-only string', () => {
+    assert.equal(isMeaningfulTitle('   '), false);
+  });
+
+  test('returns false for null/undefined', () => {
+    assert.equal(isMeaningfulTitle(null), false);
+    assert.equal(isMeaningfulTitle(undefined), false);
+  });
+
+  test('returns false for [FEATURE] with no description', () => {
+    assert.equal(isMeaningfulTitle('[FEATURE]'), false);
+  });
+
+  test('returns false for [BUG] with trailing whitespace only', () => {
+    assert.equal(isMeaningfulTitle('[BUG]   '), false);
+  });
+
+  test('returns false for [CHORE] alone', () => {
+    assert.equal(isMeaningfulTitle('[CHORE]'), false);
+  });
+
+  test('returns true for [FEATURE] with a description', () => {
+    assert.equal(isMeaningfulTitle('[FEATURE] Add login endpoint'), true);
+  });
+
+  test('returns true for [BUG] with a description', () => {
+    assert.equal(isMeaningfulTitle('[BUG] Fix null pointer on login'), true);
+  });
+
+  test('returns true for a plain title with no prefix', () => {
+    assert.equal(isMeaningfulTitle('Add login endpoint'), true);
   });
 });
 
@@ -309,5 +353,37 @@ describe('validateIssue', () => {
 
     const result = await validateIssue({ issueTitle: 'T', issueBody: 'B', callGroq: mockCallClaude });
     assert.equal(result.valid, false);
+  });
+
+  test('returns invalid without calling callGroq when title is only a [FEATURE] prefix', async () => {
+    let called = false;
+    const mockCallGroq = async () => { called = true; return makeRawResponse(); };
+
+    const result = await validateIssue({ issueTitle: '[FEATURE]', issueBody: 'Body', callGroq: mockCallGroq });
+
+    assert.equal(called, false, 'callGroq should not be invoked for a prefix-only title');
+    assert.equal(result.valid, false);
+    assert.equal(result.score, 0);
+    assert.ok(result.blockers.length > 0);
+    assert.ok(result.blockers[0].toLowerCase().includes('title'));
+  });
+
+  test('returns invalid without calling callGroq when title is empty', async () => {
+    let called = false;
+    const mockCallGroq = async () => { called = true; return makeRawResponse(); };
+
+    const result = await validateIssue({ issueTitle: '', issueBody: 'Body', callGroq: mockCallGroq });
+
+    assert.equal(called, false);
+    assert.equal(result.valid, false);
+  });
+
+  test('proceeds to callGroq when title has content beyond prefix', async () => {
+    let called = false;
+    const mockCallGroq = async () => { called = true; return makeRawResponse({ score: 80 }); };
+
+    await validateIssue({ issueTitle: '[FEATURE] Add login endpoint', issueBody: 'Body', callGroq: mockCallGroq });
+
+    assert.equal(called, true, 'callGroq should be invoked for a meaningful title');
   });
 });
