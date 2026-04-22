@@ -1,7 +1,7 @@
 # MVP: AI-Assisted Issue-to-PR Workflow
 
 ## Objective
-Build a minimal automation flow where creating a new GitHub issue triggers a workflow that:
+Build a minimal automation flow where explicitly labeling a GitHub issue with `ai-task` triggers a workflow that:
 1. Sends a prompt to an AI model.
 2. Uses the AI response to implement a small code/documentation change.
 3. Opens a simple pull request automatically.
@@ -15,7 +15,7 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
 - Projects where quick first-draft PRs reduce cycle time.
 
 ## In-Scope (MVP)
-- Trigger on **new issue** event.
+- Trigger on **issue labeled** event, gated to the `ai-task` label.
 - Build a prompt from issue title + body.
 - Call an AI model with that prompt.
 - Create/modify files in a dedicated branch.
@@ -30,7 +30,7 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
 - Multi-model orchestration.
 
 ## Functional Requirements
-1. On issue creation, workflow runs once.
+1. On `issues.labeled`, workflow runs only when the applied label is `ai-task`.
 2. Workflow sends deterministic prompt template to AI.
 3. AI output is applied as a minimal patch.
 4. Branch naming follows convention (e.g., `ai/issue-<number>`).
@@ -62,6 +62,6 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
   - **Mitigation:** retries + clear failure notifications.
 
 ## Next Steps
-- Define the exact issue label(s) eligible for automation.
-- Finalize prompt template and output format contract.
-- Implement GitHub Actions workflow and pilot with test issues.
+- Improve issue validation guidance and reviewer feedback loops for low-scoring tasks.
+- Add additional safety policies while preserving the single-file MVP scope.
+- Pilot with larger issue samples and track quality metrics against acceptance criteria.

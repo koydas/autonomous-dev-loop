@@ -30,8 +30,8 @@ All AI prompts live in `prompts/` as `.md` files, one per prompt:
 | `validation-user.md` | `issue_validator.mjs` | Placeholders: `{{issueTitle}}`, `{{issueBody}}` |
 | `generation-system.md` | `generate_issue_change.mjs` | System instruction for code generation |
 | `generation-user.md` | `config.mjs` | Placeholders: `{{issueNumber}}`, `{{issueTitle}}`, `{{issueBody}}` |
-| `pr-review-system.md` | `.github/scripts/pr-review.mjs` | Reviewer persona |
-| `pr-review-user.md` | `.github/scripts/pr-review.mjs` | Placeholder: `{{diff}}` |
+| `pr-review-system.md` | `scripts/pr_review.mjs` | Reviewer persona |
+| `pr-review-user.md` | `scripts/pr_review.mjs` | Placeholder: `{{diff}}` |
 
 Template placeholders use the `{{variableName}}` syntax. `interpolatePrompt()` in `scripts/lib/prompts.mjs` handles substitution; unknown placeholders are left unchanged.
 
