@@ -11,7 +11,8 @@ In that configuration, the run fails with:
 
 `GitHub Actions is not permitted to create or approve pull requests.`
 
-MVP still requires fail-fast behavior and deterministic PR creation when an issue is labeled `ai-task`.
+MVP still requires fail-fast behavior and deterministic PR creation when an issue receives
+the `ready-for-dev` label.
 
 ## Decision
 
@@ -20,10 +21,7 @@ Use a dedicated secret token for PR-related writes when available:
 - Prefer `secrets.AI_PR_TOKEN`.
 - Fallback to `secrets.GITHUB_TOKEN` when `AI_PR_TOKEN` is not configured.
 
-Apply this strategy consistently to:
-
-- PR creation (`peter-evans/create-pull-request`).
-- Post-run label cleanup (`actions/github-script` for removing `ai-task`).
+Apply this strategy to PR creation (`peter-evans/create-pull-request`).
 
 ## Consequences
 
