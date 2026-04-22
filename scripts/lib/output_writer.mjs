@@ -39,7 +39,7 @@ export function validateAiOutput(aiOutput) {
     throw new Error('AI response missing non-empty changes array');
   }
   if (changes.length > MAX_FILE_COUNT) {
-    throw new Error('AI response changes array too large (>3 files)');
+    throw new Error('AI response changes array too large (>6 files)');
   }
 
   const normalizedChanges = changes.map((change, index) => validateSingleChange(change, index));

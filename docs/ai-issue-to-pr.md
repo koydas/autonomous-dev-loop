@@ -15,7 +15,7 @@ Node implementation:
 When the `ready-for-dev` label is applied to an issue, the workflow:
 1. Builds a deterministic prompt using issue number, title, and body.
 2. Calls the Groq API using repository secrets.
-3. Writes 1 to 3 generated files at AI-selected relative paths.
+3. Writes 1 to 6 generated files at AI-selected relative paths.
 4. Creates a branch named `ai/issue-<number>`.
 5. Uses `peter-evans/create-pull-request` to commit generated content on `ai/issue-<number>`.
 6. Opens a PR to the repository default branch with `Closes #<issue_number>`.
@@ -66,12 +66,12 @@ The validation workflow creates and manages these labels automatically:
 6. Confirm PR details:
    - title references the issue number/title
    - body includes generated summary and `Closes #<number>`
-   - changed files are limited to the generated AI target paths (maximum 3 files)
+   - changed files are limited to the generated AI target paths (maximum 6 files)
 
 ## Limitations (MVP)
 
 - Triggers on `ready-for-dev` label application event.
-- Applies 1 to 3 small generated files per run (safe scope).
+- Applies 1 to 6 generated files per run (safe scope).
 - Does not perform auto-merge.
 - Does not attempt multi-file or complex refactors.
 
@@ -80,7 +80,7 @@ The validation workflow creates and manages these labels automatically:
 - **Risk:** AI output may be low quality or off-target.
   - **Mitigation:** deterministic prompt template, temperature `0`, and small-scope generated file.
 - **Risk:** accidental broad modifications.
-  - **Mitigation:** generated patch is constrained to validated relative paths with a hard limit of 3 files per run.
+  - **Mitigation:** generated patch is constrained to validated relative paths with a hard limit of 6 files per run.
 - **Risk:** workflow secrets misconfiguration.
   - **Mitigation:** explicit secret checks and fail-fast logging before commit/PR steps.
 
