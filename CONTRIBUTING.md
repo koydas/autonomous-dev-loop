@@ -8,7 +8,7 @@
 ## Running Tests
 
 ```bash
-npm test
+node --test scripts/tests/*.test.mjs
 ```
 
 All tests use the built-in `node:test` runner — no install needed. Tests must pass before committing any change to `scripts/` or `prompts/`.
@@ -29,7 +29,7 @@ docs/             Setup guides and architecture decisions (ADRs)
 1. Pick or open an issue.
 2. Create a branch: `git checkout -b your-branch`.
 3. Make changes — keep them small and MVP-focused (see `AGENTS.md`).
-4. Run `npm test` and fix any failures.
+4. Run `node --test scripts/tests/*.test.mjs` and fix any failures.
 5. Open a pull request against `main`.
 
 ## Key Conventions
