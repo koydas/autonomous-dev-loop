@@ -27,7 +27,7 @@ test('validateAiOutput throws when changes is missing', () => {
   );
 });
 
-test('validateAiOutput throws when changes contains more than 3 files', () => {
+test('validateAiOutput throws when changes contains more than 6 files', () => {
   assert.throws(
     () => validateAiOutput({
       summary: 'ok',
@@ -36,6 +36,9 @@ test('validateAiOutput throws when changes contains more than 3 files', () => {
         { target_path: 'b.md', file_content: 'x' },
         { target_path: 'c.md', file_content: 'x' },
         { target_path: 'd.md', file_content: 'x' },
+        { target_path: 'e.md', file_content: 'x' },
+        { target_path: 'f.md', file_content: 'x' },
+        { target_path: 'g.md', file_content: 'x' },
       ],
     }),
     /too large/,
