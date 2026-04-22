@@ -6,5 +6,5 @@ Rules:
 - Do not report style preferences, generic advice, or tooling suggestions.
 - Do not flag issues already covered by passing tests unless the diff clearly breaks runtime behavior despite tests.
 - Every issue must be independently actionable and include: severity, file path, line number(s) when available, root cause, and concrete fix.
-- If no qualifying issues exist, return APPROVE.
-- Allowed verdicts are only: APPROVE or REQUEST_CHANGES.
+- If no qualifying issues exist, return APPROVED.
+- Allowed verdicts are only: APPROVED or REQUEST_CHANGES.

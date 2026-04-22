@@ -15,7 +15,7 @@ Use one bullet per issue with this format:
 If none found, write: None.
 
 ### 🚀 Verdict
-(APPROVE | REQUEST_CHANGES)
+(APPROVED | REQUEST_CHANGES)
 
 Constraints:
 - Max 220 words
