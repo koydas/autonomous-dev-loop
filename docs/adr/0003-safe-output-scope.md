@@ -1,4 +1,4 @@
-# ADR-0003: Safe output scope (up to 3 generated files)
+# ADR-0003: Safe output scope (up to 6 generated files)
 
 - **Date:** 2026-04-14
 - **Status:** Accepted
@@ -7,12 +7,12 @@
 
 MVP requires low-risk automated code changes and clear failure behavior.
 Single-file output proved too restrictive for tasks that naturally span a source file
-and its test, so the scope was relaxed to a hard cap of 3 files while keeping the
+and its test, so the scope was relaxed to a hard cap of 6 files while keeping the
 same safety invariants.
 
 ## Decision
 
-Constrain generation to a maximum of 3 validated relative file paths returned by the AI:
+Constrain generation to a maximum of 6 validated relative file paths returned by the AI:
 - no absolute paths
 - no `..` traversal
 - duplicate target paths within a single run are rejected
@@ -26,4 +26,4 @@ file write steps fail.
 - ✅ Minimizes blast radius of generated changes.
 - ✅ Keeps review surface small and easy to audit.
 - ✅ Allows source + test (+ optional config) in a single run.
-- ⚠️ Tasks requiring more than 3 files remain out of scope for MVP.
+- ⚠️ Tasks requiring more than 6 files remain out of scope for MVP.

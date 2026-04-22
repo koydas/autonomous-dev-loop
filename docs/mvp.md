@@ -19,12 +19,12 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
 - Trigger PR generation on **issue labeled** event, gated to the `ready-for-dev` label.
 - Build a prompt from issue title + body.
 - Call an AI model with that prompt.
-- Create/modify up to 3 files in a dedicated branch.
+- Create/modify up to 6 files in a dedicated branch.
 - Open a PR with generated title/body.
 - Add basic logging for traceability.
 
 ## Out of Scope (MVP)
-- Multi-file complex refactors (hard cap: 3 files per run).
+- Multi-file complex refactors (hard cap: 6 files per run).
 - Full autonomous code review.
 - Automatic merge.
 - Advanced security policy engine.
@@ -34,7 +34,7 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
 1. On `issues.opened` or `issues.edited`, the validation workflow runs and applies either `ready-for-dev` or `needs-refinement`.
 2. On `issues.labeled`, the generation workflow runs only when the applied label is `ready-for-dev`.
 3. Workflow sends deterministic prompt template to AI.
-4. AI output is applied as a minimal patch (1–3 files, safe relative paths only).
+4. AI output is applied as a minimal patch (1–6 files, safe relative paths only).
 5. Branch naming follows convention (e.g., `ai/issue-<number>`).
 6. PR is created against default branch.
 7. PR links back to the original issue.
@@ -60,5 +60,5 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
 
 ## Next Steps
 - Improve issue validation guidance and reviewer feedback loops for low-scoring tasks.
-- Add additional safety policies while preserving the 3-file MVP scope.
+- Add additional safety policies while preserving the 6-file MVP scope.
 - Pilot with larger issue samples and track quality metrics against acceptance criteria.
