@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const MAX_FILE_COUNT = 3;
+const MAX_FILE_COUNT = 6;
 const MAX_FILE_CONTENT_LENGTH = 16000;
 
 function validateSingleChange(change, index) {
