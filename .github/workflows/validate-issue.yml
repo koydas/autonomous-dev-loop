@@ -32,15 +32,13 @@ jobs:
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
         run: node scripts/validate_issue.mjs
 
-      - name: Post validation comment
+      - name: Upsert validation comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           COMMENT_BODY: ${{ steps.validate.outputs.comment }}
-        run: |
-          printf '%s' "$COMMENT_BODY" > /tmp/validation_comment.md
-          gh issue comment ${{ github.event.issue.number }} \
-            --repo ${{ github.repository }} \
-            --body-file /tmp/validation_comment.md
+        run: node scripts/upsert_issue_validation_comment.mjs
 
       - name: Manage labels
         env:
