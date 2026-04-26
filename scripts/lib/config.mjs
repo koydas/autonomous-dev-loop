@@ -24,8 +24,18 @@ export function requireEnv(name) {
   return value;
 }
 
+export function detectProvider() {
+  const hasAnthropic = !!process.env.ANTHROPIC_API_KEY?.trim();
+  const hasGroq = !!process.env.GROQ_API_KEY?.trim();
+  if (hasAnthropic && hasGroq) {
+    return (process.env.AI_PROVIDER || 'anthropic').trim().toLowerCase();
+  }
+  if (hasGroq) return 'groq';
+  return 'anthropic';
+}
+
 export function loadLLMConfig(stage = 'generation') {
-  const provider = (process.env.AI_PROVIDER || 'anthropic').trim().toLowerCase();
+  const provider = detectProvider();
 
   if (provider === 'anthropic') {
     const apiKey = requireEnv('ANTHROPIC_API_KEY');

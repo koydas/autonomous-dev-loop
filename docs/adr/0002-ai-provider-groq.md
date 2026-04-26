@@ -16,7 +16,15 @@ Support two LLM providers via a runtime router (`scripts/lib/llm_client.mjs`):
 | Anthropic | ✅ yes | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` (default: `claude-opus-4-7`) |
 | Groq | no | `GROQ_API_KEY` | `GROQ_MODEL` (default: `llama-3.3-70b-versatile`) |
 
-The active provider is selected via the `AI_PROVIDER` environment variable (`anthropic` or `groq`, default: `anthropic`).
+The active provider is determined automatically by which API keys are present:
+
+| Keys configured | Provider used |
+|---|---|
+| `ANTHROPIC_API_KEY` only | Anthropic |
+| `GROQ_API_KEY` only | Groq |
+| Both | Anthropic (default) — override with `AI_PROVIDER=groq` |
+
+`AI_PROVIDER` is only consulted as a tiebreaker when both keys are present.
 
 Architecture:
 - `scripts/lib/llm_client.mjs` — provider router, exports `callLLM()`

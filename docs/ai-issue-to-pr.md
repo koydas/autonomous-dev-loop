@@ -26,15 +26,23 @@ If generation fails or no patch is produced, the workflow exits before PR creati
 
 Configure these in **Settings → Secrets and variables → Actions**:
 
-- **Secret**: `ANTHROPIC_API_KEY` (required when `AI_PROVIDER=anthropic`, the default) — API key for Anthropic.
-- **Secret**: `GROQ_API_KEY` (required when `AI_PROVIDER=groq`) — API key for Groq.
+Provider selection is automatic based on which secrets are configured:
+
+| Secrets configured | Provider used |
+|---|---|
+| `ANTHROPIC_API_KEY` only | Anthropic |
+| `GROQ_API_KEY` only | Groq |
+| Both | Anthropic (default) — override with `AI_PROVIDER=groq` |
+| Neither | Fails with a clear error |
+
+- **Secret**: `ANTHROPIC_API_KEY` — API key for Anthropic (Claude models).
+- **Secret**: `GROQ_API_KEY` — API key for Groq.
 - **Secret**: `AI_PR_TOKEN` (recommended) — GitHub token used for PR creation.
   - Use a fine-grained PAT or GitHub App token with at least **Contents: Read/Write**, **Pull requests: Read/Write**, and **Issues: Read/Write** on this repository.
   - If `AI_PR_TOKEN` is not set, the workflow falls back to `GITHUB_TOKEN`.
 - **Variables** (optional):
-  - `AI_PROVIDER` — `anthropic` (default) or `groq`.
+  - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Anthropic is the default.
   - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
-  - `ANTHROPIC_API_URL` — Anthropic endpoint override (for testing only).
   - `GROQ_MODEL` — Groq model name (defaults to `llama-3.3-70b-versatile` if unset).
   - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
 
@@ -93,6 +101,6 @@ The validation workflow creates and manages these labels automatically:
 File: `.github/workflows/pr-review.yml`
 
 Required secret:
-- **Secret**: `ANTHROPIC_API_KEY` (required when `AI_PROVIDER=anthropic`, the default) or `GROQ_API_KEY` (required when `AI_PROVIDER=groq`) — used to review pull request diffs and post/update a structured PR comment.
+- **Secret**: `ANTHROPIC_API_KEY` or `GROQ_API_KEY` — used to review pull request diffs and post/update a structured PR comment. Same provider selection rules apply (see above).
 
 The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with `pull-requests: write` and `contents: read`.

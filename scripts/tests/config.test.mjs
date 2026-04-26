@@ -2,7 +2,8 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt } from '../lib/config.mjs';
 
-const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', 'ANTHROPIC_API_KEY'];
+const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL'];
+const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
 
 function setEnv(vars) {
   for (const [k, v] of Object.entries(vars)) process.env[k] = v;
@@ -12,8 +13,8 @@ function unsetEnv(...names) {
   for (const name of names) delete process.env[name];
 }
 
-beforeEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_MODEL', 'AI_PROVIDER'));
-afterEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_MODEL', 'AI_PROVIDER'));
+beforeEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY'));
+afterEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY'));
 
 // requireEnv
 
@@ -72,6 +73,27 @@ test('loadConfigFromEnv throws when ANTHROPIC_API_KEY is missing', () => {
 test('loadConfigFromEnv throws when ISSUE_NUMBER is missing', () => {
   setEnv({ ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'k' });
   assert.throws(() => loadConfigFromEnv(), /ISSUE_NUMBER/);
+});
+
+test('loadConfigFromEnv uses Groq when only GROQ_API_KEY is set', () => {
+  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', GROQ_API_KEY: 'groq-key' });
+  const config = loadConfigFromEnv();
+  assert.equal(config.apiKey, 'groq-key');
+  assert.equal(config.model, 'llama-3.3-70b-versatile');
+});
+
+test('loadConfigFromEnv uses Anthropic when both keys set and no AI_PROVIDER', () => {
+  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key' });
+  const config = loadConfigFromEnv();
+  assert.equal(config.apiKey, 'ant-key');
+  assert.equal(config.model, 'claude-opus-4-7');
+});
+
+test('loadConfigFromEnv uses AI_PROVIDER=groq tiebreaker when both keys set', () => {
+  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'groq' });
+  const config = loadConfigFromEnv();
+  assert.equal(config.apiKey, 'groq-key');
+  assert.equal(config.model, 'llama-3.3-70b-versatile');
 });
 
 // buildDeterministicPrompt
