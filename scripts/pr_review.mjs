@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
-import { requireEnv, GROQ_MODEL_DEFAULTS, GROQ_API_URL_DEFAULT } from './lib/config.mjs';
-import { callGroq } from './lib/groq_client.mjs';
+import { requireEnv, loadLLMConfig } from './lib/config.mjs';
+import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log } from './lib/logger.mjs';
 
 const githubToken = requireEnv('GITHUB_TOKEN');
-const groqApiKey = requireEnv('GROQ_API_KEY');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
+const { apiKey: llmApiKey, model, apiUrl } = loadLLMConfig('review');
 
 let event;
 try {
@@ -52,16 +52,13 @@ const rawDiff = await diffRes.text();
 
 const diff = filterDiff(rawDiff);
 
-const model = (process.env.GROQ_MODEL || GROQ_MODEL_DEFAULTS.review).trim();
-const apiUrl = (process.env.GROQ_API_URL || GROQ_API_URL_DEFAULT).trim();
-
 const systemPrompt = loadPrompt('pr-review-system');
 const userPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff });
 
-const rawReview = await callGroq({
+const rawReview = await callLLM({
   prompt: userPrompt,
   systemPrompt,
-  apiKey: groqApiKey,
+  apiKey: llmApiKey,
   model,
   apiUrl,
   temperature: 0.2,

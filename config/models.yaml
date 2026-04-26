@@ -1,5 +1,6 @@
 # Default Groq model per pipeline.
 # Override at runtime with the GROQ_MODEL environment variable.
+# For Anthropic, set AI_PROVIDER=anthropic and optionally ANTHROPIC_MODEL.
 
 validation: llama-3.3-70b-versatile
 generation: llama-3.3-70b-versatile
