@@ -25,8 +25,10 @@ function getHeaders(token) {
   };
 }
 
+const githubApiBase = (process.env.GITHUB_API_URL || 'https://api.github.com').trim();
+
 async function ghRequest(path, { method = 'GET', token, body } = {}) {
-  return fetch(`https://api.github.com${path}`, {
+  return fetch(`${githubApiBase}${path}`, {
     method,
     headers: getHeaders(token),
     body: body ? JSON.stringify(body) : undefined,
