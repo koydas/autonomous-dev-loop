@@ -43,13 +43,13 @@ test('loadConfigFromEnv returns full config with all vars set', () => {
   assert.equal(config.issueTitle, 'Fix bug');
   assert.equal(config.issueBody, 'Details');
   assert.equal(config.apiKey, 'key123');
-  assert.equal(config.model, 'llama-3.1-8b-instant');
+  assert.equal(config.model, 'llama-3.3-70b-versatile');
 });
 
 test('loadConfigFromEnv uses default model when GROQ_MODEL not set', () => {
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', GROQ_API_KEY: 'k' });
   const { model } = loadConfigFromEnv();
-  assert.equal(model, 'llama-3.1-8b-instant');
+  assert.equal(model, 'llama-3.3-70b-versatile');
 });
 
 test('loadConfigFromEnv uses custom model when GROQ_MODEL is set', () => {

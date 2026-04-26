@@ -5,11 +5,13 @@ import { callGroq } from './lib/groq_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
 import { validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
+import { buildFileContentsBlock } from './lib/file_injector.mjs';
 import fs from 'node:fs/promises';
 
 async function main() {
   const config = loadConfigFromEnv();
-  const prompt = buildDeterministicPrompt(config);
+  const fileContents = await buildFileContentsBlock(config.issueTitle, config.issueBody, process.cwd());
+  const prompt = buildDeterministicPrompt({ ...config, fileContents });
   const systemPrompt = loadPrompt('generation-system');
 
   log('Calling Groq model with deterministic prompt template');
