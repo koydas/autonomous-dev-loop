@@ -22,22 +22,21 @@ afterEach(() => {
   }
 });
 
-test('callLLM routes to Groq by default (no AI_PROVIDER)', async () => {
+test('callLLM routes to Anthropic by default (no AI_PROVIDER)', async () => {
   delete process.env.AI_PROVIDER;
-  let capturedUrl;
-  globalThis.fetch = async (url, opts) => {
-    capturedUrl = url;
-    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  let capturedHeaders;
+  globalThis.fetch = async (_url, opts) => {
+    capturedHeaders = opts.headers;
+    return makeResponse({ content: [{ type: 'text', text: 'ok' }] });
   };
   const result = await callLLM({
     prompt: 'hi',
     systemPrompt: 'sys',
-    apiKey: 'key',
-    model: 'llama-3.3-70b-versatile',
-    apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    apiKey: 'sk-ant-key',
+    model: 'claude-opus-4-7',
   });
   assert.equal(result, 'ok');
-  assert.equal(capturedUrl, 'https://api.groq.com/openai/v1/chat/completions');
+  assert.equal(capturedHeaders['x-api-key'], 'sk-ant-key');
 });
 
 test('callLLM routes to Groq when AI_PROVIDER=groq', async () => {

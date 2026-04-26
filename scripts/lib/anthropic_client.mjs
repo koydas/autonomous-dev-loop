@@ -1,4 +1,4 @@
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_API_URL_DEFAULT = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
 export async function callAnthropic({
@@ -6,6 +6,7 @@ export async function callAnthropic({
   systemPrompt,
   apiKey,
   model,
+  apiUrl,
   temperature = 0,
   maxTokens = 4096,
 }) {
@@ -17,7 +18,7 @@ export async function callAnthropic({
     messages: [{ role: 'user', content: prompt }],
   };
 
-  const response = await fetch(ANTHROPIC_API_URL, {
+  const response = await fetch(apiUrl || ANTHROPIC_API_URL_DEFAULT, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

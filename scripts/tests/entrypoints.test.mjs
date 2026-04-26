@@ -29,46 +29,46 @@ function assertFails(result, pattern) {
 
 // generate_issue_change.mjs
 
-test('generate_issue_change exits 1 when GROQ_API_KEY is missing', async () => {
+test('generate_issue_change exits 1 when ANTHROPIC_API_KEY is missing', async () => {
   assertFails(
     await runScript('generate_issue_change.mjs', { ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' }),
-    /GROQ_API_KEY/,
+    /ANTHROPIC_API_KEY/,
   );
 });
 
 test('generate_issue_change exits 1 when ISSUE_NUMBER is missing', async () => {
   assertFails(
-    await runScript('generate_issue_change.mjs', { GROQ_API_KEY: 'key', ISSUE_TITLE: 'T' }),
+    await runScript('generate_issue_change.mjs', { ANTHROPIC_API_KEY: 'key', ISSUE_TITLE: 'T' }),
     /ISSUE_NUMBER/,
   );
 });
 
 test('generate_issue_change exits 1 when ISSUE_TITLE is missing', async () => {
   assertFails(
-    await runScript('generate_issue_change.mjs', { GROQ_API_KEY: 'key', ISSUE_NUMBER: '1' }),
+    await runScript('generate_issue_change.mjs', { ANTHROPIC_API_KEY: 'key', ISSUE_NUMBER: '1' }),
     /ISSUE_TITLE/,
   );
 });
 
 // validate_issue.mjs
 
-test('validate_issue exits 1 when GROQ_API_KEY is missing', async () => {
+test('validate_issue exits 1 when ANTHROPIC_API_KEY is missing', async () => {
   assertFails(
     await runScript('validate_issue.mjs', { ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' }),
-    /GROQ_API_KEY/,
+    /ANTHROPIC_API_KEY/,
   );
 });
 
 test('validate_issue exits 1 when ISSUE_NUMBER is missing', async () => {
   assertFails(
-    await runScript('validate_issue.mjs', { GROQ_API_KEY: 'key', ISSUE_TITLE: 'T' }),
+    await runScript('validate_issue.mjs', { ANTHROPIC_API_KEY: 'key', ISSUE_TITLE: 'T' }),
     /ISSUE_NUMBER/,
   );
 });
 
 test('validate_issue exits 1 when ISSUE_TITLE is missing', async () => {
   assertFails(
-    await runScript('validate_issue.mjs', { GROQ_API_KEY: 'key', ISSUE_NUMBER: '1' }),
+    await runScript('validate_issue.mjs', { ANTHROPIC_API_KEY: 'key', ISSUE_NUMBER: '1' }),
     /ISSUE_TITLE/,
   );
 });
@@ -78,7 +78,7 @@ test('validate_issue exits 1 when ISSUE_TITLE is missing', async () => {
 test('pr_review exits 1 when GITHUB_TOKEN is missing', async () => {
   assertFails(
     await runScript('pr_review.mjs', {
-      GROQ_API_KEY: 'key',
+      ANTHROPIC_API_KEY: 'key',
       GITHUB_REPOSITORY: 'owner/repo',
       GITHUB_EVENT_PATH: '/tmp/event.json',
     }),
@@ -86,14 +86,14 @@ test('pr_review exits 1 when GITHUB_TOKEN is missing', async () => {
   );
 });
 
-test('pr_review exits 1 when GROQ_API_KEY is missing', async () => {
+test('pr_review exits 1 when ANTHROPIC_API_KEY is missing', async () => {
   assertFails(
     await runScript('pr_review.mjs', {
       GITHUB_TOKEN: 'token',
       GITHUB_REPOSITORY: 'owner/repo',
       GITHUB_EVENT_PATH: '/tmp/event.json',
     }),
-    /GROQ_API_KEY/,
+    /ANTHROPIC_API_KEY/,
   );
 });
 
@@ -101,7 +101,7 @@ test('pr_review exits 1 when GITHUB_REPOSITORY is missing', async () => {
   assertFails(
     await runScript('pr_review.mjs', {
       GITHUB_TOKEN: 'token',
-      GROQ_API_KEY: 'key',
+      ANTHROPIC_API_KEY: 'key',
       GITHUB_EVENT_PATH: '/tmp/event.json',
     }),
     /GITHUB_REPOSITORY/,
@@ -112,7 +112,7 @@ test('pr_review exits 1 when GITHUB_EVENT_PATH is missing', async () => {
   assertFails(
     await runScript('pr_review.mjs', {
       GITHUB_TOKEN: 'token',
-      GROQ_API_KEY: 'key',
+      ANTHROPIC_API_KEY: 'key',
       GITHUB_REPOSITORY: 'owner/repo',
     }),
     /GITHUB_EVENT_PATH/,
@@ -123,7 +123,7 @@ test('pr_review exits 1 when event file does not exist', async () => {
   assertFails(
     await runScript('pr_review.mjs', {
       GITHUB_TOKEN: 'token',
-      GROQ_API_KEY: 'key',
+      ANTHROPIC_API_KEY: 'key',
       GITHUB_REPOSITORY: 'owner/repo',
       GITHUB_EVENT_PATH: '/nonexistent/path/event.json',
     }),
@@ -138,7 +138,7 @@ test('pr_review exits 1 when event file contains invalid JSON', async () => {
     assertFails(
       await runScript('pr_review.mjs', {
         GITHUB_TOKEN: 'token',
-        GROQ_API_KEY: 'key',
+        ANTHROPIC_API_KEY: 'key',
         GITHUB_REPOSITORY: 'owner/repo',
         GITHUB_EVENT_PATH: tmpFile,
       }),
@@ -156,7 +156,7 @@ test('pr_review exits 1 when event has no pull_request.number', async () => {
     assertFails(
       await runScript('pr_review.mjs', {
         GITHUB_TOKEN: 'token',
-        GROQ_API_KEY: 'key',
+        ANTHROPIC_API_KEY: 'key',
         GITHUB_REPOSITORY: 'owner/repo',
         GITHUB_EVENT_PATH: tmpFile,
       }),

@@ -25,12 +25,13 @@ export function requireEnv(name) {
 }
 
 export function loadLLMConfig(stage = 'generation') {
-  const provider = (process.env.AI_PROVIDER || 'groq').trim().toLowerCase();
+  const provider = (process.env.AI_PROVIDER || 'anthropic').trim().toLowerCase();
 
   if (provider === 'anthropic') {
     const apiKey = requireEnv('ANTHROPIC_API_KEY');
     const model = (process.env.ANTHROPIC_MODEL || ANTHROPIC_MODEL_DEFAULTS[stage] || ANTHROPIC_MODEL_DEFAULTS.generation).trim();
-    return { provider, apiKey, model, apiUrl: undefined };
+    const apiUrl = process.env.ANTHROPIC_API_URL?.trim() || undefined;
+    return { provider, apiKey, model, apiUrl };
   }
 
   const apiKey = requireEnv('GROQ_API_KEY');

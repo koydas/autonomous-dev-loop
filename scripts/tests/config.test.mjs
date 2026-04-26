@@ -2,7 +2,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt } from '../lib/config.mjs';
 
-const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', 'GROQ_API_KEY'];
+const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', 'ANTHROPIC_API_KEY'];
 
 function setEnv(vars) {
   for (const [k, v] of Object.entries(vars)) process.env[k] = v;
@@ -12,8 +12,8 @@ function unsetEnv(...names) {
   for (const name of names) delete process.env[name];
 }
 
-beforeEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY', 'GROQ_MODEL', 'GROQ_API_URL'));
-afterEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY', 'GROQ_MODEL', 'GROQ_API_URL'));
+beforeEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_MODEL', 'AI_PROVIDER'));
+afterEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_MODEL', 'AI_PROVIDER'));
 
 // requireEnv
 
@@ -37,40 +37,40 @@ test('requireEnv throws when variable is empty string', () => {
 // loadConfigFromEnv
 
 test('loadConfigFromEnv returns full config with all vars set', () => {
-  setEnv({ ISSUE_NUMBER: '7', ISSUE_TITLE: 'Fix bug', ISSUE_BODY: 'Details', GROQ_API_KEY: 'key123' });
+  setEnv({ ISSUE_NUMBER: '7', ISSUE_TITLE: 'Fix bug', ISSUE_BODY: 'Details', ANTHROPIC_API_KEY: 'sk-ant-123' });
   const config = loadConfigFromEnv();
   assert.equal(config.issueNumber, '7');
   assert.equal(config.issueTitle, 'Fix bug');
   assert.equal(config.issueBody, 'Details');
-  assert.equal(config.apiKey, 'key123');
-  assert.equal(config.model, 'llama-3.3-70b-versatile');
+  assert.equal(config.apiKey, 'sk-ant-123');
+  assert.equal(config.model, 'claude-opus-4-7');
 });
 
-test('loadConfigFromEnv uses default model when GROQ_MODEL not set', () => {
-  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', GROQ_API_KEY: 'k' });
+test('loadConfigFromEnv uses default Anthropic model when ANTHROPIC_MODEL not set', () => {
+  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'k' });
   const { model } = loadConfigFromEnv();
-  assert.equal(model, 'llama-3.3-70b-versatile');
+  assert.equal(model, 'claude-opus-4-7');
 });
 
-test('loadConfigFromEnv uses custom model when GROQ_MODEL is set', () => {
-  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', GROQ_API_KEY: 'k', GROQ_MODEL: 'llama-3-70b' });
+test('loadConfigFromEnv uses custom model when ANTHROPIC_MODEL is set', () => {
+  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'k', ANTHROPIC_MODEL: 'claude-haiku-4-5-20251001' });
   const { model } = loadConfigFromEnv();
-  assert.equal(model, 'llama-3-70b');
+  assert.equal(model, 'claude-haiku-4-5-20251001');
 });
 
 test('loadConfigFromEnv defaults ISSUE_BODY when not set', () => {
-  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', GROQ_API_KEY: 'k' });
+  setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'k' });
   const { issueBody } = loadConfigFromEnv();
   assert.equal(issueBody, '(no body provided)');
 });
 
-test('loadConfigFromEnv throws when GROQ_API_KEY is missing', () => {
+test('loadConfigFromEnv throws when ANTHROPIC_API_KEY is missing', () => {
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' });
-  assert.throws(() => loadConfigFromEnv(), /GROQ_API_KEY/);
+  assert.throws(() => loadConfigFromEnv(), /ANTHROPIC_API_KEY/);
 });
 
 test('loadConfigFromEnv throws when ISSUE_NUMBER is missing', () => {
-  setEnv({ ISSUE_TITLE: 'T', GROQ_API_KEY: 'k' });
+  setEnv({ ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'k' });
   assert.throws(() => loadConfigFromEnv(), /ISSUE_NUMBER/);
 });
 
