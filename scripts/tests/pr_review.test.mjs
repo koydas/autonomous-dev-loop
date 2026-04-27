@@ -53,6 +53,7 @@ function makeHandler({
   autoFixRunsInProgress = [],
   autoFixRunsQueued = [],
   prHeadRef = 'feature/test',
+  autoFixRunsStatus = 200,
 } = {}) {
   return (req, res) => {
     const { method, url } = req;
@@ -90,6 +91,10 @@ function makeHandler({
       method === 'GET' &&
       /\/actions\/workflows\/auto-fix-pr\.yml\/runs\?/.test(url)
     ) {
+      if (autoFixRunsStatus >= 300) {
+        res.writeHead(autoFixRunsStatus, { 'Content-Type': 'application/json' });
+        return res.end('error');
+      }
       const target = url.includes('status=queued') ? autoFixRunsQueued : autoFixRunsInProgress;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ total_count: target.length, workflow_runs: target }));
@@ -522,6 +527,28 @@ test('pr_review does not re-pulse changes-requested when auto-fix run is already
     );
     assert.ok(apply, 'expected POST to issue labels endpoint');
     assert.ok(JSON.parse(apply.body).labels.includes(LABELS.review.changes.name), `should apply ${LABELS.review.changes.name}`);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review does not re-pulse changes-requested when auto-fix status check is forbidden', async () => {
+  const server = await startMockServer(
+    makeHandler({
+      groqContent: 'Found issues.\n\nVerdict: REQUEST_CHANGES',
+      autoFixRunsStatus: 403,
+    }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr + result.stdout, /defaulting to skip re-pulse/i);
+    const removeApplied = server.requests.find(
+      (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.review.changes.name}`),
+    );
+    assert.equal(removeApplied, undefined, 'should not remove changes-requested when run status is unknown');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

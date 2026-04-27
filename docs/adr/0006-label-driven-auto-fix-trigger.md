@@ -21,9 +21,10 @@ That caused later review iterations to skip auto-fix.
    In `scripts/pr_review.mjs`, when verdict is `REQUEST_CHANGES`, remove `changes-requested` before adding it again.
    This guarantees a fresh `labeled` event for each iteration.
    If an auto-fix run is already `queued` or `in_progress` for the PR branch, skip re-pulse to avoid cascading loop triggers.
+   If run-status checks fail (for example permission errors), fail closed and skip re-pulse.
 
 3. **Fallback feedback source for auto-fix**  
-   If the auto-fix trigger payload has no review body, `scripts/auto_fix_pr.mjs` uses the latest automated review comment (`## 🔍 Automated Code Review`) as feedback context.
+   If the auto-fix trigger payload has no review body, `scripts/auto_fix_pr.mjs` paginates PR comments and uses the latest automated review comment (`## 🔍 Automated Code Review`) as feedback context.
 
 ## Consequences
 

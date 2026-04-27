@@ -55,6 +55,7 @@ function makeHandler({
   postCommentStatus = 201,
   commentsStatus = 200,
   commentsBody = '[]',
+  commentsByPage = null,
 } = {}) {
   return (req, res) => {
     const { method, url } = req;
@@ -84,7 +85,14 @@ function makeHandler({
       return res.end(postCommentStatus < 300 ? '{"id":1}' : 'error');
     }
 
-    if (method === 'GET' && /\/issues\/\d+\/comments\?per_page=100$/.test(url)) {
+    if (method === 'GET' && /\/issues\/\d+\/comments\?/.test(url)) {
+      if (commentsByPage) {
+        const parsed = new URL(url, 'http://127.0.0.1');
+        const page = Number(parsed.searchParams.get('page') || '1');
+        const pageBody = commentsByPage[page];
+        res.writeHead(commentsStatus, { 'Content-Type': 'application/json' });
+        return res.end(commentsStatus < 300 ? (pageBody ?? '[]') : 'error');
+      }
       res.writeHead(commentsStatus, { 'Content-Type': 'application/json' });
       return res.end(commentsStatus < 300 ? commentsBody : 'error');
     }
@@ -253,6 +261,38 @@ test('auto_fix_pr falls back to automated review comment when review payload has
     server.close();
     await fs.unlink(eventFile).catch(() => {});
     await fs.unlink(outputFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr paginates review comments to find latest automated review fallback', async () => {
+  const commentsByPage = {
+    1: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ body: `noise ${i}` }))),
+    2: JSON.stringify([{ body: '## 🔍 Automated Code Review\n\nUse the latest feedback from page 2.' }]),
+  };
+  const server = await startMockServer(
+    makeHandler({
+      commentsByPage,
+      llmResponse: validLLMJson('paged-fix.txt'),
+      inlineCommentsBody: JSON.stringify([]),
+    }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.review.body = '';
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const commentRequests = server.requests.filter(
+      (r) => r.method === 'GET' && /\/issues\/\d+\/comments\?/.test(r.url),
+    );
+    assert.ok(commentRequests.some((r) => r.url.includes('page=1')));
+    assert.ok(commentRequests.some((r) => r.url.includes('page=2')));
+    assert.match(result.stdout, /feedback fallback/i);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
   }
 });
 

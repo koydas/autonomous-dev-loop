@@ -101,8 +101,12 @@ async function hasActiveAutoFixRun(branchName) {
       `/repos/${owner}/${repo}/actions/workflows/auto-fix-pr.yml/runs?branch=${encodedBranch}&event=pull_request&status=${status}&per_page=20`,
     );
     if (!runsRes.ok) {
-      logError('Auto-fix run status check failed', { prNumber, statusCode: runsRes.status, status });
-      continue;
+      logError('Auto-fix run status check failed; defaulting to skip re-pulse', {
+        prNumber,
+        statusCode: runsRes.status,
+        status,
+      });
+      return true;
     }
     const payload = await runsRes.json();
     const runs = Array.isArray(payload?.workflow_runs) ? payload.workflow_runs : [];
