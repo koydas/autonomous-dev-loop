@@ -94,16 +94,24 @@ async function removeLabel(labelName) {
   }
 }
 
-const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
-  headers: { Accept: 'application/vnd.github.v3.diff' },
-});
+const [prMetaRes, diffRes] = await Promise.all([
+  ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`),
+  ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
+    headers: { Accept: 'application/vnd.github.v3.diff' },
+  }),
+]);
+if (!prMetaRes.ok) throw new Error(`PR metadata fetch failed: ${prMetaRes.status}`);
 if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
+
+const prMeta = await prMetaRes.json();
 const rawDiff = await diffRes.text();
 
+const prTitle = prMeta.title || '';
+const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
 
 const systemPrompt = loadPrompt('pr-review-system');
-const userPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff });
+const userPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff, issueTitle: prTitle, issueBody: prBody });
 
 const rawReview = await callLLM({
   prompt: userPrompt,
@@ -116,10 +124,10 @@ const rawReview = await callLLM({
 });
 
 const HEADING = '## 🔍 Automated Code Review';
-const review = rawReview.trim();
-const body = review.includes(HEADING) ? review : `${HEADING}\n\n${review}`;
+const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
+const body = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 
-const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
+const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
 const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
 
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
