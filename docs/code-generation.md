@@ -109,6 +109,7 @@ File: `.github/workflows/pr-review.yml`
 
 Required secret:
 - **Secret**: `ANTHROPIC_API_KEY` or `GROQ_API_KEY` — used to review pull request diffs. Same provider selection rules apply (see above).
+- **Secret**: `AI_PR_TOKEN` (recommended) — used for PR review writes (comments/review events/labels) so downstream label-based workflows (like auto-fix) can be triggered reliably. Falls back to `GITHUB_TOKEN` when unset.
 
 The workflow runs on every `push` to any branch (`branches: ["**"]`) with permissions `pull-requests: write`, `contents: read`, `issues: write`, and `actions: read`. On push events the script resolves the PR number via the GitHub API; if no open PR exists for the branch it exits silently.
 
