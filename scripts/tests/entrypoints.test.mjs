@@ -167,6 +167,82 @@ test('pr_review exits 1 when event has no pull_request.number and no ref', async
   }
 });
 
+// auto_fix_pr.mjs
+
+test('auto_fix_pr exits 1 when GITHUB_TOKEN is missing', async () => {
+  assertFails(
+    await runScript('auto_fix_pr.mjs', {
+      ANTHROPIC_API_KEY: 'key',
+      GITHUB_REPOSITORY: 'owner/repo',
+      GITHUB_EVENT_PATH: '/tmp/event.json',
+    }),
+    /GITHUB_TOKEN/,
+  );
+});
+
+test('auto_fix_pr exits 1 when ANTHROPIC_API_KEY is missing', async () => {
+  assertFails(
+    await runScript('auto_fix_pr.mjs', {
+      GITHUB_TOKEN: 'token',
+      GITHUB_REPOSITORY: 'owner/repo',
+      GITHUB_EVENT_PATH: '/tmp/event.json',
+    }),
+    /ANTHROPIC_API_KEY/,
+  );
+});
+
+test('auto_fix_pr exits 1 when GITHUB_REPOSITORY is missing', async () => {
+  assertFails(
+    await runScript('auto_fix_pr.mjs', {
+      GITHUB_TOKEN: 'token',
+      ANTHROPIC_API_KEY: 'key',
+      GITHUB_EVENT_PATH: '/tmp/event.json',
+    }),
+    /GITHUB_REPOSITORY/,
+  );
+});
+
+test('auto_fix_pr exits 1 when GITHUB_EVENT_PATH is missing', async () => {
+  assertFails(
+    await runScript('auto_fix_pr.mjs', {
+      GITHUB_TOKEN: 'token',
+      ANTHROPIC_API_KEY: 'key',
+      GITHUB_REPOSITORY: 'owner/repo',
+    }),
+    /GITHUB_EVENT_PATH/,
+  );
+});
+
+test('auto_fix_pr exits 1 when event file does not exist', async () => {
+  assertFails(
+    await runScript('auto_fix_pr.mjs', {
+      GITHUB_TOKEN: 'token',
+      ANTHROPIC_API_KEY: 'key',
+      GITHUB_REPOSITORY: 'owner/repo',
+      GITHUB_EVENT_PATH: '/nonexistent/path/event.json',
+    }),
+    /event payload/i,
+  );
+});
+
+test('auto_fix_pr exits 1 when event has no pull_request.number', async () => {
+  const tmpFile = path.join(os.tmpdir(), `auto-fix-test-no-pr-${Date.now()}.json`);
+  await fs.writeFile(tmpFile, JSON.stringify({ action: 'submitted', review: { state: 'changes_requested' } }));
+  try {
+    assertFails(
+      await runScript('auto_fix_pr.mjs', {
+        GITHUB_TOKEN: 'token',
+        ANTHROPIC_API_KEY: 'key',
+        GITHUB_REPOSITORY: 'owner/repo',
+        GITHUB_EVENT_PATH: tmpFile,
+      }),
+      /pull_request\.number/,
+    );
+  } finally {
+    await fs.unlink(tmpFile).catch(() => {});
+  }
+});
+
 // upsert_issue_validation_comment.mjs
 
 test('upsert_issue_validation_comment exits 1 when ISSUE_NUMBER is missing', async () => {

@@ -325,8 +325,9 @@ test('pr_review detects APPROVE when verdict is a markdown heading with value on
   }
 });
 
-test('pr_review prepends heading when LLM response does not include it', async () => {
-  const server = await startMockServer(makeHandler({ groqContent: 'Plain review text.' }));
+test('pr_review detects APPROVE when verdict is bold markdown (**APPROVED**)', async () => {
+  const groqContent = '### 🚀 Verdict\n**APPROVED**';
+  const server = await startMockServer(makeHandler({ groqContent }));
   const eventFile = await writeEventFile();
   try {
     const result = await runPrReview(server.address().port, eventFile);
@@ -335,7 +336,78 @@ test('pr_review prepends heading when LLM response does not include it', async (
       (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
     );
     assert.ok(review, 'expected POST to reviews endpoint');
-    const { body } = JSON.parse(review.body);
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review detects REQUEST_CHANGES when verdict is bold markdown (**REQUEST_CHANGES**)', async () => {
+  const groqContent = '### 🚀 Verdict\n**REQUEST_CHANGES**';
+  const server = await startMockServer(makeHandler({ groqContent }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find(
+      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    );
+    assert.ok(review, 'expected POST to reviews endpoint');
+    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review detects APPROVE when verdict uses single asterisk (*APPROVED*)', async () => {
+  const groqContent = 'Summary: looks fine.\n\nVerdict: *APPROVED*';
+  const server = await startMockServer(makeHandler({ groqContent }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find(
+      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    );
+    assert.ok(review, 'expected POST to reviews endpoint');
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review defaults to REQUEST_CHANGES when verdict line echoes template placeholder', async () => {
+  const groqContent = '### 🚀 Verdict\n(APPROVED | REQUEST_CHANGES)';
+  const server = await startMockServer(makeHandler({ groqContent }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find(
+      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    );
+    assert.ok(review, 'expected POST to reviews endpoint');
+    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review prepends heading when LLM response does not include it', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Plain review text.' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && r.url.includes('/comments'),
+    );
+    assert.ok(comment, 'expected a comment upsert request');
+    const { body } = JSON.parse(comment.body);
     assert.ok(body.startsWith(HEADING), `expected body to start with heading, got: ${body.slice(0, 80)}`);
   } finally {
     server.close();
@@ -350,11 +422,11 @@ test('pr_review does not duplicate heading when LLM response already contains it
   try {
     const result = await runPrReview(server.address().port, eventFile);
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
-    const review = server.requests.find(
-      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && r.url.includes('/comments'),
     );
-    assert.ok(review, 'expected POST to reviews endpoint');
-    const { body } = JSON.parse(review.body);
+    assert.ok(comment, 'expected a comment upsert request');
+    const { body } = JSON.parse(comment.body);
     const occurrences = body.split(HEADING).length - 1;
     assert.equal(occurrences, 1, `heading should appear exactly once, found ${occurrences} times`);
   } finally {
@@ -403,6 +475,32 @@ test('pr_review applies changes-requested label on REQUEST_CHANGES verdict', asy
       (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.review.approved.name}`),
     );
     assert.ok(remove, `expected DELETE for ${LABELS.review.approved.name}`);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review sends short body to review endpoint, not the full comment body', async () => {
+  const server = await startMockServer(
+    makeHandler({ groqContent: 'Detailed review.\n\nVerdict: APPROVED' }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find(
+      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    );
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && r.url.includes('/comments'),
+    );
+    assert.ok(review, 'expected POST to reviews endpoint');
+    assert.ok(comment, 'expected a comment upsert');
+    const reviewBody = JSON.parse(review.body).body;
+    const commentBody = JSON.parse(comment.body).body;
+    assert.notEqual(reviewBody, commentBody, 'review body should differ from comment body');
+    assert.ok(!reviewBody.includes(HEADING), 'review body should not contain the full heading');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

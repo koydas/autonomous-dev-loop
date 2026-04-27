@@ -20,3 +20,17 @@ review:
     name: changes-requested
     color: d93f0b
     description: Automated code review found issues requiring changes
+
+autofix:
+  attempt1:
+    name: auto-fix-attempt-1
+    color: fbca04
+    description: Auto-fix iteration 1 applied
+  attempt2:
+    name: auto-fix-attempt-2
+    color: fbca04
+    description: Auto-fix iteration 2 applied
+  attempt3:
+    name: auto-fix-attempt-3
+    color: fbca04
+    description: Auto-fix iteration 3 applied

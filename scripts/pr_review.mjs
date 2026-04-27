@@ -127,7 +127,7 @@ const HEADING = '## 🔍 Automated Code Review';
 const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
 const body = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 
-const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
+const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
 const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
 
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
@@ -149,10 +149,14 @@ if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${awa
 
 log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
 
+const shortReviewBody = isApproved
+  ? 'Automated review passed. See the review comment for details.'
+  : 'Changes required. See the automated review comment above for details.';
+
 const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
   method: 'POST',
   body: JSON.stringify({
-    body,
+    body: shortReviewBody,
     event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES',
   }),
 });

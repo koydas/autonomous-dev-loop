@@ -5,6 +5,8 @@
 validation:            qwen/qwen3-32b
 generation:            qwen/qwen3-32b
 review:                qwen/qwen3-32b
+autofix:               qwen/qwen3-32b
 temperature_validation: 0
 temperature_generation: 0
 temperature_review:    0.6
+temperature_autofix:   0
