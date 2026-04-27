@@ -33,6 +33,19 @@ const githubHeaders = {
   'X-GitHub-Api-Version': '2022-11-28',
 };
 
+const PR_REVIEW_LABELS = [
+  {
+    name: 'review-approved',
+    color: '0e8a16',
+    description: 'Automated code review passed without requested changes',
+  },
+  {
+    name: 'changes-requested',
+    color: 'd93f0b',
+    description: 'Automated code review found issues requiring changes',
+  },
+];
+
 async function ghFetch(path, options = {}) {
   try {
     return await fetch(`${githubApiBase}${path}`, {
@@ -41,6 +54,42 @@ async function ghFetch(path, options = {}) {
     });
   } catch (err) {
     throw new Error(`Network error calling GitHub API (${path}): ${err.message}`);
+  }
+}
+
+async function upsertLabel(label) {
+  const createRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
+    method: 'POST',
+    body: JSON.stringify(label),
+  });
+  if (createRes.status === 201) return;
+  if (createRes.status !== 422) {
+    throw new Error(`Label create failed for "${label.name}": ${createRes.status}`);
+  }
+  const updateRes = await ghFetch(
+    `/repos/${owner}/${repo}/labels/${encodeURIComponent(label.name)}`,
+    { method: 'PATCH', body: JSON.stringify(label) },
+  );
+  if (!updateRes.ok) {
+    throw new Error(`Label update failed for "${label.name}": ${updateRes.status}`);
+  }
+}
+
+async function addLabel(labelName) {
+  const res = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
+    method: 'POST',
+    body: JSON.stringify({ labels: [labelName] }),
+  });
+  if (!res.ok) throw new Error(`Add label "${labelName}" failed: ${res.status}`);
+}
+
+async function removeLabel(labelName) {
+  const res = await ghFetch(
+    `/repos/${owner}/${repo}/issues/${prNumber}/labels/${encodeURIComponent(labelName)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Remove label "${labelName}" failed: ${res.status}`);
   }
 }
 
@@ -87,3 +136,18 @@ const postRes = await ghFetch(commentUrl, {
 if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${await postRes.text()}`);
 
 log(`PR review ${existing ? 'updated' : 'posted'}`, { prNumber });
+
+const verdictMatch = rawReview.match(/Verdict:\s*(APPROVED|REQUEST_CHANGES)/i);
+const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+
+for (const label of PR_REVIEW_LABELS) {
+  await upsertLabel(label);
+  log('Label upserted', { label: label.name });
+}
+
+const apply = isApproved ? 'review-approved' : 'changes-requested';
+const remove = isApproved ? 'changes-requested' : 'review-approved';
+
+await addLabel(apply);
+await removeLabel(remove);
+log('PR review labels applied', { prNumber, added: apply, removed: remove });
