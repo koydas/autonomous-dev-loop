@@ -184,8 +184,15 @@ const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/revie
 });
 if (!reviewRes.ok) {
   const detail = await reviewRes.text();
-  if (reviewRes.status === 422) {
-    logError('PR review submit skipped: GitHub Actions lacks permission to submit reviews. Enable "Allow GitHub Actions to create and approve pull requests" in repository Settings → Actions → General.', { prNumber, status: 422 });
+  const permissionLikeFailure =
+    reviewRes.status === 422 ||
+    reviewRes.status === 403 ||
+    (reviewRes.status === 401 && /permission|not permitted|resource not accessible/i.test(detail));
+  if (permissionLikeFailure) {
+    logError('PR review submit skipped: token lacks permission to submit reviews. Ensure "Pull requests: write" scope is granted and, if using GITHUB_TOKEN, enable "Allow GitHub Actions to create and approve pull requests" in repository Settings → Actions → General.', {
+      prNumber,
+      status: reviewRes.status,
+    });
   } else {
     throw new Error(`Review submit failed: ${reviewRes.status} ${detail}`);
   }
