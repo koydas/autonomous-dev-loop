@@ -130,10 +130,14 @@ if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${awa
 
 log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
 
+const shortReviewBody = isApproved
+  ? 'Automated review passed. See the review comment for details.'
+  : 'Changes required. See the automated review comment above for details.';
+
 const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
   method: 'POST',
   body: JSON.stringify({
-    body,
+    body: shortReviewBody,
     event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES',
   }),
 });

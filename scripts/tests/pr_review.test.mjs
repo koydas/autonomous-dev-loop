@@ -327,11 +327,11 @@ test('pr_review prepends heading when LLM response does not include it', async (
   try {
     const result = await runPrReview(server.address().port, eventFile);
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
-    const review = server.requests.find(
-      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && r.url.includes('/comments'),
     );
-    assert.ok(review, 'expected POST to reviews endpoint');
-    const { body } = JSON.parse(review.body);
+    assert.ok(comment, 'expected a comment upsert request');
+    const { body } = JSON.parse(comment.body);
     assert.ok(body.startsWith(HEADING), `expected body to start with heading, got: ${body.slice(0, 80)}`);
   } finally {
     server.close();
@@ -346,11 +346,11 @@ test('pr_review does not duplicate heading when LLM response already contains it
   try {
     const result = await runPrReview(server.address().port, eventFile);
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
-    const review = server.requests.find(
-      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && r.url.includes('/comments'),
     );
-    assert.ok(review, 'expected POST to reviews endpoint');
-    const { body } = JSON.parse(review.body);
+    assert.ok(comment, 'expected a comment upsert request');
+    const { body } = JSON.parse(comment.body);
     const occurrences = body.split(HEADING).length - 1;
     assert.equal(occurrences, 1, `heading should appear exactly once, found ${occurrences} times`);
   } finally {

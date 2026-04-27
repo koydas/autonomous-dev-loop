@@ -23,6 +23,7 @@ export const ANTHROPIC_MODEL_DEFAULTS = {
   validation: 'claude-opus-4-7',
   generation: 'claude-opus-4-7',
   review: 'claude-opus-4-7',
+  autofix: 'claude-opus-4-7',
 };
 
 export function requireEnv(name) {
