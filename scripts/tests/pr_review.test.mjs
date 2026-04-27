@@ -288,6 +288,27 @@ test('pr_review applies changes-requested and removes review-approved on REQUEST
   }
 });
 
+test('pr_review detects APPROVED when verdict is a markdown heading with value on next line', async () => {
+  const groqContent = '### ✅ Summary\nLooks good.\n\n### 🚀 Verdict\nAPPROVED';
+  const server = await startMockServer(makeHandler({ groqContent }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const apply = server.requests.find(
+      (r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url),
+    );
+    assert.ok(apply, 'expected POST to issue labels endpoint');
+    assert.ok(
+      JSON.parse(apply.body).labels.includes('review-approved'),
+      'should apply review-approved for heading-style APPROVED verdict',
+    );
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 test('pr_review defaults to changes-requested when verdict is absent from LLM response', async () => {
   const server = await startMockServer(
     makeHandler({ groqContent: 'No verdict line in this response.' }),

@@ -127,7 +127,7 @@ if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${awa
 
 log(`PR review ${existing ? 'updated' : 'posted'}`, { prNumber });
 
-const verdictMatch = rawReview.match(/Verdict:\s*(APPROVED|REQUEST_CHANGES)/i);
+const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
 const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
 
 for (const label of PR_REVIEW_LABELS) {
