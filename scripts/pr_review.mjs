@@ -108,7 +108,7 @@ const HEADING = '## 🔍 Automated Code Review';
 const review = rawReview.trim();
 const body = review.includes(HEADING) ? review : `${HEADING}\n\n${review}`;
 
-const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
+const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
 const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
 
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);

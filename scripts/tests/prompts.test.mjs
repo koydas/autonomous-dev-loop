@@ -9,6 +9,8 @@ const PROMPT_NAMES = [
   'generation-user',
   'pr-review-system',
   'pr-review-user',
+  'auto-fix-system',
+  'auto-fix-user',
 ];
 
 // ---------------------------------------------------------------------------
@@ -124,5 +126,33 @@ describe('prompt file contents', () => {
     const content = loadPrompt('pr-review-user');
     assert.ok(content.includes('Summary'));
     assert.ok(content.includes('Verdict'));
+  });
+
+  test('auto-fix-system mentions the required JSON output keys', () => {
+    const content = loadPrompt('auto-fix-system');
+    assert.ok(content.includes('summary'));
+    assert.ok(content.includes('changes'));
+    assert.ok(content.includes('target_path'));
+    assert.ok(content.includes('file_content'));
+  });
+
+  test('auto-fix-system constrains scope to issues explicitly in the review', () => {
+    const content = loadPrompt('auto-fix-system');
+    assert.ok(content.includes('explicit'));
+  });
+
+  test('auto-fix-user contains {{reviewFeedback}}, {{diff}}, and {{fileContents}} placeholders', () => {
+    const content = loadPrompt('auto-fix-user');
+    assert.ok(content.includes('{{reviewFeedback}}'));
+    assert.ok(content.includes('{{diff}}'));
+    assert.ok(content.includes('{{fileContents}}'));
+  });
+
+  test('auto-fix-user contains the JSON output schema', () => {
+    const content = loadPrompt('auto-fix-user');
+    assert.ok(content.includes('summary'));
+    assert.ok(content.includes('changes'));
+    assert.ok(content.includes('target_path'));
+    assert.ok(content.includes('file_content'));
   });
 });
