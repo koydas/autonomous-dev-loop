@@ -20,9 +20,6 @@ try {
 }
 if (!event || typeof event !== 'object') throw new Error('GitHub event payload is not a valid object');
 
-const prNumber = event.pull_request?.number;
-if (!prNumber) throw new Error('Missing pull_request.number in event payload');
-
 const [owner, repo] = repository.split('/');
 
 const githubApiBase = (process.env.GITHUB_API_URL || 'https://api.github.com').trim();
@@ -35,6 +32,20 @@ const githubHeaders = {
 
 const reviewLabels = loadLabelsConfig('review');
 const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes];
+
+let prNumber = event.pull_request?.number;
+if (!prNumber) {
+  const branch = event.ref?.replace('refs/heads/', '');
+  if (!branch) throw new Error('Could not determine branch from event payload');
+  const prsRes = await ghFetch(`/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=open`);
+  if (!prsRes.ok) throw new Error(`PR lookup failed: ${prsRes.status}`);
+  const prs = await prsRes.json();
+  if (!prs.length) {
+    log('No open PR found for branch, skipping review');
+    process.exit(0);
+  }
+  prNumber = prs[0].number;
+}
 
 async function ghFetch(path, options = {}) {
   try {
