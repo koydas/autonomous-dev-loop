@@ -131,7 +131,7 @@ Node implementation:
 Required secret:
 - **Secret**: `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) — same provider selection rules apply (see above).
 
-The workflow is label-driven: it triggers on `pull_request` `labeled` events and runs only when the applied label is `changes-requested`.
+The workflow is label-driven: it triggers on `pull_request` `labeled` events and runs only when the applied label matches `review.changes.name` from `config/labels.yaml` (default: `changes-requested`).
 
 This avoids silent skips when GitHub Actions cannot submit an official `REQUEST_CHANGES` review event (for example when repository settings block review submission), because the PR review workflow still applies the `changes-requested` label.
 

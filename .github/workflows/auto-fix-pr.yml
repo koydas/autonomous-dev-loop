@@ -10,8 +10,28 @@ permissions:
   issues: write
 
 jobs:
+  load-labels:
+    runs-on: ubuntu-latest
+    outputs:
+      changes_requested: ${{ steps.cfg.outputs.changes_requested }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - id: cfg
+        run: |
+          LABEL=$(node --input-type=module <<'EOF'
+          import { readFileSync } from 'fs';
+          import { parseNestedYaml } from './scripts/lib/yaml.mjs';
+          process.stdout.write(parseNestedYaml(readFileSync('config/labels.yaml', 'utf8')).review.changes.name);
+          EOF
+          )
+          echo "changes_requested=$LABEL" >> "$GITHUB_OUTPUT"
+
   auto-fix:
-    if: ${{ github.event.action == 'labeled' && github.event.label.name == 'changes-requested' }}
+    needs: load-labels
+    if: ${{ github.event.action == 'labeled' && github.event.label.name == needs.load-labels.outputs.changes_requested }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

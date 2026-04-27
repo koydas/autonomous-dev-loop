@@ -42,7 +42,7 @@ Before committing any change to `scripts/` or `prompts/`:
 
 ## Auto-Fix Rules _(pipeline only)_
 
-- The auto-fix workflow (`auto-fix-pr.yml`) triggers on any `pull_request_review` event where `review.state == 'changes_requested'`, regardless of whether the reviewer is the automated bot or a human.
+- The auto-fix workflow (`auto-fix-pr.yml`) is label-driven: it triggers on `pull_request` `labeled` events and runs when the applied label matches `review.changes.name` from `config/labels.yaml` (default `changes-requested`).
 - The maximum number of auto-fix attempts per PR is **3**, tracked via `auto-fix-attempt-N` labels on the PR.
 - When the attempt limit is reached, the workflow posts a comment and exits without making any changes.
 - Auto-fix commits use the message format `fix(ai): auto-fix attempt N`.
