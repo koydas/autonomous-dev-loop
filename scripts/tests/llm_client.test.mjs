@@ -53,7 +53,21 @@ test('callLLM defaults to Anthropic when no keys are set', async () => {
   assert.equal(result, 'ok');
 });
 
-test('callLLM uses AI_PROVIDER as tiebreaker when both keys are set', async () => {
+test('callLLM routes to Groq when AI_PROVIDER=groq even if only ANTHROPIC_API_KEY is set', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async (_url, opts) => {
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  // callGroq will be invoked; key enforcement happens in loadLLMConfig (not tested here)
+  const result = await callLLM({
+    prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'llama-3.3-70b-versatile',
+    apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
+  });
+  assert.equal(result, 'ok');
+});
+
+test('callLLM routes to Groq when AI_PROVIDER=groq and both keys are set', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
   process.env.GROQ_API_KEY = 'groq-key';
   process.env.AI_PROVIDER = 'groq';
@@ -72,7 +86,7 @@ test('callLLM uses AI_PROVIDER as tiebreaker when both keys are set', async () =
   assert.equal(capturedHeaders['Authorization'], 'Bearer groq-key');
 });
 
-test('callLLM defaults to Anthropic tiebreaker when both keys set and no AI_PROVIDER', async () => {
+test('callLLM defaults to Anthropic when both keys set and no AI_PROVIDER', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
   process.env.GROQ_API_KEY = 'groq-key';
   let capturedHeaders;
@@ -84,7 +98,7 @@ test('callLLM defaults to Anthropic tiebreaker when both keys set and no AI_PROV
   assert.equal(capturedHeaders['x-api-key'], 'sk-ant-key');
 });
 
-test('callLLM AI_PROVIDER tiebreaker is case-insensitive', async () => {
+test('callLLM AI_PROVIDER is case-insensitive', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
   process.env.GROQ_API_KEY = 'groq-key';
   process.env.AI_PROVIDER = 'ANTHROPIC';

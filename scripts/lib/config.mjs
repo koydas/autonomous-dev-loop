@@ -25,12 +25,9 @@ export function requireEnv(name) {
 }
 
 export function detectProvider() {
-  const hasAnthropic = !!process.env.ANTHROPIC_API_KEY?.trim();
-  const hasGroq = !!process.env.GROQ_API_KEY?.trim();
-  if (hasAnthropic && hasGroq) {
-    return (process.env.AI_PROVIDER || 'anthropic').trim().toLowerCase();
-  }
-  if (hasGroq) return 'groq';
+  const explicit = process.env.AI_PROVIDER?.trim().toLowerCase();
+  if (explicit) return explicit;
+  if (process.env.GROQ_API_KEY?.trim() && !process.env.ANTHROPIC_API_KEY?.trim()) return 'groq';
   return 'anthropic';
 }
 
