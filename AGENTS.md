@@ -4,7 +4,7 @@ This file provides working conventions for AI agents contributing to this reposi
 
 Two distinct agent types operate here:
 - **Interactive agents** (e.g. Claude Code): assist developers directly on the codebase.
-- **Pipeline agent**: the automated `ai-issue-to-pr` workflow that generates file changes from issues.
+- **Pipeline agent**: the automated `code-generation` workflow that generates file changes from issues.
 
 Rules marked _(pipeline only)_ apply exclusively to the automated pipeline. All other rules apply to both.
 
@@ -42,5 +42,5 @@ Before committing any change to `scripts/` or `prompts/`:
 
 ## Documentation Rules
 
-- Update `docs/ai-issue-to-pr.md` when workflow inputs or setup requirements change.
+- Update `docs/code-generation.md` when workflow inputs or setup requirements change.
 - Record major architectural decisions in `docs/adr/` as numbered ADR files.

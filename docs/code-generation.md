@@ -1,10 +1,10 @@
-# AI Issue-to-PR MVP Setup
+# Code Generation MVP Setup
 
 This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Anthropic** (Claude models). Groq is also supported and can be selected via the `AI_PROVIDER` environment variable. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Workflow Overview
 
-File: `.github/workflows/ai-issue-to-pr.yml`
+File: `.github/workflows/code-generation.yml`
 
 Workflow design note: YAML stays intentionally minimal (orchestration only). Most logic lives in Node modules for future unit testing.
 
@@ -76,7 +76,7 @@ All label names, colors, and descriptions are configurable in `config/labels.yam
 1. Ensure secrets above are configured.
 2. Create a new GitHub issue using the feature or bug template, with a clear title and body.
 3. Open **Actions** and confirm run `Issue Validation Agent` starts.
-4. Once validation passes, confirm `AI Issue to PR` starts automatically from the `ready-for-dev` label event.
+4. Once validation passes, confirm `Code Generation` starts automatically from the `ready-for-dev` label event.
 5. Verify logs for:
    - prompt construction
    - LLM API call success

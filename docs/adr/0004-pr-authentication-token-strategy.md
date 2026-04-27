@@ -5,7 +5,7 @@
 
 ## Context
 
-The workflow opens pull requests from GitHub Actions (`.github/workflows/ai-issue-to-pr.yml`).
+The workflow opens pull requests from GitHub Actions (`.github/workflows/code-generation.yml`).
 Some repositories/organizations disable the setting that allows `GITHUB_TOKEN` to create or approve PRs.
 In that configuration, the run fails with:
 
