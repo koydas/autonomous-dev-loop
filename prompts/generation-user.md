@@ -18,6 +18,8 @@ Requirements:
 5. Prefer focused, coherent changes over broad refactors.
 6. Generated code must be syntactically valid and consistent. No unresolved imports or references.
 7. Every path must be relative (no ../ and no absolute paths).
-8. Do not add explanations, comments, or metadata outside the required output.
+8. If a file is shown in the provided current content block and you modify it, preserve unchanged sections verbatim and apply minimal edits.
+9. If the issue requires information that is missing from the issue text or provided files, choose the safest minimal implementation and avoid inventing external APIs/contracts.
+10. Do not add explanations, comments, or metadata outside the required output.
 
 Output JSON only: { "summary": "One sentence summary of the generated change", "changes": [ { "target_path": "relative/path/to/file.ext", "file_content": "Exact content to write in the file" } ] }
