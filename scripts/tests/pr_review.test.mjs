@@ -405,6 +405,32 @@ test('pr_review applies changes-requested label on REQUEST_CHANGES verdict', asy
   }
 });
 
+test('pr_review sends short body to review endpoint, not the full comment body', async () => {
+  const server = await startMockServer(
+    makeHandler({ groqContent: 'Detailed review.\n\nVerdict: APPROVED' }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find(
+      (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+    );
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && r.url.includes('/comments'),
+    );
+    assert.ok(review, 'expected POST to reviews endpoint');
+    assert.ok(comment, 'expected a comment upsert');
+    const reviewBody = JSON.parse(review.body).body;
+    const commentBody = JSON.parse(comment.body).body;
+    assert.notEqual(reviewBody, commentBody, 'review body should differ from comment body');
+    assert.ok(!reviewBody.includes(HEADING), 'review body should not contain the full heading');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 test('pr_review falls back to PATCH when label POST returns 422', async () => {
   const server = await startMockServer(
     makeHandler({ groqContent: 'Verdict: APPROVED', labelCreateStatus: 422 }),

@@ -114,8 +114,41 @@ The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with pe
 
 On each run it:
 1. Fetches the PR diff and calls the LLM for a structured review.
-2. Posts or updates a comment on the PR with the full review text.
-3. Submits an official GitHub pull request review with event `APPROVE` or `REQUEST_CHANGES` based on the verdict in the LLM response.
+2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
+3. Submits an official GitHub pull request review event (`APPROVE` or `REQUEST_CHANGES`) with a short redirect body. The full review detail lives only in the comment, preventing duplicate content from appearing in the PR conversation.
 4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other).
 
 **Review submission permission:** submitting a GitHub review requires the repository setting **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** to be enabled. If it is not enabled, the review submission is skipped with a warning (the comment and labels are still applied). This is the same setting used for PR creation by the generation workflow.
+
+## Auto-Fix Workflow
+
+File: `.github/workflows/auto-fix-pr.yml`
+
+Node implementation:
+- Entrypoint: `scripts/auto_fix_pr.mjs`
+- Prompts: `prompts/auto-fix-system.md`, `prompts/auto-fix-user.md`
+
+Required secret:
+- **Secret**: `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) — same provider selection rules apply (see above).
+
+The workflow triggers on `pull_request_review` events of type `submitted` where `review.state == 'changes_requested'`. This fires whether the reviewer is the automated review bot or a human.
+
+On each run it:
+1. Checks the PR for `auto-fix-attempt-N` labels to determine how many auto-fix cycles have already run.
+2. If the attempt count has reached the maximum (3), posts a comment explaining that the limit is exhausted and exits without making changes.
+3. Fetches the review body and any inline review comments to build the full feedback context.
+4. Fetches the current PR diff and reads the changed files from disk (up to 10 files, capped at 8 000 chars each).
+5. Calls the LLM with the review feedback, diff, and current file contents to generate targeted fixes.
+6. Writes 1 to 6 fixed files to the PR branch, commits, and pushes.
+7. Applies the `auto-fix-attempt-N` label to the PR for tracking.
+8. The push triggers a new `synchronize` event on the PR, which re-runs the PR Review workflow — closing the iterative loop.
+
+**Iteration limit:** the loop runs at most 3 times per PR. After 3 auto-fix attempts, the workflow posts a comment asking for manual intervention.
+
+**Required label:**
+
+The auto-fix workflow creates and manages these labels automatically:
+
+- `auto-fix-attempt-1`, `auto-fix-attempt-2`, `auto-fix-attempt-3` — each applied after the corresponding fix cycle completes.
+
+All label names, colors, and descriptions are configurable in `config/labels.yaml` under the `autofix` key.
