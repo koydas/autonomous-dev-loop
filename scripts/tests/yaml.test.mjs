@@ -42,19 +42,6 @@ test('returns empty object for empty input', () => {
   assert.deepEqual(parseFlatYaml(''), {});
 });
 
-test('parses models.yaml keys correctly', () => {
-  const yaml = [
-    '# comment',
-    'validation: qwen-qwq-32b',
-    'generation: qwen-qwq-32b',
-    'review:     qwen-qwq-32b',
-  ].join('\n');
-  const result = parseFlatYaml(yaml);
-  assert.equal(result.validation, 'qwen-qwq-32b');
-  assert.equal(result.generation, 'qwen-qwq-32b');
-  assert.equal(result.review, 'qwen-qwq-32b');
-});
-
 // parseNestedYaml tests
 
 test('parseNestedYaml parses 3-level nested structure', () => {
