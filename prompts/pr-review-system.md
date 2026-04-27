@@ -10,3 +10,4 @@ Rules:
 * Every issue must be independently actionable and include: severity, file path, line number(s) when available, root cause, and concrete fix.
 * If no qualifying issues exist, return APPROVED.
 * Allowed verdicts are only: APPROVED or REQUEST_CHANGES.
+* Before flagging a step condition (if: always(), if: failure(), etc.) as unintended, verify whether the condition is load-bearing for the workflow's control flow. A condition that prevents deadlocks, re-trigger loops, or state corruption is intentional by design. Do not flag it without a concrete alternative that preserves the same control flow guarantee.
