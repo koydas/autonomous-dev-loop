@@ -94,6 +94,24 @@ async function removeLabel(labelName) {
   }
 }
 
+async function hasActiveAutoFixRun(branchName) {
+  const encodedBranch = encodeURIComponent(branchName);
+  for (const status of ['in_progress', 'queued']) {
+    const runsRes = await ghFetch(
+      `/repos/${owner}/${repo}/actions/workflows/auto-fix-pr.yml/runs?branch=${encodedBranch}&event=pull_request&status=${status}&per_page=20`,
+    );
+    if (!runsRes.ok) {
+      logError('Auto-fix run status check failed', { prNumber, statusCode: runsRes.status, status });
+      continue;
+    }
+    const payload = await runsRes.json();
+    const runs = Array.isArray(payload?.workflow_runs) ? payload.workflow_runs : [];
+    const hasMatch = runs.some((run) => run?.head_branch === branchName);
+    if (hasMatch) return true;
+  }
+  return false;
+}
+
 const [prMetaRes, diffRes] = await Promise.all([
   ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`),
   ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
@@ -178,6 +196,21 @@ for (const label of PR_REVIEW_LABELS) {
 
 const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
 const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
+
+if (!isApproved) {
+  const branchName = prMeta?.head?.ref;
+  const autoFixAlreadyRunning = branchName ? await hasActiveAutoFixRun(branchName) : false;
+  if (autoFixAlreadyRunning) {
+    log('Skipping changes-requested re-pulse because auto-fix is already running', {
+      prNumber,
+      branchName,
+    });
+  } else {
+    // Re-pulse the changes-requested label on every iteration so auto-fix
+    // reliably receives a new `pull_request:labeled` trigger.
+    await removeLabel(apply);
+  }
+}
 
 await addLabel(apply);
 await removeLabel(remove);
