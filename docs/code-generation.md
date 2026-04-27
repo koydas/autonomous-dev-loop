@@ -131,12 +131,14 @@ Node implementation:
 Required secret:
 - **Secret**: `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) — same provider selection rules apply (see above).
 
-The workflow triggers on `pull_request_review` events (`submitted`, `edited`, `dismissed`) and only runs the auto-fix job when `review.state == 'changes_requested'` (case-insensitive match for compatibility). This fires whether the reviewer is the automated review bot or a human.
+The workflow is label-driven: it triggers on `pull_request` `labeled` events and runs only when the applied label is `changes-requested`.
+
+This avoids silent skips when GitHub Actions cannot submit an official `REQUEST_CHANGES` review event (for example when repository settings block review submission), because the PR review workflow still applies the `changes-requested` label.
 
 On each run it:
 1. Checks the PR for `auto-fix-attempt-N` labels to determine how many auto-fix cycles have already run.
 2. If the attempt count has reached the maximum (3), posts a comment explaining that the limit is exhausted and exits without making changes.
-3. Fetches the review body and any inline review comments to build the full feedback context.
+3. Fetches the review body and any inline review comments to build the full feedback context. If the triggering event has no review body (for example label-based trigger), it falls back to the latest automated review comment body.
 4. Fetches the current PR diff and reads the changed files from disk (up to 10 files, capped at 8 000 chars each).
 5. Calls the LLM with the review feedback, diff, and current file contents to generate targeted fixes.
 6. Writes 1 to 6 fixed files to the PR branch, commits, and pushes.

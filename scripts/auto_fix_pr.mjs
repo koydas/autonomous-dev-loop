@@ -86,6 +86,20 @@ if (reviewId) {
   }
 }
 
+if (!feedbackParts.length) {
+  const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
+  if (commentsRes.ok) {
+    const comments = await commentsRes.json();
+    const automatedReviewComment = comments
+      .filter((c) => typeof c.body === 'string' && c.body.includes('## 🔍 Automated Code Review'))
+      .at(-1);
+    if (automatedReviewComment?.body) {
+      feedbackParts.push(automatedReviewComment.body);
+      log('Using latest automated review comment as feedback fallback', { prNumber });
+    }
+  }
+}
+
 const reviewFeedback =
   feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)';
 
