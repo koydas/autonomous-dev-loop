@@ -108,6 +108,9 @@ const HEADING = '## 🔍 Automated Code Review';
 const review = rawReview.trim();
 const body = review.includes(HEADING) ? review : `${HEADING}\n\n${review}`;
 
+const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
+const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
 if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
 
@@ -125,10 +128,18 @@ const postRes = await ghFetch(commentUrl, {
 });
 if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${await postRes.text()}`);
 
-log(`PR review ${existing ? 'updated' : 'posted'}`, { prNumber });
+log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
 
-const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
-const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+  method: 'POST',
+  body: JSON.stringify({
+    body,
+    event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES',
+  }),
+});
+if (!reviewRes.ok) throw new Error(`Review submit failed: ${reviewRes.status} ${await reviewRes.text()}`);
+
+log('PR review submitted', { prNumber, event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES' });
 
 for (const label of PR_REVIEW_LABELS) {
   await upsertLabel(label);
