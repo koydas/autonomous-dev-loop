@@ -116,7 +116,7 @@ On each run it:
 1. Fetches the PR title, body, and diff; calls the LLM for a structured review.
 2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
 3. Submits an official GitHub pull request review event (`APPROVE` or `REQUEST_CHANGES`) with a short redirect body. The full review detail lives only in the comment, preventing duplicate content from appearing in the PR conversation.
-4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other).
+4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other). When verdict is `REQUEST_CHANGES`, it first removes and then re-applies `changes-requested` so each review iteration emits a fresh `labeled` event.
 
 **Review submission permission:** submitting a GitHub review requires the repository setting **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** to be enabled. If it is not enabled, the review submission is skipped with a warning (the comment and labels are still applied). This is the same setting used for PR creation by the generation workflow.
 

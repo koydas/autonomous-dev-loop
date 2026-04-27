@@ -179,6 +179,12 @@ for (const label of PR_REVIEW_LABELS) {
 const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
 const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
 
+if (!isApproved) {
+  // Re-pulse the changes-requested label on every iteration so auto-fix
+  // reliably receives a new `pull_request:labeled` trigger.
+  await removeLabel(apply);
+}
+
 await addLabel(apply);
 await removeLabel(remove);
 log('PR review labels applied', { prNumber, added: apply, removed: remove });

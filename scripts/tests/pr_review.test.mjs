@@ -471,10 +471,18 @@ test('pr_review applies changes-requested label on REQUEST_CHANGES verdict', asy
     );
     assert.ok(apply, 'expected POST to issue labels endpoint');
     assert.ok(JSON.parse(apply.body).labels.includes(LABELS.review.changes.name), `should apply ${LABELS.review.changes.name}`);
-    const remove = server.requests.find(
+    const removeApplied = server.requests.find(
+      (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.review.changes.name}`),
+    );
+    assert.ok(removeApplied, `expected DELETE for ${LABELS.review.changes.name} to re-trigger label event`);
+    const removeOpposite = server.requests.find(
       (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.review.approved.name}`),
     );
-    assert.ok(remove, `expected DELETE for ${LABELS.review.approved.name}`);
+    assert.ok(removeOpposite, `expected DELETE for ${LABELS.review.approved.name}`);
+    assert.ok(
+      server.requests.indexOf(removeApplied) < server.requests.indexOf(apply),
+      'expected changes-requested label removal before re-apply',
+    );
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
