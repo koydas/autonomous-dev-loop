@@ -1,4 +1,4 @@
-name: AI Issue to PR
+name: Code Generation
 
 on:
   issues:
@@ -77,4 +77,3 @@ jobs:
             Closes #${{ steps.issue.outputs.number }}
           add-paths: |
             ${{ steps.generate.outputs.generated_paths }}
-
