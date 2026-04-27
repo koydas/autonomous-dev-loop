@@ -1,13 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import http from 'node:http';
+import { parseNestedYaml } from '../lib/yaml.mjs';
 
 const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT_DIR = path.join(SCRIPTS_DIR, '..');
+const LABELS = parseNestedYaml(readFileSync(path.join(ROOT_DIR, 'config/labels.yaml'), 'utf8'));
 const HEADING = '## 🔍 Automated Code Review';
 const PR_NUMBER = 42;
 const COMMENT_ID = 999;
@@ -367,11 +371,11 @@ test('pr_review applies review-approved label on APPROVED verdict', async () => 
       (r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url),
     );
     assert.ok(apply, 'expected POST to issue labels endpoint');
-    assert.ok(JSON.parse(apply.body).labels.includes('review-approved'), 'should apply review-approved');
+    assert.ok(JSON.parse(apply.body).labels.includes(LABELS.review.approved.name), `should apply ${LABELS.review.approved.name}`);
     const remove = server.requests.find(
-      (r) => r.method === 'DELETE' && r.url.includes('/labels/changes-requested'),
+      (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.review.changes.name}`),
     );
-    assert.ok(remove, 'expected DELETE for changes-requested');
+    assert.ok(remove, `expected DELETE for ${LABELS.review.changes.name}`);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -390,11 +394,11 @@ test('pr_review applies changes-requested label on REQUEST_CHANGES verdict', asy
       (r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url),
     );
     assert.ok(apply, 'expected POST to issue labels endpoint');
-    assert.ok(JSON.parse(apply.body).labels.includes('changes-requested'), 'should apply changes-requested');
+    assert.ok(JSON.parse(apply.body).labels.includes(LABELS.review.changes.name), `should apply ${LABELS.review.changes.name}`);
     const remove = server.requests.find(
-      (r) => r.method === 'DELETE' && r.url.includes('/labels/review-approved'),
+      (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.review.approved.name}`),
     );
-    assert.ok(remove, 'expected DELETE for review-approved');
+    assert.ok(remove, `expected DELETE for ${LABELS.review.approved.name}`);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
