@@ -53,9 +53,8 @@ export function loadLLMConfig(stage = 'generation') {
   const apiKey = requireEnv('GROQ_API_KEY');
   const model = (process.env.GROQ_MODEL || GROQ_MODEL_DEFAULTS[stage] || GROQ_MODEL_DEFAULTS.generation).trim();
   const apiUrl = (process.env.GROQ_API_URL || GROQ_API_URL_DEFAULT).trim();
-  const temperature = GROQ_MODEL_DEFAULTS.temperature !== undefined
-    ? parseFloat(GROQ_MODEL_DEFAULTS.temperature)
-    : undefined;
+  const rawTemp = GROQ_MODEL_DEFAULTS[`temperature_${stage}`] ?? GROQ_MODEL_DEFAULTS.temperature;
+  const temperature = rawTemp !== undefined ? parseFloat(rawTemp) : undefined;
   return { provider, apiKey, model, apiUrl, temperature };
 }
 
