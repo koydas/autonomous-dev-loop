@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
-import { requireEnv, loadLLMConfig } from './lib/config.mjs';
+import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
@@ -33,18 +33,8 @@ const githubHeaders = {
   'X-GitHub-Api-Version': '2022-11-28',
 };
 
-const PR_REVIEW_LABELS = [
-  {
-    name: 'review-approved',
-    color: '0e8a16',
-    description: 'Automated code review passed without requested changes',
-  },
-  {
-    name: 'changes-requested',
-    color: 'd93f0b',
-    description: 'Automated code review found issues requiring changes',
-  },
-];
+const reviewLabels = loadLabelsConfig('review');
+const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes];
 
 async function ghFetch(path, options = {}) {
   try {
@@ -145,8 +135,8 @@ for (const label of PR_REVIEW_LABELS) {
   log('Label upserted', { label: label.name });
 }
 
-const apply = isApproved ? 'review-approved' : 'changes-requested';
-const remove = isApproved ? 'changes-requested' : 'review-approved';
+const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
+const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
 
 await addLabel(apply);
 await removeLabel(remove);

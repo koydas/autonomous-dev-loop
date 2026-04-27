@@ -2,11 +2,20 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
-import { parseFlatYaml } from './yaml.mjs';
+import { parseFlatYaml, parseNestedYaml } from './yaml.mjs';
 
-const MODELS_FILE = resolve(dirname(fileURLToPath(import.meta.url)), '../../config/models.yaml');
+const CONFIG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../config');
+const MODELS_FILE = resolve(CONFIG_DIR, 'models.yaml');
+const LABELS_FILE = resolve(CONFIG_DIR, 'labels.yaml');
 
 export const GROQ_MODEL_DEFAULTS = parseFlatYaml(readFileSync(MODELS_FILE, 'utf8'));
+
+export function loadLabelsConfig(group) {
+  const all = parseNestedYaml(readFileSync(LABELS_FILE, 'utf8'));
+  const section = all[group];
+  if (!section) throw new Error(`Unknown label group "${group}" in labels.yaml`);
+  return section;
+}
 
 export const GROQ_API_URL_DEFAULT = 'https://api.groq.com/openai/v1/chat/completions';
 
