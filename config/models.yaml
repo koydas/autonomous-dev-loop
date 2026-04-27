@@ -5,3 +5,4 @@
 validation: llama-3.3-70b-versatile
 generation: llama-3.3-70b-versatile
 review:     llama-3.3-70b-versatile
+autofix:    llama-3.3-70b-versatile

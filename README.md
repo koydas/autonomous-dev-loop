@@ -17,6 +17,15 @@ The MVP issue-to-PR automation is now implemented. The default AI provider is **
 
 See `docs/code-generation.md` for required secrets (`ANTHROPIC_API_KEY` or `GROQ_API_KEY`), recommended PR token (`AI_PR_TOKEN`), optional variables, label configuration, end-to-end test steps, and risk/mitigation notes.
 
+## Iterative Review Loop
+
+Once a PR is opened, the automation continues:
+
+1. **PR Review** (`.github/workflows/pr-review.yml`) — triggered on every push to the PR branch. Posts or updates a review comment and submits an `APPROVE` or `REQUEST_CHANGES` verdict.
+2. **Auto-Fix** (`.github/workflows/auto-fix-pr.yml`) — triggered when a review requests changes. Reads the review feedback, generates targeted fixes using the LLM, and pushes them back to the PR branch — re-triggering the review.
+
+The loop runs up to **3 auto-fix iterations** per PR. After that, a comment is posted requesting manual intervention.
+
 
 ## Tests
 
