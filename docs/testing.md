@@ -37,7 +37,7 @@ All AI prompts live in `prompts/` as `.md` files, one per prompt:
 | `generation-system.md` | `generate_issue_change.mjs` | System instruction for code generation |
 | `generation-user.md` | `config.mjs` | Placeholders: `{{issueNumber}}`, `{{issueTitle}}`, `{{issueBody}}` |
 | `pr-review-system.md` | `scripts/pr_review.mjs` | Reviewer persona |
-| `pr-review-user.md` | `scripts/pr_review.mjs` | Placeholder: `{{diff}}` |
+| `pr-review-user.md` | `scripts/pr_review.mjs` | Placeholders: `{{issueTitle}}`, `{{issueBody}}`, `{{diff}}` |
 | `auto-fix-system.md` | `scripts/auto_fix_pr.mjs` | Fix-only persona, hard output-format rules |
 | `auto-fix-user.md` | `scripts/auto_fix_pr.mjs` | Placeholders: `{{reviewFeedback}}`, `{{diff}}`, `{{fileContents}}` |
 
