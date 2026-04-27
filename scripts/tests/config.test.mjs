@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt } from '../lib/config.mjs';
+import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider } from '../lib/config.mjs';
 
 const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
@@ -15,6 +15,47 @@ function unsetEnv(...names) {
 
 beforeEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY'));
 afterEach(() => unsetEnv(...REQUIRED_VARS, 'ISSUE_BODY'));
+
+// detectProvider
+
+test('detectProvider returns anthropic when only ANTHROPIC_API_KEY is set', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key' });
+  assert.equal(detectProvider(), 'anthropic');
+});
+
+test('detectProvider returns groq when only GROQ_API_KEY is set', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  assert.equal(detectProvider(), 'groq');
+});
+
+test('detectProvider returns anthropic when no keys are set', () => {
+  assert.equal(detectProvider(), 'anthropic');
+});
+
+test('detectProvider returns anthropic when both keys set and no AI_PROVIDER', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key' });
+  assert.equal(detectProvider(), 'anthropic');
+});
+
+test('detectProvider returns groq when both keys set and AI_PROVIDER=groq', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'groq' });
+  assert.equal(detectProvider(), 'groq');
+});
+
+test('detectProvider returns anthropic when both keys set and AI_PROVIDER=anthropic', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic' });
+  assert.equal(detectProvider(), 'anthropic');
+});
+
+test('detectProvider AI_PROVIDER tiebreaker is case-insensitive', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'GROQ' });
+  assert.equal(detectProvider(), 'groq');
+});
+
+test('detectProvider ignores AI_PROVIDER when only one key is set', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic' });
+  assert.equal(detectProvider(), 'groq');
+});
 
 // requireEnv
 
