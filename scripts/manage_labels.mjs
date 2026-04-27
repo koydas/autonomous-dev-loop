@@ -1,20 +1,10 @@
 #!/usr/bin/env node
 
-import { requireEnv } from './lib/config.mjs';
+import { requireEnv, loadLabelsConfig } from './lib/config.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 
-const LABELS = [
-  {
-    name: 'ready-for-dev',
-    color: '0075ca',
-    description: 'Issue validated and ready for automated implementation',
-  },
-  {
-    name: 'needs-refinement',
-    color: 'e4e669',
-    description: 'Issue requires clearer acceptance criteria before automation',
-  },
-];
+const issueLabels = loadLabelsConfig('issue');
+const LABELS = [issueLabels.valid, issueLabels.invalid];
 
 function getHeaders(token) {
   return {
@@ -89,8 +79,8 @@ async function main() {
     log('Label upserted', { label: label.name });
   }
 
-  const apply = isValid ? 'ready-for-dev' : 'needs-refinement';
-  const remove = isValid ? 'needs-refinement' : 'ready-for-dev';
+  const apply = isValid ? issueLabels.valid.name : issueLabels.invalid.name;
+  const remove = isValid ? issueLabels.invalid.name : issueLabels.valid.name;
 
   await addLabel(owner, name, token, issueNumber, apply);
   await removeLabel(owner, name, token, issueNumber, remove);

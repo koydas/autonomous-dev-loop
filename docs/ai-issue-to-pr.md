@@ -64,6 +64,13 @@ The validation workflow creates and manages these labels automatically:
 - `ready-for-dev` — applied when issue quality is sufficient; triggers PR generation.
 - `needs-refinement` — applied when the issue requires clearer acceptance criteria.
 
+The PR review workflow creates and manages these labels automatically:
+
+- `review-approved` — applied when the automated code review verdict is APPROVED.
+- `changes-requested` — applied when the automated code review verdict is REQUEST_CHANGES.
+
+All label names, colors, and descriptions are configurable in `config/labels.yaml`.
+
 ## End-to-End Test
 
 1. Ensure secrets above are configured.
@@ -101,6 +108,14 @@ The validation workflow creates and manages these labels automatically:
 File: `.github/workflows/pr-review.yml`
 
 Required secret:
-- **Secret**: `ANTHROPIC_API_KEY` or `GROQ_API_KEY` — used to review pull request diffs and post/update a structured PR comment. Same provider selection rules apply (see above).
+- **Secret**: `ANTHROPIC_API_KEY` or `GROQ_API_KEY` — used to review pull request diffs. Same provider selection rules apply (see above).
 
-The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with `pull-requests: write` and `contents: read`.
+The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with permissions `pull-requests: write`, `contents: read`, and `issues: write`.
+
+On each run it:
+1. Fetches the PR diff and calls the LLM for a structured review.
+2. Posts or updates a comment on the PR with the full review text.
+3. Submits an official GitHub pull request review with event `APPROVE` or `REQUEST_CHANGES` based on the verdict in the LLM response.
+4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other).
+
+**Review submission permission:** submitting a GitHub review requires the repository setting **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** to be enabled. If it is not enabled, the review submission is skipped with a warning (the comment and labels are still applied). This is the same setting used for PR creation by the generation workflow.

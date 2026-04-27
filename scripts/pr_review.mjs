@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
-import { requireEnv, loadLLMConfig } from './lib/config.mjs';
+import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
-import { log } from './lib/logger.mjs';
+import { log, error as logError } from './lib/logger.mjs';
 
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
@@ -33,6 +33,9 @@ const githubHeaders = {
   'X-GitHub-Api-Version': '2022-11-28',
 };
 
+const reviewLabels = loadLabelsConfig('review');
+const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes];
+
 async function ghFetch(path, options = {}) {
   try {
     return await fetch(`${githubApiBase}${path}`, {
@@ -41,6 +44,42 @@ async function ghFetch(path, options = {}) {
     });
   } catch (err) {
     throw new Error(`Network error calling GitHub API (${path}): ${err.message}`);
+  }
+}
+
+async function upsertLabel(label) {
+  const createRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
+    method: 'POST',
+    body: JSON.stringify(label),
+  });
+  if (createRes.status === 201) return;
+  if (createRes.status !== 422) {
+    throw new Error(`Label create failed for "${label.name}": ${createRes.status}`);
+  }
+  const updateRes = await ghFetch(
+    `/repos/${owner}/${repo}/labels/${encodeURIComponent(label.name)}`,
+    { method: 'PATCH', body: JSON.stringify(label) },
+  );
+  if (!updateRes.ok) {
+    throw new Error(`Label update failed for "${label.name}": ${updateRes.status}`);
+  }
+}
+
+async function addLabel(labelName) {
+  const res = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
+    method: 'POST',
+    body: JSON.stringify({ labels: [labelName] }),
+  });
+  if (!res.ok) throw new Error(`Add label "${labelName}" failed: ${res.status}`);
+}
+
+async function removeLabel(labelName) {
+  const res = await ghFetch(
+    `/repos/${owner}/${repo}/issues/${prNumber}/labels/${encodeURIComponent(labelName)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Remove label "${labelName}" failed: ${res.status}`);
   }
 }
 
@@ -69,6 +108,9 @@ const HEADING = '## 🔍 Automated Code Review';
 const review = rawReview.trim();
 const body = review.includes(HEADING) ? review : `${HEADING}\n\n${review}`;
 
+const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)(APPROVED|REQUEST_CHANGES)/i);
+const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
 if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
 
@@ -86,4 +128,34 @@ const postRes = await ghFetch(commentUrl, {
 });
 if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${await postRes.text()}`);
 
-log(`PR review ${existing ? 'updated' : 'posted'}`, { prNumber });
+log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
+
+const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
+  method: 'POST',
+  body: JSON.stringify({
+    body,
+    event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES',
+  }),
+});
+if (!reviewRes.ok) {
+  const detail = await reviewRes.text();
+  if (reviewRes.status === 422) {
+    logError('PR review submit skipped: GitHub Actions lacks permission to submit reviews. Enable "Allow GitHub Actions to create and approve pull requests" in repository Settings → Actions → General.', { prNumber, status: 422 });
+  } else {
+    throw new Error(`Review submit failed: ${reviewRes.status} ${detail}`);
+  }
+} else {
+  log('PR review submitted', { prNumber, event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES' });
+}
+
+for (const label of PR_REVIEW_LABELS) {
+  await upsertLabel(label);
+  log('Label upserted', { label: label.name });
+}
+
+const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
+const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
+
+await addLabel(apply);
+await removeLabel(remove);
+log('PR review labels applied', { prNumber, added: apply, removed: remove });

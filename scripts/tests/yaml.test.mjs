@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFlatYaml } from '../lib/yaml.mjs';
+import { parseFlatYaml, parseNestedYaml } from '../lib/yaml.mjs';
 
 test('parses simple key: value pairs', () => {
   const result = parseFlatYaml('foo: bar\nbaz: qux');
@@ -53,4 +53,91 @@ test('parses models.yaml keys correctly', () => {
   assert.equal(result.validation, 'llama-3.3-70b-versatile');
   assert.equal(result.generation, 'llama-3.1-8b-instant');
   assert.equal(result.review, 'llama-3.3-70b-versatile');
+});
+
+// parseNestedYaml tests
+
+test('parseNestedYaml parses 3-level nested structure', () => {
+  const yaml = [
+    'issue:',
+    '  valid:',
+    '    name: ready-for-dev',
+    '    color: 0075ca',
+  ].join('\n');
+  const result = parseNestedYaml(yaml);
+  assert.deepEqual(result, { issue: { valid: { name: 'ready-for-dev', color: '0075ca' } } });
+});
+
+test('parseNestedYaml parses multiple groups and sections', () => {
+  const yaml = [
+    'issue:',
+    '  valid:',
+    '    name: ready-for-dev',
+    '  invalid:',
+    '    name: needs-refinement',
+    'review:',
+    '  approved:',
+    '    name: review-approved',
+  ].join('\n');
+  const result = parseNestedYaml(yaml);
+  assert.equal(result.issue.valid.name, 'ready-for-dev');
+  assert.equal(result.issue.invalid.name, 'needs-refinement');
+  assert.equal(result.review.approved.name, 'review-approved');
+});
+
+test('parseNestedYaml ignores blank lines and comments', () => {
+  const yaml = [
+    '# top comment',
+    'issue:',
+    '  # section comment',
+    '  valid:',
+    '',
+    '    name: ready-for-dev',
+  ].join('\n');
+  const result = parseNestedYaml(yaml);
+  assert.equal(result.issue.valid.name, 'ready-for-dev');
+});
+
+test('parseNestedYaml handles values containing colons', () => {
+  const yaml = [
+    'group:',
+    '  key:',
+    '    url: https://example.com/path',
+  ].join('\n');
+  const result = parseNestedYaml(yaml);
+  assert.equal(result.group.key.url, 'https://example.com/path');
+});
+
+test('parseNestedYaml returns empty object for empty input', () => {
+  assert.deepEqual(parseNestedYaml(''), {});
+});
+
+test('parseNestedYaml parses labels.yaml structure correctly', () => {
+  const yaml = [
+    'issue:',
+    '  valid:',
+    '    name: ready-for-dev',
+    '    color: 0075ca',
+    '    description: Issue validated and ready for automated implementation',
+    '  invalid:',
+    '    name: needs-refinement',
+    '    color: e4e669',
+    '    description: Issue requires clearer acceptance criteria before automation',
+    'review:',
+    '  approved:',
+    '    name: review-approved',
+    '    color: 0e8a16',
+    '    description: Automated code review passed without requested changes',
+    '  changes:',
+    '    name: changes-requested',
+    '    color: d93f0b',
+    '    description: Automated code review found issues requiring changes',
+  ].join('\n');
+  const result = parseNestedYaml(yaml);
+  assert.equal(result.issue.valid.name, 'ready-for-dev');
+  assert.equal(result.issue.valid.color, '0075ca');
+  assert.equal(result.issue.invalid.name, 'needs-refinement');
+  assert.equal(result.review.approved.name, 'review-approved');
+  assert.equal(result.review.changes.name, 'changes-requested');
+  assert.equal(result.review.changes.color, 'd93f0b');
 });

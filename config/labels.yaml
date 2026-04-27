@@ -1,0 +1,22 @@
+# Label definitions for all automated pipeline stages.
+# Each label requires: name, color (hex without #), description.
+
+issue:
+  valid:
+    name: ready-for-dev
+    color: 0075ca
+    description: Issue validated and ready for automated implementation
+  invalid:
+    name: needs-refinement
+    color: e4e669
+    description: Issue requires clearer acceptance criteria before automation
+
+review:
+  approved:
+    name: review-approved
+    color: 0e8a16
+    description: Automated code review passed without requested changes
+  changes:
+    name: changes-requested
+    color: d93f0b
+    description: Automated code review found issues requiring changes
