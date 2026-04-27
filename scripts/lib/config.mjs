@@ -54,7 +54,15 @@ export function loadLLMConfig(stage = 'generation') {
   const apiKey = requireEnv('GROQ_API_KEY');
   const model = (process.env.GROQ_MODEL || GROQ_MODEL_DEFAULTS[stage] || GROQ_MODEL_DEFAULTS.generation).trim();
   const apiUrl = (process.env.GROQ_API_URL || GROQ_API_URL_DEFAULT).trim();
-  return { provider, apiKey, model, apiUrl };
+  const rawTemp = GROQ_MODEL_DEFAULTS[`${stage}_temperature`] ?? GROQ_MODEL_DEFAULTS.temperature;
+  let temperature;
+  if (rawTemp !== undefined) {
+    temperature = parseFloat(rawTemp);
+    if (isNaN(temperature) || temperature < 0 || temperature > 2) {
+      throw new Error(`Invalid temperature for stage "${stage}": ${rawTemp} (must be a number between 0 and 2)`);
+    }
+  }
+  return { provider, apiKey, model, apiUrl, temperature };
 }
 
 export function loadConfigFromEnv() {
@@ -62,7 +70,7 @@ export function loadConfigFromEnv() {
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
 
-  const { apiKey, model, apiUrl } = loadLLMConfig('generation');
+  const { apiKey, model, apiUrl, temperature } = loadLLMConfig('generation');
 
   return {
     issueNumber,
@@ -71,6 +79,7 @@ export function loadConfigFromEnv() {
     apiKey,
     model,
     apiUrl,
+    temperature,
   };
 }
 

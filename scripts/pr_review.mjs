@@ -10,7 +10,7 @@ import { log, error as logError } from './lib/logger.mjs';
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl } = loadLLMConfig('review');
+const { apiKey: llmApiKey, model, apiUrl, temperature } = loadLLMConfig('review');
 
 let event;
 try {
@@ -19,9 +19,6 @@ try {
   throw new Error(`Failed to parse GitHub event payload: ${err.message}`);
 }
 if (!event || typeof event !== 'object') throw new Error('GitHub event payload is not a valid object');
-
-const prNumber = event.pull_request?.number;
-if (!prNumber) throw new Error('Missing pull_request.number in event payload');
 
 const [owner, repo] = repository.split('/');
 
@@ -35,6 +32,20 @@ const githubHeaders = {
 
 const reviewLabels = loadLabelsConfig('review');
 const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes];
+
+let prNumber = event.pull_request?.number;
+if (!prNumber) {
+  const branch = event.ref?.replace('refs/heads/', '');
+  if (!branch) throw new Error('Could not determine branch from event payload');
+  const prsRes = await ghFetch(`/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=open`);
+  if (!prsRes.ok) throw new Error(`PR lookup failed: ${prsRes.status}`);
+  const prs = await prsRes.json();
+  if (!prs.length) {
+    log('No open PR found for branch, skipping review');
+    process.exit(0);
+  }
+  prNumber = prs[0].number;
+}
 
 async function ghFetch(path, options = {}) {
   try {
@@ -83,16 +94,24 @@ async function removeLabel(labelName) {
   }
 }
 
-const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
-  headers: { Accept: 'application/vnd.github.v3.diff' },
-});
+const [prMetaRes, diffRes] = await Promise.all([
+  ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`),
+  ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
+    headers: { Accept: 'application/vnd.github.v3.diff' },
+  }),
+]);
+if (!prMetaRes.ok) throw new Error(`PR metadata fetch failed: ${prMetaRes.status}`);
 if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
+
+const prMeta = await prMetaRes.json();
 const rawDiff = await diffRes.text();
 
+const prTitle = prMeta.title || '';
+const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
 
 const systemPrompt = loadPrompt('pr-review-system');
-const userPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff });
+const userPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff, issueTitle: prTitle, issueBody: prBody });
 
 const rawReview = await callLLM({
   prompt: userPrompt,
@@ -100,15 +119,15 @@ const rawReview = await callLLM({
   apiKey: llmApiKey,
   model,
   apiUrl,
-  temperature: 0.2,
+  temperature,
   responseFormat: null,
 });
 
 const HEADING = '## 🔍 Automated Code Review';
-const review = rawReview.trim();
-const body = review.includes(HEADING) ? review : `${HEADING}\n\n${review}`;
+const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
+const body = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 
-const verdictMatch = rawReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
+const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
 const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
 
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);

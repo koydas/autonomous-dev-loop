@@ -43,7 +43,7 @@ Provider selection is automatic based on which secrets are configured:
 - **Variables** (optional):
   - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Anthropic is the default.
   - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
-  - `GROQ_MODEL` — Groq model name (defaults to `llama-3.3-70b-versatile` if unset).
+  - `GROQ_MODEL` — Groq model name (defaults to `qwen/qwen3-32b` if unset).
   - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
 
 ## GitHub Actions PR Permission Requirement
@@ -97,7 +97,7 @@ All label names, colors, and descriptions are configurable in `config/labels.yam
 ## Risk and Mitigation Note
 
 - **Risk:** AI output may be low quality or off-target.
-  - **Mitigation:** deterministic prompt template, temperature `0`, and small-scope generated file.
+  - **Mitigation:** deterministic prompt template, temperature `0` for generation and validation (see `config/models.yaml`), and small-scope generated file.
 - **Risk:** accidental broad modifications.
   - **Mitigation:** generated patch is constrained to validated relative paths with a hard limit of 6 files per run.
 - **Risk:** workflow secrets misconfiguration.
@@ -110,10 +110,10 @@ File: `.github/workflows/pr-review.yml`
 Required secret:
 - **Secret**: `ANTHROPIC_API_KEY` or `GROQ_API_KEY` — used to review pull request diffs. Same provider selection rules apply (see above).
 
-The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with permissions `pull-requests: write`, `contents: read`, and `issues: write`.
+The workflow runs on every `push` to any branch (`branches: ["**"]`) with permissions `pull-requests: write`, `contents: read`, and `issues: write`. On push events the script resolves the PR number via the GitHub API; if no open PR exists for the branch it exits silently.
 
 On each run it:
-1. Fetches the PR diff and calls the LLM for a structured review.
+1. Fetches the PR title, body, and diff; calls the LLM for a structured review.
 2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
 3. Submits an official GitHub pull request review event (`APPROVE` or `REQUEST_CHANGES`) with a short redirect body. The full review detail lives only in the comment, preventing duplicate content from appearing in the PR conversation.
 4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other).

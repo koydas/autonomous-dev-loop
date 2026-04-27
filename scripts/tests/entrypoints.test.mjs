@@ -149,7 +149,7 @@ test('pr_review exits 1 when event file contains invalid JSON', async () => {
   }
 });
 
-test('pr_review exits 1 when event has no pull_request.number', async () => {
+test('pr_review exits 1 when event has no pull_request.number and no ref', async () => {
   const tmpFile = path.join(os.tmpdir(), 'pr-review-test-no-pr.json');
   await fs.writeFile(tmpFile, JSON.stringify({ action: 'opened' }));
   try {
@@ -160,7 +160,7 @@ test('pr_review exits 1 when event has no pull_request.number', async () => {
         GITHUB_REPOSITORY: 'owner/repo',
         GITHUB_EVENT_PATH: tmpFile,
       }),
-      /pull_request\.number/,
+      /Could not determine branch/,
     );
   } finally {
     await fs.unlink(tmpFile).catch(() => {});

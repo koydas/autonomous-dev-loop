@@ -60,8 +60,12 @@ function makeHandler({
     }
 
     if (method === 'GET' && /\/pulls\/\d+$/.test(url)) {
-      res.writeHead(diffStatus);
-      return res.end(diffStatus < 300 ? SAMPLE_DIFF : 'Forbidden');
+      if (req.headers['accept']?.includes('vnd.github.v3.diff')) {
+        res.writeHead(diffStatus);
+        return res.end(diffStatus < 300 ? SAMPLE_DIFF : 'Forbidden');
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ title: 'Test PR', body: 'Test PR body' }));
     }
 
     if (method === 'GET' && url.includes('/issues/') && url.includes('/comments')) {

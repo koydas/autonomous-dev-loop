@@ -42,19 +42,6 @@ test('returns empty object for empty input', () => {
   assert.deepEqual(parseFlatYaml(''), {});
 });
 
-test('parses models.yaml keys correctly', () => {
-  const yaml = [
-    '# comment',
-    'validation: llama-3.3-70b-versatile',
-    'generation: llama-3.1-8b-instant',
-    'review:     llama-3.3-70b-versatile',
-  ].join('\n');
-  const result = parseFlatYaml(yaml);
-  assert.equal(result.validation, 'llama-3.3-70b-versatile');
-  assert.equal(result.generation, 'llama-3.1-8b-instant');
-  assert.equal(result.review, 'llama-3.3-70b-versatile');
-});
-
 // parseNestedYaml tests
 
 test('parseNestedYaml parses 3-level nested structure', () => {

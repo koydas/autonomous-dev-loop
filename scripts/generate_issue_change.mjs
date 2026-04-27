@@ -21,6 +21,7 @@ async function main() {
     apiKey: config.apiKey,
     model: config.model,
     apiUrl: config.apiUrl,
+    temperature: config.temperature,
   });
 
   let aiOutput;
