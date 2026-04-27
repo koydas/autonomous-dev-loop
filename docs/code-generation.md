@@ -131,7 +131,7 @@ Node implementation:
 Required secret:
 - **Secret**: `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) — same provider selection rules apply (see above).
 
-The workflow triggers on `pull_request_review` events of type `submitted` where `review.state == 'changes_requested'`. This fires whether the reviewer is the automated review bot or a human.
+The workflow triggers on `pull_request_review` events (`submitted`, `edited`, `dismissed`) and only runs the auto-fix job when `review.state == 'changes_requested'` (case-insensitive match for compatibility). This fires whether the reviewer is the automated review bot or a human.
 
 On each run it:
 1. Checks the PR for `auto-fix-attempt-N` labels to determine how many auto-fix cycles have already run.
