@@ -53,6 +53,8 @@ function makeHandler({
   labelCreateStatus = 201,
   applyLabelStatus = 200,
   postCommentStatus = 201,
+  commentsStatus = 200,
+  commentsBody = '[]',
 } = {}) {
   return (req, res) => {
     const { method, url } = req;
@@ -80,6 +82,11 @@ function makeHandler({
     if (method === 'POST' && /\/issues\/\d+\/comments$/.test(url)) {
       res.writeHead(postCommentStatus, { 'Content-Type': 'application/json' });
       return res.end(postCommentStatus < 300 ? '{"id":1}' : 'error');
+    }
+
+    if (method === 'GET' && /\/issues\/\d+\/comments\?per_page=100$/.test(url)) {
+      res.writeHead(commentsStatus, { 'Content-Type': 'application/json' });
+      return res.end(commentsStatus < 300 ? commentsBody : 'error');
     }
 
     if (method === 'POST' && /\/repos\/[^/]+\/[^/]+\/labels$/.test(url)) {
@@ -213,6 +220,39 @@ test('auto_fix_pr exits 1 when LLM returns JSON with no changes array', async ()
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr falls back to automated review comment when review payload has no feedback', async () => {
+  const commentsBody = JSON.stringify([
+    { body: 'Random note' },
+    {
+      body: '## 🔍 Automated Code Review\n\nPlease fix the lint error in `src/index.js`.',
+    },
+  ]);
+  const server = await startMockServer(
+    makeHandler({
+      commentsBody,
+      llmResponse: validLLMJson('fixed.txt'),
+      inlineCommentsBody: JSON.stringify([]),
+    }),
+  );
+  const eventFile = await writeEventFile();
+  const outputFile = path.join(os.tmpdir(), `autofix-output-${Date.now()}.txt`);
+  try {
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.review.body = '';
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, {
+      extraEnv: { GITHUB_OUTPUT: outputFile },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stdout, /feedback fallback/i);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(outputFile).catch(() => {});
   }
 });
 

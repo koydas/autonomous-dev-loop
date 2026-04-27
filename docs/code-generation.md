@@ -116,7 +116,7 @@ On each run it:
 1. Fetches the PR title, body, and diff; calls the LLM for a structured review.
 2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
 3. Submits an official GitHub pull request review event (`APPROVE` or `REQUEST_CHANGES`) with a short redirect body. The full review detail lives only in the comment, preventing duplicate content from appearing in the PR conversation.
-4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other).
+4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other). When verdict is `REQUEST_CHANGES`, it removes and re-applies `changes-requested` so each review iteration emits a fresh `labeled` event — unless an auto-fix run is already `queued`/`in_progress`, in which case re-pulse is skipped to avoid loop amplification.
 
 **Review submission permission:** submitting a GitHub review requires the repository setting **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** to be enabled. If it is not enabled, the review submission is skipped with a warning (the comment and labels are still applied). This is the same setting used for PR creation by the generation workflow.
 
@@ -131,12 +131,14 @@ Node implementation:
 Required secret:
 - **Secret**: `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) — same provider selection rules apply (see above).
 
-The workflow triggers on `pull_request_review` events (`submitted`, `edited`, `dismissed`) and only runs the auto-fix job when `review.state == 'changes_requested'` (case-insensitive match for compatibility). This fires whether the reviewer is the automated review bot or a human.
+The workflow is label-driven: it triggers on `pull_request` `labeled` events and runs only when the applied label matches `review.changes.name` from `config/labels.yaml` (default: `changes-requested`).
+
+This avoids silent skips when GitHub Actions cannot submit an official `REQUEST_CHANGES` review event (for example when repository settings block review submission), because the PR review workflow still applies the `changes-requested` label.
 
 On each run it:
 1. Checks the PR for `auto-fix-attempt-N` labels to determine how many auto-fix cycles have already run.
 2. If the attempt count has reached the maximum (3), posts a comment explaining that the limit is exhausted and exits without making changes.
-3. Fetches the review body and any inline review comments to build the full feedback context.
+3. Fetches the review body and any inline review comments to build the full feedback context. If the triggering event has no review body (for example label-based trigger), it falls back to the latest automated review comment body.
 4. Fetches the current PR diff and reads the changed files from disk (up to 10 files, capped at 8 000 chars each).
 5. Calls the LLM with the review feedback, diff, and current file contents to generate targeted fixes.
 6. Writes 1 to 6 fixed files to the PR branch, commits, and pushes.
