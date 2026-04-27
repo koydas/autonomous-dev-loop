@@ -2,7 +2,7 @@
 # Override at runtime with the GROQ_MODEL environment variable.
 # For Anthropic, set AI_PROVIDER=anthropic and optionally ANTHROPIC_MODEL.
 
-validation: qwen-qwq-32b
-generation: qwen-qwq-32b
-review:     qwen-qwq-32b
-temperature: 0.6
+validation: qwen/qwen3-32b
+generation: qwen/qwen3-32b
+review:     qwen/qwen3-32b
+temperature: 0.7
