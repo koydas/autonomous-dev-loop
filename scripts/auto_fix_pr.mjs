@@ -53,6 +53,30 @@ async function ghFetch(endpoint, options = {}) {
   }
 }
 
+async function loadLatestAutomatedReviewComment() {
+  let page = 1;
+  while (true) {
+    const commentsRes = await ghFetch(
+      `/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100&sort=created&direction=desc&page=${page}`,
+    );
+    if (!commentsRes.ok) {
+      logError('Automated review comment fallback fetch failed', { prNumber, statusCode: commentsRes.status, page });
+      return null;
+    }
+
+    const comments = await commentsRes.json();
+    if (!Array.isArray(comments) || comments.length === 0) return null;
+
+    const automatedReviewComment = comments.find(
+      (c) => typeof c.body === 'string' && c.body.includes('## 🔍 Automated Code Review'),
+    );
+    if (automatedReviewComment?.body) return automatedReviewComment.body;
+
+    if (comments.length < 100) return null;
+    page += 1;
+  }
+}
+
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
 const prLabels = await labelsRes.json();
@@ -83,6 +107,14 @@ if (reviewId) {
     for (const c of inlineComments) {
       feedbackParts.push(`**${c.path}** (line ${c.original_line || c.line || '?'}):\n${c.body}`);
     }
+  }
+}
+
+if (!feedbackParts.length) {
+  const automatedReviewCommentBody = await loadLatestAutomatedReviewComment();
+  if (automatedReviewCommentBody) {
+    feedbackParts.push(automatedReviewCommentBody);
+    log('Using latest automated review comment as feedback fallback', { prNumber });
   }
 }
 
