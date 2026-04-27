@@ -1,6 +1,6 @@
-# AI Issue-to-PR MVP Setup (Groq)
+# AI Issue-to-PR MVP Setup
 
-This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests using Groq. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
+This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Anthropic** (Claude models). Groq is also supported and can be selected via the `AI_PROVIDER` environment variable. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Workflow Overview
 
@@ -10,11 +10,11 @@ Workflow design note: YAML stays intentionally minimal (orchestration only). Mos
 
 Node implementation:
 - Entrypoint: `scripts/generate_issue_change.mjs`
-- Modules: `scripts/lib/config.mjs`, `scripts/lib/groq_client.mjs`, `scripts/lib/output_writer.mjs`
+- Modules: `scripts/lib/config.mjs`, `scripts/lib/llm_client.mjs`, `scripts/lib/anthropic_client.mjs`, `scripts/lib/groq_client.mjs`, `scripts/lib/output_writer.mjs`
 
 When the `ready-for-dev` label is applied to an issue, the workflow:
 1. Builds a deterministic prompt using issue number, title, and body.
-2. Calls the Groq API using repository secrets.
+2. Calls the LLM API (Anthropic by default) using repository secrets.
 3. Writes 1 to 6 generated files at AI-selected relative paths.
 4. Creates a branch named `ai/issue-<number>`.
 5. Uses `peter-evans/create-pull-request` to commit generated content on `ai/issue-<number>`.
@@ -26,13 +26,25 @@ If generation fails or no patch is produced, the workflow exits before PR creati
 
 Configure these in **Settings → Secrets and variables → Actions**:
 
-- **Secret**: `GROQ_API_KEY` (required) — API key for Groq.
+Provider selection is automatic based on which secrets are configured:
+
+| Secrets configured | Provider used |
+|---|---|
+| `ANTHROPIC_API_KEY` only | Anthropic |
+| `GROQ_API_KEY` only | Groq |
+| Both | Anthropic (default) — override with `AI_PROVIDER=groq` |
+| Neither | Fails with a clear error |
+
+- **Secret**: `ANTHROPIC_API_KEY` — API key for Anthropic (Claude models).
+- **Secret**: `GROQ_API_KEY` — API key for Groq.
 - **Secret**: `AI_PR_TOKEN` (recommended) — GitHub token used for PR creation.
   - Use a fine-grained PAT or GitHub App token with at least **Contents: Read/Write**, **Pull requests: Read/Write**, and **Issues: Read/Write** on this repository.
   - If `AI_PR_TOKEN` is not set, the workflow falls back to `GITHUB_TOKEN`.
 - **Variables** (optional):
-  - `GROQ_MODEL` — model name (defaults to `llama-3.1-8b-instant` if unset).
-  - `GROQ_API_URL` — endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
+  - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Anthropic is the default.
+  - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
+  - `GROQ_MODEL` — Groq model name (defaults to `llama-3.3-70b-versatile` if unset).
+  - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
 
 ## GitHub Actions PR Permission Requirement
 
@@ -60,7 +72,7 @@ The validation workflow creates and manages these labels automatically:
 4. Once validation passes, confirm `AI Issue to PR` starts automatically from the `ready-for-dev` label event.
 5. Verify logs for:
    - prompt construction
-   - Groq API call success
+   - LLM API call success
    - branch creation (`ai/issue-<number>`)
    - PR creation
 6. Confirm PR details:
@@ -84,11 +96,11 @@ The validation workflow creates and manages these labels automatically:
 - **Risk:** workflow secrets misconfiguration.
   - **Mitigation:** explicit secret checks and fail-fast logging before commit/PR steps.
 
-## PR Review Workflow (Groq)
+## PR Review Workflow
 
 File: `.github/workflows/pr-review.yml`
 
 Required secret:
-- **Secret**: `GROQ_API_KEY` (required) — used to review pull request diffs and post/update a structured PR comment.
+- **Secret**: `ANTHROPIC_API_KEY` or `GROQ_API_KEY` — used to review pull request diffs and post/update a structured PR comment. Same provider selection rules apply (see above).
 
 The workflow runs on pull requests (`opened`, `synchronize`, `reopened`) with `pull-requests: write` and `contents: read`.

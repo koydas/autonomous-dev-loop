@@ -9,8 +9,8 @@ import http from 'node:http';
 
 const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-function startGroqMock(content) {
-  const body = JSON.stringify({ choices: [{ message: { content } }] });
+function startAnthropicMock(content) {
+  const body = JSON.stringify({ content: [{ type: 'text', text: content }] });
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(body);
@@ -41,17 +41,17 @@ test('validate_issue.mjs writes valid/score/comment to GITHUB_OUTPUT', async () 
     warnings: [],
     suggested_ac: [],
   });
-  const server = await startGroqMock(groqContent);
+  const server = await startAnthropicMock(groqContent);
   const port = server.address().port;
   const outputFile = path.join(os.tmpdir(), `gh-output-validate-${Date.now()}.txt`);
   await fs.writeFile(outputFile, '');
 
   try {
     const result = await runScript('validate_issue.mjs', {
-      GROQ_API_KEY: 'test-key',
+      ANTHROPIC_API_KEY: 'test-key',
       ISSUE_NUMBER: '42',
       ISSUE_TITLE: 'Add login feature',
-      GROQ_API_URL: `http://127.0.0.1:${port}/v1/chat/completions`,
+      ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
       GITHUB_OUTPUT: outputFile,
     });
 
@@ -71,7 +71,7 @@ test('generate_issue_change.mjs writes summary/generated_paths to GITHUB_OUTPUT'
     summary: 'Implement login feature',
     changes: [{ target_path: 'src/login.js', file_content: 'export function login() {}' }],
   });
-  const server = await startGroqMock(groqContent);
+  const server = await startAnthropicMock(groqContent);
   const port = server.address().port;
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gh-output-gen-'));
@@ -82,10 +82,10 @@ test('generate_issue_change.mjs writes summary/generated_paths to GITHUB_OUTPUT'
     const result = await runScript(
       'generate_issue_change.mjs',
       {
-        GROQ_API_KEY: 'test-key',
+        ANTHROPIC_API_KEY: 'test-key',
         ISSUE_NUMBER: '42',
         ISSUE_TITLE: 'Add login feature',
-        GROQ_API_URL: `http://127.0.0.1:${port}/v1/chat/completions`,
+        ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
         GITHUB_OUTPUT: outputFile,
       },
       tmpDir,

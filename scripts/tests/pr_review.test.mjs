@@ -31,8 +31,8 @@ function startMockServer(handler) {
   });
 }
 
-function groqJson(content) {
-  return JSON.stringify({ choices: [{ message: { content } }] });
+function anthropicJson(content) {
+  return JSON.stringify({ content: [{ type: 'text', text: content }] });
 }
 
 function makeHandler({
@@ -45,9 +45,9 @@ function makeHandler({
   return (req, res) => {
     const { method, url } = req;
 
-    if (url === '/v1/chat/completions') {
+    if (url === '/v1/messages') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(groqJson(groqContent));
+      return res.end(anthropicJson(groqContent));
     }
 
     if (method === 'GET' && /\/pulls\/\d+$/.test(url)) {
@@ -74,11 +74,11 @@ async function runPrReview(port, eventFile, extraEnv = {}) {
   const env = {
     PATH: process.env.PATH,
     GITHUB_TOKEN: 'test-token',
-    GROQ_API_KEY: 'test-key',
+    ANTHROPIC_API_KEY: 'test-key',
     GITHUB_REPOSITORY: 'owner/repo',
     GITHUB_EVENT_PATH: eventFile,
     GITHUB_API_URL: `http://127.0.0.1:${port}`,
-    GROQ_API_URL: `http://127.0.0.1:${port}/v1/chat/completions`,
+    ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
     ...extraEnv,
   };
   return new Promise((resolve) => {
@@ -174,7 +174,7 @@ test('pr_review PATCHes existing comment when one already contains the heading',
   }
 });
 
-test('pr_review prepends heading when Groq response does not include it', async () => {
+test('pr_review prepends heading when LLM response does not include it', async () => {
   const server = await startMockServer(makeHandler({ groqContent: 'Plain review text.' }));
   const eventFile = await writeEventFile();
   try {
@@ -190,7 +190,7 @@ test('pr_review prepends heading when Groq response does not include it', async 
   }
 });
 
-test('pr_review does not duplicate heading when Groq response already contains it', async () => {
+test('pr_review does not duplicate heading when LLM response already contains it', async () => {
   const groqContent = `${HEADING}\n\nDetailed review.`;
   const server = await startMockServer(makeHandler({ groqContent }));
   const eventFile = await writeEventFile();

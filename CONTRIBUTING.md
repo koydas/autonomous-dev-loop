@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js 20+
-- A Groq API key (for manual end-to-end testing)
+- An `ANTHROPIC_API_KEY` (default provider) or `GROQ_API_KEY` (set `AI_PROVIDER=groq`) for manual end-to-end testing
 
 ## Running Tests
 

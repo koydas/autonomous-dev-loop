@@ -15,7 +15,7 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
 - Projects where quick first-draft PRs reduce cycle time.
 
 ## In-Scope (MVP)
-- Validate issues automatically on open/edit (Groq-backed quality gate).
+- Validate issues automatically on open/edit (AI-backed quality gate).
 - Trigger PR generation on **issue labeled** event, gated to the `ready-for-dev` label.
 - Build a prompt from issue title + body.
 - Call an AI model with that prompt.
