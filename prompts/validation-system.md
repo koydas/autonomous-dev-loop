@@ -52,10 +52,10 @@ BLOCKED when:
 - Key terms are undefined and could mean multiple incompatible things
 - The scope boundary is unclear (which endpoints? which environments? all users or a specific role?)
 
-PASSES when:
-- The scope is narrow enough that the implementation path is unambiguous
+NOT BLOCKED when:
+- Named entities correspond to identifiable components, files, or flows within the target repository — these are references, not ambiguities
 - The deliverable is a documentation or configuration artifact with named components explicitly listed
-- In/Out scope boundaries are explicitly stated, even without exhaustive detail
+- In/Out scope boundaries are explicitly stated, even without exhaustive implementation detail
 
 B4. UNRESOLVED UNDOCUMENTED DEPENDENCIES
 All hard external dependencies must be resolved or explicitly documented.
@@ -64,7 +64,9 @@ BLOCKED when:
 - AND there is no documented workaround, stub, mock, or resolution plan
 - External API contracts or third-party behaviours are assumed without citation
 
-PASSES when dependencies are listed with status: available, in-progress (with ticket), or explicitly mocked/stubbed for this implementation.
+NOT BLOCKED when:
+- The dependency is a standard, stable platform capability (e.g. GitHub's native Mermaid rendering in Markdown, built-in language standard library features) — these require no configuration or resolution plan
+- Dependencies are listed with status: available, in-progress (with ticket), or explicitly mocked/stubbed for this implementation
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WARNING CRITERIA — non-blocking, reduce score, noted for quality
