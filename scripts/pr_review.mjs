@@ -5,7 +5,7 @@ import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
-import { log } from './lib/logger.mjs';
+import { log, error as logError } from './lib/logger.mjs';
 
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
@@ -137,9 +137,16 @@ const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/revie
     event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES',
   }),
 });
-if (!reviewRes.ok) throw new Error(`Review submit failed: ${reviewRes.status} ${await reviewRes.text()}`);
-
-log('PR review submitted', { prNumber, event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES' });
+if (!reviewRes.ok) {
+  const detail = await reviewRes.text();
+  if (reviewRes.status === 422) {
+    logError('PR review submit skipped: GitHub Actions lacks permission to submit reviews. Enable "Allow GitHub Actions to create and approve pull requests" in repository Settings → Actions → General.', { prNumber, status: 422 });
+  } else {
+    throw new Error(`Review submit failed: ${reviewRes.status} ${detail}`);
+  }
+} else {
+  log('PR review submitted', { prNumber, event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES' });
+}
 
 for (const label of PR_REVIEW_LABELS) {
   await upsertLabel(label);
