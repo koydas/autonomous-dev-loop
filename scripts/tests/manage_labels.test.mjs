@@ -1,11 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import http from 'node:http';
+import { parseNestedYaml } from '../lib/yaml.mjs';
 
 const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT_DIR = path.join(SCRIPTS_DIR, '..');
+const LABELS = parseNestedYaml(readFileSync(path.join(ROOT_DIR, 'config/labels.yaml'), 'utf8'));
 
 function startMockServer(handler) {
   const requests = [];
@@ -97,12 +101,12 @@ test('manage_labels IS_VALID=true applies ready-for-dev and removes needs-refine
       (r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url),
     );
     assert.ok(apply, 'expected POST to issue labels endpoint');
-    assert.ok(JSON.parse(apply.body).labels.includes('ready-for-dev'), 'should apply ready-for-dev');
+    assert.ok(JSON.parse(apply.body).labels.includes(LABELS.issue.valid.name), `should apply ${LABELS.issue.valid.name}`);
 
     const remove = server.requests.find(
-      (r) => r.method === 'DELETE' && r.url.includes('/labels/needs-refinement'),
+      (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.issue.invalid.name}`),
     );
-    assert.ok(remove, 'expected DELETE for needs-refinement');
+    assert.ok(remove, `expected DELETE for ${LABELS.issue.invalid.name}`);
   } finally {
     server.close();
   }
@@ -117,12 +121,12 @@ test('manage_labels IS_VALID=false applies needs-refinement and removes ready-fo
     const apply = server.requests.find(
       (r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url),
     );
-    assert.ok(JSON.parse(apply.body).labels.includes('needs-refinement'), 'should apply needs-refinement');
+    assert.ok(JSON.parse(apply.body).labels.includes(LABELS.issue.invalid.name), `should apply ${LABELS.issue.invalid.name}`);
 
     const remove = server.requests.find(
-      (r) => r.method === 'DELETE' && r.url.includes('/labels/ready-for-dev'),
+      (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.issue.valid.name}`),
     );
-    assert.ok(remove, 'expected DELETE for ready-for-dev');
+    assert.ok(remove, `expected DELETE for ${LABELS.issue.valid.name}`);
   } finally {
     server.close();
   }

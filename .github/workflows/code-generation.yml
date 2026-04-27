@@ -16,10 +16,30 @@ permissions:
   issues: write
 
 jobs:
+  load-labels:
+    runs-on: ubuntu-latest
+    outputs:
+      ready_for_dev: ${{ steps.cfg.outputs.ready_for_dev }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - id: cfg
+        run: |
+          LABEL=$(node --input-type=module <<'EOF'
+          import { readFileSync } from 'fs';
+          import { parseNestedYaml } from './scripts/lib/yaml.mjs';
+          process.stdout.write(parseNestedYaml(readFileSync('config/labels.yaml', 'utf8')).issue.valid.name);
+          EOF
+          )
+          echo "ready_for_dev=$LABEL" >> "$GITHUB_OUTPUT"
+
   generate-pr:
+    needs: load-labels
     if: >
       github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'ready-for-dev'
+      github.event.label.name == needs.load-labels.outputs.ready_for_dev
     runs-on: ubuntu-latest
 
     steps:
