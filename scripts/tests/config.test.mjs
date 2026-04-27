@@ -120,7 +120,7 @@ test('loadConfigFromEnv uses Groq when only GROQ_API_KEY is set', () => {
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', GROQ_API_KEY: 'groq-key' });
   const config = loadConfigFromEnv();
   assert.equal(config.apiKey, 'groq-key');
-  assert.equal(config.model, 'llama-3.3-70b-versatile');
+  assert.equal(config.model, 'qwen-qwq-32b');
 });
 
 test('loadConfigFromEnv uses Anthropic when both keys set and no AI_PROVIDER', () => {
@@ -134,7 +134,7 @@ test('loadConfigFromEnv uses AI_PROVIDER=groq tiebreaker when both keys set', ()
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'groq' });
   const config = loadConfigFromEnv();
   assert.equal(config.apiKey, 'groq-key');
-  assert.equal(config.model, 'llama-3.3-70b-versatile');
+  assert.equal(config.model, 'qwen-qwq-32b');
 });
 
 // buildDeterministicPrompt

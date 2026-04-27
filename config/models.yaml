@@ -2,6 +2,6 @@
 # Override at runtime with the GROQ_MODEL environment variable.
 # For Anthropic, set AI_PROVIDER=anthropic and optionally ANTHROPIC_MODEL.
 
-validation: llama-3.3-70b-versatile
-generation: llama-3.3-70b-versatile
-review:     llama-3.3-70b-versatile
+validation: qwen-qwq-32b
+generation: qwen-qwq-32b
+review:     qwen-qwq-32b
