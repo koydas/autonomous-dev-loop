@@ -14,7 +14,7 @@ Support two LLM providers via a runtime router (`scripts/lib/llm_client.mjs`):
 | Provider | Default | Key variable | Model variable |
 |---|---|---|---|
 | Anthropic | ✅ yes | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` (default: `claude-opus-4-7`) |
-| Groq | no | `GROQ_API_KEY` | `GROQ_MODEL` (default: `llama-3.3-70b-versatile`) |
+| Groq | no | `GROQ_API_KEY` | `GROQ_MODEL` (default: `qwen/qwen3-32b` — see ADR-0005) |
 
 The active provider is determined automatically by which API keys are present:
 
@@ -32,7 +32,7 @@ Architecture:
 - `scripts/lib/groq_client.mjs` — OpenAI-compatible Groq client (unchanged)
 - `scripts/lib/config.mjs` — `loadLLMConfig(stage)` returns provider-aware config
 
-Deterministic generation settings remain in effect (temperature `0` for generation and validation, `0.2` for reviews).
+Temperature is configured per stage in `config/models.yaml` (see ADR-0005).
 
 ## Consequences
 
