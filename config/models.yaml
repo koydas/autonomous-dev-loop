@@ -5,3 +5,4 @@
 validation: qwen-qwq-32b
 generation: qwen-qwq-32b
 review:     qwen-qwq-32b
+temperature: 0.6

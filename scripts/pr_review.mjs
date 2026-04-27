@@ -10,7 +10,7 @@ import { log, error as logError } from './lib/logger.mjs';
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl } = loadLLMConfig('review');
+const { apiKey: llmApiKey, model, apiUrl, temperature } = loadLLMConfig('review');
 
 let event;
 try {
@@ -100,7 +100,7 @@ const rawReview = await callLLM({
   apiKey: llmApiKey,
   model,
   apiUrl,
-  temperature: 0.2,
+  temperature,
   responseFormat: null,
 });
 
