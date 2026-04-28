@@ -45,8 +45,8 @@ export function parseGroqResponse(rawText) {
   let parsed;
   try {
     parsed = JSON.parse(rawText.slice(start, end + 1));
-  } catch {
-    throw new Error('Groq response contained invalid JSON');
+  } catch (err) {
+    throw new Error('Groq response contained invalid JSON', { cause: err });
   }
 
   if (typeof parsed.valid !== 'boolean') throw new Error('Response missing "valid" boolean');

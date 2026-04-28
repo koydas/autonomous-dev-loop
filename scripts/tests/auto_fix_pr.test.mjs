@@ -372,7 +372,7 @@ test('auto_fix_pr includes inline review comments in LLM prompt', async () => {
   }
 });
 
-test('auto_fix_pr continues when inline comment fetch fails', async () => {
+test('auto_fix_pr exits 1 when inline comment fetch fails', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-run-'));
   const server = await startMockServer(
     makeHandler({ inlineCommentsStatus: 500, llmResponse: validLLMJson('out.txt') }),
@@ -380,7 +380,8 @@ test('auto_fix_pr continues when inline comment fetch fails', async () => {
   const eventFile = await writeEventFile();
   try {
     const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
-    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.notEqual(result.code, 0, `expected non-zero exit, stderr: ${result.stderr}`);
+    assert.match(result.stderr + result.stdout, /Review inline comments fetch failed/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

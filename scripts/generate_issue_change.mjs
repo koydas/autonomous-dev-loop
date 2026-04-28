@@ -8,6 +8,12 @@ import { log, error as logError } from './lib/logger.mjs';
 import { buildFileContentsBlock } from './lib/file_injector.mjs';
 import fs from 'node:fs/promises';
 
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
+  process.exit(1);
+});
+
 async function main() {
   const config = loadConfigFromEnv();
   const fileContents = await buildFileContentsBlock(config.issueTitle, config.issueBody, process.cwd());
@@ -28,8 +34,8 @@ async function main() {
   let aiOutput;
   try {
     aiOutput = parseJsonResponse(raw);
-  } catch {
-    throw new Error('AI response was not valid JSON');
+  } catch (err) {
+    throw new Error('AI response was not valid JSON', { cause: err });
   }
   if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
     throw new Error('AI response JSON must be an object');
@@ -51,6 +57,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  logError(err.message);
+  logError('Fatal error', { error: err.message, stack: err.stack });
   process.exit(1);
 });

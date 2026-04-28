@@ -10,6 +10,12 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
+  process.exit(1);
+});
+
 const MAX_ATTEMPTS = 3;
 const MAX_FILE_SIZE = 2000;
 const MAX_FILES = 5;
@@ -33,7 +39,7 @@ let event;
 try {
   event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
 } catch (err) {
-  throw new Error(`Failed to parse GitHub event payload: ${err.message}`);
+  throw new Error(`Failed to parse GitHub event payload: ${err.message}`, { cause: err });
 }
 if (!event || typeof event !== 'object') throw new Error('GitHub event payload is not a valid object');
 
@@ -59,7 +65,7 @@ async function ghFetch(endpoint, options = {}) {
       headers: { ...githubHeaders, ...(options.headers || {}) },
     });
   } catch (err) {
-    throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`);
+    throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`, { cause: err });
   }
 }
 
@@ -112,11 +118,12 @@ if (reviewId) {
   const inlineRes = await ghFetch(
     `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`,
   );
-  if (inlineRes.ok) {
-    const inlineComments = await inlineRes.json();
-    for (const c of inlineComments) {
-      feedbackParts.push(`**${c.path}** (line ${c.original_line || c.line || '?'}):\n${c.body}`);
-    }
+  if (!inlineRes.ok) {
+    throw new Error(`Review inline comments fetch failed: ${inlineRes.status}`);
+  }
+  const inlineComments = await inlineRes.json();
+  for (const c of inlineComments) {
+    feedbackParts.push(`**${c.path}** (line ${c.original_line || c.line || '?'}):\n${c.body}`);
   }
 }
 
@@ -200,7 +207,7 @@ try {
   aiOutput = parseJsonResponse(raw);
 } catch (parseErr) {
   logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
-  throw new Error(`AI response was not valid JSON: ${parseErr.message}`);
+  throw new Error(`AI response was not valid JSON: ${parseErr.message}`, { cause: parseErr });
 }
 if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   throw new Error('AI response JSON must be an object');
@@ -219,7 +226,7 @@ const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
   }),
 });
 if (!createLabelRes.ok && createLabelRes.status !== 422) {
-  logError(`Auto-fix label create failed: ${createLabelRes.status}`, { attemptLabelName });
+  throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
 }
 
 const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
@@ -227,7 +234,7 @@ const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/
   body: JSON.stringify({ labels: [attemptLabelName] }),
 });
 if (!applyLabelRes.ok) {
-  logError(`Auto-fix label apply failed: ${applyLabelRes.status}`, { attemptLabelName });
+  throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
 }
 
 if (process.env.GITHUB_OUTPUT) {

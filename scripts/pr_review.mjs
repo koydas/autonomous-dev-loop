@@ -7,6 +7,12 @@ import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
+  process.exit(1);
+});
+
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
@@ -16,7 +22,7 @@ let event;
 try {
   event = JSON.parse(fs.readFileSync(eventPath, 'utf8'));
 } catch (err) {
-  throw new Error(`Failed to parse GitHub event payload: ${err.message}`);
+  throw new Error(`Failed to parse GitHub event payload: ${err.message}`, { cause: err });
 }
 if (!event || typeof event !== 'object') throw new Error('GitHub event payload is not a valid object');
 
@@ -54,7 +60,7 @@ async function ghFetch(path, options = {}) {
       headers: { ...githubHeaders, ...(options.headers || {}) },
     });
   } catch (err) {
-    throw new Error(`Network error calling GitHub API (${path}): ${err.message}`);
+    throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
   }
 }
 
@@ -176,6 +182,19 @@ const shortReviewBody = isApproved
   ? 'Automated review passed. See the review comment for details.'
   : 'Changes required. See the automated review comment above for details.';
 
+function isOwnPullRequestApprovalFailure(status, detail, approvedVerdict) {
+  if (!approvedVerdict || status !== 422) return false;
+  const ownPrApprovalPattern = /can not approve your own pull request/i;
+  if (ownPrApprovalPattern.test(detail)) return true;
+  try {
+    const parsed = JSON.parse(detail);
+    const errors = Array.isArray(parsed?.errors) ? parsed.errors.map(String) : [];
+    return errors.some((entry) => ownPrApprovalPattern.test(entry));
+  } catch {
+    return false;
+  }
+}
+
 const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
   method: 'POST',
   body: JSON.stringify({
@@ -189,11 +208,16 @@ if (!reviewRes.ok) {
     reviewRes.status === 422 ||
     reviewRes.status === 403 ||
     (reviewRes.status === 401 && /permission|not permitted|resource not accessible/i.test(detail));
-  if (permissionLikeFailure) {
-    logError('PR review submit skipped: token lacks permission to submit reviews. Ensure "Pull requests: write" scope is granted and, if using GITHUB_TOKEN, enable "Allow GitHub Actions to create and approve pull requests" in repository Settings → Actions → General.', {
+  const ownPrApprovalFailure = isOwnPullRequestApprovalFailure(reviewRes.status, detail, isApproved);
+  if (ownPrApprovalFailure) {
+    logError('PR review submit skipped: GitHub rejected APPROVE because the actor opened the pull request. Continuing with review comment and labels.', {
       prNumber,
       status: reviewRes.status,
     });
+  } else if (permissionLikeFailure) {
+    throw new Error(
+      `Review submit failed due to permission/configuration issue: ${reviewRes.status} ${detail}`,
+    );
   } else {
     throw new Error(`Review submit failed: ${reviewRes.status} ${detail}`);
   }

@@ -107,6 +107,11 @@ describe('readRelevantFiles', () => {
     assert.equal(files.length, 0);
   });
 
+  test('skips ENOTDIR path-like tokens silently', async () => {
+    const files = await readRelevantFiles(['hello.js/section'], tmpDir);
+    assert.equal(files.length, 0);
+  });
+
   test('prevents traversal outside the repo root', async () => {
     const files = await readRelevantFiles(['../outside.js'], tmpDir);
     assert.equal(files.length, 0);
