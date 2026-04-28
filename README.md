@@ -26,7 +26,6 @@ Once a PR is opened, the automation continues:
 
 The loop runs up to **3 auto-fix iterations** per PR. After that, a comment is posted requesting manual intervention.
 
-
 ## Tests
 
 The core Node.js modules are covered by unit tests using the built-in `node:test` runner (no extra dependencies).
@@ -42,3 +41,16 @@ node --test scripts/tests/*.test.mjs
 ## Architecture Decisions
 
 - ADR index: `docs/adr/README.md`
+
+## Flow Diagram
+
+```mermaid
+graph LR
+    A[Issue Validation] --> B[Code Generation]
+    B --> C[PR Review]
+    C --> D{Auto-Fix Needed?}
+    D -->|Yes| E[Auto-Fix Attempts]
+    E --> F[Update Code]
+    F --> C
+    D -->|No| G[Process Complete]
+```
