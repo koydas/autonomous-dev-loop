@@ -165,14 +165,14 @@ const raw = await callLLM({
   model,
   apiUrl,
   temperature: 0.2,
-  responseFormat: null,
 });
 
 let aiOutput;
 try {
   aiOutput = parseJsonResponse(raw);
-} catch {
-  throw new Error('AI response was not valid JSON');
+} catch (parseErr) {
+  logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
+  throw new Error(`AI response was not valid JSON: ${parseErr.message}`);
 }
 if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   throw new Error('AI response JSON must be an object');

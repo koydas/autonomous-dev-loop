@@ -246,6 +246,7 @@ test('auto_fix_pr falls back to automated review comment when review payload has
     }),
   );
   const eventFile = await writeEventFile();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-fallback-'));
   const outputFile = path.join(os.tmpdir(), `autofix-output-${Date.now()}.txt`);
   try {
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
@@ -253,6 +254,7 @@ test('auto_fix_pr falls back to automated review comment when review payload has
     await fs.writeFile(eventFile, JSON.stringify(rawEvent));
 
     const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
       extraEnv: { GITHUB_OUTPUT: outputFile },
     });
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
@@ -261,6 +263,7 @@ test('auto_fix_pr falls back to automated review comment when review payload has
     server.close();
     await fs.unlink(eventFile).catch(() => {});
     await fs.unlink(outputFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
   }
 });
 
@@ -277,12 +280,13 @@ test('auto_fix_pr paginates review comments to find latest automated review fall
     }),
   );
   const eventFile = await writeEventFile();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-paged-'));
   try {
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
     rawEvent.review.body = '';
     await fs.writeFile(eventFile, JSON.stringify(rawEvent));
 
-    const result = await runAutoFix(server.address().port, eventFile);
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
     const commentRequests = server.requests.filter(
       (r) => r.method === 'GET' && /\/issues\/\d+\/comments\?/.test(r.url),
@@ -293,6 +297,7 @@ test('auto_fix_pr paginates review comments to find latest automated review fall
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
   }
 });
 
