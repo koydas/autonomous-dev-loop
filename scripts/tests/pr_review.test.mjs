@@ -46,6 +46,7 @@ function makeHandler({
   commentsBody = '[]',
   upsertStatus = 201,
   reviewStatus = 201,
+  reviewBody = null,
   labelCreateStatus = 201,
   labelUpdateStatus = 200,
   applyLabelStatus = 200,
@@ -84,7 +85,7 @@ function makeHandler({
 
     if (method === 'POST' && /\/pulls\/\d+\/reviews$/.test(url)) {
       res.writeHead(reviewStatus, { 'Content-Type': 'application/json' });
-      return res.end(reviewStatus < 300 ? '{"id":1}' : 'Internal Server Error');
+      return res.end(reviewStatus < 300 ? '{"id":1}' : (reviewBody ?? 'Internal Server Error'));
     }
 
     if (
@@ -260,6 +261,29 @@ test('pr_review exits 1 when review submit returns 403 (insufficient scope)', as
     const result = await runPrReview(server.address().port, eventFile);
     assert.notEqual(result.code, 0, `expected non-zero exit, stderr: ${result.stderr}`);
     assert.match(result.stderr + result.stdout, /permission\/configuration issue/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review continues when GitHub rejects APPROVE on own pull request', async () => {
+  const ownPrError = JSON.stringify({
+    message: 'Unprocessable Entity',
+    errors: ['Review Can not approve your own pull request'],
+  });
+  const server = await startMockServer(
+    makeHandler({
+      groqContent: 'Looks good.\n\nVerdict: APPROVED',
+      reviewStatus: 422,
+      reviewBody: ownPrError,
+    }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr + result.stdout, /rejected APPROVE because the actor opened the pull request/i);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
