@@ -11,7 +11,10 @@ import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/
 import { log, error as logError } from './lib/logger.mjs';
 
 const MAX_ATTEMPTS = 3;
-const MAX_FILE_SIZE = 8000;
+const MAX_FILE_SIZE = 2000;
+const MAX_FILES = 5;
+const MAX_DIFF_CHARS = 3000;
+const MAX_FEEDBACK_CHARS = 1500;
 const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
 
 const githubToken = requireEnv('GITHUB_TOKEN');
@@ -118,15 +121,16 @@ if (!feedbackParts.length) {
   }
 }
 
-const reviewFeedback =
-  feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)';
+const reviewFeedback = (
+  feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)'
+).slice(0, MAX_FEEDBACK_CHARS);
 
 const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
   headers: { Accept: 'application/vnd.github.v3.diff' },
 });
 if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
 const rawDiff = await diffRes.text();
-const diff = filterDiff(rawDiff);
+const diff = filterDiff(rawDiff, MAX_DIFF_CHARS);
 
 const changedFiles = [
   ...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1])),
@@ -134,7 +138,7 @@ const changedFiles = [
 
 const repoRoot = path.resolve(process.cwd());
 const fileContentParts = [];
-for (const filePath of changedFiles.slice(0, 10)) {
+for (const filePath of changedFiles.slice(0, MAX_FILES)) {
   const absPath = path.resolve(repoRoot, filePath);
   if (!absPath.startsWith(repoRoot + path.sep)) continue;
   try {
