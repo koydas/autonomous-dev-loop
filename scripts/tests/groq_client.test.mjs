@@ -97,3 +97,23 @@ test('callGroq includes response_format by default', async () => {
   await callGroq(BASE_ARGS);
   assert.deepEqual(capturedBody.response_format, { type: 'json_object' });
 });
+
+test('callGroq sends max_tokens when maxTokens is provided', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  await callGroq({ ...BASE_ARGS, maxTokens: 16384 });
+  assert.equal(capturedBody.max_tokens, 16384);
+});
+
+test('callGroq omits max_tokens when maxTokens is not provided', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  await callGroq(BASE_ARGS);
+  assert.equal('max_tokens' in capturedBody, false);
+});

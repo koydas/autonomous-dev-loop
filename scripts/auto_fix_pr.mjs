@@ -165,6 +165,7 @@ const raw = await callLLM({
   model,
   apiUrl,
   temperature: 0.2,
+  maxTokens: 16384,
 });
 
 let aiOutput;
