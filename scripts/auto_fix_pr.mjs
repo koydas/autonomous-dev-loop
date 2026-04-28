@@ -7,7 +7,7 @@ import { requireEnv, loadLLMConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
-import { validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 
 const MAX_ATTEMPTS = 3;
@@ -170,7 +170,7 @@ const raw = await callLLM({
 
 let aiOutput;
 try {
-  aiOutput = JSON.parse(raw);
+  aiOutput = parseJsonResponse(raw);
 } catch {
   throw new Error('AI response was not valid JSON');
 }

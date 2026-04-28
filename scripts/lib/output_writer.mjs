@@ -2,6 +2,29 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const MAX_FILE_COUNT = 6;
+
+export function parseJsonResponse(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {}
+
+  const fenced = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1].trim());
+    } catch {}
+  }
+
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {}
+  }
+
+  throw new Error('AI response was not valid JSON');
+}
 const MAX_FILE_CONTENT_LENGTH = 16000;
 
 function validateSingleChange(change, index) {

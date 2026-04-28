@@ -3,7 +3,33 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { validateAiOutput, writeGeneratedFiles } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from '../lib/output_writer.mjs';
+
+// parseJsonResponse tests
+
+test('parseJsonResponse parses plain JSON', () => {
+  const result = parseJsonResponse('{"summary":"fix","changes":[]}');
+  assert.deepEqual(result, { summary: 'fix', changes: [] });
+});
+
+test('parseJsonResponse parses JSON wrapped in ```json fences', () => {
+  const result = parseJsonResponse('```json\n{"summary":"fix","changes":[]}\n```');
+  assert.deepEqual(result, { summary: 'fix', changes: [] });
+});
+
+test('parseJsonResponse parses JSON wrapped in plain ``` fences', () => {
+  const result = parseJsonResponse('```\n{"summary":"fix","changes":[]}\n```');
+  assert.deepEqual(result, { summary: 'fix', changes: [] });
+});
+
+test('parseJsonResponse extracts JSON when there is surrounding prose', () => {
+  const result = parseJsonResponse('Here is the output:\n{"summary":"fix","changes":[]}\nDone.');
+  assert.deepEqual(result, { summary: 'fix', changes: [] });
+});
+
+test('parseJsonResponse throws for completely non-JSON text', () => {
+  assert.throws(() => parseJsonResponse('not json at all'), /not valid JSON/);
+});
 
 test('validateAiOutput returns trimmed fields for valid input', () => {
   const result = validateAiOutput({
