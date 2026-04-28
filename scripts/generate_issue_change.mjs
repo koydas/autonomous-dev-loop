@@ -3,7 +3,7 @@
 import { buildDeterministicPrompt, loadConfigFromEnv } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
-import { validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { buildFileContentsBlock } from './lib/file_injector.mjs';
 import fs from 'node:fs/promises';
@@ -26,7 +26,7 @@ async function main() {
 
   let aiOutput;
   try {
-    aiOutput = JSON.parse(raw);
+    aiOutput = parseJsonResponse(raw);
   } catch {
     throw new Error('AI response was not valid JSON');
   }
