@@ -78,7 +78,7 @@ export function loadConfigFromEnv() {
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
 
-  const { apiKey, model, apiUrl, temperature } = loadLLMConfig('generation');
+  const { apiKey, model, apiUrl, temperature, maxTokens } = loadLLMConfig('generation');
 
   return {
     issueNumber,
@@ -88,6 +88,7 @@ export function loadConfigFromEnv() {
     model,
     apiUrl,
     temperature,
+    maxTokens,
   };
 }
 

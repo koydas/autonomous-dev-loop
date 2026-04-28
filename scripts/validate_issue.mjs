@@ -10,12 +10,12 @@ async function main() {
   const issueNumber = requireEnv('ISSUE_NUMBER');
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
-  const { apiKey, model, apiUrl, temperature } = loadLLMConfig('validation');
+  const { apiKey, model, apiUrl, temperature, maxTokens } = loadLLMConfig('validation');
 
   log('Validating issue', { issueNumber, issueTitle, model });
 
   const boundCallGroq = ({ prompt }) =>
-    callLLM({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature });
+    callLLM({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens });
 
   const result = await validateIssue({ issueTitle, issueBody, callGroq: boundCallGroq });
   const comment = formatGitHubComment(result, issueTitle);
