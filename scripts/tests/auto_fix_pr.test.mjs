@@ -388,6 +388,26 @@ test('auto_fix_pr continues when inline comment fetch fails', async () => {
   }
 });
 
+test('auto_fix_pr logs token_estimate before calling LLM', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-tokens-'));
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stdout, /token_estimate/);
+    const estimateLine = result.stdout.split('\n').find((l) => l.includes('token_estimate'));
+    const parsed = JSON.parse(estimateLine);
+    assert.ok(typeof parsed.system === 'number' && parsed.system > 0, 'system tokens > 0');
+    assert.ok(typeof parsed.total === 'number' && parsed.total > 0, 'total tokens > 0');
+    assert.ok(typeof parsed.max_tokens === 'number' && parsed.max_tokens > 0, 'max_tokens > 0');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
 test('auto_fix_pr creates attempt label in repo before applying it', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-run-'));
   const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));

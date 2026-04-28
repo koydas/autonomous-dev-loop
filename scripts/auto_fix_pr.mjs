@@ -11,13 +11,23 @@ import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/
 import { log, error as logError } from './lib/logger.mjs';
 
 const MAX_ATTEMPTS = 3;
-const MAX_FILE_SIZE = 8000;
+const MAX_FILE_SIZE = 2000;
+const MAX_FILES = 5;
 const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
+
+const MODEL_TPM = {
+  'qwen/qwen3-32b': 6000,
+  'llama-3.1-8b-instant': 30000,
+};
+
+function estimateTokens(text) {
+  return Math.ceil(text.length / 4);
+}
 
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens } = loadLLMConfig('autofix');
+const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens } = loadLLMConfig('autofix');
 
 let event;
 try {
@@ -118,15 +128,24 @@ if (!feedbackParts.length) {
   }
 }
 
-const reviewFeedback =
-  feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)';
+const systemPrompt = loadPrompt('auto-fix-system');
+const systemTokens = estimateTokens(systemPrompt);
+const tpmLimit = llmProvider === 'groq' ? (MODEL_TPM[model] ?? 6000) : 8000;
+const effectiveMaxTokens = Math.min(llmMaxTokens ?? 4096, tpmLimit - systemTokens - 200);
+const remaining = Math.max(0, tpmLimit - 200 - systemTokens - effectiveMaxTokens);
+const diffBudget = Math.floor(remaining * 0.6);
+const feedbackBudget = remaining - diffBudget;
+
+const reviewFeedback = (
+  feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)'
+).slice(0, feedbackBudget * 4);
 
 const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
   headers: { Accept: 'application/vnd.github.v3.diff' },
 });
 if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
 const rawDiff = await diffRes.text();
-const diff = filterDiff(rawDiff);
+const diff = filterDiff(rawDiff, diffBudget * 4);
 
 const changedFiles = [
   ...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1])),
@@ -134,7 +153,7 @@ const changedFiles = [
 
 const repoRoot = path.resolve(process.cwd());
 const fileContentParts = [];
-for (const filePath of changedFiles.slice(0, 10)) {
+for (const filePath of changedFiles.slice(0, MAX_FILES)) {
   const absPath = path.resolve(repoRoot, filePath);
   if (!absPath.startsWith(repoRoot + path.sep)) continue;
   try {
@@ -151,11 +170,19 @@ const fileContents =
     ? fileContentParts.join('\n\n')
     : 'No existing files identified as relevant to this review.';
 
-const systemPrompt = loadPrompt('auto-fix-system');
 const userPrompt = interpolatePrompt(loadPrompt('auto-fix-user'), {
   reviewFeedback,
   diff,
   fileContents,
+});
+
+log('token_estimate', {
+  system: systemTokens,
+  diff: estimateTokens(diff),
+  feedback: estimateTokens(reviewFeedback),
+  files: estimateTokens(fileContents),
+  max_tokens: effectiveMaxTokens,
+  total: systemTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + effectiveMaxTokens,
 });
 
 const raw = await callLLM({
@@ -165,7 +192,7 @@ const raw = await callLLM({
   model,
   apiUrl,
   temperature: llmTemperature,
-  maxTokens: llmMaxTokens,
+  maxTokens: effectiveMaxTokens,
 });
 
 let aiOutput;

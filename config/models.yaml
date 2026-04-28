@@ -13,4 +13,4 @@ review_temperature:     0.6
 
 autofix:                qwen/qwen3-32b
 autofix_temperature:    0.2
-autofix_max_tokens:     16384
+autofix_max_tokens:     4096
