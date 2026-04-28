@@ -17,7 +17,7 @@ const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl } = loadLLMConfig('autofix');
+const { apiKey: llmApiKey, model, apiUrl, maxTokens: llmMaxTokens } = loadLLMConfig('autofix');
 
 let event;
 try {
@@ -165,7 +165,7 @@ const raw = await callLLM({
   model,
   apiUrl,
   temperature: 0.2,
-  maxTokens: 16384,
+  maxTokens: llmMaxTokens,
 });
 
 let aiOutput;

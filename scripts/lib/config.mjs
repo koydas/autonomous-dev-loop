@@ -62,7 +62,15 @@ export function loadLLMConfig(stage = 'generation') {
       throw new Error(`Invalid temperature for stage "${stage}": ${rawTemp} (must be a number between 0 and 2)`);
     }
   }
-  return { provider, apiKey, model, apiUrl, temperature };
+  const rawMaxTokens = GROQ_MODEL_DEFAULTS[`${stage}_max_tokens`] ?? GROQ_MODEL_DEFAULTS.max_tokens;
+  let maxTokens;
+  if (rawMaxTokens !== undefined) {
+    maxTokens = parseInt(rawMaxTokens, 10);
+    if (isNaN(maxTokens) || maxTokens <= 0) {
+      throw new Error(`Invalid max_tokens for stage "${stage}": ${rawMaxTokens} (must be a positive integer)`);
+    }
+  }
+  return { provider, apiKey, model, apiUrl, temperature, maxTokens };
 }
 
 export function loadConfigFromEnv() {
