@@ -5,6 +5,7 @@ export async function callGroq({
   model,
   apiUrl,
   temperature = 0,
+  maxTokens,
   responseFormat = { type: 'json_object' },
 }) {
   const payload = {
@@ -15,6 +16,9 @@ export async function callGroq({
       { role: 'user', content: prompt },
     ],
   };
+  if (maxTokens != null) {
+    payload.max_tokens = maxTokens;
+  }
   if (responseFormat) {
     payload.response_format = responseFormat;
   }
