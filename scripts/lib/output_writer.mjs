@@ -4,15 +4,20 @@ import path from 'node:path';
 const MAX_FILE_COUNT = 6;
 
 export function parseJsonResponse(raw) {
+  const parseErrors = [];
   try {
     return JSON.parse(raw);
-  } catch {}
+  } catch (err) {
+    parseErrors.push(`direct parse: ${err.message}`);
+  }
 
   const fenced = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
   if (fenced) {
     try {
       return JSON.parse(fenced[1].trim());
-    } catch {}
+    } catch (err) {
+      parseErrors.push(`fenced parse: ${err.message}`);
+    }
   }
 
   const start = raw.indexOf('{');
@@ -20,10 +25,12 @@ export function parseJsonResponse(raw) {
   if (start !== -1 && end > start) {
     try {
       return JSON.parse(raw.slice(start, end + 1));
-    } catch {}
+    } catch (err) {
+      parseErrors.push(`slice parse: ${err.message}`);
+    }
   }
 
-  throw new Error('AI response was not valid JSON');
+  throw new Error(`AI response was not valid JSON (${parseErrors.join('; ')})`);
 }
 const MAX_FILE_CONTENT_LENGTH = 16000;
 

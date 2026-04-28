@@ -44,8 +44,11 @@ export async function readRelevantFiles(candidates, repoRoot) {
       if (!stat.isFile()) continue;
       const raw = await fs.readFile(absPath, 'utf8');
       files.push({ path: candidate, content: raw.slice(0, MAX_FILE_SIZE) });
-    } catch {
-      // Non-existent or unreadable — skip silently.
+    } catch (err) {
+      // Ignore expected file-system misses; surface unexpected failures.
+      if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EISDIR'].includes(err?.code)) {
+        throw err;
+      }
     }
   }
 
