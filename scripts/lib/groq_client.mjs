@@ -68,8 +68,8 @@ export async function callGroq({
     let raw;
     try {
       raw = JSON.parse(rawText);
-    } catch {
-      throw new Error('Groq API returned non-JSON response');
+    } catch (err) {
+      throw new Error('Groq API returned non-JSON response', { cause: err });
     }
 
     const content = raw?.choices?.[0]?.message?.content;

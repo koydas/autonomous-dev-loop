@@ -3,6 +3,12 @@
 import { requireEnv, loadLabelsConfig } from './lib/config.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
+  process.exit(1);
+});
+
 const issueLabels = loadLabelsConfig('issue');
 const LABELS = [issueLabels.valid, issueLabels.invalid];
 
@@ -88,6 +94,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  logError(err.message);
+  logError('Fatal error', { error: err.message, stack: err.stack });
   process.exit(1);
 });

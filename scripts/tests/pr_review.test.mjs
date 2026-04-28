@@ -240,26 +240,26 @@ test('pr_review exits 1 when review submit returns non-2xx (not permission-relat
   }
 });
 
-test('pr_review logs warning and exits 0 when review submit returns 422 (permissions)', async () => {
+test('pr_review exits 1 when review submit returns 422 (permissions)', async () => {
   const server = await startMockServer(makeHandler({ reviewStatus: 422 }));
   const eventFile = await writeEventFile();
   try {
     const result = await runPrReview(server.address().port, eventFile);
-    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
-    assert.match(result.stderr + result.stdout, /lacks permission/);
+    assert.notEqual(result.code, 0, `expected non-zero exit, stderr: ${result.stderr}`);
+    assert.match(result.stderr + result.stdout, /permission\/configuration issue/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
   }
 });
 
-test('pr_review logs warning and exits 0 when review submit returns 403 (insufficient scope)', async () => {
+test('pr_review exits 1 when review submit returns 403 (insufficient scope)', async () => {
   const server = await startMockServer(makeHandler({ reviewStatus: 403 }));
   const eventFile = await writeEventFile();
   try {
     const result = await runPrReview(server.address().port, eventFile);
-    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
-    assert.match(result.stderr + result.stdout, /lacks permission/);
+    assert.notEqual(result.code, 0, `expected non-zero exit, stderr: ${result.stderr}`);
+    assert.match(result.stderr + result.stdout, /permission\/configuration issue/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

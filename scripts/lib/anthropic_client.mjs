@@ -36,8 +36,8 @@ export async function callAnthropic({
   let raw;
   try {
     raw = JSON.parse(rawText);
-  } catch {
-    throw new Error('Anthropic API returned non-JSON response');
+  } catch (err) {
+    throw new Error('Anthropic API returned non-JSON response', { cause: err });
   }
 
   const content = raw?.content?.[0]?.text;
