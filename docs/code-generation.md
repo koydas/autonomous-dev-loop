@@ -125,12 +125,12 @@ sequenceDiagram
 
     PR->>pr-review.yml: push event
     pr-review.yml-->>PR: post review comment
-    pr-review.yml-->>Issue: apply review-approved or changes-requested
+    pr-review.yml-->>PR: apply review-approved or changes-requested
 
     alt review-approved
         PR-->>User: ready for manual merge
     else changes-requested (attempt < 3)
-        Issue->>auto-fix-pr.yml: labeled changes-requested
+        PR->>auto-fix-pr.yml: pull_request labeled changes-requested
         auto-fix-pr.yml-->>PR: push fix commit + apply auto-fix-attempt-N
         PR->>pr-review.yml: push event (synchronize)
         Note over pr-review.yml,auto-fix-pr.yml: loop repeats up to 3 times
