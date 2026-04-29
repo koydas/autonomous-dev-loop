@@ -113,7 +113,6 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 
 ## Suggested next actions (priority order)
 
-1. Add ADR-0007 for PR review trigger strategy.
-2. Add contracts documentation for script/workflow boundaries.
-3. Add architecture sequence diagram for onboarding clarity.
-4. Align provider narrative in docs with actual stage wiring.
+1. Add contracts documentation for script/workflow boundaries.
+2. Add architecture sequence diagram for onboarding clarity.
+3. Align provider narrative in docs with actual stage wiring.
