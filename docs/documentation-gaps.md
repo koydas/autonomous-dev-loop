@@ -10,22 +10,6 @@ Date: 2026-04-29
 
 ## Detected gaps
 
-### 2) No architecture diagram for end-to-end control flow
-
-**Gap**
-The loop is described textually in `docs/code-generation.md`, but lacks a single visual sequence/state diagram connecting issue events, label transitions, workflow triggers, and stop conditions.
-
-**Impact**
-Harder onboarding and higher risk of misunderstanding trigger semantics (especially `labeled` event behavior and re-pulse logic).
-
-**Recommendation**
-Add a Mermaid sequence diagram in `docs/code-generation.md` (or `docs/architecture.md`) showing:
-- Issue lifecycle (`needs-refinement` ↔ `ready-for-dev`)
-- PR review verdict labels (`review-approved` / `changes-requested`)
-- Auto-fix attempts (`auto-fix-attempt-N`) and terminal conditions
-
----
-
 ### 3) ADR coverage gap for review-trigger choice
 
 **Gap**
@@ -113,5 +97,4 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 
 ## Suggested next actions (priority order)
 
-1. Add architecture sequence diagram for onboarding clarity.
-2. Align provider narrative in docs with actual stage wiring.
+1. Align provider narrative in docs with actual stage wiring.
