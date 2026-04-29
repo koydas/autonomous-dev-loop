@@ -97,8 +97,9 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 
 ## Suggested next actions (priority order)
 
-1. Add ADR `0007` for PR review trigger scope (`push` vs `pull_request`) and link it from `docs/adr/README.md`.
-2. Decide and document provider posture (full dual-provider parity vs staged support) in ADR + `docs/code-generation.md`.
-3. Add `docs/contracts.md` defining script/workflow I/O contracts and failure semantics.
-4. Extend `docs/testing.md` with a risk-to-test traceability matrix.
-5. Add documentation governance rules in `CONTRIBUTING.md` for when to update docs/ADR/changelog together.
+> ✅ Mise à jour du 2026-04-29 : le point 1 a été traité via `docs/adr/0007-pr-review-trigger-strategy.md` et son ajout dans `docs/adr/README.md`.
+
+1. Decide and document provider posture (full dual-provider parity vs staged support) in ADR + `docs/code-generation.md`.
+2. Add `docs/contracts.md` defining script/workflow I/O contracts and failure semantics.
+3. Extend `docs/testing.md` with a risk-to-test traceability matrix.
+4. Add documentation governance rules in `CONTRIBUTING.md` for when to update docs/ADR/changelog together.
