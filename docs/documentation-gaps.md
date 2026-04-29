@@ -96,3 +96,9 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 - No superseded/deprecated ADR markers are currently needed, but a status field convention (`Accepted`, `Superseded`, `Deprecated`) would help future maintenance.
 
 ## Suggested next actions (priority order)
+
+1. Add ADR `0007` for PR review trigger scope (`push` vs `pull_request`) and link it from `docs/adr/README.md`.
+2. Decide and document provider posture (full dual-provider parity vs staged support) in ADR + `docs/code-generation.md`.
+3. Add `docs/contracts.md` defining script/workflow I/O contracts and failure semantics.
+4. Extend `docs/testing.md` with a risk-to-test traceability matrix.
+5. Add documentation governance rules in `CONTRIBUTING.md` for when to update docs/ADR/changelog together.
