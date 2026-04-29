@@ -1,11 +1,11 @@
-# ADR-0002: AI provider support (Anthropic default, Groq fallback)
+# ADR-0002: AI provider support (Groq default, Anthropic optional)
 
-- **Date:** 2026-04-14 (updated 2026-04-26)
+- **Date:** 2026-04-14 (updated 2026-04-29)
 - **Status:** Updated
 
 ## Context
 
-The automation needs an external AI provider with secret-based authentication and a simple API contract. Initially Groq was chosen for its API simplicity. The project has since added Anthropic support to improve output quality, with Anthropic becoming the default provider.
+The automation needs an external AI provider with secret-based authentication and a simple API contract. Groq was chosen initially for its API simplicity and remains the default. Anthropic is also supported and can be selected via configuration.
 
 ## Decision
 
@@ -13,16 +13,16 @@ Support two LLM providers via a runtime router (`scripts/lib/llm_client.mjs`):
 
 | Provider | Default | Key variable | Model variable |
 |---|---|---|---|
-| Anthropic | ✅ yes | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` (default: `claude-opus-4-7`) |
-| Groq | no | `GROQ_API_KEY` | `GROQ_MODEL` (default: `qwen/qwen3-32b` — see ADR-0005) |
+| Groq | ✅ yes | `GROQ_API_KEY` | `GROQ_MODEL` (default: `qwen/qwen3-32b` — see ADR-0005) |
+| Anthropic | no | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` (default: `claude-opus-4-7`) |
 
 The active provider is determined automatically by which API keys are present:
 
 | Keys configured | Provider used |
 |---|---|
-| `ANTHROPIC_API_KEY` only | Anthropic |
 | `GROQ_API_KEY` only | Groq |
-| Both | Anthropic (default) — override with `AI_PROVIDER=groq` |
+| `ANTHROPIC_API_KEY` only | Anthropic |
+| Both | Groq (default) — override with `AI_PROVIDER=anthropic` |
 
 `AI_PROVIDER` is only consulted as a tiebreaker when both keys are present.
 
@@ -36,8 +36,8 @@ Temperature is configured per stage in `config/models.yaml` (see ADR-0005).
 
 ## Consequences
 
-- ✅ Anthropic's Claude models improve output quality for generation and review.
-- ✅ Groq remains fully supported as a fallback or cost-saving option.
+- ✅ Groq is the default; only `GROQ_API_KEY` is required for a minimal setup.
+- ✅ Anthropic is fully supported as an opt-in alternative for higher output quality.
 - ✅ Provider switching requires only an environment variable change — no code changes.
 - ✅ Each provider has its own isolated client module, independently testable.
 - ⚠️ Anthropic's Messages API format differs from OpenAI-compatible APIs (no `response_format: json_object`); Claude models follow JSON instructions in the system prompt instead.

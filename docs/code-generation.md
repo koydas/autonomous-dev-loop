@@ -30,9 +30,9 @@ Provider selection is automatic based on which secrets are configured:
 
 | Secrets configured | Provider used |
 |---|---|
-| `ANTHROPIC_API_KEY` only | Anthropic |
 | `GROQ_API_KEY` only | Groq |
-| Both | Anthropic (default) — override with `AI_PROVIDER=groq` |
+| `ANTHROPIC_API_KEY` only | Anthropic |
+| Both | Groq (default) — override with `AI_PROVIDER=anthropic` |
 | Neither | Fails with a clear error |
 
 - **Secret**: `ANTHROPIC_API_KEY` — API key for Anthropic (Claude models).
@@ -41,7 +41,7 @@ Provider selection is automatic based on which secrets are configured:
   - Use a fine-grained PAT or GitHub App token with at least **Contents: Read/Write**, **Pull requests: Read/Write**, and **Issues: Read/Write** on this repository.
   - If `AI_PR_TOKEN` is not set, the workflow falls back to `GITHUB_TOKEN`.
 - **Variables** (optional):
-  - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Anthropic is the default.
+  - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Groq is the default.
   - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
   - `GROQ_MODEL` — Groq model name (defaults to `qwen/qwen3-32b` if unset).
   - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
