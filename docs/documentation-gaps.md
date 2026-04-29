@@ -10,24 +10,7 @@ Date: 2026-04-29
 
 ## Detected gaps
 
-### 3) ADR coverage gap for review-trigger choice
-
-**Gap**
-There is no dedicated ADR documenting why PR review is triggered on `push` to all branches instead of narrower PR-centric triggers (`pull_request` synchronize/opened), including trade-offs and operational safeguards.
-
-**Impact**
-Future contributors may “optimize” trigger behavior without understanding rationale, potentially breaking current branch→PR resolution assumptions.
-
-**Recommendation**
-Create a new ADR (e.g., `0007`) capturing:
-- Decision context
-- Considered alternatives
-- Chosen trigger and implications
-- Guardrails for no-PR branches
-
----
-
-### 4) ADR coverage gap for provider strategy evolution
+### 1) ADR coverage gap for provider strategy evolution
 
 **Gap**
 ADRs capture Anthropic/Groq and model defaults, but current workflows mostly wire `GROQ_API_KEY`. The docs discuss dual-provider behavior at length, yet operationally this can look asymmetric.
@@ -44,7 +27,7 @@ Also add a matrix table by workflow: required env vars, optional vars, and fallb
 
 ---
 
-### 5) Missing formal data contract docs for script outputs
+### 2) Missing formal data contract docs for script outputs
 
 **Gap**
 Entrypoint scripts communicate via workflow outputs (e.g., `generated_paths`, `summary`, `fixed_paths`, `attempt_number`), but there is no explicit versioned contract documentation.
@@ -61,7 +44,7 @@ Add `docs/contracts.md` with per-script I/O contracts:
 
 ---
 
-### 6) Testing documentation does not map tests to risk areas
+### 3) Testing documentation does not map tests to risk areas
 
 **Gap**
 `docs/testing.md` exists, but there is no traceability table linking test suites to workflow risks and critical user journeys.
@@ -78,7 +61,7 @@ Extend testing docs with a “risk→test mapping” table:
 
 ---
 
-### 7) Missing changelog policy for automation behavior changes
+### 4) Missing changelog policy for automation behavior changes
 
 **Gap**
 Major behavior shifts are partly reflected in ADRs, but there is no explicit contributor-facing rule for when to update docs + ADR + release/changelog notes together.
@@ -97,7 +80,7 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 
 ## Suggested next actions (priority order)
 
-> ✅ Update as of 2026-04-29: action item #1 has been completed via `docs/adr/0007-pr-review-trigger-strategy.md` and its addition to `docs/adr/README.md`.
+> ✅ Update as of 2026-04-29: the former top-priority action (ADR for PR review trigger scope) is completed via `docs/adr/0007-pr-review-trigger-strategy.md` and its addition to `docs/adr/README.md`.
 
 1. Decide and document provider posture (full dual-provider parity vs staged support) in ADR + `docs/code-generation.md`.
 2. Add `docs/contracts.md` defining script/workflow I/O contracts and failure semantics.
