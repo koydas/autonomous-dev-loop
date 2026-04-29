@@ -6,7 +6,7 @@ A fully autonomous GitHub-native dev loop: Issue → AI coder → PR → AI revi
 
 ## MVP Automation Implemented
 
-The MVP issue-to-PR automation is now implemented. The default AI provider is **Anthropic** (Claude); Groq is also supported via the `AI_PROVIDER` variable.
+The MVP issue-to-PR automation is now implemented. The default AI provider is **Groq** (`qwen/qwen3-32b`); Anthropic (Claude) is also supported via `AI_PROVIDER` when both provider keys are configured.
 
 - Workflow: `.github/workflows/code-generation.yml` (kept minimal/orchestration-only)
 - Generator script: `scripts/generate_issue_change.mjs`

@@ -1,6 +1,6 @@
 # Code Generation MVP Setup
 
-This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Anthropic** (Claude models). Groq is also supported and can be selected via the `AI_PROVIDER` environment variable. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
+This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** (`qwen/qwen3-32b`). Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Quick Start (Operator)
 
@@ -34,7 +34,7 @@ Node implementation:
 
 When the `ready-for-dev` label is applied to an issue, the workflow:
 1. Builds a deterministic prompt using issue number, title, and body.
-2. Calls the LLM API (Anthropic by default) using repository secrets.
+2. Calls the LLM API (Groq by default) using repository secrets.
 3. Writes 1 to 6 generated files at AI-selected relative paths.
 4. Creates a branch named `ai/issue-<number>`.
 5. Uses `peter-evans/create-pull-request` to commit generated content on `ai/issue-<number>`.
