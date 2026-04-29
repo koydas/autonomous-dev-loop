@@ -113,6 +113,5 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 
 ## Suggested next actions (priority order)
 
-1. Add contracts documentation for script/workflow boundaries.
-2. Add architecture sequence diagram for onboarding clarity.
-3. Align provider narrative in docs with actual stage wiring.
+1. Add architecture sequence diagram for onboarding clarity.
+2. Align provider narrative in docs with actual stage wiring.
