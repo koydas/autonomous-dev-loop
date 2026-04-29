@@ -37,8 +37,8 @@ export function requireEnv(name) {
 export function detectProvider() {
   const explicit = process.env.AI_PROVIDER?.trim().toLowerCase();
   if (explicit) return explicit;
-  if (process.env.GROQ_API_KEY?.trim() && !process.env.ANTHROPIC_API_KEY?.trim()) return 'groq';
-  return 'anthropic';
+  if (process.env.ANTHROPIC_API_KEY?.trim() && !process.env.GROQ_API_KEY?.trim()) return 'anthropic';
+  return 'groq';
 }
 
 export function loadLLMConfig(stage = 'generation') {

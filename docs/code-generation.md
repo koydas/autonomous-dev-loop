@@ -30,9 +30,9 @@ Provider selection is automatic based on which secrets are configured:
 
 | Secrets configured | Provider used |
 |---|---|
-| `ANTHROPIC_API_KEY` only | Anthropic |
 | `GROQ_API_KEY` only | Groq |
-| Both | Anthropic (default) — override with `AI_PROVIDER=groq` |
+| `ANTHROPIC_API_KEY` only | Anthropic |
+| Both | Groq (default) — override with `AI_PROVIDER=anthropic` |
 | Neither | Fails with a clear error |
 
 - **Secret**: `ANTHROPIC_API_KEY` — API key for Anthropic (Claude models).
@@ -41,10 +41,23 @@ Provider selection is automatic based on which secrets are configured:
   - Use a fine-grained PAT or GitHub App token with at least **Contents: Read/Write**, **Pull requests: Read/Write**, and **Issues: Read/Write** on this repository.
   - If `AI_PR_TOKEN` is not set, the workflow falls back to `GITHUB_TOKEN`.
 - **Variables** (optional):
-  - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Anthropic is the default.
+  - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Groq is the default.
   - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
   - `GROQ_MODEL` — Groq model name (defaults to `qwen/qwen3-32b` if unset).
   - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
+
+### Per-workflow environment variable matrix
+
+All four workflows pass both provider key sets, so provider selection is driven entirely by which secrets are configured in the repository — no workflow-level override is needed.
+
+| Workflow | Required secret(s) | Optional variables | Fallback |
+|---|---|---|---|
+| `validate-issue.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+
+`AI_PR_TOKEN` is used only by `code-generation.yml`, `pr-review.yml`, and `auto-fix-pr.yml` for GitHub API write operations.
 
 ## GitHub Actions PR Permission Requirement
 
