@@ -102,6 +102,43 @@ The project now runs as a continuous loop rather than a one-shot generation:
 
 In practice, this means the issue is not only used to create the initial PR; it also drives the downstream review/fix cycles through labels and automated review signals.
 
+## End-to-End Control Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Issue
+    participant validate-issue.yml
+    participant code-generation.yml
+    participant pr-review.yml
+    participant auto-fix-pr.yml
+    participant PR
+
+    User->>Issue: Create issue
+    Issue->>validate-issue.yml: issue opened/edited event
+    validate-issue.yml-->>Issue: apply needs-refinement
+    Note over Issue,validate-issue.yml: User refines issue
+    validate-issue.yml-->>Issue: apply ready-for-dev
+
+    Issue->>code-generation.yml: labeled ready-for-dev
+    code-generation.yml->>PR: open PR on ai/issue-N branch
+
+    PR->>pr-review.yml: push event
+    pr-review.yml-->>PR: post review comment
+    pr-review.yml-->>PR: apply review-approved or changes-requested
+
+    alt review-approved
+        PR-->>User: ready for manual merge
+    else changes-requested (attempt < 3)
+        PR->>auto-fix-pr.yml: pull_request labeled changes-requested
+        auto-fix-pr.yml-->>PR: push fix commit + apply auto-fix-attempt-N
+        PR->>pr-review.yml: push event (synchronize)
+        Note over pr-review.yml,auto-fix-pr.yml: loop repeats up to 3 times
+    else changes-requested (attempt = 3)
+        auto-fix-pr.yml-->>PR: post manual intervention comment
+    end
+```
+
 ## Limitations (MVP)
 
 - Triggers on `ready-for-dev` label application event.
