@@ -10,23 +10,6 @@ Date: 2026-04-29
 
 ## Detected gaps
 
-### 1) Missing operator runbook for failure triage
-
-**Gap**
-The current documentation explains expected behavior and setup, but not a concise incident/runbook path for common failures (provider outage, token permission drift, label mismatch, empty generation output, auto-fix loop stop at attempt 3).
-
-**Impact**
-On-call maintainers may spend extra time diagnosing routine failures and may apply inconsistent manual recovery steps.
-
-**Recommendation**
-Add `docs/runbook.md` with:
-- Symptom → probable cause mapping
-- Exact GitHub checks/log locations
-- Recovery actions per workflow (`validate-issue`, `code-generation`, `pr-review`, `auto-fix-pr`)
-- Escalation criteria and manual override path
-
----
-
 ### 2) No architecture diagram for end-to-end control flow
 
 **Gap**
@@ -130,8 +113,7 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 
 ## Suggested next actions (priority order)
 
-1. Add runbook (`docs/runbook.md`) for operational reliability.
-2. Add ADR-0007 for PR review trigger strategy.
-3. Add contracts documentation for script/workflow boundaries.
-4. Add architecture sequence diagram for onboarding clarity.
-5. Align provider narrative in docs with actual stage wiring.
+1. Add ADR-0007 for PR review trigger strategy.
+2. Add contracts documentation for script/workflow boundaries.
+3. Add architecture sequence diagram for onboarding clarity.
+4. Align provider narrative in docs with actual stage wiring.
