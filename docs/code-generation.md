@@ -87,6 +87,21 @@ All label names, colors, and descriptions are configurable in `config/labels.yam
    - body includes generated summary and `Closes #<number>`
    - changed files are limited to the generated AI target paths (maximum 6 files)
 
+## Loop: `issue -> issue review`
+
+The project now runs as a continuous loop rather than a one-shot generation:
+
+1. **Issue validation** (`validate-issue.yml`) reviews issue quality and applies `ready-for-dev` or `needs-refinement`.
+2. **Code generation** (`code-generation.yml`) starts only when `ready-for-dev` is applied and opens/updates a PR for that issue.
+3. **PR review** (`pr-review.yml`) runs on branch pushes, posts structured feedback, submits review status, and applies `review-approved` or `changes-requested`.
+4. **Auto-fix** (`auto-fix-pr.yml`) runs when `changes-requested` is applied, generates a targeted fix commit, and pushes it.
+5. The push from auto-fix re-triggers **PR review**, creating the iterative review loop.
+6. The loop ends when either:
+   - PR review returns `review-approved`, or
+   - auto-fix reaches 3 attempts and requests manual intervention.
+
+In practice, this means the issue is not only used to create the initial PR; it also drives the downstream review/fix cycles through labels and automated review signals.
+
 ## Limitations (MVP)
 
 - Triggers on `ready-for-dev` label application event.
