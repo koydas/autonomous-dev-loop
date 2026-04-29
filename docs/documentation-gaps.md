@@ -10,8 +10,8 @@ Date: 2026-04-29
 
 ## Detected gaps
 
-> ✅ Mise à jour du 2026-04-29 : à date, aucun gap de documentation ouvert n'est retenu.
+> ✅ Update as of 2026-04-29: there are currently no open documentation gaps.
 
 ## Suggested next actions (priority order)
 
-- Aucun action item ouvert à ce jour.
+- There are no open action items at this time.
