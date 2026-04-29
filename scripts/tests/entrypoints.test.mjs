@@ -29,10 +29,10 @@ function assertFails(result, pattern) {
 
 // generate_issue_change.mjs
 
-test('generate_issue_change exits 1 when ANTHROPIC_API_KEY is missing', async () => {
+test('generate_issue_change exits 1 when GROQ_API_KEY is missing', async () => {
   assertFails(
     await runScript('generate_issue_change.mjs', { ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' }),
-    /ANTHROPIC_API_KEY/,
+    /GROQ_API_KEY/,
   );
 });
 
@@ -52,10 +52,10 @@ test('generate_issue_change exits 1 when ISSUE_TITLE is missing', async () => {
 
 // validate_issue.mjs
 
-test('validate_issue exits 1 when ANTHROPIC_API_KEY is missing', async () => {
+test('validate_issue exits 1 when GROQ_API_KEY is missing', async () => {
   assertFails(
     await runScript('validate_issue.mjs', { ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' }),
-    /ANTHROPIC_API_KEY/,
+    /GROQ_API_KEY/,
   );
 });
 
@@ -86,14 +86,14 @@ test('pr_review exits 1 when GITHUB_TOKEN is missing', async () => {
   );
 });
 
-test('pr_review exits 1 when ANTHROPIC_API_KEY is missing', async () => {
+test('pr_review exits 1 when GROQ_API_KEY is missing', async () => {
   assertFails(
     await runScript('pr_review.mjs', {
       GITHUB_TOKEN: 'token',
       GITHUB_REPOSITORY: 'owner/repo',
       GITHUB_EVENT_PATH: '/tmp/event.json',
     }),
-    /ANTHROPIC_API_KEY/,
+    /GROQ_API_KEY/,
   );
 });
 
@@ -180,14 +180,14 @@ test('auto_fix_pr exits 1 when GITHUB_TOKEN is missing', async () => {
   );
 });
 
-test('auto_fix_pr exits 1 when ANTHROPIC_API_KEY is missing', async () => {
+test('auto_fix_pr exits 1 when GROQ_API_KEY is missing', async () => {
   assertFails(
     await runScript('auto_fix_pr.mjs', {
       GITHUB_TOKEN: 'token',
       GITHUB_REPOSITORY: 'owner/repo',
       GITHUB_EVENT_PATH: '/tmp/event.json',
     }),
-    /ANTHROPIC_API_KEY/,
+    /GROQ_API_KEY/,
   );
 });
 

@@ -28,13 +28,13 @@ test('detectProvider returns groq when only GROQ_API_KEY is set', () => {
   assert.equal(detectProvider(), 'groq');
 });
 
-test('detectProvider returns anthropic when no keys are set', () => {
-  assert.equal(detectProvider(), 'anthropic');
+test('detectProvider returns groq when no keys are set', () => {
+  assert.equal(detectProvider(), 'groq');
 });
 
-test('detectProvider returns anthropic when both keys set and no AI_PROVIDER', () => {
+test('detectProvider returns groq when both keys set and no AI_PROVIDER', () => {
   setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key' });
-  assert.equal(detectProvider(), 'anthropic');
+  assert.equal(detectProvider(), 'groq');
 });
 
 test('detectProvider returns groq when AI_PROVIDER=groq regardless of keys', () => {
@@ -106,9 +106,9 @@ test('loadConfigFromEnv defaults ISSUE_BODY when not set', () => {
   assert.equal(issueBody, '(no body provided)');
 });
 
-test('loadConfigFromEnv throws when ANTHROPIC_API_KEY is missing', () => {
+test('loadConfigFromEnv throws when GROQ_API_KEY is missing', () => {
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' });
-  assert.throws(() => loadConfigFromEnv(), /ANTHROPIC_API_KEY/);
+  assert.throws(() => loadConfigFromEnv(), /GROQ_API_KEY/);
 });
 
 test('loadConfigFromEnv throws when ISSUE_NUMBER is missing', () => {
@@ -122,10 +122,10 @@ test('loadConfigFromEnv uses Groq when only GROQ_API_KEY is set', () => {
   assert.equal(config.apiKey, 'groq-key');
 });
 
-test('loadConfigFromEnv uses Anthropic when both keys set and no AI_PROVIDER', () => {
+test('loadConfigFromEnv uses Groq when both keys set and no AI_PROVIDER', () => {
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key' });
   const config = loadConfigFromEnv();
-  assert.equal(config.apiKey, 'ant-key');
+  assert.equal(config.apiKey, 'groq-key');
 });
 
 test('loadConfigFromEnv uses AI_PROVIDER=groq tiebreaker when both keys set', () => {
