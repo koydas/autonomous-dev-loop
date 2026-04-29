@@ -76,6 +76,9 @@ jobs:
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}
           ISSUE_BODY: ${{ steps.issue.outputs.body }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}

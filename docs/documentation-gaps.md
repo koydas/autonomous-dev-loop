@@ -96,5 +96,3 @@ Add a short documentation governance section (or `CONTRIBUTING.md` subsection) s
 - No superseded/deprecated ADR markers are currently needed, but a status field convention (`Accepted`, `Superseded`, `Deprecated`) would help future maintenance.
 
 ## Suggested next actions (priority order)
-
-1. Align provider narrative in docs with actual stage wiring.
