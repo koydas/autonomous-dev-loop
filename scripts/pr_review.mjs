@@ -182,14 +182,14 @@ const shortReviewBody = isApproved
   ? 'Automated review passed. See the review comment for details.'
   : 'Changes required. See the automated review comment above for details.';
 
-function isOwnPullRequestApprovalFailure(status, detail, approvedVerdict) {
-  if (!approvedVerdict || status !== 422) return false;
-  const ownPrApprovalPattern = /can not approve your own pull request/i;
-  if (ownPrApprovalPattern.test(detail)) return true;
+function isOwnPullRequestApprovalFailure(status, detail) {
+  if (status !== 422) return false;
+  const ownPrPattern = /can not (?:approve|request changes on) your own pull request/i;
+  if (ownPrPattern.test(detail)) return true;
   try {
     const parsed = JSON.parse(detail);
     const errors = Array.isArray(parsed?.errors) ? parsed.errors.map(String) : [];
-    return errors.some((entry) => ownPrApprovalPattern.test(entry));
+    return errors.some((entry) => ownPrPattern.test(entry));
   } catch {
     return false;
   }
@@ -208,9 +208,9 @@ if (!reviewRes.ok) {
     reviewRes.status === 422 ||
     reviewRes.status === 403 ||
     (reviewRes.status === 401 && /permission|not permitted|resource not accessible/i.test(detail));
-  const ownPrApprovalFailure = isOwnPullRequestApprovalFailure(reviewRes.status, detail, isApproved);
+  const ownPrApprovalFailure = isOwnPullRequestApprovalFailure(reviewRes.status, detail);
   if (ownPrApprovalFailure) {
-    logError('PR review submit skipped: GitHub rejected APPROVE because the actor opened the pull request. Continuing with review comment and labels.', {
+    logError('PR review submit skipped: GitHub rejected the review because the actor opened the pull request. Continuing with review comment and labels.', {
       prNumber,
       status: reviewRes.status,
     });

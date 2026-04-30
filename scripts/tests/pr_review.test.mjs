@@ -283,7 +283,30 @@ test('pr_review continues when GitHub rejects APPROVE on own pull request', asyn
   try {
     const result = await runPrReview(server.address().port, eventFile);
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
-    assert.match(result.stderr + result.stdout, /rejected APPROVE because the actor opened the pull request/i);
+    assert.match(result.stderr + result.stdout, /rejected the review because the actor opened the pull request/i);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review continues when GitHub rejects REQUEST_CHANGES on own pull request', async () => {
+  const ownPrError = JSON.stringify({
+    message: 'Unprocessable Entity',
+    errors: ['Review Can not request changes on your own pull request'],
+  });
+  const server = await startMockServer(
+    makeHandler({
+      groqContent: 'Issues found.\n\nVerdict: REQUEST_CHANGES',
+      reviewStatus: 422,
+      reviewBody: ownPrError,
+    }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr + result.stdout, /rejected the review because the actor opened the pull request/i);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
