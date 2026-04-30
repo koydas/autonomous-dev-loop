@@ -5,7 +5,7 @@
 validation:             qwen/qwen3-32b
 validation_temperature: 0
 
-generation:             qwen/qwen3-32b
+generation:             llama-3.3-70b-versatile
 generation_temperature: 0
 
 review:                 qwen/qwen3-32b
