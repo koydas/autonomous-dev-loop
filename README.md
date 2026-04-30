@@ -28,15 +28,17 @@ The loop runs up to **3 auto-fix iterations** per PR. After that, a comment is p
 
 ## Tests
 
-The core Node.js modules are covered by unit tests using the built-in `node:test` runner (no extra dependencies).
+The test suite uses the built-in `node:test` runner — no external dependencies.
 
 ```bash
 node --test scripts/tests/*.test.mjs
 ```
 
-- Test files: `scripts/tests/*.test.mjs` (includes prompt file tests)
-- CI: `.github/workflows/test.yml` runs on every push/PR
-- Guide: `docs/testing.md`
+Two layers of tests:
+- **Unit tests** — each module tested in isolation (`config`, `output_writer`, `issue_validator`, etc.)
+- **Smoke tests** (`smoke.test.mjs`) — full pipelines with real config files and prompt templates, LLM mocked at the network boundary
+
+CI: `.github/workflows/test.yml` runs the full suite on every push and PR. Guide: `docs/testing.md`.
 
 ## Architecture Decisions
 
