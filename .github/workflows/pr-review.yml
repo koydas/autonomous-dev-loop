@@ -3,6 +3,8 @@ name: PR Review
 on:
   push:
     branches: ["**"]
+  pull_request:
+    types: [opened]
 
 permissions:
   pull-requests: write

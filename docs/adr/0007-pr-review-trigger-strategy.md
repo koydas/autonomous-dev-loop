@@ -1,7 +1,7 @@
 # ADR-0007: PR Review Trigger Strategy
 
 - **Date:** 2026-04-29
-- **Status:** Accepted
+- **Status:** Amended 2026-04-30
 
 ## Context
 
@@ -14,23 +14,29 @@ Two candidate trigger strategies were considered:
 
 ## Decision
 
-Use a `push` trigger on `branches: ["**"]`.
+Use a `push` trigger on `branches: ["**"]` combined with a `pull_request: [opened]` trigger.
 
-Key reasons:
+The `push` trigger alone was insufficient because of a GitHub security rule: when a workflow pushes using `GITHUB_TOKEN`, the resulting push event does not trigger other workflows. The `code-generation.yml` workflow falls back to `GITHUB_TOKEN` when `AI_PR_TOKEN` is not configured, which means `pr-review.yml` never fires on the initial push from `peter-evans/create-pull-request`. Even when a PAT is used, there is a race window where `pr_review.mjs` queries for an open PR before GitHub has finished indexing it.
 
-- **Timing of PR creation:** In this pipeline, a PR is opened by the code-generation workflow moments before the first push. Relying on `pull_request: synchronize` would miss that first push unless the generation workflow itself opens the PR in a way that guarantees `opened` fires before review starts, which is fragile with `peter-evans/create-pull-request`.
-- **Label-event availability:** The re-pulse strategy (ADR-0006) removes and re-applies `changes-requested` to force a fresh `labeled` event. This re-labeling does not cause a `synchronize` event, so `pull_request`-based triggers would require a secondary event source — adding complexity.
-- **Simplicity of the guard:** A silent exit when no PR is found is a clean, low-risk guard. The cost is a few extra API calls on pushes to branches without open PRs (e.g., direct commits to `main`). This overhead is negligible given the repository's usage pattern.
+Adding `pull_request: [opened]` closes both gaps:
+
+- When `code-generation.yml` (or any workflow) opens a PR, the `opened` event fires unconditionally regardless of the token used for the push.
+- The event payload carries `pull_request.number` directly, so `pr_review.mjs` reads it at line 42 without a GitHub API lookup — eliminating the race condition.
+- The `push` trigger is retained to cover all subsequent pushes to the branch (auto-fix commits, manual fixups) where a PR already exists.
+
+The `pull_request: synchronize` type is intentionally omitted: subsequent pushes are already covered by the `push` trigger, and adding `synchronize` would cause duplicate review runs on every auto-fix commit.
 
 ## Guardrails
 
-- The script checks for an open PR at the beginning of each run. If none is found for the pushed branch, it exits immediately without calling the LLM or writing any output.
+- The script checks for an open PR at the beginning of each `push`-triggered run. If none is found for the pushed branch, it exits immediately without calling the LLM or writing any output.
+- On `pull_request: opened` runs, `pull_request.number` is read directly from the payload; no API lookup is needed.
 - The `timeout-minutes: 2` job constraint prevents runaway executions on branches with large diffs or slow API responses.
 - The `actions: read` permission is the minimum required to query run status for the re-pulse guard (ADR-0006), and no broader permissions are granted.
 
 ## Consequences
 
-- ✅ Review fires reliably on the first push to a new AI branch, even before the PR is fully indexed by GitHub's event system.
-- ✅ No secondary event wiring needed for the re-pulse loop; every push (including auto-fix pushes) triggers review naturally.
+- ✅ Review fires on PR open regardless of which token was used to push (`GITHUB_TOKEN` or PAT).
+- ✅ Review fires on every subsequent push (auto-fix commits, manual fixups) via the `push` trigger.
+- ✅ No race condition between push and PR indexing: `opened` event carries the PR number directly.
+- ⚠️ When `AI_PR_TOKEN` is configured and the push succeeds in triggering `pr-review.yml`, the `opened` event will also fire — resulting in two concurrent review runs on the very first commit. Both runs are safe (idempotent comment upsert, label swap); the mild redundancy is accepted.
 - ⚠️ Pushes to branches with no open PR (e.g., direct commits to `main`) will invoke the workflow but exit immediately after a single API call — a minor, accepted overhead.
-- ⚠️ Contributors adding branch-protection or push rules for `main` should be aware that the review workflow will still fire (and silently no-op) on those pushes.
