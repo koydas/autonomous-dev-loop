@@ -20,6 +20,7 @@ const MAX_ATTEMPTS = 3;
 const MAX_FILE_SIZE = 2000;
 const MAX_FILES = 5;
 const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
+const TOKEN_SAFETY_MARGIN = 200;
 
 const MODEL_TPM = {
   'qwen/qwen3-32b': 6000,
@@ -138,10 +139,11 @@ if (!feedbackParts.length) {
 const systemPrompt = loadPrompt('auto-fix-system');
 const systemTokens = estimateTokens(systemPrompt);
 const tpmLimit = llmProvider === 'groq' ? (MODEL_TPM[model] ?? 6000) : 8000;
-const effectiveMaxTokens = Math.min(llmMaxTokens ?? 4096, tpmLimit - systemTokens - 200);
-const remaining = Math.max(0, tpmLimit - 200 - systemTokens - effectiveMaxTokens);
-const diffBudget = Math.floor(remaining * 0.6);
-const feedbackBudget = remaining - diffBudget;
+const maxOutputBudget = Math.min(llmMaxTokens ?? 4096, Math.max(256, Math.floor(tpmLimit * 0.35)));
+const inputBudget = Math.max(0, tpmLimit - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
+const diffBudget = Math.floor(inputBudget * 0.45);
+const feedbackBudget = Math.floor(inputBudget * 0.25);
+const fileBudget = Math.max(0, inputBudget - diffBudget - feedbackBudget);
 
 const reviewFeedback = (
   feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)'
@@ -172,10 +174,11 @@ for (const filePath of changedFiles.slice(0, MAX_FILES)) {
     // File deleted or unreadable — skip
   }
 }
-const fileContents =
+const rawFileContents =
   fileContentParts.length > 0
     ? fileContentParts.join('\n\n')
     : 'No existing files identified as relevant to this review.';
+const fileContents = rawFileContents.slice(0, fileBudget * 4);
 
 const userPrompt = interpolatePrompt(loadPrompt('auto-fix-user'), {
   reviewFeedback,
@@ -188,8 +191,9 @@ log('token_estimate', {
   diff: estimateTokens(diff),
   feedback: estimateTokens(reviewFeedback),
   files: estimateTokens(fileContents),
-  max_tokens: effectiveMaxTokens,
-  total: systemTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + effectiveMaxTokens,
+  max_tokens: maxOutputBudget,
+  budget: { input: inputBudget, diff: diffBudget, feedback: feedbackBudget, files: fileBudget },
+  total: systemTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
 });
 
 const raw = await callLLM({
@@ -199,7 +203,7 @@ const raw = await callLLM({
   model,
   apiUrl,
   temperature: llmTemperature,
-  maxTokens: effectiveMaxTokens,
+  maxTokens: maxOutputBudget,
 });
 
 let aiOutput;
