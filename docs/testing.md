@@ -1,6 +1,9 @@
 # Testing
 
-Unit tests cover all core Node.js modules using the built-in `node:test` runner — no external dependencies required.
+The test suite uses the built-in `node:test` runner — no external dependencies required. It contains two layers:
+
+- **Unit tests** — each module tested in isolation with mocked dependencies.
+- **Smoke tests** — full pipelines exercised with real config files (`config/models.yaml`, `config/labels.yaml`) and real prompt templates (`prompts/*.md`), with the LLM mocked at the network boundary. They catch integration failures that unit tests cannot: a renamed placeholder, a missing YAML key, a mis-wired pipeline stage.
 
 ## Running Tests
 
@@ -8,9 +11,22 @@ Unit tests cover all core Node.js modules using the built-in `node:test` runner 
 node --test scripts/tests/*.test.mjs
 ```
 
-Requires Node.js 20+. All tests should pass in under a second.
+Requires Node.js 20+. All tests should pass in under a few seconds.
 
-## Coverage
+## Smoke Tests
+
+`scripts/tests/smoke.test.mjs` — 20 tests across 6 groups:
+
+| Group | What is covered |
+|-------|-----------------|
+| Config files | `models.yaml` has a model + temperature for every pipeline stage; `labels.yaml` has all label groups (`issue`, `review`, `autofix`) with required fields |
+| Prompt files | All 8 prompt templates load without error and contain their expected `{{placeholder}}` variables |
+| Validation pipeline | `validateIssue()` → `formatGitHubComment()` end-to-end for valid and invalid issues; prompt template produces no unsubstituted placeholders |
+| Generation pipeline | Realistic LLM JSON (plain and markdown-fenced) → `parseJsonResponse` → `validateAiOutput` → `writeGeneratedFiles` with real temp files |
+| `buildDeterministicPrompt` | Real `generation-user.md` template used; all placeholders substituted; output schema keys present |
+| `loadLLMConfig` | All four stages (`validation`, `generation`, `review`, `autofix`) produce a valid config shape for both Groq and Anthropic; `autofix` exposes `maxTokens` from `models.yaml` |
+
+## Unit Test Coverage
 
 | File | Tests | What is covered |
 |------|-------|-----------------|

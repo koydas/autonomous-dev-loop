@@ -32,6 +32,7 @@ Before committing any change to `scripts/` or `prompts/`:
 
 - Run `node --test scripts/tests/*.test.mjs` and ensure all tests pass.
 - Never commit code that breaks an existing test without updating or replacing the test intentionally.
+- The suite includes **unit tests** (modules in isolation) and **smoke tests** (`smoke.test.mjs`, cross-module pipelines with real config/prompt files). Both must pass.
 
 ## Workflow Rules _(pipeline only)_
 
