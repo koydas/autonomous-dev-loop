@@ -15,10 +15,15 @@ export function safeStringify(obj) {
   }
 }
 
+function normalizePayload(data) {
+  if (data !== null && typeof data === 'object') return data;
+  return { data };
+}
+
 export function log(msg, data = {}) {
-  console.log(safeStringify({ level: 'info', msg, ...data }));
+  console.log(safeStringify({ level: 'info', msg, ...normalizePayload(data) }));
 }
 
 export function error(msg, data = {}) {
-  console.error(safeStringify({ level: 'error', msg, ...data }));
+  console.error(safeStringify({ level: 'error', msg, ...normalizePayload(data) }));
 }
