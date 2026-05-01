@@ -8,10 +8,7 @@ const providers = [
 ];
 
 export function callLLM(args) {
-  const availableProviders = providers.filter(p => {
-    // Assume detectProvider checks for valid API key presence
-    return detectProvider() === p.name;
-  });
+  const availableProviders = providers;
 
   const attemptCall = async (providerIndex) => {
     try {
