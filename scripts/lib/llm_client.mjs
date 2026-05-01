@@ -2,26 +2,25 @@ import { callGroq } from './groq_client.mjs';
 import { callAnthropic } from './anthropic_client.mjs';
 import { detectProvider } from './config.mjs';
 
-const providers = [
+const ALL_PROVIDERS = [
   { name: 'anthropic', call: callAnthropic },
-  { name: 'groq', call: callGroq }
+  { name: 'groq', call: callGroq },
 ];
 
-export function callLLM(args) {
-  const availableProviders = providers;
+export async function callLLM(args) {
+  const primary = detectProvider();
+  const startIndex = ALL_PROVIDERS.findIndex(p => p.name === primary);
+  const ordered = startIndex > 0
+    ? [...ALL_PROVIDERS.slice(startIndex), ...ALL_PROVIDERS.slice(0, startIndex)]
+    : ALL_PROVIDERS;
 
-  const attemptCall = async (providerIndex) => {
+  const errors = [];
+  for (const provider of ordered) {
     try {
-      return await availableProviders[providerIndex].call(args);
+      return await provider.call(args);
     } catch (error) {
-      if (providerIndex < availableProviders.length - 1) {
-        return await attemptCall(providerIndex + 1);
-      } else {
-        const failureReasons = availableProviders.map(p => `${p.name}: ${error.message}`);
-        throw new Error(`All providers failed: ${failureReasons.join(', ')}`);
-      }
+      errors.push(`${provider.name}: ${error.message}`);
     }
-  };
-
-  return attemptCall(0);
+  }
+  throw new Error(`All providers failed: ${errors.join(', ')}`);
 }

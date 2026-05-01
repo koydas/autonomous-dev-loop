@@ -106,3 +106,44 @@ test('callLLM AI_PROVIDER is case-insensitive', async () => {
   const result = await callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-4-7' });
   assert.equal(result, 'ok');
 });
+
+test('callLLM falls back to groq when primary provider (anthropic) fails at runtime', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount++;
+    if (callCount === 1) throw new Error('network error');
+    return makeResponse({ choices: [{ message: { content: 'fallback-ok' } }] });
+  };
+  const result = await callLLM({
+    prompt: 'hi',
+    systemPrompt: 'sys',
+    apiKey: 'sk-ant-key',
+    model: 'claude-opus-4-7',
+    apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
+  });
+  assert.equal(result, 'fallback-ok');
+  assert.equal(callCount, 2);
+});
+
+test('callLLM throws descriptive error listing each provider failure when all fail', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async () => { throw new Error('connection refused'); };
+  await assert.rejects(
+    () => callLLM({
+      prompt: 'hi',
+      systemPrompt: 'sys',
+      apiKey: 'sk-ant-key',
+      model: 'claude-opus-4-7',
+      apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    }),
+    (err) => {
+      assert.match(err.message, /All providers failed/);
+      assert.match(err.message, /anthropic:/);
+      assert.match(err.message, /groq:/);
+      return true;
+    }
+  );
+});
