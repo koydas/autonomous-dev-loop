@@ -101,3 +101,13 @@ test('callAnthropic includes max_tokens in payload', async () => {
   await callAnthropic({ ...BASE_ARGS, maxTokens: 1024 });
   assert.equal(capturedBody.max_tokens, 1024);
 });
+
+test('callAnthropic throws on fetch TypeError', async () => {
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), /fetch failed/);
+});
+
+test('callAnthropic throws on fetch generic Error', async () => {
+  globalThis.fetch = async () => { throw new Error('fetch error'); };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), /fetch error/);
+});
