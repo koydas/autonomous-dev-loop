@@ -15,5 +15,6 @@ export async function generateIssueChange({ issueTitle, issueBody, callGroq }) {
   const prompt = buildGenerationUserPrompt(issueTitle, issueBody);
   const rawResponse = await callGroq({ prompt });
   const aiOutput = parseJsonResponse(String(rawResponse));
-  return validateAiOutput(aiOutput);
+  const { summary, changes } = validateAiOutput(aiOutput);
+  return { summary, changes: changes.map(({ targetPath, fileContent }) => ({ target_path: targetPath, file_content: fileContent })) };
 }

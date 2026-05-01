@@ -30,7 +30,7 @@ test('generate_issue_change runs end-to-end with a mocked LLM', async () => {
   const callGroq = () => makeGenerationResponse();
   const result = await generateIssueChange({ issueTitle: ISSUE_TITLE, issueBody: ISSUE_BODY, callGroq });
   assert.strictEqual(result.summary, 'summary');
-  assert.deepStrictEqual(result.changes, [{ targetPath: 'path/to/file.js', fileContent: 'content' }]);
+  assert.deepStrictEqual(result.changes, [{ target_path: 'path/to/file.js', file_content: 'content' }]);
 });
 
 test('validate_issue handles a malformed LLM response', async () => {
