@@ -1,7 +1,29 @@
+export function safeStringify(obj) {
+  try {
+    const seen = new WeakSet();
+    return JSON.stringify(obj, (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) {
+          return '[Circular]';
+        }
+        seen.add(value);
+      }
+      return value;
+    });
+  } catch (e) {
+    return JSON.stringify({ _serializationError: '[unserializable data]' });
+  }
+}
+
+function normalizePayload(data) {
+  if (data !== null && typeof data === 'object') return data;
+  return { data };
+}
+
 export function log(msg, data = {}) {
-  console.log(JSON.stringify({ level: 'info', msg, ...data }));
+  console.log(safeStringify({ level: 'info', msg, ...normalizePayload(data) }));
 }
 
 export function error(msg, data = {}) {
-  console.error(JSON.stringify({ level: 'error', msg, ...data }));
+  console.error(safeStringify({ level: 'error', msg, ...normalizePayload(data) }));
 }

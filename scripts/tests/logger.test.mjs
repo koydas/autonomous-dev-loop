@@ -60,6 +60,36 @@ test('error includes extra data fields', (t) => {
   assert.equal(parsed.status, 500);
 });
 
+test('log with number payload preserves value under data key', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  log('number', 42);
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.data, 42);
+});
+
+test('log with null payload preserves null under data key', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  log('null', null);
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.data, null);
+});
+
+test('log with string payload preserves value under data key', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  log('string', 'hello');
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.data, 'hello');
+});
+
 test('log output is valid JSON', (t) => {
   const captured = [];
   t.mock.method(console, 'log', (s) => captured.push(s));
