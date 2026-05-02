@@ -1,6 +1,6 @@
 export const ERROR_TYPES = {
   TRANSIENT: ['timeout', '429'],
-  PERMANENT: ['401', '403', '400'],
+  PERMANENT: ['401', '403'],
   UNKNOWN: []
 };
 
