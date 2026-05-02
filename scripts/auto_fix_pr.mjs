@@ -166,9 +166,14 @@ if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
 const rawDiff = await diffRes.text();
 const diff = truncateToTokenBudget(filterDiff(rawDiff, diffBudget * 4), diffBudget);
 
-const changedFiles = [
-  ...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1])),
-].filter(shouldIncludeFile);
+const allChangedFiles = [...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1]))];
+
+if (allChangedFiles.includes('scripts/auto_fix_pr.mjs')) {
+  log('Auto-fix skipped: PR modifies auto_fix_pr.mjs itself — self-modification guard triggered', { prNumber });
+  process.exit(0);
+}
+
+const changedFiles = allChangedFiles.filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
 const fileContentParts = [];
