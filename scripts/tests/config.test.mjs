@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider } from '../lib/config.mjs';
+import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, loadLLMConfig, GROQ_MODEL_DEFAULTS } from '../lib/config.mjs';
 
 const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
@@ -155,4 +155,54 @@ test('buildDeterministicPrompt returns a non-empty string', () => {
   const prompt = buildDeterministicPrompt({ issueNumber: '1', issueTitle: 'T', issueBody: 'B' });
   assert.equal(typeof prompt, 'string');
   assert.ok(prompt.length > 0);
+});
+
+// loadLLMConfig temperature validation
+// GROQ_MODEL_DEFAULTS is a mutable module-level object; we mutate generation_temperature
+// in-process so the validation logic in loadLLMConfig actually runs with the desired value.
+
+test('loadLLMConfig accepts temperature 0', () => {
+  const original = GROQ_MODEL_DEFAULTS.generation_temperature;
+  GROQ_MODEL_DEFAULTS.generation_temperature = 0;
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  try {
+    const config = loadLLMConfig('generation');
+    assert.equal(config.temperature, 0);
+  } finally {
+    GROQ_MODEL_DEFAULTS.generation_temperature = original;
+  }
+});
+
+test('loadLLMConfig accepts temperature 2', () => {
+  const original = GROQ_MODEL_DEFAULTS.generation_temperature;
+  GROQ_MODEL_DEFAULTS.generation_temperature = 2;
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  try {
+    const config = loadLLMConfig('generation');
+    assert.equal(config.temperature, 2);
+  } finally {
+    GROQ_MODEL_DEFAULTS.generation_temperature = original;
+  }
+});
+
+test('loadLLMConfig rejects temperature -0.0001', () => {
+  const original = GROQ_MODEL_DEFAULTS.generation_temperature;
+  GROQ_MODEL_DEFAULTS.generation_temperature = -0.0001;
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  try {
+    assert.throws(() => loadLLMConfig('generation'), /Invalid temperature/);
+  } finally {
+    GROQ_MODEL_DEFAULTS.generation_temperature = original;
+  }
+});
+
+test('loadLLMConfig rejects temperature 2.0001', () => {
+  const original = GROQ_MODEL_DEFAULTS.generation_temperature;
+  GROQ_MODEL_DEFAULTS.generation_temperature = 2.0001;
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  try {
+    assert.throws(() => loadLLMConfig('generation'), /Invalid temperature/);
+  } finally {
+    GROQ_MODEL_DEFAULTS.generation_temperature = original;
+  }
 });
