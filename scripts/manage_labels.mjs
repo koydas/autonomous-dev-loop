@@ -70,14 +70,27 @@ async function removeLabel(owner, repo, token, issueNumber, labelName) {
 }
 
 async function main() {
-  log('Starting label management...');
-  try {
-    const { GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN } = requireEnv(['GITHUB_OWNER', 'GITHUB_REPO', 'GITHUB_TOKEN']);
-    // Label management logic here
-  } catch (err) {
-    logError('Initialization error', { error: err.message });
-    process.exit(1);
+  const issueNumber = requireEnv('ISSUE_NUMBER');
+  const repo = requireEnv('GITHUB_REPOSITORY');
+  const isValid = requireEnv('IS_VALID') === 'true';
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+
+  if (!token) throw new Error('Missing GH_TOKEN or GITHUB_TOKEN');
+
+  const [owner, name] = repo.split('/');
+  if (!owner || !name) throw new Error(`Invalid GITHUB_REPOSITORY format: ${repo}`);
+
+  for (const label of LABELS) {
+    await upsertLabel(owner, name, token, label);
+    log('Label upserted', { label: label.name });
   }
+
+  const apply = isValid ? issueLabels.valid.name : issueLabels.invalid.name;
+  const remove = isValid ? issueLabels.invalid.name : issueLabels.valid.name;
+
+  await addLabel(owner, name, token, issueNumber, apply);
+  await removeLabel(owner, name, token, issueNumber, remove);
+  log('Labels applied', { issueNumber, added: apply, removed: remove });
 }
 
 main().catch((err) => {
