@@ -15,7 +15,7 @@ const LABELS = [issueLabels.valid, issueLabels.invalid];
 function getHeaders(token) {
   return {
     Accept: 'application/vnd.github+json',
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${token}',
     'X-GitHub-Api-Version': '2022-11-28',
     'Content-Type': 'application/json',
   };
@@ -51,11 +51,28 @@ async function upsertLabel(owner, repo, token, label) {
 }
 
 async function addLabel(owner, repo, token, issueNumber, labelName) {
-  const res = await ghRequest(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`, {
-    method: 'POST',
-    token,
-    body: { labels: [labelName] },
-  });
+  // Check if label already exists on issue
+  const existingRes = await ghRequest(
+    `/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
+    { method: 'GET', token }
+  );
+  
+  if (!existingRes.ok) {
+    throw new Error(`Failed to fetch existing labels: ${existingRes.status}`);
+  }
+  
+  const existingLabels = await existingRes.json();
+  if (existingLabels.includes(labelName)) return;
+
+  const res = await ghRequest(
+    `/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
+    {
+      method: 'POST',
+      token,
+      body: { labels: [labelName] }
+    }
+  );
+  
   if (!res.ok) {
     if (res.status === 422) return;
     throw new Error(`Add label "${labelName}" failed: ${res.status}`);
@@ -63,40 +80,3 @@ async function addLabel(owner, repo, token, issueNumber, labelName) {
 }
 
 async function removeLabel(owner, repo, token, issueNumber, labelName) {
-  const res = await ghRequest(
-    `/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(labelName)}`,
-    { method: 'DELETE', token },
-  );
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`Remove label "${labelName}" failed: ${res.status}`);
-  }
-}
-
-async function main() {
-  const issueNumber = requireEnv('ISSUE_NUMBER');
-  const repo = requireEnv('GITHUB_REPOSITORY');
-  const isValid = requireEnv('IS_VALID') === 'true';
-  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-
-  if (!token) throw new Error('Missing GH_TOKEN or GITHUB_TOKEN');
-
-  const [owner, name] = repo.split('/');
-  if (!owner || !name) throw new Error(`Invalid GITHUB_REPOSITORY format: ${repo}`);
-
-  for (const label of LABELS) {
-    await upsertLabel(owner, name, token, label);
-    log('Label upserted', { label: label.name });
-  }
-
-  const apply = isValid ? issueLabels.valid.name : issueLabels.invalid.name;
-  const remove = isValid ? issueLabels.invalid.name : issueLabels.valid.name;
-
-  await addLabel(owner, name, token, issueNumber, apply);
-  await removeLabel(owner, name, token, issueNumber, remove);
-  log('Labels applied', { issueNumber, added: apply, removed: remove });
-}
-
-main().catch((err) => {
-  logError('Fatal error', { error: err.message, stack: err.stack });
-  process.exit(1);
-});
