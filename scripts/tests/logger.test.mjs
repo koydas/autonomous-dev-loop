@@ -98,3 +98,31 @@ test('log output is valid JSON', (t) => {
 
   assert.doesNotThrow(() => JSON.parse(captured[0]));
 });
+
+test('log does not throw on circular reference data', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  const circ = {};
+  circ.self = circ;
+
+  assert.doesNotThrow(() => log('circular', circ));
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.level, 'info');
+  assert.equal(parsed.msg, 'circular');
+  assert.equal(parsed.self.self, '[Circular]');
+});
+
+test('error does not throw on circular reference data', (t) => {
+  const captured = [];
+  t.mock.method(console, 'error', (s) => captured.push(s));
+
+  const circ = {};
+  circ.self = circ;
+
+  assert.doesNotThrow(() => error('circular', circ));
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.level, 'error');
+  assert.equal(parsed.msg, 'circular');
+  assert.equal(parsed.self.self, '[Circular]');
+});

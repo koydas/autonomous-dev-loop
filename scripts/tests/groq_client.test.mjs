@@ -157,3 +157,24 @@ test('callGroq exhausts retries on persistent 429 and throws', async () => {
     delete process.env.GROQ_MAX_RETRIES;
   }
 });
+
+test('callGroq uses Retry-After header seconds value as wait delay', async () => {
+  const waits = [];
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms) => { waits.push(ms); fn(); return {}; };
+
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 1) return makeResponse('rate limited', 429, { 'Retry-After': '3' });
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  process.env.GROQ_MAX_RETRIES = '1';
+  try {
+    await callGroq({ ...BASE_ARGS, responseFormat: null });
+    assert.equal(waits[0], 3000);
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+    globalThis.setTimeout = origSetTimeout;
+  }
+});
