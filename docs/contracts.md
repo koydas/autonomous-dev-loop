@@ -113,7 +113,7 @@ This document specifies the interface contract for each entrypoint script: requi
 
 | Code | Meaning |
 |---|---|
-| `0` | Fixes applied, **or** max attempts already reached (posts exhaustion comment and exits cleanly) |
+| `0` | Fixes applied, **or** max attempts already reached (posts exhaustion comment and exits cleanly), **or** attempt already completed (checkpoint resume), **or** PR modifies the auto-fixer itself (self-modification guard) |
 | `1` | GitHub API error, LLM returned invalid JSON, or fatal error |
 
 ### Behavioral constraints
@@ -121,6 +121,23 @@ This document specifies the interface contract for each entrypoint script: requi
 - Maximum of **3 auto-fix attempts** (`MAX_ATTEMPTS`). Attempt count is tracked by labels named `auto-fix-attempt-N` on the PR.
 - When the limit is reached the script posts a `## 🤖 Auto-Fix Exhausted` comment and exits `0` without writing outputs.
 - The downstream workflow step (`Commit and push fixes`) is conditioned on `fixed_paths != ''` and skips silently if the LLM produced no changes.
+- **Self-modification guard:** if the PR includes changes to `scripts/auto_fix_pr.mjs`, the script posts a `## 🤖 Auto-Fix Skipped` comment and exits `0` without calling the LLM, to prevent feedback loops.
+- **Checkpointing:** after each critical step the script writes an atomic checkpoint file (`checkpoint-attempt-N.json`) via a temp-file-then-rename strategy. At startup, if that file already records `stage: "complete"` with a matching `inputHash`, the script exits `0` immediately (idempotent re-run safety). Checkpoint stages in order: `ai-complete` → `files-written` → `complete`.
+
+### Checkpoint file schema
+
+Written to `checkpoint-attempt-N.json` in the working directory:
+
+| Field | Type | Description |
+|---|---|---|
+| `runId` | string | `GITHUB_RUN_ID` of the Actions run that wrote this checkpoint |
+| `stage` | `"ai-complete"` \| `"files-written"` \| `"complete"` | Last successfully completed stage |
+| `attempt` | integer | Attempt number (1–3) |
+| `inputHash` | string | SHA-256 of `prNumber + GITHUB_SHA`; used to detect stale checkpoints on re-run |
+| `timestamp` | ISO 8601 string | Wall-clock time of the write |
+| `summary` | string | AI-generated fix summary (present from `ai-complete` onward) |
+| `changesCount` | integer | Number of file changes returned by the LLM (present at `ai-complete`) |
+| `outputPaths` | string[] | Paths of written files (present from `files-written` onward) |
 
 ---
 
