@@ -3,7 +3,7 @@ import { log } from './logger.mjs';
 function parseWaitMs(rawText, headers) {
   const match = rawText.match(/Please try again in (\d+(?:\.\d+)?)s/i);
   if (match) return Math.ceil(parseFloat(match[1]) * 1000);
-  const retryAfter = headers.get('Retry-After');
+  const retryAfter = headers?.get('Retry-After');
   if (retryAfter != null) {
     const secs = parseFloat(retryAfter);
     if (!isNaN(secs) && secs >= 0) return Math.ceil(secs * 1000);
