@@ -4,6 +4,8 @@ import { retryWithBackoff } from './retry.mjs';
 const ANTHROPIC_API_URL_DEFAULT = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+
 export async function callAnthropic({
   prompt,
   systemPrompt,
@@ -21,7 +23,7 @@ export async function callAnthropic({
     messages: [{ role: 'user', content: prompt }],
   };
 
-  const response = await retryWithBackoff(async () => {
+  const rawText = await retryWithBackoff(async () => {
     const response = await fetch(apiUrl || ANTHROPIC_API_URL_DEFAULT, {
       method: 'POST',
       headers: {
@@ -31,15 +33,15 @@ export async function callAnthropic({
       },
       body: JSON.stringify(payload),
     });
-    return response;
+    const text = await response.text();
+    if (!response.ok) {
+      const err = new Error(`Anthropic API HTTP error ${response.status}: ${text}`);
+      err.errorType = classifyError(String(response.status));
+      err.retryable = RETRYABLE_STATUS_CODES.has(response.status);
+      throw err;
+    }
+    return text;
   });
-
-  const rawText = await response.text();
-  if (!response.ok) {
-    const err = new Error(`Anthropic API HTTP error ${response.status}: ${rawText}`);
-    err.errorType = classifyError(String(response.status));
-    throw err;
-  }
 
   let raw;
   try {

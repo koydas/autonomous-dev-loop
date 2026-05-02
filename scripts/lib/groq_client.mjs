@@ -13,6 +13,8 @@ function parseWaitMs(rawText, headers) {
   return null;
 }
 
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+
 export async function callGroq({
   prompt,
   systemPrompt,
@@ -23,6 +25,9 @@ export async function callGroq({
   maxTokens,
   responseFormat = { type: 'json_object' },
 }) {
+  const parsed = parseInt(process.env.GROQ_MAX_RETRIES, 10);
+  const maxAttempts = (Number.isFinite(parsed) && parsed >= 0 ? parsed : 3) + 1;
+
   const payload = {
     model,
     temperature,
@@ -38,7 +43,7 @@ export async function callGroq({
     payload.response_format = responseFormat;
   }
 
-  const response = await retryWithBackoff(async () => {
+  const rawText = await retryWithBackoff(async () => {
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
@@ -47,12 +52,16 @@ export async function callGroq({
       },
       body: JSON.stringify(payload),
     });
-    return response;
-  }, {
-    retryableStatusCodes: [429, 500, 502, 503, 504],
-  });
-
-  const rawText = await response.text();
+    const text = await response.text();
+    if (!response.ok) {
+      const err = new Error(`Groq API HTTP error ${response.status}: ${text}`);
+      err.errorType = classifyError(String(response.status));
+      err.retryable = RETRYABLE_STATUS_CODES.has(response.status);
+      err.waitMs = parseWaitMs(text, response.headers);
+      throw err;
+    }
+    return text;
+  }, { maxAttempts });
 
   let raw;
   try {
