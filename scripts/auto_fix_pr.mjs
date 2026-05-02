@@ -237,7 +237,11 @@ const checkpoint = {
 };
 
 try {
-  await fsPromises.writeFile('checkpoint.json', JSON.stringify(checkpoint, null, 2));
+  const checkpointPath = 'checkpoint.json';
+  const exists = await fsPromises.stat(checkpointPath).then(() => true, () => false);
+  if (!exists) {
+    await fsPromises.writeFile(checkpointPath, JSON.stringify(checkpoint, null, 2));
+  }
 } catch (err) {
   logError('Failed to write checkpoint', { error: err.message, stack: err.stack });
 }
