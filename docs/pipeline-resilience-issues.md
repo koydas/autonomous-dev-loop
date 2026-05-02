@@ -51,44 +51,7 @@ https://github.com/koydas/autonomous-dev-loop/issues/111
 **Title**
 `[FEATURE] Idempotence for labels/comments/generated outputs`
 
-**Body (copy/paste):**
-```md
-## 🎯 Goal
-Add a feature that addresses a clear product need.
-
-## 📍 Context
-- Repo: autonomous-dev-loop
-- Domain: Re-runnability
-- Component: `scripts/lib/output_writer.mjs`, `scripts/manage_labels.mjs`
-
-## 🚀 Description
-Make all write-side operations idempotent (labels, comments, generated files) so reruns do not create duplicates or inconsistent state.
-
-Current state (partial):
-- `upsert_issue_validation_comment.mjs` already applies upsert by marker — good model to follow.
-- `auto_fix_pr.mjs` label creation tolerates 422 (existing label) — good.
-- `output_writer.mjs` overwrites files unconditionally — acceptable but not verified against expected state.
-- `manage_labels.mjs` label operations need idempotence verification.
-
-## 🧩 Scope
-- In:
-  - "Already applied" checks before write operations.
-  - Upsert strategy for comments/labels (extend the pattern from `upsert_issue_validation_comment.mjs`).
-  - Run-context idempotency keys.
-- Out:
-  - Workflow trigger strategy changes.
-
-## 🧪 Acceptance criteria
-- [ ] Functional
-  - Re-running with same inputs does not change the final state.
-- [ ] Edge cases covered
-  - No duplicates after interrupted/retried runs.
-- [ ] Tests included
-  - Unit + smoke tests for duplicate prevention.
-
-## ⚙️ Constraints
-Preserve current business behavior; hardening only.
-```
+https://github.com/koydas/autonomous-dev-loop/issues/113
 
 ---
 
