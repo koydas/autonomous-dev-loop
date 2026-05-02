@@ -120,6 +120,34 @@ if (attemptCount >= MAX_ATTEMPTS) {
 }
 
 const nextAttempt = attemptCount + 1;
+
+const CHECKPOINT_PATH = `checkpoint-attempt-${nextAttempt}.json`;
+const inputHash = createHash('sha256').update(`${prNumber}${process.env.GITHUB_SHA}`).digest('hex');
+
+try {
+  const existing = JSON.parse(await fsPromises.readFile(CHECKPOINT_PATH, 'utf8'));
+  if (existing.stage === 'complete' && existing.inputHash === inputHash) {
+    log('Attempt already completed, skipping duplicate run', { prNumber, attempt: nextAttempt });
+    process.exit(0);
+  }
+} catch {
+  // No checkpoint yet — proceed normally
+}
+
+async function writeCheckpoint(stage, extra = {}) {
+  const data = JSON.stringify(
+    { runId: process.env.GITHUB_RUN_ID, stage, attempt: nextAttempt, inputHash, timestamp: new Date().toISOString(), ...extra },
+    null, 2,
+  );
+  const tmpPath = `${CHECKPOINT_PATH}.tmp`;
+  try {
+    await fsPromises.writeFile(tmpPath, data);
+    await fsPromises.rename(tmpPath, CHECKPOINT_PATH);
+  } catch (err) {
+    logError('Failed to write checkpoint', { stage, error: err.message });
+  }
+}
+
 log('Starting auto-fix', { prNumber, attempt: nextAttempt });
 
 const feedbackParts = [];
@@ -240,26 +268,11 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   throw new Error('AI response JSON must be an object');
 }
 
-const checkpoint = {
-  runId: process.env.GITHUB_RUN_ID,
-  step: 'ai-complete',
-  attempt: nextAttempt,
-  inputHash: createHash('sha256').update(`${prNumber}${process.env.GITHUB_SHA}`).digest('hex'),
-  timestamp: new Date().toISOString(),
-};
-
-try {
-  const checkpointPath = 'checkpoint.json';
-  const exists = await fsPromises.stat(checkpointPath).then(() => true, () => false);
-  if (!exists) {
-    await fsPromises.writeFile(checkpointPath, JSON.stringify(checkpoint, null, 2));
-  }
-} catch (err) {
-  logError('Failed to write checkpoint', { error: err.message, stack: err.stack });
-}
-
 const { summary, changes } = validateAiOutput(aiOutput);
+await writeCheckpoint('ai-complete', { summary, changesCount: changes.length });
+
 const outputPaths = await writeGeneratedFiles(changes);
+await writeCheckpoint('files-written', { summary, outputPaths });
 
 const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
 const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
@@ -290,4 +303,5 @@ if (process.env.GITHUB_OUTPUT) {
   );
 }
 
+await writeCheckpoint('complete', { summary, outputPaths });
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
