@@ -33,47 +33,7 @@ Use this table to decide which issues to open first.
 **Title**
 `[FEATURE] Unified TRANSIENT/PERMANENT/UNKNOWN error taxonomy`
 
-**Body (copy/paste):**
-```md
-## 🎯 Goal
-Add a feature that addresses a clear product need.
-
-## 📍 Context
-- Repo: autonomous-dev-loop
-- Domain: Pipeline reliability
-- Component: `scripts/lib/*` (error handling + external clients)
-
-## 🚀 Description
-Introduce a shared error taxonomy (`TRANSIENT`, `PERMANENT`, `UNKNOWN`) used across modules calling external services (LLM, GitHub API).
-
-Value: consistent retry/fail-fast decisions and reduced behavioral drift across scripts.
-
-Current state:
-- `groq_client.mjs` retries on 429 only — 5xx is not retried.
-- `anthropic_client.mjs` has no retry at all.
-- `llm_client.mjs` falls back to secondary provider on **any** error, including permanent 4xx (e.g. invalid API key). This is a correctness bug: a 401 should fail fast, not trigger provider fallback.
-
-## 🧩 Scope
-- In:
-  - Create a shared error classification module.
-  - Explicitly map known cases (timeout, 429, 5xx, business 4xx, invalid payload).
-  - Expose a simple API consumed by existing clients.
-  - Fix `llm_client.mjs` to only fall back on `TRANSIENT` errors.
-- Out:
-  - Full refactor of unrelated scripts.
-
-## 🧪 Acceptance criteria
-- [ ] Functional
-  - Errors are deterministically classified according to documented rules.
-- [ ] Edge cases covered
-  - Ambiguous cases (`UNKNOWN`) are explicitly handled.
-  - `llm_client.mjs` does NOT fall back on 401/403/400.
-- [ ] Tests included
-  - Unit tests for 429/5xx/timeout/4xx/invalid payload classification.
-
-## ⚙️ Constraints
-No heavy new dependencies; keep API minimal and stable.
-```
+https://github.com/koydas/autonomous-dev-loop/issues/109
 
 ---
 
