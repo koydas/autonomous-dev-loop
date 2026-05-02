@@ -1,16 +1,29 @@
-function safeStringify(obj) {
+export function safeStringify(obj) {
   try {
-    return JSON.stringify(obj);
-  } catch {
-    const { level, msg } = obj;
-    return JSON.stringify({ level, msg, _serializationError: '[unserializable data]' });
+    const seen = new WeakSet();
+    return JSON.stringify(obj, (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) {
+          return '[Circular]';
+        }
+        seen.add(value);
+      }
+      return value;
+    });
+  } catch (e) {
+    return JSON.stringify({ _serializationError: '[unserializable data]' });
   }
 }
 
+function normalizePayload(data) {
+  if (data !== null && typeof data === 'object') return data;
+  return { data };
+}
+
 export function log(msg, data = {}) {
-  console.log(safeStringify({ level: 'info', msg, ...data }));
+  console.log(safeStringify({ level: 'info', msg, ...normalizePayload(data) }));
 }
 
 export function error(msg, data = {}) {
-  console.error(safeStringify({ level: 'error', msg, ...data }));
+  console.error(safeStringify({ level: 'error', msg, ...normalizePayload(data) }));
 }

@@ -4,10 +4,11 @@ import { callGroq } from '../lib/groq_client.mjs';
 
 const BASE_ARGS = { prompt: 'go', systemPrompt: 'You are a test assistant.', apiKey: 'key', model: 'llama-3.1-8b-instant', apiUrl: 'https://api.test' };
 
-function makeResponse(body, status = 200) {
+function makeResponse(body, status = 200, headers = {}) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: { get: (name) => headers[name] ?? null },
     text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
   };
 }
@@ -118,38 +119,40 @@ test('callGroq omits max_tokens when maxTokens is not provided', async () => {
   assert.equal('max_tokens' in capturedBody, false);
 });
 
-test('callGroq retries on 429 and succeeds on the second attempt', async () => {
-  let callCount = 0;
+test('callGroq retries on 429 and succeeds on next attempt', async () => {
+  let calls = 0;
   globalThis.fetch = async () => {
-    callCount++;
-    if (callCount === 1) {
-      return {
-        ok: false, status: 429,
-        headers: { get: () => null },
-        text: async () => 'rate limited',
-      };
-    }
-    return makeResponse({ choices: [{ message: { content: '{"ok":true}' } }] });
+    calls++;
+    if (calls === 1) return makeResponse('Please try again in 0s', 429);
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
   };
-  process.env.GROQ_MAX_RETRIES = '1';
-  try {
-    const result = await callGroq({ ...BASE_ARGS, responseFormat: null });
-    assert.equal(result, '{"ok":true}');
-    assert.equal(callCount, 2);
-  } finally {
-    delete process.env.GROQ_MAX_RETRIES;
-  }
+  const result = await callGroq(BASE_ARGS);
+  assert.equal(result, '{}');
+  assert.equal(calls, 2);
 });
 
-test('callGroq throws after exhausting all retries on 429', async () => {
-  globalThis.fetch = async () => ({
-    ok: false, status: 429,
-    headers: { get: () => null },
-    text: async () => 'rate limited',
-  });
+test('callGroq retries on 429 with Retry-After header', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 1) return makeResponse('rate limited', 429, { 'Retry-After': '0' });
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  const result = await callGroq(BASE_ARGS);
+  assert.equal(result, '{}');
+  assert.equal(calls, 2);
+});
+
+test('callGroq exhausts retries on persistent 429 and throws', async () => {
   process.env.GROQ_MAX_RETRIES = '1';
+  let calls = 0;
   try {
+    globalThis.fetch = async () => {
+      calls++;
+      return makeResponse('Please try again in 0s', 429);
+    };
     await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 429/);
+    assert.equal(calls, 2);
   } finally {
     delete process.env.GROQ_MAX_RETRIES;
   }
@@ -160,16 +163,10 @@ test('callGroq uses Retry-After header seconds value as wait delay', async () =>
   const origSetTimeout = globalThis.setTimeout;
   globalThis.setTimeout = (fn, ms) => { waits.push(ms); fn(); return {}; };
 
-  let callCount = 0;
+  let calls = 0;
   globalThis.fetch = async () => {
-    callCount++;
-    if (callCount === 1) {
-      return {
-        ok: false, status: 429,
-        headers: { get: (h) => h === 'Retry-After' ? '3' : null },
-        text: async () => 'rate limited',
-      };
-    }
+    calls++;
+    if (calls === 1) return makeResponse('rate limited', 429, { 'Retry-After': '3' });
     return makeResponse({ choices: [{ message: { content: '{}' } }] });
   };
   process.env.GROQ_MAX_RETRIES = '1';
