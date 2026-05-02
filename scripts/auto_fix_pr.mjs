@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -9,6 +8,7 @@ import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
+import { retryWithBackoff } from './lib/retry.mjs';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -68,9 +68,11 @@ const githubHeaders = {
 
 async function ghFetch(endpoint, options = {}) {
   try {
-    return await fetch(`${githubApiBase}${endpoint}`, {
-      ...options,
-      headers: { ...githubHeaders, ...(options.headers || {}) },
+    return await retryWithBackoff(async () => {
+      return await fetch(`${githubApiBase}${endpoint}`, {
+        ...options,
+        headers: { ...githubHeaders, ...(options.headers || {}) },
+      });
     });
   } catch (err) {
     throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`, { cause: err });

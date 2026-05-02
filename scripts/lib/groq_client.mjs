@@ -1,5 +1,6 @@
 import { log } from './logger.mjs';
 import { classifyError } from './error_taxonomy.mjs';
+import { retryWithBackoff } from './retry.mjs';
 
 function parseWaitMs(rawText, headers) {
   const match = rawText.match(/Please try again in (\d+(?:\.\d+)?)s/i);
@@ -12,6 +13,8 @@ function parseWaitMs(rawText, headers) {
   return null;
 }
 
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+
 export async function callGroq({
   prompt,
   systemPrompt,
@@ -23,7 +26,7 @@ export async function callGroq({
   responseFormat = { type: 'json_object' },
 }) {
   const parsed = parseInt(process.env.GROQ_MAX_RETRIES, 10);
-  const maxRetries = Number.isFinite(parsed) && parsed >= 0 ? parsed : 3;
+  const maxAttempts = (Number.isFinite(parsed) && parsed >= 0 ? parsed : 3) + 1;
 
   const payload = {
     model,
@@ -40,46 +43,43 @@ export async function callGroq({
     payload.response_format = responseFormat;
   }
 
-  let lastError;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const rawText = await response.text();
-
-    if (!response.ok) {
-      const errorType = classifyError(String(response.status));
-      lastError = new Error(`Groq API HTTP error ${response.status}: ${rawText}`);
-      lastError.errorType = errorType;
-      if (errorType !== 'TRANSIENT' || attempt === maxRetries) {
-        throw lastError;
-      }
-      const waitMs = parseWaitMs(rawText, response.headers) ?? 1000 * 2 ** attempt;
-      log('rate_limit_retry', { waitMs, attempt, model, errorType });
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-      continue;
-    }
-
-    let raw;
+  const rawText = await retryWithBackoff(async () => {
+    let response;
     try {
-      raw = JSON.parse(rawText);
-    } catch (err) {
-      throw new Error('Groq API returned non-JSON response', { cause: err });
+      response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (fetchErr) {
+      fetchErr.retryable = false;
+      throw fetchErr;
     }
-
-    const content = raw?.choices?.[0]?.message?.content;
-    if (!content || typeof content !== 'string') {
-      throw new Error('Unexpected Groq API response format');
+    const text = await response.text();
+    if (!response.ok) {
+      const err = new Error(`Groq API HTTP error ${response.status}: ${text}`);
+      err.errorType = classifyError(String(response.status));
+      err.retryable = RETRYABLE_STATUS_CODES.has(response.status);
+      err.waitMs = parseWaitMs(text, response.headers);
+      throw err;
     }
+    return text;
+  }, { maxAttempts });
 
-    return content;
+  let raw;
+  try {
+    raw = JSON.parse(rawText);
+  } catch (err) {
+    throw new Error('Groq API returned non-JSON response', { cause: err });
   }
 
-  throw lastError;
+  const content = raw?.choices?.[0]?.message?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('Unexpected Groq API response format');
+  }
+
+  return content;
 }
