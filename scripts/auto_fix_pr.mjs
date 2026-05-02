@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -9,6 +8,7 @@ import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
+import { retryWithBackoff } from '../lib/retry.mjs';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -68,9 +68,11 @@ const githubHeaders = {
 
 async function ghFetch(endpoint, options = {}) {
   try {
-    return await fetch(`${githubApiBase}${endpoint}`, {
-      ...options,
-      headers: { ...githubHeaders, ...(options.headers || {}) },
+    return await retryWithBackoff(async () => {
+      return await fetch(`${githubApiBase}${endpoint}`, {
+        ...options,
+        headers: { ...githubHeaders, ...(options.headers || {}) },
+      });
     });
   } catch (err) {
     throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`, { cause: err });
@@ -92,7 +94,7 @@ async function loadLatestAutomatedReviewComment() {
     if (!Array.isArray(comments) || comments.length === 0) return null;
 
     const automatedReviewComment = comments.find(
-      (c) => typeof c.body === 'string' && c.body.includes('## 🔍 Automated Code Review'),
+      (c) => typeof c.body === 'string' && c.body.includes('## \u2705 Automated Code Review'),
     );
     if (automatedReviewComment?.body) return automatedReviewComment.body;
 
@@ -107,7 +109,7 @@ const prLabels = await labelsRes.json();
 const attemptCount = prLabels.filter((l) => l.name.startsWith(ATTEMPT_LABEL_PREFIX)).length;
 
 if (attemptCount >= MAX_ATTEMPTS) {
-  const exhaustedBody = `## 🤖 Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
+  const exhaustedBody = `## \u{1F921} Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
   await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body: exhaustedBody }),
@@ -146,7 +148,7 @@ if (!feedbackParts.length) {
 const systemPrompt = loadPrompt('auto-fix-system');
 const systemTokens = estimateTokens(systemPrompt);
 const tpmLimit = llmProvider === 'groq' ? (MODEL_TPM[model] ?? 6000) : 8000;
-const maxOutputBudget = Math.min(llmMaxTokens ?? 4096, Math.max(256, Math.floor(tpmLimit * 0.35)));
+const maxOutputBudget = Math.min(llmMaxTokens ?? 4096, Math.floor(tpmLimit * 0.35));
 const inputBudget = Math.max(0, tpmLimit - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
 const diffBudget = Math.floor(inputBudget * 0.45);
 const feedbackBudget = Math.floor(inputBudget * 0.25);
@@ -165,7 +167,9 @@ const rawDiff = await diffRes.text();
 const diff = truncateToTokenBudget(filterDiff(rawDiff, diffBudget * 4), diffBudget);
 
 const changedFiles = [
-  ...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1])),
+  ...new Set([
+    ...rawDiff.matchAll(/^diff --git a/(.*?) b//gm),
+  ].map((m) => m[1])),
 ].filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
@@ -176,7 +180,8 @@ for (const filePath of changedFiles.slice(0, MAX_FILES)) {
   try {
     const content = await fsPromises.readFile(absPath, 'utf8');
     fileContentParts.push(
-      `### Current file: ${filePath}\n\`\`\`\n${content.slice(0, MAX_FILE_SIZE)}\n\`\`\``,
+      `### Current file: ${filePath}\n\n```\n${content.slice(0, MAX_FILE_SIZE)}\n\n```,
+    `,
     );
   } catch {
     // File deleted or unreadable — skip
@@ -219,42 +224,5 @@ try {
   aiOutput = parseJsonResponse(raw);
 } catch (parseErr) {
   logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
-  throw new Error(`AI response was not valid JSON: ${parseErr.message}`, { cause: parseErr });
+  throw new Error(`AI response was not valid JSON: ${parseErr.message}`);
 }
-if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
-  throw new Error('AI response JSON must be an object');
-}
-
-const { summary, changes } = validateAiOutput(aiOutput);
-const outputPaths = await writeGeneratedFiles(changes);
-
-const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
-const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
-  method: 'POST',
-  body: JSON.stringify({
-    name: attemptLabelName,
-    color: 'fbca04',
-    description: `Auto-fix iteration ${nextAttempt}`,
-  }),
-});
-if (!createLabelRes.ok && createLabelRes.status !== 422) {
-  throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
-}
-
-const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
-  method: 'POST',
-  body: JSON.stringify({ labels: [attemptLabelName] }),
-});
-if (!applyLabelRes.ok) {
-  throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
-}
-
-if (process.env.GITHUB_OUTPUT) {
-  await fsPromises.appendFile(
-    process.env.GITHUB_OUTPUT,
-    `fixed_paths<<EOF\n${outputPaths.join('\n')}\nEOF\nattempt_number=${nextAttempt}\nsummary<<EOF\n${summary}\nEOF\n`,
-    'utf8',
-  );
-}
-
-log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });

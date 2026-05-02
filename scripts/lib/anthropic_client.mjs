@@ -1,4 +1,5 @@
 import { classifyError } from './error_taxonomy.mjs';
+import { retryWithBackoff } from './retry.mjs';
 
 const ANTHROPIC_API_URL_DEFAULT = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -20,14 +21,17 @@ export async function callAnthropic({
     messages: [{ role: 'user', content: prompt }],
   };
 
-  const response = await fetch(apiUrl || ANTHROPIC_API_URL_DEFAULT, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-    },
-    body: JSON.stringify(payload),
+  const response = await retryWithBackoff(async () => {
+    const response = await fetch(apiUrl || ANTHROPIC_API_URL_DEFAULT, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify(payload),
+    });
+    return response;
   });
 
   const rawText = await response.text();
