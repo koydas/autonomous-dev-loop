@@ -24,15 +24,21 @@ export async function callAnthropic({
   };
 
   const rawText = await retryWithBackoff(async () => {
-    const response = await fetch(apiUrl || ANTHROPIC_API_URL_DEFAULT, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify(payload),
-    });
+    let response;
+    try {
+      response = await fetch(apiUrl || ANTHROPIC_API_URL_DEFAULT, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (fetchErr) {
+      fetchErr.retryable = false;
+      throw fetchErr;
+    }
     const text = await response.text();
     if (!response.ok) {
       const err = new Error(`Anthropic API HTTP error ${response.status}: ${text}`);

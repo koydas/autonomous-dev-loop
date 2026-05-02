@@ -44,14 +44,20 @@ export async function callGroq({
   }
 
   const rawText = await retryWithBackoff(async () => {
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    let response;
+    try {
+      response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (fetchErr) {
+      fetchErr.retryable = false;
+      throw fetchErr;
+    }
     const text = await response.text();
     if (!response.ok) {
       const err = new Error(`Groq API HTTP error ${response.status}: ${text}`);
