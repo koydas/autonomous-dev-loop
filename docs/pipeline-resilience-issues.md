@@ -42,47 +42,7 @@ https://github.com/koydas/autonomous-dev-loop/issues/109
 **Title**
 `[FEATURE] Bounded exponential retry with jitter for external calls`
 
-**Body (copy/paste):**
-```md
-## 🎯 Goal
-Add a feature that addresses a clear product need.
-
-## 📍 Context
-- Repo: autonomous-dev-loop
-- Domain: Transient failure tolerance
-- Component: `scripts/lib/anthropic_client.mjs`, `scripts/lib/groq_client.mjs`, `scripts/auto_fix_pr.mjs` (`ghFetch`)
-
-## 🚀 Description
-Create a shared retry utility with exponential backoff + jitter, per-attempt timeout, and max-attempt budget.
-
-Value: better recovery from intermittent incidents without infinite loops.
-
-Current state:
-- `anthropic_client.mjs`: single `fetch`, zero retry, zero timeout.
-- `groq_client.mjs`: retries on 429 only; 5xx throws immediately; no per-call timeout.
-- `ghFetch` in `auto_fix_pr.mjs`: no retry, no timeout — a single network error fails the entire run.
-
-## 🧩 Scope
-- In:
-  - `retry_with_backoff` utility in `scripts/lib/`.
-  - Configurable parameters (max attempts, base delay, max delay, timeout).
-  - Integrate into `anthropic_client.mjs` and extend `groq_client.mjs` to cover 5xx.
-  - Apply to `ghFetch` in `auto_fix_pr.mjs` for GitHub API calls.
-- Out:
-  - Global pipeline performance optimization.
-
-## 🧪 Acceptance criteria
-- [ ] Functional
-  - Transient external failures (5xx, network reset) are retried automatically.
-- [ ] Edge cases covered
-  - Max attempt count and timeout budget are strictly enforced.
-  - 429 retry-after header is respected (already implemented in Groq — preserve this).
-- [ ] Tests included
-  - Unit tests for backoff calculation and budget stop behavior.
-
-## ⚙️ Constraints
-Reliability is more important than speed. Retries must stay bounded and observable.
-```
+https://github.com/koydas/autonomous-dev-loop/issues/111
 
 ---
 
