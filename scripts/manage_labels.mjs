@@ -15,7 +15,7 @@ const LABELS = [issueLabels.valid, issueLabels.invalid];
 function getHeaders(token) {
   return {
     Accept: 'application/vnd.github+json',
-    Authorization: `Bearer ${token}`, // Fixed missing backtick
+    Authorization: `Bearer ${token}`,
     'X-GitHub-Api-Version': '2022-11-28',
     'Content-Type': 'application/json',
   };
