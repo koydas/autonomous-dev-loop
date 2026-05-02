@@ -9,6 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
+import { createHash } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -94,7 +95,7 @@ async function loadLatestAutomatedReviewComment() {
     if (!Array.isArray(comments) || comments.length === 0) return null;
 
     const automatedReviewComment = comments.find(
-      (c) => typeof c.body === 'string' && c.body.includes('## 🔍 Automated Code Review'),
+      (c) => typeof c.body === 'string' && c.body.includes('## \u{1F50D} Automated Code Review'),
     );
     if (automatedReviewComment?.body) return automatedReviewComment.body;
 
@@ -109,7 +110,7 @@ const prLabels = await labelsRes.json();
 const attemptCount = prLabels.filter((l) => l.name.startsWith(ATTEMPT_LABEL_PREFIX)).length;
 
 if (attemptCount >= MAX_ATTEMPTS) {
-  const exhaustedBody = `## 🤖 Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
+  const exhaustedBody = `## \u{1F92A} Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
   await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body: exhaustedBody }),
@@ -119,6 +120,34 @@ if (attemptCount >= MAX_ATTEMPTS) {
 }
 
 const nextAttempt = attemptCount + 1;
+
+const CHECKPOINT_PATH = `checkpoint-attempt-${nextAttempt}.json`;
+const inputHash = createHash('sha256').update(`${prNumber}${process.env.GITHUB_SHA}`).digest('hex');
+
+try {
+  const existing = JSON.parse(await fsPromises.readFile(CHECKPOINT_PATH, 'utf8'));
+  if (existing.stage === 'complete' && existing.inputHash === inputHash) {
+    log('Attempt already completed, skipping duplicate run', { prNumber, attempt: nextAttempt });
+    process.exit(0);
+  }
+} catch {
+  // No checkpoint yet — proceed normally
+}
+
+async function writeCheckpoint(stage, extra = {}) {
+  const data = JSON.stringify(
+    { runId: process.env.GITHUB_RUN_ID, stage, attempt: nextAttempt, inputHash, timestamp: new Date().toISOString(), ...extra },
+    null, 2,
+  );
+  const tmpPath = `${CHECKPOINT_PATH}.tmp`;
+  try {
+    await fsPromises.writeFile(tmpPath, data);
+    await fsPromises.rename(tmpPath, CHECKPOINT_PATH);
+  } catch (err) {
+    logError('Failed to write checkpoint', { stage, error: err.message });
+  }
+}
+
 log('Starting auto-fix', { prNumber, attempt: nextAttempt });
 
 const feedbackParts = [];
@@ -174,6 +203,18 @@ if (allChangedFiles.includes('scripts/auto_fix_pr.mjs')) {
 }
 
 const changedFiles = allChangedFiles.filter(shouldIncludeFile);
+
+const SELF_PATH = 'scripts/auto_fix_pr.mjs';
+if (changedFiles.includes(SELF_PATH)) {
+  await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({
+      body: `## 🤖 Auto-Fix Skipped\n\nThis PR modifies \`${SELF_PATH}\`. Automated self-modification is disabled to prevent feedback loops.`,
+    }),
+  });
+  log('Auto-fix skipped: PR modifies auto_fix_pr.mjs itself', { prNumber });
+  process.exit(0);
+}
 
 const repoRoot = path.resolve(process.cwd());
 const fileContentParts = [];
@@ -233,7 +274,10 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
 }
 
 const { summary, changes } = validateAiOutput(aiOutput);
+await writeCheckpoint('ai-complete', { summary, changesCount: changes.length });
+
 const outputPaths = await writeGeneratedFiles(changes);
+await writeCheckpoint('files-written', { summary, outputPaths });
 
 const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
 const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
@@ -264,4 +308,5 @@ if (process.env.GITHUB_OUTPUT) {
   );
 }
 
+await writeCheckpoint('complete', { summary, outputPaths });
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });

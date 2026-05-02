@@ -13,6 +13,8 @@
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
 | Auto-fix loop stops at attempt 3 | Expected: 3-attempt hard limit reached — manual intervention required (see below) |
+| Auto-fix posts "Auto-Fix Skipped" comment and stops | PR modifies `scripts/auto_fix_pr.mjs` — self-modification guard triggered (expected) |
+| Auto-fix workflow succeeds but pushes nothing | Checkpoint resume: attempt was already completed in a previous run |
 | Provider outage (Anthropic or Groq) | All LLM-calling workflows fail with HTTP 5xx or timeout; switch provider via `AI_PROVIDER` variable |
 | Token permission drift | Workflows fail with 403; audit PAT/App token scopes and repository secret values |
 
@@ -80,6 +82,9 @@ Key steps to expand per workflow:
 | LLM returns invalid JSON | Check `auto-fix-system.md` for prompt integrity; re-trigger by removing and re-applying `changes-requested` label |
 | Commit push fails (branch protection) | Ensure `AI_PR_TOKEN` has `contents: write` and branch protection allows bot pushes |
 | `auto-fix-attempt-N` label missing | Labels are auto-created on first use; if creation fails (403), grant `issues: write` to the token used |
+| Auto-fix skipped on a PR that modifies `auto_fix_pr.mjs` | Expected — self-modification guard is active. Fix the script manually and push directly. |
+| Workflow re-run completes immediately with no commit | Expected — checkpoint for that attempt already records `stage: complete`; the run is idempotent. Delete `checkpoint-attempt-N.json` from the branch if a fresh run is needed. |
+| Stale checkpoint blocking a legitimate re-run | Delete `checkpoint-attempt-N.json` from the branch (`git rm checkpoint-attempt-N.json && git push`), then re-apply `changes-requested` to restart. |
 
 ---
 
