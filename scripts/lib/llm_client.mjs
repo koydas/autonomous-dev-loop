@@ -1,6 +1,7 @@
 import { callGroq } from './groq_client.mjs';
 import { callAnthropic } from './anthropic_client.mjs';
 import { detectProvider } from './config.mjs';
+import { classifyError } from './error_taxonomy.mjs';
 
 const ALL_PROVIDERS = [
   { name: 'anthropic', call: callAnthropic },
@@ -19,7 +20,11 @@ export async function callLLM(args) {
     try {
       return await provider.call(args);
     } catch (error) {
+      const errorType = error.errorType ?? classifyError(String(error.status ?? ''));
       errors.push(`${provider.name}: ${error.message}`);
+      if (errorType === 'PERMANENT') {
+        break;
+      }
     }
   }
   throw new Error(`All providers failed: ${errors.join(', ')}`);

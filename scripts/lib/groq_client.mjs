@@ -1,4 +1,5 @@
 import { log } from './logger.mjs';
+import { classifyError } from './error_taxonomy.mjs';
 
 function parseWaitMs(rawText, headers) {
   const match = rawText.match(/Please try again in (\d+(?:\.\d+)?)s/i);
@@ -52,17 +53,17 @@ export async function callGroq({
 
     const rawText = await response.text();
 
-    if (response.status === 429) {
+    if (!response.ok) {
+      const errorType = classifyError(String(response.status));
       lastError = new Error(`Groq API HTTP error ${response.status}: ${rawText}`);
-      if (attempt === maxRetries) break;
+      lastError.errorType = errorType;
+      if (errorType !== 'TRANSIENT' || attempt === maxRetries) {
+        throw lastError;
+      }
       const waitMs = parseWaitMs(rawText, response.headers) ?? 1000 * 2 ** attempt;
-      log('rate_limit_retry', { waitMs, attempt, model });
+      log('rate_limit_retry', { waitMs, attempt, model, errorType });
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       continue;
-    }
-
-    if (!response.ok) {
-      throw new Error(`Groq API HTTP error ${response.status}: ${rawText}`);
     }
 
     let raw;

@@ -1,3 +1,5 @@
+import { classifyError } from './error_taxonomy.mjs';
+
 const ANTHROPIC_API_URL_DEFAULT = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -30,7 +32,9 @@ export async function callAnthropic({
 
   const rawText = await response.text();
   if (!response.ok) {
-    throw new Error(`Anthropic API HTTP error ${response.status}: ${rawText}`);
+    const err = new Error(`Anthropic API HTTP error ${response.status}: ${rawText}`);
+    err.errorType = classifyError(String(response.status));
+    throw err;
   }
 
   let raw;
