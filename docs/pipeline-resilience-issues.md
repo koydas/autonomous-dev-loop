@@ -60,44 +60,7 @@ https://github.com/koydas/autonomous-dev-loop/issues/113
 **Title**
 `[FEATURE] Run progression checkpoints for interruption recovery`
 
-**Body (copy/paste):**
-```md
-## 🎯 Goal
-Add a feature that addresses a clear product need.
-
-## 📍 Context
-- Repo: autonomous-dev-loop
-- Domain: Execution continuity
-- Component: `scripts/auto_fix_pr.mjs`, orchestration workflows
-
-## 🚀 Description
-Add minimal progression state (checkpoint) to resume interrupted runs safely without restarting from scratch when safe.
-
-Current state:
-- `auto_fix_pr.mjs` already uses PR labels (`auto-fix-attempt-N`) as a lightweight checkpoint.
-- Gap: if the label API call fails after the AI work is done, the checkpoint is lost and the attempt counter is wrong on the next run.
-- `code-generation.yml` has no checkpoint mechanism at all.
-
-## 🧩 Scope
-- In:
-  - Minimal state format (step, attempts, timestamp, input version).
-  - Conditional resume when checkpoint is valid.
-  - Checkpoint invalidation when inputs change.
-  - Atomic write semantics for the checkpoint (write before declaring work done).
-- Out:
-  - Long-term persistence beyond current run context.
-
-## 🧪 Acceptance criteria
-- [ ] Functional
-  - Interrupted runs can resume successfully for transient failures.
-- [ ] Edge cases covered
-  - Invalid checkpoints are detected and safely ignored.
-- [ ] Tests included
-  - Smoke test for resume + no-resume test on changed inputs.
-
-## ⚙️ Constraints
-Keep MVP-simple; no additional infrastructure.
-```
+https://github.com/koydas/autonomous-dev-loop/issues/116
 
 ---
 
