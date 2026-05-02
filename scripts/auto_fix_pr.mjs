@@ -9,6 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
+import { createHash } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -167,9 +168,7 @@ const rawDiff = await diffRes.text();
 const diff = truncateToTokenBudget(filterDiff(rawDiff, diffBudget * 4), diffBudget);
 
 const changedFiles = [
-  ...new Set([
-    ...rawDiff.matchAll(/^diff --git a/(.*?) b\//gm)
-  ].map((m) => m[1])),
+  ...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1])),
 ].filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
@@ -180,7 +179,7 @@ for (const filePath of changedFiles.slice(0, MAX_FILES)) {
   try {
     const content = await fsPromises.readFile(absPath, 'utf8');
     fileContentParts.push(
-      `### Current file: ${filePath}\n\n```\n${content.slice(0, MAX_FILE_SIZE)}\n\n```,
+      `### Current file: ${filePath}\n\`\`\`\n${content.slice(0, MAX_FILE_SIZE)}\n\`\`\``,
     );
   } catch {
     // File deleted or unreadable — skip
@@ -222,15 +221,18 @@ let aiOutput;
 try {
   aiOutput = parseJsonResponse(raw);
 } catch (parseErr) {
-  logError('AI response was not JSON', { error: parseErr.message, stack: parseErr.stack });
-  process.exit(1);
+  logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
+  throw new Error(`AI response was not valid JSON: ${parseErr.message}`, { cause: parseErr });
+}
+if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
+  throw new Error('AI response JSON must be an object');
 }
 
 const checkpoint = {
   runId: process.env.GITHUB_RUN_ID,
   step: 'ai-complete',
   attempt: nextAttempt,
-  inputHash: require('crypto').createHash('sha256').update(`${prNumber}${process.env.GITHUB_SHA}`).digest('hex'),
+  inputHash: createHash('sha256').update(`${prNumber}${process.env.GITHUB_SHA}`).digest('hex'),
   timestamp: new Date().toISOString(),
 };
 
@@ -240,4 +242,36 @@ try {
   logError('Failed to write checkpoint', { error: err.message, stack: err.stack });
 }
 
-// Rest of the code remains the same...
+const { summary, changes } = validateAiOutput(aiOutput);
+const outputPaths = await writeGeneratedFiles(changes);
+
+const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
+const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
+  method: 'POST',
+  body: JSON.stringify({
+    name: attemptLabelName,
+    color: 'fbca04',
+    description: `Auto-fix iteration ${nextAttempt}`,
+  }),
+});
+if (!createLabelRes.ok && createLabelRes.status !== 422) {
+  throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
+}
+
+const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
+  method: 'POST',
+  body: JSON.stringify({ labels: [attemptLabelName] }),
+});
+if (!applyLabelRes.ok) {
+  throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
+}
+
+if (process.env.GITHUB_OUTPUT) {
+  await fsPromises.appendFile(
+    process.env.GITHUB_OUTPUT,
+    `fixed_paths<<EOF\n${outputPaths.join('\n')}\nEOF\nattempt_number=${nextAttempt}\nsummary<<EOF\n${summary}\nEOF\n`,
+    'utf8',
+  );
+}
+
+log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
