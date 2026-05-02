@@ -62,7 +62,7 @@ async function addLabel(owner, repo, token, issueNumber, labelName) {
 async function removeLabel(owner, repo, token, issueNumber, labelName) {
   const res = await ghRequest(
     `/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(labelName)}`,
-    { method: 'DELETE', token },
+    { method: 'DELETE', token }
   );
   if (!res.ok && res.status !== 404) {
     throw new Error(`Remove label "${labelName}" failed: ${res.status}`);
