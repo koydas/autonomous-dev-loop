@@ -171,6 +171,18 @@ const changedFiles = [
   ...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1])),
 ].filter(shouldIncludeFile);
 
+const SELF_PATH = 'scripts/auto_fix_pr.mjs';
+if (changedFiles.includes(SELF_PATH)) {
+  await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({
+      body: `## 🤖 Auto-Fix Skipped\n\nThis PR modifies \`${SELF_PATH}\`. Automated self-modification is disabled to prevent feedback loops.`,
+    }),
+  });
+  log('Auto-fix skipped: PR modifies auto_fix_pr.mjs itself', { prNumber });
+  process.exit(0);
+}
+
 const repoRoot = path.resolve(process.cwd());
 const fileContentParts = [];
 for (const filePath of changedFiles.slice(0, MAX_FILES)) {
