@@ -51,32 +51,12 @@ async function upsertLabel(owner, repo, token, label) {
 }
 
 async function addLabel(owner, repo, token, issueNumber, labelName) {
-  // Check if label already exists on issue
-  const existingRes = await ghRequest(
-    `/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
-    { method: 'GET', token }
-  );
-  
-  if (!existingRes.ok) {
-    throw new Error(`Failed to fetch existing labels: ${existingRes.status}`);
-  }
-  
-  const existingLabels = await existingRes.json();
-  if (existingLabels.includes(labelName)) return;
-
-  const res = await ghRequest(
-    `/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
-    {
-      method: 'POST',
-      token,
-      body: { labels: [labelName] }
-    }
-  );
-  
-  if (!res.ok) {
-    if (res.status === 422) return;
-    throw new Error(`Add label "${labelName}" failed: ${res.status}`);
-  }
+  const res = await ghRequest(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`, {
+    method: 'POST',
+    token,
+    body: { labels: [labelName] },
+  });
+  if (!res.ok) throw new Error(`Add label "${labelName}" failed: ${res.status}`);
 }
 
 async function removeLabel(owner, repo, token, issueNumber, labelName) {

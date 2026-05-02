@@ -90,16 +90,6 @@ export async function writeGeneratedFiles(changes) {
     if (parentDir && parentDir !== '.') {
       await fs.mkdir(parentDir, { recursive: true });
     }
-    try {
-      const existingContent = await fs.readFile(outputPath, 'utf8');
-      if (existingContent === fileContent) {
-        continue;
-      }
-    } catch (err) {
-      if (err.code !== 'ENOENT') {
-        throw err;
-      }
-    }
     await fs.writeFile(outputPath, fileContent, 'utf8');
     writtenPaths.push(outputPath);
   }
