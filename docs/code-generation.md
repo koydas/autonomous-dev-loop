@@ -28,6 +28,10 @@ File: `.github/workflows/code-generation.yml`
 
 Workflow design note: YAML stays intentionally minimal (orchestration only). Most logic lives in Node modules for future unit testing.
 
+### Code Generation Guardrails
+
+`prompts/generation-system.md` enforces the same **HARD GUARDRAILS** as the auto-fix prompt (see [Auto-Fix Guardrails](#auto-fix-guardrails)), plus the PRESERVATION RULE: all existing file content must be preserved unless the issue explicitly requests deletion or replacement.
+
 Node implementation:
 - Entrypoint: `scripts/generate_issue_change.mjs`
 - Modules: `scripts/lib/config.mjs`, `scripts/lib/llm_client.mjs`, `scripts/lib/anthropic_client.mjs`, `scripts/lib/groq_client.mjs`, `scripts/lib/output_writer.mjs`
@@ -207,6 +211,13 @@ For automation-scope PRs (changes in `.github/workflows/`, `scripts/`, `prompts/
 - minimum unit-test coverage expectations must remain explicit and enforced/documented.
 
 If these gates are missing, the automated review returns `REQUEST_CHANGES` with actionable findings.
+
+The gate context is built by `scripts/lib/coverage_checker.mjs` and appended to the user prompt. It surfaces:
+- `automation_scope` — whether the diff touches automation paths (including **deleted** automation files)
+- `unit_test_updates_present` — whether test files were changed
+- `docs_updates_present` — whether `docs/` was changed
+- `coverage_signal_present` — whether coverage language appears in the diff
+- `minimum_coverage_pct_stated` — explicit percentage threshold found in the diff (e.g. `coverage: 80%`), or `not stated`
 2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
 3. Submits an official GitHub pull request review event (`APPROVE` or `REQUEST_CHANGES`) with a short redirect body. The full review detail lives only in the comment, preventing duplicate content from appearing in the PR conversation.
 4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other). When verdict is `REQUEST_CHANGES`, it removes and re-applies `changes-requested` so each review iteration emits a fresh `labeled` event — unless an auto-fix run is already `queued`/`in_progress`, or run-status checks fail (fail-closed guard), in which case re-pulse is skipped to avoid loop amplification.
@@ -220,6 +231,18 @@ File: `.github/workflows/auto-fix-pr.yml`
 Node implementation:
 - Entrypoint: `scripts/auto_fix_pr.mjs`
 - Prompts: `prompts/auto-fix-system.md`, `prompts/auto-fix-user.md`
+
+### Auto-Fix Guardrails
+
+`prompts/auto-fix-system.md` enforces the following **HARD GUARDRAILS** that the LLM must not violate:
+
+| Guardrail | Rationale |
+|---|---|
+| Never replace a test file with fewer tests than the original | Prevents silently dropping existing coverage when adding a new test case |
+| `.mjs` files are always ESM — `require()` is forbidden | Prevents CommonJS imports breaking ESM-only modules |
+| Never change an exported function's signature unless flagged by the review | Preserves API contracts between modules |
+| Never import a package not already present in the file's imports | Prevents introducing undeclared external dependencies |
+| Never rewrite >30% of a file's lines for a single finding | Forces targeted, minimal edits over full rewrites |
 
 Required secret:
 - **Secret**: `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) — same provider selection rules apply (see above).
