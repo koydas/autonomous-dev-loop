@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import http from 'node:http';
 import { parseNestedYaml } from '../lib/yaml.mjs';
+import { buildAutomationGateContext } from '../lib/coverage_checker.mjs';
 
 const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT_DIR = path.join(SCRIPTS_DIR, '..');
@@ -687,4 +688,23 @@ test('pr_review exits 1 when addLabel fails', async () => {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
   }
+});
+
+test('buildAutomationGateContext returns empty string for non-automation diffs', () => {
+  const diff = '--- a/src/app.mjs\n+++ b/src/app.mjs\n@@ -1 +1 @@\n+change\n';
+  assert.equal(buildAutomationGateContext(diff), '');
+});
+
+test('buildAutomationGateContext includes automation gate booleans for automation-scope diffs', () => {
+  const diff = [
+    'diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml',
+    '+++ b/.github/workflows/test.yml',
+    '@@ -0,0 +1 @@',
+    '+new workflow config',
+  ].join('\n');
+  const ctx = buildAutomationGateContext(diff);
+  assert.match(ctx, /automation_scope: true/);
+  assert.match(ctx, /unit_test_updates_present: false/);
+  assert.match(ctx, /docs_updates_present: false/);
+  assert.match(ctx, /coverage_signal_present: false/);
 });

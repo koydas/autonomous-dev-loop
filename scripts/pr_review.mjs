@@ -6,6 +6,7 @@ import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
+import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -52,6 +53,7 @@ if (!prNumber) {
   }
   prNumber = prs[0].number;
 }
+
 
 async function ghFetch(path, options = {}) {
   try {
@@ -139,7 +141,8 @@ const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
 
 const systemPrompt = loadPrompt('pr-review-system');
-const userPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff, issueTitle: prTitle, issueBody: prBody });
+const baseUserPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff, issueTitle: prTitle, issueBody: prBody });
+const userPrompt = `${baseUserPrompt}${buildAutomationGateContext(rawDiff)}`;
 
 const rawReview = await callLLM({
   prompt: userPrompt,

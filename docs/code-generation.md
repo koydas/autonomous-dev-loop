@@ -200,6 +200,13 @@ The workflow runs on every `push` to any branch (`branches: ["**"]`) with permis
 
 On each run it:
 1. Fetches the PR title, body, and diff; calls the LLM for a structured review.
+
+For automation-scope PRs (changes in `.github/workflows/`, `scripts/`, `prompts/`, or `docs/code-generation.md`), the review prompt now enforces three mandatory checks:
+- unit-test status is explicitly reviewed,
+- documentation updates are required when behavior/config/setup changes,
+- minimum unit-test coverage expectations must remain explicit and enforced/documented.
+
+If these gates are missing, the automated review returns `REQUEST_CHANGES` with actionable findings.
 2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
 3. Submits an official GitHub pull request review event (`APPROVE` or `REQUEST_CHANGES`) with a short redirect body. The full review detail lives only in the comment, preventing duplicate content from appearing in the PR conversation.
 4. Applies the label `review-approved` or `changes-requested` to the PR (and removes the other). When verdict is `REQUEST_CHANGES`, it removes and re-applies `changes-requested` so each review iteration emits a fresh `labeled` event — unless an auto-fix run is already `queued`/`in_progress`, or run-status checks fail (fail-closed guard), in which case re-pulse is skipped to avoid loop amplification.
