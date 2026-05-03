@@ -1,0 +1,11 @@
+{
+  "runId": "25265702592",
+  "stage": "complete",
+  "attempt": 1,
+  "inputHash": "c23484238f74bcb559095ebdbab904d3cd6ee640b9e0d3c58c839a17c170023f",
+  "timestamp": "2026-05-03T00:34:33.530Z",
+  "summary": "Added missing test cases for unit-test and coverage gate enforcement in PR review automation",
+  "outputPaths": [
+    "scripts/tests/pr_review.test.mjs"
+  ]
+}
