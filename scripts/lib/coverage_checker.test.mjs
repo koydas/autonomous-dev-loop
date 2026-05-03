@@ -29,6 +29,27 @@ test('buildAutomationGateContext returns empty string for non-automation diffs',
   assert.equal(buildAutomationGateContext(diff), '');
 });
 
+test('extractChangedFiles includes deleted automation files (--- a/... lines)', () => {
+  const diff = [
+    'diff --git a/scripts/foo.mjs b/scripts/foo.mjs',
+    'deleted file mode 100644',
+    '--- a/scripts/foo.mjs',
+    '+++ /dev/null',
+  ].join('\n');
+  assert.deepEqual(extractChangedFiles(diff), ['scripts/foo.mjs']);
+});
+
+test('buildAutomationGateContext detects automation scope via deleted file', () => {
+  const diff = [
+    'diff --git a/scripts/foo.mjs b/scripts/foo.mjs',
+    'deleted file mode 100644',
+    '--- a/scripts/foo.mjs',
+    '+++ /dev/null',
+  ].join('\n');
+  const ctx = buildAutomationGateContext(diff);
+  assert.match(ctx, /automation_scope: true/);
+});
+
 test('buildAutomationGateContext includes expected gate booleans', () => {
   const diff = [
     'diff --git a/scripts/pr_review.mjs b/scripts/pr_review.mjs',

@@ -1,8 +1,11 @@
 export function extractChangedFiles(rawDiffText) {
   const files = [];
   for (const line of String(rawDiffText || '').split('\n')) {
-    const match = line.match(/^\+\+\+ b\/(.+)$/);
-    if (match) files.push(match[1]);
+    const addMatch = line.match(/^\+\+\+ b\/(.+)$/);
+    if (addMatch) { files.push(addMatch[1]); continue; }
+    // Capture deleted files (path only appears on --- a/... line; +++ side is /dev/null)
+    const delMatch = line.match(/^--- a\/(.+)$/);
+    if (delMatch) files.push(delMatch[1]);
   }
   return [...new Set(files)];
 }
