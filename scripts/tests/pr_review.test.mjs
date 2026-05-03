@@ -567,6 +567,36 @@ test('pr_review applies changes-requested label on REQUEST_CHANGES verdict', asy
   }
 });
 
+
+
+test('pr_review re-pulses changes-requested label to reset auto-fix workflow cycle', async () => {
+  const server = await startMockServer(
+    makeHandler({ groqContent: 'Needs fixes.\n\nVerdict: REQUEST_CHANGES' }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+
+    const removeChangesRequested = server.requests.filter(
+      (r) => r.method === 'DELETE' && r.url.includes(`/labels/${LABELS.review.changes.name}`),
+    );
+    assert.equal(removeChangesRequested.length, 1, 'expected a single DELETE for changes-requested label');
+
+    const applyChangesRequested = server.requests.filter(
+      (r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url) && JSON.parse(r.body).labels.includes(LABELS.review.changes.name),
+    );
+    assert.equal(applyChangesRequested.length, 1, 'expected a single POST re-applying changes-requested label');
+
+    assert.ok(
+      server.requests.indexOf(removeChangesRequested[0]) < server.requests.indexOf(applyChangesRequested[0]),
+      'expected changes-requested label to be removed before being re-applied',
+    );
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
 test('pr_review does not re-pulse changes-requested when auto-fix run is already active', async () => {
   const server = await startMockServer(
     makeHandler({
