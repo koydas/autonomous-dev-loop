@@ -1,36 +1,38 @@
-export async function buildAutomationGateContext({ prBody, coverageReport }) {
-  const coverageThreshold = getCoverageThreshold(prBody) || 80;
-  const currentCoverage = await getActualCoveragePercentage();
-
-  if (currentCoverage < coverageThreshold) {
-    return {
-      status: 'fail',
-      message: `Test coverage ${currentCoverage}% below required ${coverageThreshold}% threshold`,
-      fixable: false
-    };
+export function extractChangedFiles(rawDiffText) {
+  const files = [];
+  for (const line of String(rawDiffText || '').split('\n')) {
+    const addMatch = line.match(/^\+\+\+ b\/(.+)$/);
+    if (addMatch) { files.push(addMatch[1]); continue; }
+    // Capture deleted files (path only appears on --- a/... line; +++ side is /dev/null)
+    const delMatch = line.match(/^--- a\/(.+)$/);
+    if (delMatch) files.push(delMatch[1]);
   }
-
-  return {
-    status: 'pass',
-    message: `Test coverage ${currentCoverage}% meets ${coverageThreshold}% requirement`,
-    fixable: false
-  };
+  return [...new Set(files)];
 }
 
-function getCoverageThreshold(prBody) {
-  const match = prBody.match(/\/\/\s*coverage:\s*(\d+)%/i);
-  return match ? parseInt(match[1], 10) : null;
+export function isAutomationScopeFile(filePath) {
+  return (
+    filePath.startsWith('.github/workflows/') ||
+    filePath.startsWith('scripts/') ||
+    filePath.startsWith('prompts/') ||
+    filePath === 'docs/code-generation.md'
+  );
 }
 
-async function getActualCoveragePercentage() {
-  const nyc = require('nyc');
-  const reporter = new nyc({
-    cwd: process.cwd(),
-    reporter: ['json'],
-    tempDirectory: '.nyc_output'
-  });
+export function buildAutomationGateContext(rawDiffText) {
+  const changedFiles = extractChangedFiles(rawDiffText);
+  const automationScope = changedFiles.some(isAutomationScopeFile);
+  if (!automationScope) return '';
 
-  await reporter.load();
-  const report = reporter.reporterFor('json').report();
-  return Math.round(report.summary.lines.pct);
+  const hasUnitTestChanges = changedFiles.some(
+    (filePath) => filePath.startsWith('scripts/tests/') || /(^|\/)tests?\/.+\.test\.mjs$/.test(filePath),
+  );
+  const hasDocsUpdates = changedFiles.some((filePath) => filePath.startsWith('docs/'));
+  const hasCoverageSignal = /coverage|min(?:imum)?\s+coverage|unit[-\s]?test coverage/i.test(rawDiffText);
+
+  // Extract any explicit minimum coverage percentage stated in the diff (e.g. "coverage 80%" or "80% coverage")
+  const pctMatch = rawDiffText.match(/\b(\d{1,3})\s*%\s*(?:minimum\s+)?(?:unit[-\s]?test\s+)?coverage\b|coverage[:\s]+(\d{1,3})\s*%/i);
+  const minimumCoveragePctStated = pctMatch ? (pctMatch[1] || pctMatch[2]) : null;
+
+  return `\n\nAutomation gates context:\n- automation_scope: true\n- changed_files: ${changedFiles.join(', ') || '(none)'}\n- unit_test_updates_present: ${hasUnitTestChanges}\n- docs_updates_present: ${hasDocsUpdates}\n- coverage_signal_present: ${hasCoverageSignal}\n- minimum_coverage_pct_stated: ${minimumCoveragePctStated ?? 'not stated'}\n\nUse this context while deciding whether to request changes.`;
 }
