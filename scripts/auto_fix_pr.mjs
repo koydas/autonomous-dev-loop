@@ -46,14 +46,21 @@ function isManualRerunRequested(eventPayload) {
 }
 
 const WORKSPACE_ROOT = path.resolve(process.env.GITHUB_WORKSPACE || process.cwd());
+const CHECKPOINT_DIR = path.join(WORKSPACE_ROOT, '.github', 'checkpoints');
 
 async function cleanupCheckpointFiles() {
-  const entries = await fsPromises.readdir(WORKSPACE_ROOT, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await fsPromises.readdir(CHECKPOINT_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
   const removed = [];
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!/^checkpoint-attempt-\d+\.json$/.test(entry.name)) continue;
-    await fsPromises.unlink(path.resolve(WORKSPACE_ROOT, entry.name));
+    await fsPromises.unlink(path.join(CHECKPOINT_DIR, entry.name));
     removed.push(entry.name);
   }
   return removed;

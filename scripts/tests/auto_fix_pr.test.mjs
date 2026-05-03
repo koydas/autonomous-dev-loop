@@ -440,10 +440,12 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
   const server = await startMockServer(makeHandler({ labelsBody: existingLabels }));
   const eventFile = await writeEventFile();
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-'));
+  const checkpointDir = path.join(tmpDir, '.github', 'checkpoints');
   const outputFile = path.join(os.tmpdir(), `autofix-output-reset-${Date.now()}.txt`);
   try {
-    await fs.writeFile(path.join(tmpDir, 'checkpoint-attempt-1.json'), '{"stage":"complete"}');
-    await fs.writeFile(path.join(tmpDir, 'checkpoint-attempt-2.json'), '{"stage":"complete"}');
+    await fs.mkdir(checkpointDir, { recursive: true });
+    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-1.json'), '{"stage":"complete"}');
+    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-2.json'), '{"stage":"complete"}');
 
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
     rawEvent.action = 'edited';
@@ -459,8 +461,8 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
     const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
     assert.equal(deleteCalls.length, 2, 'expected removal of auto-fix attempt labels');
 
-    await assert.rejects(fs.access(path.join(tmpDir, 'checkpoint-attempt-1.json')));
-    await assert.rejects(fs.access(path.join(tmpDir, 'checkpoint-attempt-2.json')));
+    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-1.json')));
+    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-2.json')));
 
     const output = await fs.readFile(outputFile, 'utf8');
     assert.match(output, /attempt_number=1/);
