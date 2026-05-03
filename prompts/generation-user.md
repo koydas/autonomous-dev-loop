@@ -21,5 +21,7 @@ Requirements:
 8. If a file is shown in the provided current content block and you modify it, preserve unchanged sections verbatim and apply minimal edits.
 9. If the issue requires information that is missing from the issue text or provided files, choose the safest minimal implementation and avoid inventing external APIs/contracts.
 10. Do not add explanations, comments, or metadata outside the required output.
+11. For changes in scripts/, prompts/, or .github/workflows/, include/update unit tests so the change is verifiable and keeps/raises minimum unit test coverage expectations for the touched behavior.
+12. When workflow behavior, setup, or operator expectations change, update docs/code-generation.md in the same patch.
 
 Output JSON only: { "summary": "One sentence summary of the generated change", "changes": [ { "target_path": "relative/path/to/file.ext", "file_content": "Exact content to write in the file" } ] }

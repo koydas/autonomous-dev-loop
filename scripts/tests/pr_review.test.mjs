@@ -41,6 +41,7 @@ function anthropicJson(content) {
 
 function makeHandler({
   diffStatus = 200,
+  diffBody = SAMPLE_DIFF,
   groqContent = 'Review text here.',
   commentsStatus = 200,
   commentsBody = '[]',
@@ -67,7 +68,7 @@ function makeHandler({
     if (method === 'GET' && /\/pulls\/\d+$/.test(url)) {
       if (req.headers['accept']?.includes('vnd.github.v3.diff')) {
         res.writeHead(diffStatus);
-        return res.end(diffStatus < 300 ? SAMPLE_DIFF : 'Forbidden');
+        return res.end(diffStatus < 300 ? diffBody : 'Forbidden');
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ title: 'Test PR', body: 'Test PR body', head: { ref: prHeadRef } }));
@@ -125,6 +126,33 @@ function makeHandler({
     res.end('not found');
   };
 }
+
+test('pr_review adds automation gate context to review prompt for automation-scope diffs', async () => {
+  const automationDiff = [
+    'diff --git a/scripts/pr_review.mjs b/scripts/pr_review.mjs',
+    '--- a/scripts/pr_review.mjs',
+    '+++ b/scripts/pr_review.mjs',
+    '@@ -1 +1 @@',
+    '+updated automation logic',
+  ].join('\n');
+  const server = await startMockServer(makeHandler({ diffBody: automationDiff }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const llmCall = server.requests.find((r) => r.method === 'POST' && r.url === '/v1/messages');
+    assert.ok(llmCall, 'expected a POST to the LLM endpoint');
+    const payload = JSON.parse(llmCall.body);
+    const promptText = payload?.messages?.[0]?.content ?? '';
+    assert.match(promptText, /Automation gates context:/);
+    assert.match(promptText, /automation_scope: true/);
+    assert.match(promptText, /unit_test_updates_present: false/);
+    assert.match(promptText, /docs_updates_present: false/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
 
 async function runPrReview(port, eventFile, extraEnv = {}) {
   const env = {
