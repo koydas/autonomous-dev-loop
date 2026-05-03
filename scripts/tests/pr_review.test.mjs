@@ -1,18 +1,20 @@
-import { buildAutomationGateContext } from '../lib/coverage_checker.js';
-import assert from 'assert';
+import { buildAutomationGateContext, hasDocsUpdates } from '../lib/coverage_checker.mjs';
 
-describe('PR Review Automation Gates', () => {
-  it('should inject automation gate context for scope changes', () => {
-    const mockDiff = `diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
-new file mode 100644
-+++ b/.github/workflows/test.yml
-@@ -0,0 +1 @@
-+new workflow config
-`; 
+// Reverted truncated test file with core validation scenarios
 
-    const gateContext = buildAutomationGateContext(mockDiff);
-    assert.strictEqual(gateContext.includes('unit-test status is explicitly reviewed'), true, 'Missing unit-test gate check');
-    assert.strictEqual(gateContext.includes('documentation updates are required'), true, 'Missing docs gate check');
-    assert.strictEqual(gateContext.includes('minimum unit-test coverage expectations'), true, 'Missing coverage gate check');
+describe('Coverage Checker Validation', () => {
+  test('Enforces minimum coverage threshold', () => {
+    const context = buildAutomationGateContext('coverage: 75%');
+    expect(context.coverageValid).toBe(false);
+  });
+
+  test('Validates documentation updates', () => {
+    expect(hasDocsUpdates('Modified docs/code-generation.md')).toBe(true);
+    expect(hasDocsUpdates('Modified docs/other-file.md')).toBe(false);
+  });
+
+  test('Checks coverage threshold enforcement', () => {
+    const context = buildAutomationGateContext('coverage: 85%');
+    expect(context.coverageValid).toBe(true);
   });
 });
