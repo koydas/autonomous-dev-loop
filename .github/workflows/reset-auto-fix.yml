@@ -1,0 +1,92 @@
+name: Reset Auto-Fix Counter
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to reset'
+        required: true
+        type: number
+      retrigger:
+        description: 'Re-apply changes-requested to trigger a new auto-fix cycle'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Reset auto-fix attempt labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          RETRIGGER: ${{ inputs.retrigger }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { readFileSync } from 'fs';
+          import { parseNestedYaml } from './scripts/lib/yaml.mjs';
+
+          const LABELS = parseNestedYaml(readFileSync('config/labels.yaml', 'utf8'));
+          const ATTEMPT_LABELS = [
+            LABELS.autofix.attempt1.name,
+            LABELS.autofix.attempt2.name,
+            LABELS.autofix.attempt3.name,
+          ];
+          const CHANGES_LABEL = LABELS.review.changes.name;
+
+          const prNumber = Number(process.env.PR_NUMBER);
+          const retrigger = process.env.RETRIGGER === 'true';
+          const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+          const base = `https://api.github.com/repos/${owner}/${repo}`;
+          const headers = {
+            Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+            Accept: 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+          };
+
+          async function ghFetch(path, opts = {}) {
+            const res = await fetch(`${base}${path}`, { headers, ...opts });
+            if (!res.ok && res.status !== 404) {
+              const text = await res.text();
+              throw new Error(`GitHub API ${opts.method || 'GET'} ${path} → ${res.status}: ${text}`);
+            }
+            return res;
+          }
+
+          // Remove all auto-fix-attempt-* labels
+          let removed = 0;
+          for (const label of ATTEMPT_LABELS) {
+            const res = await ghFetch(`/issues/${prNumber}/labels/${encodeURIComponent(label)}`, { method: 'DELETE' });
+            if (res.status !== 404) {
+              console.log(`Removed label: ${label}`);
+              removed++;
+            }
+          }
+          console.log(`Removed ${removed} auto-fix-attempt label(s) from PR #${prNumber}.`);
+
+          if (retrigger) {
+            // Remove changes-requested then re-apply it to emit a fresh labeled event
+            await ghFetch(`/issues/${prNumber}/labels/${encodeURIComponent(CHANGES_LABEL)}`, { method: 'DELETE' });
+            const applyRes = await ghFetch(`/issues/${prNumber}/labels`, {
+              method: 'POST',
+              body: JSON.stringify({ labels: [CHANGES_LABEL] }),
+            });
+            if (applyRes.ok) {
+              console.log(`Re-applied "${CHANGES_LABEL}" — new auto-fix cycle will start.`);
+            }
+          } else {
+            console.log('Retrigger skipped. Apply "changes-requested" manually to start a new cycle.');
+          }
+          EOF
