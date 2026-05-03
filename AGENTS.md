@@ -26,6 +26,18 @@ These instructions apply to the entire repository.
 - Keep generated output constrained to predictable locations.
 - Use repository secrets/variables for all external credentials/configuration.
 
+## Hard Guardrails
+
+These apply to **all agents** (interactive and pipeline) whenever modifying existing files:
+
+- **Test files**: never produce a test file with fewer test cases than the original. Preserve all existing tests; only add new ones or modify the specific case explicitly requested.
+- **Module format**: never change a file's module system. `.mjs` files are always ESM — `import`/`export` only; `require()` is forbidden. `.cjs` or `require`-based files stay CJS.
+- **Exported function signatures**: never rename, re-type parameters, or change the return type of an exported function unless the request explicitly targets that signature.
+- **External dependencies**: never introduce an `import` or `require` for a package not already present in the file's existing imports or in `package.json`.
+- **File rewrite scope**: if a single fix or feature requires replacing more than 30% of an existing file's lines, reduce scope to a targeted edit instead. Full rewrites are only acceptable for new files or when the request explicitly asks for a rewrite.
+
+See [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) for the incidents that motivated these rules.
+
 ## Validation
 
 Before committing any change to `scripts/` or `prompts/`:
