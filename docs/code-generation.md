@@ -206,7 +206,7 @@ For automation-scope PRs (changes in `.github/workflows/`, `scripts/`, `prompts/
 - documentation updates are required when behavior/config/setup changes,
 - minimum unit-test coverage expectations must remain explicit and enforced/documented.
 
-Minimum expectation for automation-scope changes: add or update at least one targeted unit test for each new behavior branch (happy path + one guard/negative path), and run `node --test scripts/tests/*.test.mjs` in the same PR.
+Minimum expectation for automation-scope changes: add or update at least one targeted unit test for each new behavior branch (happy path + one guard/negative path), and run `node --test scripts/tests/*.test.mjs` in the same PR. The minimum acceptable unit-test coverage for automation-scope changes is **85%** of new/modified code paths.
 
 If these gates are missing, the automated review returns `REQUEST_CHANGES` with actionable findings.
 2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
