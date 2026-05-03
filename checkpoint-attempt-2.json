@@ -1,0 +1,13 @@
+{
+  "runId": "25265746040",
+  "stage": "complete",
+  "attempt": 2,
+  "inputHash": "cad9afd0a6d950bdbec9ea32346a69231cfa04c47e25cacc14a6da45d8775163",
+  "timestamp": "2026-05-03T00:36:24.180Z",
+  "summary": "Added minimum coverage policy enforcement, readded critical test cases, and implemented coverage validation in automation gate logic",
+  "outputPaths": [
+    "prompts/pr-review-system.md",
+    "scripts/tests/pr_review.test.mjs",
+    "scripts/pr_review.mjs"
+  ]
+}
