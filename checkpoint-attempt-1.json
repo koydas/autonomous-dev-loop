@@ -1,0 +1,11 @@
+{
+  "runId": "25265331594",
+  "stage": "complete",
+  "attempt": 1,
+  "inputHash": "05a8357b8a8046eee98ab19db0e4b38ab24b9d3a3cceaf4ec52de357c0162946",
+  "timestamp": "2026-05-03T00:12:08.483Z",
+  "summary": "Added unit tests to validate automation-scope gate enforcement for missing test evidence",
+  "outputPaths": [
+    "scripts/tests/review-gates.test.mjs"
+  ]
+}
