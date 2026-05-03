@@ -195,21 +195,21 @@ if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
 const rawDiff = await diffRes.text();
 const diff = truncateToTokenBudget(filterDiff(rawDiff, diffBudget * 4), diffBudget);
 
-const changedFiles = [
-  ...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1])),
-].filter(shouldIncludeFile);
+const allChangedFiles = [...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1]))];
 
 const SELF_PATH = 'scripts/auto_fix_pr.mjs';
-if (changedFiles.includes(SELF_PATH)) {
+if (allChangedFiles.includes(SELF_PATH)) {
   await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({
-      body: `## 🤖 Auto-Fix Skipped\n\nThis PR modifies \`${SELF_PATH}\`. Automated self-modification is disabled to prevent feedback loops.`,
+      body: `## 🤖 Auto-Fix Skipped\n\nThis PR modifies \`${SELF_PATH}\`. Automated self-modification is disabled to prevent feedback loops. Please review and merge this PR manually.`,
     }),
   });
   log('Auto-fix skipped: PR modifies auto_fix_pr.mjs itself', { prNumber });
   process.exit(0);
 }
+
+const changedFiles = allChangedFiles.filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
 const fileContentParts = [];
