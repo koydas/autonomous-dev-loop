@@ -53,7 +53,7 @@ async function cleanupCheckpointFiles() {
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!/^checkpoint-attempt-\d+\.json$/.test(entry.name)) continue;
-    await fsPromises.unlink(path.join(WORKSPACE_ROOT, entry.name));
+    await fsPromises.unlink(path.resolve(WORKSPACE_ROOT, entry.name));
     removed.push(entry.name);
   }
   return removed;
