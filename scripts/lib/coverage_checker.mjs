@@ -30,6 +30,10 @@ export function buildAutomationGateContext(rawDiffText) {
   const hasDocsUpdates = changedFiles.some((filePath) => filePath.startsWith('docs/'));
   const hasCoverageSignal = /coverage|min(?:imum)?\s+coverage|unit[-\s]?test coverage/i.test(rawDiffText);
 
+  // Extract any explicit minimum coverage percentage stated in the diff (e.g. "coverage 80%" or "80% coverage")
+  const pctMatch = rawDiffText.match(/\b(\d{1,3})\s*%\s*(?:minimum\s+)?(?:unit[-\s]?test\s+)?coverage\b|coverage[:\s]+(\d{1,3})\s*%/i);
+  const minimumCoveragePctStated = pctMatch ? (pctMatch[1] || pctMatch[2]) : null;
+
   return `
 
 Automation gates context:
@@ -38,6 +42,7 @@ Automation gates context:
 - unit_test_updates_present: ${hasUnitTestChanges}
 - docs_updates_present: ${hasDocsUpdates}
 - coverage_signal_present: ${hasCoverageSignal}
+- minimum_coverage_pct_stated: ${minimumCoveragePctStated ?? 'not stated'}
 
 Use this context while deciding whether to request changes.`;
 }

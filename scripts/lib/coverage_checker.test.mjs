@@ -66,3 +66,23 @@ test('buildAutomationGateContext includes expected gate booleans', () => {
   assert.match(context, /docs_updates_present: true/);
   assert.match(context, /coverage_signal_present: true/);
 });
+
+test('buildAutomationGateContext extracts explicit minimum coverage pct from diff', () => {
+  const diff = [
+    'diff --git a/scripts/foo.mjs b/scripts/foo.mjs',
+    '+++ b/scripts/foo.mjs',
+    '+// minimum_coverage: 90%',
+  ].join('\n');
+  const ctx = buildAutomationGateContext(diff);
+  assert.match(ctx, /minimum_coverage_pct_stated: 90/);
+});
+
+test('buildAutomationGateContext reports not stated when no coverage pct in diff', () => {
+  const diff = [
+    'diff --git a/scripts/foo.mjs b/scripts/foo.mjs',
+    '+++ b/scripts/foo.mjs',
+    '+some change without coverage mention',
+  ].join('\n');
+  const ctx = buildAutomationGateContext(diff);
+  assert.match(ctx, /minimum_coverage_pct_stated: not stated/);
+});
