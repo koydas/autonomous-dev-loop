@@ -69,43 +69,7 @@ https://github.com/koydas/autonomous-dev-loop/issues/116
 **Title**
 `[FEATURE] Early validation of prerequisites and external payloads`
 
-**Body (copy/paste):**
-```md
-## 🎯 Goal
-Add a feature that addresses a clear product need.
-
-## 📍 Context
-- Repo: autonomous-dev-loop
-- Domain: Reliable fail-fast behavior
-- Component: `scripts/lib/config.mjs`, `scripts/lib/prompts.mjs`, external payload parsing
-
-## 🚀 Description
-Harden startup validation (secrets/config/prompts) and enforce schema validation for external payloads before costly steps.
-
-Current state:
-- `requireEnv()` in `config.mjs` already validates required secrets at startup — good.
-- Prompt files are loaded on demand but their existence is not verified before the LLM call.
-- External payload structure (GitHub event JSON, LLM response JSON) is parsed without schema validation.
-
-## 🧩 Scope
-- In:
-  - Extend startup checks to prompt and config file existence (`scripts/lib/prompts.mjs`).
-  - Validation of expected payload structure for GitHub events and LLM responses.
-  - Actionable error messages.
-- Out:
-  - Full redesign of global config format.
-
-## 🧪 Acceptance criteria
-- [ ] Functional
-  - Pipeline fails early with explicit errors when prerequisites are missing.
-- [ ] Edge cases covered
-  - Incomplete/malformed payloads are classified correctly.
-- [ ] Tests included
-  - Unit tests for config + payload validation.
-
-## ⚙️ Constraints
-Do not hide root causes behind generic messages.
-```
+https://github.com/koydas/autonomous-dev-loop/issues/129
 
 ---
 
