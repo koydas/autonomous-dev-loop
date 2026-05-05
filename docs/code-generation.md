@@ -127,7 +127,7 @@ The project now runs as a continuous loop rather than a one-shot generation:
 1. **Issue validation** (`validate-issue.yml`) reviews issue quality and applies `ready-for-dev` or `needs-refinement`.
 2. **Code generation** (`code-generation.yml`) starts only when `ready-for-dev` is applied and opens/updates a PR for that issue.
 3. **PR review** (`pr-review.yml`) runs on branch pushes, posts structured feedback, submits review status, and applies `review-approved` or `changes-requested`.
-4. **Auto-fix** (`auto-fix-pr.yml`) runs when `changes-requested` is applied, generates a targeted fix commit, and pushes it.
+4. **Auto-fix** (`auto-fix-pr.yml`) runs when `changes-requested` is applied, or when a PR comment contains `- [x] Relancer Auto Fixer`, then generates a targeted fix commit and pushes it.
 5. The push from auto-fix re-triggers **PR review**, creating the iterative review loop.
 6. The loop ends when either:
    - PR review returns `review-approved`, or
@@ -206,6 +206,14 @@ For automation-scope PRs (changes in `.github/workflows/`, `scripts/`, `prompts/
 - documentation updates are required when behavior/config/setup changes,
 - minimum unit-test coverage expectations must remain explicit and enforced/documented.
 
+Coverage gate (hardcoded):
+
+```
+minimum-coverage: 85
+```
+
+Minimum expectation for automation-scope changes: add or update at least one targeted unit test for each new behavior branch (happy path + one guard/negative path), and run `node --test scripts/tests/*.test.mjs` in the same PR. The minimum acceptable unit-test coverage for automation-scope changes is **85%** of new/modified code paths.
+
 If these gates are missing, the automated review returns `REQUEST_CHANGES` with actionable findings.
 2. Posts or updates a single comment on the PR with the full review text (existing review comments are updated in place).
 3. Submits an official GitHub pull request review event (`APPROVE` or `REQUEST_CHANGES`) with a short redirect body. The full review detail lives only in the comment, preventing duplicate content from appearing in the PR conversation.
@@ -224,12 +232,12 @@ Node implementation:
 Required secret:
 - **Secret**: `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) — same provider selection rules apply (see above).
 
-The workflow is label-driven: it triggers on `pull_request` `labeled` events and runs only when the applied label matches `review.changes.name` from `config/labels.yaml` (default: `changes-requested`).
+The workflow triggers on either `pull_request` `labeled` events (matching `review.changes.name` from `config/labels.yaml`, default `changes-requested`) or `issue_comment` `created/edited` events when the comment body contains `- [x] Relancer Auto Fixer`.
 
 This avoids silent skips when GitHub Actions cannot submit an official `REQUEST_CHANGES` review event (for example when repository settings block review submission), because the PR review workflow still applies the `changes-requested` label.
 
 On each run it:
-1. Checks the PR for `auto-fix-attempt-N` labels to determine how many auto-fix cycles have already run.
+1. Checks the PR for `auto-fix-attempt-N` labels to determine how many auto-fix cycles have already run. For checkbox-triggered reruns, it first removes existing `auto-fix-attempt-N` labels and deletes local `checkpoint-attempt-*.json` files before continuing.
 2. If the attempt count has reached the maximum (3), posts a comment explaining that the limit is exhausted and exits without making changes.
 3. Fetches the review body and any inline review comments to build the full feedback context. If the triggering event has no review body (for example label-based trigger), it paginates issue comments and falls back to the latest automated review comment body.
 4. Fetches the current PR diff and reads the changed files from disk (up to 10 files, capped at 8 000 chars each).

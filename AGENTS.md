@@ -61,6 +61,15 @@ Before committing any change to `scripts/` or `prompts/`:
 - Auto-fix commits use the message format `fix(ai): auto-fix attempt N`.
 - Auto-fix only addresses issues explicitly named in the review feedback. It does not make speculative improvements.
 
+
+## Review Hygiene (explicit)
+
+For any change to workflow behavior (for example files under `.github/workflows/` or automation scripts under `scripts/`):
+
+- **Documentation is mandatory in the same PR**: update `docs/code-generation.md` and/or `docs/runbook.md` whenever trigger conditions, rerun mechanics, labels, checkpoints, or operator steps change.
+- **Tests are mandatory in the same PR**: add or update targeted tests that cover the new behavior (not only happy-path execution), in addition to running the full `node --test scripts/tests/*.test.mjs` suite.
+- **No "code-only" automation behavior changes**: behavior updates without matching doc + test updates are considered incomplete.
+
 ## Documentation Rules
 
 - Update `docs/code-generation.md` when workflow inputs, setup requirements, or pipeline behavior change.

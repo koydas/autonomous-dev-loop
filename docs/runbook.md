@@ -83,8 +83,8 @@ Key steps to expand per workflow:
 | Commit push fails (branch protection) | Ensure `AI_PR_TOKEN` has `contents: write` and branch protection allows bot pushes |
 | `auto-fix-attempt-N` label missing | Labels are auto-created on first use; if creation fails (403), grant `issues: write` to the token used |
 | Auto-fix skipped on a PR that modifies `auto_fix_pr.mjs` | Expected — self-modification guard is active. Fix the script manually and push directly. |
-| Workflow re-run completes immediately with no commit | Expected — checkpoint for that attempt already records `stage: complete`; the run is idempotent. Delete `checkpoint-attempt-N.json` from the branch if a fresh run is needed. |
-| Stale checkpoint blocking a legitimate re-run | Delete `checkpoint-attempt-N.json` from the branch (`git rm checkpoint-attempt-N.json && git push`), then re-apply `changes-requested` to restart. |
+| Workflow re-run completes immediately with no commit | No files changed by the model output for that run; inspect logs and review feedback context. |
+| Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and checkpoint files automatically before rerun. |
 
 ---
 
@@ -124,7 +124,7 @@ git commit --allow-empty -m "re-trigger pr-review" && git push
 
 ### Reset the auto-fix attempt counter
 
-Remove all `auto-fix-attempt-N` labels from the PR via the Labels panel, then re-apply `changes-requested` to restart the loop from attempt 1.
+Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and checkpoint files, then start a fresh run from attempt 1.
 
 ### Manually approve and close the loop
 

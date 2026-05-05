@@ -9,7 +9,6 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
-import { createHash } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -37,6 +36,34 @@ function truncateToTokenBudget(text, tokenBudget) {
   const maxChars = tokenBudget * 4;
   if (text.length <= maxChars) return text;
   return text.slice(0, maxChars);
+}
+
+function isManualRerunRequested(eventPayload) {
+  const action = eventPayload?.action;
+  const body = eventPayload?.comment?.body || '';
+  if (!['created', 'edited'].includes(action) || typeof body !== 'string') return false;
+  return /-\s*\[x\]\s*(relancer\s+auto\s*fixer|rerun\s+auto\s*-?\s*fix(er)?)/i.test(body);
+}
+
+const WORKSPACE_ROOT = path.resolve(process.env.GITHUB_WORKSPACE || process.cwd());
+const CHECKPOINT_DIR = path.join(WORKSPACE_ROOT, '.github', 'checkpoints');
+
+async function cleanupCheckpointFiles() {
+  let entries;
+  try {
+    entries = await fsPromises.readdir(CHECKPOINT_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const removed = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!/^checkpoint-attempt-\d+\.json$/.test(entry.name)) continue;
+    await fsPromises.unlink(path.join(CHECKPOINT_DIR, entry.name));
+    removed.push(entry.name);
+  }
+  return removed;
 }
 
 const githubToken = requireEnv('GITHUB_TOKEN');
@@ -107,7 +134,33 @@ async function loadLatestAutomatedReviewComment() {
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
 const prLabels = await labelsRes.json();
-const attemptCount = prLabels.filter((l) => l.name.startsWith(ATTEMPT_LABEL_PREFIX)).length;
+
+const manualRerunRequested = isManualRerunRequested(event);
+if (manualRerunRequested) {
+  const attemptLabels = prLabels
+    .map((l) => l.name)
+    .filter((name) => name.startsWith(ATTEMPT_LABEL_PREFIX));
+  for (const labelName of attemptLabels) {
+    const removeRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels/${encodeURIComponent(labelName)}`, { method: 'DELETE' });
+    if (!removeRes.ok && removeRes.status !== 404) {
+      throw new Error(`Failed to remove label ${labelName}: ${removeRes.status}`);
+    }
+  }
+  const removedCheckpointFiles = await cleanupCheckpointFiles();
+  if (process.env.GITHUB_OUTPUT) {
+    await fsPromises.appendFile(
+      process.env.GITHUB_OUTPUT,
+      `attempt_number=1\nsummary<<EOF\nManual auto-fix reset triggered via checkbox.\nEOF\n`,
+      'utf8',
+    );
+  }
+  log('Manual auto-fix rerun requested via comment checkbox', { prNumber, removedLabels: attemptLabels.length, removedCheckpointFiles: removedCheckpointFiles.length });
+}
+
+const refreshedLabelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
+if (!refreshedLabelsRes.ok) throw new Error(`Label list failed after reset: ${refreshedLabelsRes.status}`);
+const refreshedLabels = await refreshedLabelsRes.json();
+const attemptCount = refreshedLabels.filter((l) => l.name.startsWith(ATTEMPT_LABEL_PREFIX)).length;
 
 if (attemptCount >= MAX_ATTEMPTS) {
   const exhaustedBody = `## \u{1F92A} Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
@@ -120,33 +173,6 @@ if (attemptCount >= MAX_ATTEMPTS) {
 }
 
 const nextAttempt = attemptCount + 1;
-
-const CHECKPOINT_PATH = `checkpoint-attempt-${nextAttempt}.json`;
-const inputHash = createHash('sha256').update(`${prNumber}${process.env.GITHUB_SHA}`).digest('hex');
-
-try {
-  const existing = JSON.parse(await fsPromises.readFile(CHECKPOINT_PATH, 'utf8'));
-  if (existing.stage === 'complete' && existing.inputHash === inputHash) {
-    log('Attempt already completed, skipping duplicate run', { prNumber, attempt: nextAttempt });
-    process.exit(0);
-  }
-} catch {
-  // No checkpoint yet — proceed normally
-}
-
-async function writeCheckpoint(stage, extra = {}) {
-  const data = JSON.stringify(
-    { runId: process.env.GITHUB_RUN_ID, stage, attempt: nextAttempt, inputHash, timestamp: new Date().toISOString(), ...extra },
-    null, 2,
-  );
-  const tmpPath = `${CHECKPOINT_PATH}.tmp`;
-  try {
-    await fsPromises.writeFile(tmpPath, data);
-    await fsPromises.rename(tmpPath, CHECKPOINT_PATH);
-  } catch (err) {
-    logError('Failed to write checkpoint', { stage, error: err.message });
-  }
-}
 
 log('Starting auto-fix', { prNumber, attempt: nextAttempt });
 
@@ -269,11 +295,7 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
 }
 
 const { summary, changes } = validateAiOutput(aiOutput);
-await writeCheckpoint('ai-complete', { summary, changesCount: changes.length });
-
 const outputPaths = await writeGeneratedFiles(changes);
-await writeCheckpoint('files-written', { summary, outputPaths });
-
 const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
 const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
   method: 'POST',
@@ -303,5 +325,4 @@ if (process.env.GITHUB_OUTPUT) {
   );
 }
 
-await writeCheckpoint('complete', { summary, outputPaths });
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
