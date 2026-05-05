@@ -5,13 +5,13 @@
 validation:             qwen/qwen3-32b
 validation_temperature: 0
 
-generation:             qwen/qwen3-32b
+generation:             llama-3.3-70b-versatile
 generation_temperature: 0
 
 review:                 qwen/qwen3-32b
 review_temperature:     0.6
 
-autofix:                qwen/qwen3-32b
+autofix:                llama-3.3-70b-versatile
 autofix_temperature:    0.2
 autofix_max_tokens:     4096
 
