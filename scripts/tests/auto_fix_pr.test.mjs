@@ -107,6 +107,11 @@ function makeHandler({
       return res.end(applyLabelStatus < 300 ? '[]' : 'error');
     }
 
+    if (method === 'DELETE' && /\/issues\/\d+\/labels\//.test(url)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end('{}');
+    }
+
     res.writeHead(404);
     res.end('not found');
   };
@@ -426,5 +431,97 @@ test('auto_fix_pr creates attempt label in repo before applying it', async () =>
     server.close();
     await fs.unlink(eventFile).catch(() => {});
     await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+
+test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun is requested', async () => {
+  const existingLabels = JSON.stringify([{ name: 'auto-fix-attempt-1' }, { name: 'auto-fix-attempt-2' }]);
+  const server = await startMockServer(makeHandler({ labelsBody: existingLabels }));
+  const eventFile = await writeEventFile();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-'));
+  const checkpointDir = path.join(tmpDir, '.github', 'checkpoints');
+  const outputFile = path.join(os.tmpdir(), `autofix-output-reset-${Date.now()}.txt`);
+  try {
+    await fs.mkdir(checkpointDir, { recursive: true });
+    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-1.json'), '{"stage":"complete"}');
+    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-2.json'), '{"stage":"complete"}');
+
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.action = 'edited';
+    rawEvent.comment = { body: '- [x] Relancer Auto Fixer' };
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
+      extraEnv: { GITHUB_OUTPUT: outputFile },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+
+    const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
+    assert.equal(deleteCalls.length, 2, 'expected removal of auto-fix attempt labels');
+
+    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-1.json')));
+    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-2.json')));
+
+    const output = await fs.readFile(outputFile, 'utf8');
+    assert.match(output, /attempt_number=1/);
+    assert.match(output, /Manual auto-fix reset triggered via checkbox\./);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await fs.unlink(outputFile).catch(() => {});
+  }
+});
+
+
+test('auto_fix_pr does not reset attempt labels when checkbox is unchecked', async () => {
+  const existingLabels = JSON.stringify([{ name: 'auto-fix-attempt-1' }]);
+  const server = await startMockServer(makeHandler({ labelsBody: existingLabels }));
+  const eventFile = await writeEventFile();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-no-reset-'));
+  try {
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.action = 'edited';
+    rawEvent.comment = { body: '- [ ] Relancer Auto Fixer' };
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+
+    const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
+    assert.equal(deleteCalls.length, 0, 'should not remove attempt labels when checkbox is unchecked');
+
+    const labelApply = server.requests.find((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url));
+    assert.ok(labelApply, 'expected next attempt label apply');
+    assert.ok(JSON.parse(labelApply.body).labels.includes('auto-fix-attempt-2'));
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr resets labels when english rerun checkbox text is used', async () => {
+  const existingLabels = JSON.stringify([{ name: 'auto-fix-attempt-1' }]);
+  const server = await startMockServer(makeHandler({ labelsBody: existingLabels }));
+  const eventFile = await writeEventFile();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-en-'));
+  try {
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.action = 'created';
+    rawEvent.comment = { body: '- [x] rerun auto-fix' };
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+
+    const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
+    assert.equal(deleteCalls.length, 1, 'expected removal of existing attempt label on rerun');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
