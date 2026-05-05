@@ -20,10 +20,36 @@ function normalizePayload(data) {
   return { data };
 }
 
+let logContext = {};
+
+export function setLogContext(context) {
+  logContext = context;
+}
+
 export function log(msg, data = {}) {
-  console.log(safeStringify({ level: 'info', msg, ...normalizePayload(data) }));
+  const context = { ...logContext, ...normalizePayload(data) };
+  console.log(safeStringify({ level: 'info', msg, ...context }));
 }
 
 export function error(msg, data = {}) {
-  console.error(safeStringify({ level: 'error', msg, ...normalizePayload(data) }));
+  const context = { ...logContext, ...normalizePayload(data) };
+  console.error(safeStringify({ level: 'error', msg, ...context }));
+}
+
+let startTime = {};
+
+export function logStart(step) {
+  startTime[step] = performance.now();
+}
+
+export function logEnd(step, result) {
+  const endTime = performance.now();
+  const durationMs = startTime[step] ? endTime - startTime[step] : null;
+  const context = { ...logContext, step, result, durationMs };
+  console.log(safeStringify({ level: 'info', msg: 'step_end', ...context }));
+}
+
+export function logSummary({ success, stepsCompleted, errors }) {
+  const context = { ...logContext, success, stepsCompleted, errors };
+  console.log(safeStringify({ level: 'info', msg: 'run_summary', ...context }));
 }
