@@ -54,6 +54,18 @@ Before committing any change to `scripts/` or `prompts/`:
 - Never commit code that breaks an existing test without updating or replacing the test intentionally.
 - The suite includes **unit tests** (modules in isolation) and **smoke tests** (`smoke.test.mjs`, cross-module pipelines with real config/prompt files). Both must pass.
 
+### Test Coverage Policy
+
+Minimum required path coverage for automation modules (enforced by code review):
+
+| Module | Minimum coverage | Required test paths |
+|---|---|---|
+| `scripts/lib/prompts.mjs` — `loadPrompt` | 100% of branches | happy path (file exists, non-empty), file-not-found (explicit `Prompt file not found` error with path), empty-file (explicit `Prompt file is empty` error with path) |
+| `scripts/lib/prompts.mjs` — `interpolatePrompt` | 100% of branches | single placeholder, multiple distinct placeholders, repeated placeholder, unknown placeholder left unchanged, non-placeholder content unchanged |
+| Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields produce explicit path-oriented errors (e.g. `pull_request.number`, `pull_request.head.ref`) |
+
+Any PR that adds a new exported function to `scripts/lib/` must include tests for every failure branch, not only the happy path. PRs that lack these tests are considered incomplete regardless of whether existing tests pass.
+
 ## Workflow Rules _(pipeline only)_
 
 - Issue automation triggers automatically when the validation agent applies the `ready-for-dev` label.
