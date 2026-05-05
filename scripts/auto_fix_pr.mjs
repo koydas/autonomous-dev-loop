@@ -148,10 +148,9 @@ if (manualRerunRequested) {
   }
   const removedCheckpointFiles = await cleanupCheckpointFiles();
   if (process.env.GITHUB_OUTPUT) {
-    const resetPaths = [...attemptLabels.map((name) => `(label-removed) ${name}`), ...removedCheckpointFiles];
     await fsPromises.appendFile(
       process.env.GITHUB_OUTPUT,
-      `fixed_paths<<EOF\n${resetPaths.join('\n')}\nEOF\nattempt_number=1\nsummary<<EOF\nManual auto-fix reset triggered via checkbox.\nEOF\n`,
+      `attempt_number=1\nsummary<<EOF\nManual auto-fix reset triggered via checkbox.\nEOF\n`,
       'utf8',
     );
   }
