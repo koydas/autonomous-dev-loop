@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
@@ -210,3 +211,127 @@ if (!feedbackParts.length) {
 
 const systemTokens = estimateTokens(systemPrompt);
 const contextWindow = MODEL_CONTEXT_WINDOW[model] ?? (llmProvider === 'groq' ? 32768 : 200000);
+const maxOutputBudget = llmMaxTokens ?? 4096;
+const inputBudget = Math.max(0, contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
+const diffBudget = Math.floor(inputBudget * 0.45);
+const feedbackBudget = Math.floor(inputBudget * 0.25);
+const fileBudget = Math.max(0, inputBudget - diffBudget - feedbackBudget);
+
+const reviewFeedback = truncateToTokenBudget(
+  feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)',
+  feedbackBudget,
+);
+
+const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
+  headers: { Accept: 'application/vnd.github.v3.diff' },
+});
+if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
+const rawDiff = await diffRes.text();
+const diff = truncateToTokenBudget(filterDiff(rawDiff, diffBudget * 4), diffBudget);
+
+const allChangedFiles = [...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1]))];
+
+const SELF_PATH = 'scripts/auto_fix_pr.mjs';
+if (allChangedFiles.includes(SELF_PATH)) {
+  await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({
+      body: `## 🤖 Auto-Fix Skipped\n\nThis PR modifies \`${SELF_PATH}\`. Automated self-modification is disabled to prevent feedback loops. Please review and merge this PR manually.`,
+    }),
+  });
+  log('Auto-fix skipped: PR modifies auto_fix_pr.mjs itself', { prNumber });
+  process.exit(0);
+}
+
+const changedFiles = allChangedFiles.filter(shouldIncludeFile);
+
+const repoRoot = path.resolve(process.cwd());
+const fileContentParts = [];
+for (const filePath of changedFiles.slice(0, MAX_FILES)) {
+  const absPath = path.resolve(repoRoot, filePath);
+  if (!absPath.startsWith(repoRoot + path.sep)) continue;
+  try {
+    const content = await fsPromises.readFile(absPath, 'utf8');
+    fileContentParts.push(
+      `### Current file: ${filePath}\n\`\`\`\n${content.slice(0, MAX_FILE_SIZE)}\n\`\`\``,
+    );
+  } catch {
+    // File deleted or unreadable — skip
+  }
+}
+const rawFileContents =
+  fileContentParts.length > 0
+    ? fileContentParts.join('\n\n')
+    : 'No existing files identified as relevant to this review.';
+const fileContents = truncateToTokenBudget(rawFileContents, fileBudget);
+
+const userPrompt = interpolatePrompt(userPromptTemplate, {
+  reviewFeedback,
+  diff,
+  fileContents,
+});
+
+log('token_estimate', {
+  system: systemTokens,
+  diff: estimateTokens(diff),
+  feedback: estimateTokens(reviewFeedback),
+  files: estimateTokens(fileContents),
+  max_tokens: maxOutputBudget,
+  budget: { input: inputBudget, diff: diffBudget, feedback: feedbackBudget, files: fileBudget },
+  total: systemTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
+});
+
+const raw = await callLLM({
+  prompt: userPrompt,
+  systemPrompt,
+  apiKey: llmApiKey,
+  model,
+  apiUrl,
+  temperature: llmTemperature,
+  maxTokens: maxOutputBudget,
+  responseFormat: null,
+});
+
+let aiOutput;
+try {
+  aiOutput = parseJsonResponse(raw);
+} catch (parseErr) {
+  logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
+  throw new Error(`AI response was not valid JSON: ${parseErr.message}`, { cause: parseErr });
+}
+if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
+  throw new Error('AI response JSON must be an object');
+}
+
+const { summary, changes } = validateAiOutput(aiOutput);
+const outputPaths = await writeGeneratedFiles(changes);
+const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
+const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
+  method: 'POST',
+  body: JSON.stringify({
+    name: attemptLabelName,
+    color: 'fbca04',
+    description: `Auto-fix iteration ${nextAttempt}`,
+  }),
+});
+if (!createLabelRes.ok && createLabelRes.status !== 422) {
+  throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
+}
+
+const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
+  method: 'POST',
+  body: JSON.stringify({ labels: [attemptLabelName] }),
+});
+if (!applyLabelRes.ok) {
+  throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
+}
+
+if (process.env.GITHUB_OUTPUT) {
+  await fsPromises.appendFile(
+    process.env.GITHUB_OUTPUT,
+    `fixed_paths<<EOF\n${outputPaths.join('\n')}\nEOF\nattempt_number=${nextAttempt}\nsummary<<EOF\n${summary}\nEOF\n`,
+    'utf8',
+  );
+}
+
+log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
