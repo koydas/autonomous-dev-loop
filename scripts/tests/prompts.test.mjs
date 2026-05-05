@@ -26,8 +26,8 @@ describe('loadPrompt', () => {
     });
   }
 
-  test('throws ENOENT for a non-existent prompt file', () => {
-    assert.throws(() => loadPrompt('nonexistent'), /ENOENT/);
+  test('throws explicit error for a non-existent prompt file', () => {
+    assert.throws(() => loadPrompt('nonexistent'), /Prompt file not found/);
   });
 });
 

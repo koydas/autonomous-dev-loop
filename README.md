@@ -26,6 +26,14 @@ Once a PR is opened, the automation continues:
 
 The loop runs up to **3 auto-fix iterations** per PR. After that, a comment is posted requesting manual intervention.
 
+## Fail-Fast Startup & Payload Validation
+
+Automation entrypoints now validate critical runtime inputs before network calls:
+- required env vars are validated up-front with explicit errors,
+- required prompt files are validated as existing and non-empty at load time,
+- GitHub event payload fields are validated with explicit path-oriented messages (for example `pull_request.number`, `issue.number`, `pull_request.head.ref` / `ref`),
+- provider response parsing errors include concrete JSON paths (`content[0].text`, `choices[0].message.content`).
+
 ## Tests
 
 The test suite uses the built-in `node:test` runner — no external dependencies.

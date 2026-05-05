@@ -31,6 +31,8 @@ Context windows: Groq models cap at 32 768 tokens; Anthropic models at 200 000 t
 - Avoid multi-file refactors unless explicitly requested.
 - Keep generated output constrained to predictable locations.
 - Use repository secrets/variables for all external credentials/configuration.
+- Keep startup validation fail-fast and deterministic: validate required env vars, prompt files, and payload shape before external API calls.
+- Prefer explicit error messages that include missing field paths (for example `pull_request.number`, `choices[0].message.content`) rather than generic parse failures.
 
 ## Hard Guardrails
 

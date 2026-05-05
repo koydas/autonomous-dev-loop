@@ -19,6 +19,8 @@ const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
 const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens } = loadLLMConfig('review');
+const systemPrompt = loadPrompt('pr-review-system');
+const userPromptTemplate = loadPrompt('pr-review-user');
 
 let event;
 try {
@@ -43,8 +45,10 @@ const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes];
 
 let prNumber = event.pull_request?.number;
 if (!prNumber) {
-  const branch = event.ref?.replace('refs/heads/', '');
-  if (!branch) throw new Error('Could not determine branch from event payload');
+  const branch = event.pull_request?.head?.ref || event.ref?.replace('refs/heads/', '');
+  if (!branch) {
+    throw new Error('Missing GitHub payload field: expected pull_request.number or one of pull_request.head.ref / ref');
+  }
   const prsRes = await ghFetch(`/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=open`);
   if (!prsRes.ok) throw new Error(`PR lookup failed: ${prsRes.status}`);
   const prs = await prsRes.json();
@@ -154,8 +158,7 @@ const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
 
-const systemPrompt = loadPrompt('pr-review-system');
-const baseUserPrompt = interpolatePrompt(loadPrompt('pr-review-user'), { diff, issueTitle: prTitle, issueBody: prBody });
+const baseUserPrompt = interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: prBody });
 const userPrompt = `${baseUserPrompt}${buildAutomationGateContext(rawDiff)}`;
 
 const rawReview = await callLLM({

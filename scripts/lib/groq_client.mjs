@@ -77,8 +77,8 @@ export async function callGroq({
   }
 
   const content = raw?.choices?.[0]?.message?.content;
-  if (!content || typeof content !== 'string') {
-    throw new Error('Unexpected Groq API response format');
+  if (typeof content !== 'string' || content.trim() === '') {
+    throw new Error('Unexpected Groq API response format: expected non-empty string at choices[0].message.content');
   }
 
   return content;
