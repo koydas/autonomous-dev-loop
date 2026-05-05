@@ -22,9 +22,9 @@ const MAX_FILES = 5;
 const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
 const TOKEN_SAFETY_MARGIN = 200;
 
-const MODEL_TPM = {
-  'qwen/qwen3-32b': 6000,
-  'llama-3.1-8b-instant': 30000,
+const MODEL_CONTEXT_WINDOW = {
+  'qwen/qwen3-32b': 32768,
+  'llama-3.1-8b-instant': 32768,
 };
 
 function estimateTokens(text) {
@@ -202,9 +202,9 @@ if (!feedbackParts.length) {
 
 const systemPrompt = loadPrompt('auto-fix-system');
 const systemTokens = estimateTokens(systemPrompt);
-const tpmLimit = llmProvider === 'groq' ? (MODEL_TPM[model] ?? 6000) : 8000;
-const maxOutputBudget = Math.min(llmMaxTokens ?? 4096, Math.max(256, Math.floor(tpmLimit * 0.35)));
-const inputBudget = Math.max(0, tpmLimit - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
+const contextWindow = llmProvider === 'groq' ? (MODEL_CONTEXT_WINDOW[model] ?? 32768) : 32768;
+const maxOutputBudget = llmMaxTokens ?? 4096;
+const inputBudget = Math.max(0, contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
 const diffBudget = Math.floor(inputBudget * 0.45);
 const feedbackBudget = Math.floor(inputBudget * 0.25);
 const fileBudget = Math.max(0, inputBudget - diffBudget - feedbackBudget);
@@ -281,6 +281,7 @@ const raw = await callLLM({
   apiUrl,
   temperature: llmTemperature,
   maxTokens: maxOutputBudget,
+  responseFormat: null,
 });
 
 let aiOutput;
