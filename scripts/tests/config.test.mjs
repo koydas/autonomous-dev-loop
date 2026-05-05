@@ -134,6 +134,15 @@ test('loadConfigFromEnv uses AI_PROVIDER=groq tiebreaker when both keys set', ()
   assert.equal(config.apiKey, 'groq-key');
 });
 
+
+test('loadLLMConfig uses llama-3.3-70b-versatile defaults for generation and autofix', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const generationCfg = loadLLMConfig('generation');
+  const autofixCfg = loadLLMConfig('autofix');
+  assert.equal(generationCfg.model, 'llama-3.3-70b-versatile');
+  assert.equal(autofixCfg.model, 'llama-3.3-70b-versatile');
+});
+
 // buildDeterministicPrompt
 
 test('buildDeterministicPrompt includes issue fields', () => {

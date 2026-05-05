@@ -13,7 +13,7 @@ Support two LLM providers via a runtime router (`scripts/lib/llm_client.mjs`):
 
 | Provider | Default | Key variable | Model variable |
 |---|---|---|---|
-| Groq | ✅ yes | `GROQ_API_KEY` | `GROQ_MODEL` (default: `qwen/qwen3-32b` — see ADR-0005) |
+| Groq | ✅ yes | `GROQ_API_KEY` | `GROQ_MODEL` (default: stage-specific from `config/models.yaml`; generation/autofix use `llama-3.3-70b-versatile`, validation/review use `qwen/qwen3-32b`) |
 | Anthropic | no | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` (default: `claude-opus-4-7`) |
 
 The active provider is determined automatically by which API keys are present:
