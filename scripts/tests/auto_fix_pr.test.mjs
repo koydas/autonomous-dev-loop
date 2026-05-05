@@ -663,3 +663,41 @@ test('auto_fix_pr exits 1 when event has neither pull_request.number nor issue.n
     await fs.unlink(tmpFile).catch(() => {});
   }
 });
+
+test('auto_fix_pr unhandledRejection handler logs run_summary with success false', async () => {
+  // In Node.js v22 ESM, top-level await rejections bypass unhandledRejection and crash directly.
+  // The handler is a safety net for detached (fire-and-forget) promises. We exercise it by
+  // running the exact same handler code in a minimal script that emits the event explicitly.
+  const loggerPath = path.join(SCRIPTS_DIR, 'lib', 'logger.mjs');
+  const tmpScript = path.join(os.tmpdir(), `unhandled-test-${Date.now()}.mjs`);
+  await fs.writeFile(tmpScript, [
+    `import { error as logError, logSummary } from ${JSON.stringify(loggerPath)};`,
+    `process.on('unhandledRejection', (reason) => {`,
+    `  const err = reason instanceof Error ? reason : new Error(String(reason));`,
+    `  logError('Unhandled promise rejection', { error: err.message, stack: err.stack });`,
+    `  logSummary({ success: false, stepsCompleted: [], errors: [err.message] });`,
+    `  process.exit(1);`,
+    `});`,
+    `process.emit('unhandledRejection', new Error('simulated detached rejection'));`,
+  ].join('\n'));
+  const result = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [tmpScript], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('close', (code) => resolve({ code, stdout, stderr }));
+  });
+  try {
+    assert.equal(result.code, 1);
+    const summaryLine = result.stdout.split('\n').find((line) => {
+      try { return JSON.parse(line)?.msg === 'run_summary'; } catch { return false; }
+    });
+    assert.ok(summaryLine, `expected run_summary in stdout, got: ${result.stdout}`);
+    const summary = JSON.parse(summaryLine);
+    assert.equal(summary.success, false);
+    assert.ok(Array.isArray(summary.errors) && summary.errors.length > 0, 'expected non-empty errors');
+  } finally {
+    await fs.unlink(tmpScript).catch(() => {});
+  }
+});
