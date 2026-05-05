@@ -57,10 +57,6 @@ async function addLabel(owner, repo, token, issueNumber, labelName) {
     body: { labels: [labelName] },
   });
   if (!res.ok) {
-    if (res.status === 422) {
-      // Label already exists, do nothing
-      return;
-    }
     throw new Error(`Add label "${labelName}" failed: ${res.status}`);
   }
 }
