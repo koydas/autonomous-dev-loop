@@ -29,7 +29,7 @@ All automation-scope changes must maintain **minimum 85% test coverage** for cri
 - Configuration validation
 - Workflow execution paths
 
-Coverage reports must be reviewed in pull requests to ensure no regression in automation reliability.
+**Automation workflows must enforce an 85%+ coverage gate before deployment** to ensure reliability of generated code. Coverage reports must be reviewed in pull requests to ensure no regression in automation reliability.
 
 ## Workflow Overview
 
@@ -39,9 +39,4 @@ Workflow design note: YAML stays intentionally minimal (orchestration only). Mos
 
 Node implementation:
 - Entrypoint: `scripts/generate_issue_change.mjs`
-- Modules: `scripts/lib/config.mjs`, `scripts/lib/llm_client.mjs`, `scripts/lib/anthropic_client.mjs`, `scripts/lib/groq_client.mjs`, `scripts/lib/output_writer.mjs`
-
-When the `ready-for-dev` label is applied to an issue, the workflow:
-1. Builds a deterministic prompt using issue number, title, and body.
-2. Calls the LLM API (Groq by default) using repository secrets.
-3. W
+- Modules: `scripts/lib/config.mjs`, `s
