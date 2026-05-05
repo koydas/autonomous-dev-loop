@@ -228,11 +228,21 @@ The workflow is label-driven: it triggers on `pull_request` `labeled` events and
 
 This avoids silent skips when GitHub Actions cannot submit an official `REQUEST_CHANGES` review event (for example when repository settings block review submission), because the PR review workflow still applies the `changes-requested` label.
 
+**Workflow step dependency chain:**
+
+The `auto-fix` job in `auto-fix-pr.yml` has a strict step ordering requirement:
+
+1. **Resolve PR payload** (`id: pr`, `if: issue_comment`) — runs first for `issue_comment` triggers. Calls the GitHub PR API, extracts the PR branch name (`head_ref`), and stores the full payload. This step must complete before checkout so the branch ref is available.
+2. **Checkout PR branch** — uses `steps.pr.outputs.head_ref` for `issue_comment` events, `github.event.pull_request.head.ref` for `pull_request` events.
+3. Remaining steps (setup-node, apply fixes, commit/push) depend on the correct branch being checked out.
+
+For `issue_comment` events the PR number is resolved from `event.issue.number` (not `event.pull_request.number`, which is absent). The entrypoint script handles both cases: `event.pull_request?.number ?? event.issue?.number`.
+
 On each run it:
 1. Checks the PR for `auto-fix-attempt-N` labels to determine how many auto-fix cycles have already run.
 2. If the attempt count has reached the maximum (3), posts a comment explaining that the limit is exhausted and exits without making changes.
 3. Fetches the review body and any inline review comments to build the full feedback context. If the triggering event has no review body (for example label-based trigger), it paginates issue comments and falls back to the latest automated review comment body.
-4. Fetches the current PR diff and reads the changed files from disk (up to 10 files, capped at 8 000 chars each).
+4. Fetches the current PR diff and reads the changed files from disk (up to 5 files, capped at 8 000 chars each).
 5. Calls the LLM with the review feedback, diff, and current file contents to generate targeted fixes.
 6. Writes 1 to 6 fixed files to the PR branch, commits, and pushes.
 7. Applies the `auto-fix-attempt-N` label to the PR for tracking.
@@ -284,7 +294,7 @@ All automation-scope changes (`.github/workflows/`, `scripts/`, `prompts/`, `doc
 | Workflow | Coverage scope |
 |---|---|
 | `pr-review.yml` | Verdict parsing, label reset (DELETE→POST sequence), skip conditions, comment upsert |
-| `auto-fix-pr.yml` | Attempt counting, feedback fetch, file generation, label application |
+| `auto-fix-pr.yml` | Attempt counting, feedback fetch, file generation, label application, `MODEL_CONTEXT_WINDOW` lookup (100% coverage required: all named models + both provider fallbacks) |
 | `code-generation.yml` | Prompt construction, branch/PR creation |
 | `validate-issue.yml` | Issue quality gate, label application |
 
