@@ -6,6 +6,7 @@ import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
+import { retryWithBackoff } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
 
 process.on('unhandledRejection', (reason) => {
@@ -56,14 +57,21 @@ if (!prNumber) {
 
 
 async function ghFetch(path, options = {}) {
-  try {
-    return await fetch(`${githubApiBase}${path}`, {
-      ...options,
-      headers: { ...githubHeaders, ...(options.headers || {}) },
-    });
-  } catch (err) {
-    throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
-  }
+  return await retryWithBackoff(async () => {
+    let res;
+    try {
+      res = await fetch(`${githubApiBase}${path}`, {
+        ...options,
+        headers: { ...githubHeaders, ...(options.headers || {}) },
+      });
+    } catch (err) {
+      throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      throw Object.assign(new Error(`GitHub API transient error (${path}): ${res.status}`), { status: res.status });
+    }
+    return res;
+  });
 }
 
 async function upsertLabel(label) {
@@ -105,9 +113,15 @@ async function removeLabel(labelName) {
 async function hasActiveAutoFixRun(branchName) {
   const encodedBranch = encodeURIComponent(branchName);
   for (const status of ['in_progress', 'queued']) {
-    const runsRes = await ghFetch(
-      `/repos/${owner}/${repo}/actions/workflows/auto-fix-pr.yml/runs?branch=${encodedBranch}&event=pull_request&status=${status}&per_page=20`,
-    );
+    let runsRes;
+    try {
+      runsRes = await ghFetch(
+        `/repos/${owner}/${repo}/actions/workflows/auto-fix-pr.yml/runs?branch=${encodedBranch}&event=pull_request&status=${status}&per_page=20`,
+      );
+    } catch (err) {
+      logError('Auto-fix run status check failed; defaulting to skip re-pulse', { prNumber, status, error: err.message });
+      return true;
+    }
     if (!runsRes.ok) {
       logError('Auto-fix run status check failed; defaulting to skip re-pulse', {
         prNumber,
