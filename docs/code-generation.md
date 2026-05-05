@@ -250,23 +250,42 @@ All label names, colors, and descriptions are configurable in `config/labels.yam
 
 ## changes-requested Label Reset
 
-When the PR review verdict is `REQUEST_CHANGES`, the workflow resets the `changes-requested` label to guarantee a fresh `labeled` event that re-triggers the auto-fix pipeline:
+When the PR review verdict is `REQUEST_CHANGES`, `pr-review.yml` resets the `changes-requested` label to guarantee a fresh `pull_request labeled` event that re-triggers `auto-fix-pr.yml`:
 
-1. **DELETE** `changes-requested` via `DELETE /repos/{owner}/{repo}/issues/{number}/labels/changes-requested`
-2. **POST** `changes-requested` via `POST /repos/{owner}/{repo}/issues/{number}/labels`
+```mermaid
+sequenceDiagram
+    participant pr-review.yml
+    participant GitHub Labels API
+    participant auto-fix-pr.yml
 
-The DELETE must occur before the POST so the `pull_request labeled` event fires on the re-application rather than being silently swallowed by GitHub's deduplication logic.
+    pr-review.yml->>GitHub Labels API: DELETE /issues/{n}/labels/changes-requested
+    pr-review.yml->>GitHub Labels API: POST /issues/{n}/labels {changes-requested}
+    Note over GitHub Labels API,auto-fix-pr.yml: labeled event fires → auto-fix-pr.yml triggers
+    auto-fix-pr.yml-->>pr-review.yml: push fix commit (synchronize event)
+```
 
-Re-pulse is **skipped** when an auto-fix run is already `queued` or `in_progress` (checked via the Actions API) to prevent loop amplification. If the run-status check itself fails, the workflow defaults to skipping re-pulse (fail-closed).
+Steps performed by `pr-review.yml`:
 
-This behaviour is tested by the `pr_review re-pulses changes-requested label to reset auto-fix workflow cycle` integration test in `scripts/tests/pr_review.test.mjs`.
+1. **DELETE** `changes-requested` — `DELETE /repos/{owner}/{repo}/issues/{number}/labels/changes-requested`
+2. **POST** `changes-requested` — `POST /repos/{owner}/{repo}/issues/{number}/labels`
+
+The DELETE must occur before the POST so GitHub emits a new `labeled` event on the re-application rather than silently deduplicating it.
+
+**Skip conditions** (re-pulse is skipped and only a single POST is made):
+- An auto-fix run for the same branch is already `queued` or `in_progress` (checked via the Actions API) — prevents loop amplification.
+- The run-status API call fails — workflow defaults to skip (fail-closed guard).
+
+Integration test: `pr_review re-pulses changes-requested label to reset auto-fix workflow cycle` in `scripts/tests/pr_review.test.mjs` asserts exactly one DELETE followed by one POST for `changes-requested`.
 
 ## Test Coverage Requirement
 
-All automation-scope changes (`.github/workflows/`, `scripts/`, `prompts/`, `docs/code-generation.md`) must maintain a **minimum 85% test coverage** for critical-path logic, including:
+All automation-scope changes (`.github/workflows/`, `scripts/`, `prompts/`, `docs/code-generation.md`) must maintain a **minimum 85% unit test coverage** for critical-path logic. Covered paths include:
 
-- Label management and idempotency error handling
-- Configuration validation
-- Workflow execution paths (label reset, review verdict parsing, auto-fix iteration limit)
+| Workflow | Coverage scope |
+|---|---|
+| `pr-review.yml` | Verdict parsing, label reset (DELETE→POST sequence), skip conditions, comment upsert |
+| `auto-fix-pr.yml` | Attempt counting, feedback fetch, file generation, label application |
+| `code-generation.yml` | Prompt construction, branch/PR creation |
+| `validate-issue.yml` | Issue quality gate, label application |
 
-Coverage reports must be reviewed in pull requests to ensure no regression in automation reliability.
+Coverage reports must be reviewed in pull requests to ensure no regression. Automation PRs that drop unit test coverage below 85% for any module should receive `REQUEST_CHANGES`.
