@@ -74,6 +74,8 @@ const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
 const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens } = loadLLMConfig('autofix');
+const systemPrompt = loadPrompt('auto-fix-system');
+const userPromptTemplate = loadPrompt('auto-fix-user');
 
 let event;
 try {
@@ -84,7 +86,7 @@ try {
 if (!event || typeof event !== 'object') throw new Error('GitHub event payload is not a valid object');
 
 const prNumber = event.pull_request?.number ?? event.issue?.number;
-if (!prNumber) throw new Error('Missing pull_request.number or issue.number in event payload');
+if (!prNumber) throw new Error('Missing GitHub payload field: expected pull_request.number or issue.number');
 
 const reviewBody = (event.review?.body || '').trim();
 const reviewId = event.review?.id;
@@ -204,7 +206,6 @@ if (!feedbackParts.length) {
   }
 }
 
-const systemPrompt = loadPrompt('auto-fix-system');
 const systemTokens = estimateTokens(systemPrompt);
 const contextWindow = MODEL_CONTEXT_WINDOW[model] ?? (llmProvider === 'groq' ? 32768 : 200000);
 const maxOutputBudget = llmMaxTokens ?? 4096;
@@ -261,7 +262,7 @@ const rawFileContents =
     : 'No existing files identified as relevant to this review.';
 const fileContents = truncateToTokenBudget(rawFileContents, fileBudget);
 
-const userPrompt = interpolatePrompt(loadPrompt('auto-fix-user'), {
+const userPrompt = interpolatePrompt(userPromptTemplate, {
   reviewFeedback,
   diff,
   fileContents,

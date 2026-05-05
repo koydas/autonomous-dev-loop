@@ -100,3 +100,16 @@ sequenceDiagram
 ## Minimum Test Coverage Policy
 
 The config validation logic must have a minimum test coverage of 80%. This ensures that all critical paths are properly tested and validated before deployment.
+
+## Startup Fail-Fast Validation (automation entrypoints)
+
+Automation scripts must fail before network calls when required startup inputs are invalid:
+
+- **Environment**: required vars are validated synchronously at process start (`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, provider API key, etc.).
+- **Prompts**: prompt files are loaded and validated as existing + non-empty at startup, with explicit file-path errors when missing/empty.
+- **GitHub payload**: required fields are validated with path-based errors:
+  - PR number: `pull_request.number` or fallback `issue.number`.
+  - Branch reference (when needed): `pull_request.head.ref` or fallback `ref`.
+- **Provider payload parsing**: response-shape failures include concrete expected paths:
+  - Anthropic: `content[0].text`
+  - Groq: `choices[0].message.content`

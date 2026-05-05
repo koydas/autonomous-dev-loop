@@ -57,8 +57,8 @@ export async function callAnthropic({
   }
 
   const content = raw?.content?.[0]?.text;
-  if (!content || typeof content !== 'string') {
-    throw new Error('Unexpected Anthropic API response format');
+  if (typeof content !== 'string' || content.trim() === '') {
+    throw new Error('Unexpected Anthropic API response format: expected non-empty string at content[0].text');
   }
 
   return content;

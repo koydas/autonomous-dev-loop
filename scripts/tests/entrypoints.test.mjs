@@ -160,7 +160,7 @@ test('pr_review exits 1 when event has no pull_request.number and no ref', async
         GITHUB_REPOSITORY: 'owner/repo',
         GITHUB_EVENT_PATH: tmpFile,
       }),
-      /Could not determine branch/,
+      /pull_request\.number.*pull_request\.head\.ref.*ref/,
     );
   } finally {
     await fs.unlink(tmpFile).catch(() => {});
