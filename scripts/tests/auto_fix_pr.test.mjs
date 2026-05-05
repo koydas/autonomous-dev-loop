@@ -129,6 +129,19 @@ async function writeEventFile(prNumber = PR_NUMBER, reviewId = REVIEW_ID) {
   return tmpFile;
 }
 
+async function writeIssueCommentEventFile(prNumber = PR_NUMBER) {
+  const tmpFile = path.join(os.tmpdir(), `auto-fix-evt-ic-${Date.now()}-${Math.random()}.json`);
+  await fs.writeFile(
+    tmpFile,
+    JSON.stringify({
+      action: 'created',
+      issue: { number: prNumber, pull_request: { url: 'http://placeholder' } },
+      comment: { body: '- [x] Relancer Auto Fixer' },
+    }),
+  );
+  return tmpFile;
+}
+
 async function runAutoFix(port, eventFile, { extraEnv = {}, cwd = null } = {}) {
   const env = {
     PATH: process.env.PATH,
@@ -523,5 +536,38 @@ test('auto_fix_pr resets labels when english rerun checkbox text is used', async
     server.close();
     await fs.unlink(eventFile).catch(() => {});
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr extracts PR number from issue.number for issue_comment events', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-ic-'));
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('ic-fix.txt') }));
+  const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 for issue_comment event, stderr: ${result.stderr}`);
+
+    const labelRequests = server.requests.filter(
+      (r) => r.method === 'GET' && new RegExp(`/issues/${PR_NUMBER}/labels`).test(r.url),
+    );
+    assert.ok(labelRequests.length > 0, `expected label fetch for PR #${PR_NUMBER} via issue.number`);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr exits 1 when event has neither pull_request.number nor issue.number', async () => {
+  const tmpFile = path.join(os.tmpdir(), `auto-fix-evt-bad-${Date.now()}.json`);
+  await fs.writeFile(tmpFile, JSON.stringify({ action: 'created' }));
+  const server = await startMockServer(makeHandler());
+  try {
+    const result = await runAutoFix(server.address().port, tmpFile);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /pull_request.number or issue.number/);
+  } finally {
+    server.close();
+    await fs.unlink(tmpFile).catch(() => {});
   }
 });

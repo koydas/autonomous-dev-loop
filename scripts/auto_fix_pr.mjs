@@ -17,7 +17,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const MAX_ATTEMPTS = 3;
-const MAX_FILE_SIZE = 2000;
+const MAX_FILE_SIZE = 8000;
 const MAX_FILES = 5;
 const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
 const TOKEN_SAFETY_MARGIN = 200;
@@ -25,6 +25,10 @@ const TOKEN_SAFETY_MARGIN = 200;
 const MODEL_CONTEXT_WINDOW = {
   'qwen/qwen3-32b': 32768,
   'llama-3.1-8b-instant': 32768,
+  'llama-3.3-70b-versatile': 131072,
+  'claude-opus-4-7': 200000,
+  'claude-sonnet-4-6': 200000,
+  'claude-haiku-4-5-20251001': 200000,
 };
 
 function estimateTokens(text) {
@@ -79,8 +83,8 @@ try {
 }
 if (!event || typeof event !== 'object') throw new Error('GitHub event payload is not a valid object');
 
-const prNumber = event.pull_request?.number;
-if (!prNumber) throw new Error('Missing pull_request.number in event payload');
+const prNumber = event.pull_request?.number ?? event.issue?.number;
+if (!prNumber) throw new Error('Missing pull_request.number or issue.number in event payload');
 
 const reviewBody = (event.review?.body || '').trim();
 const reviewId = event.review?.id;
@@ -202,7 +206,7 @@ if (!feedbackParts.length) {
 
 const systemPrompt = loadPrompt('auto-fix-system');
 const systemTokens = estimateTokens(systemPrompt);
-const contextWindow = llmProvider === 'groq' ? (MODEL_CONTEXT_WINDOW[model] ?? 32768) : 32768;
+const contextWindow = MODEL_CONTEXT_WINDOW[model] ?? (llmProvider === 'groq' ? 32768 : 200000);
 const maxOutputBudget = llmMaxTokens ?? 4096;
 const inputBudget = Math.max(0, contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
 const diffBudget = Math.floor(inputBudget * 0.45);
