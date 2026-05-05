@@ -129,6 +129,19 @@ async function writeEventFile(prNumber = PR_NUMBER, reviewId = REVIEW_ID) {
   return tmpFile;
 }
 
+async function writeIssueCommentEventFile(prNumber = PR_NUMBER) {
+  const tmpFile = path.join(os.tmpdir(), `auto-fix-evt-ic-${Date.now()}-${Math.random()}.json`);
+  await fs.writeFile(
+    tmpFile,
+    JSON.stringify({
+      action: 'created',
+      issue: { number: prNumber, pull_request: { url: 'http://placeholder' } },
+      comment: { body: '- [x] Relancer Auto Fixer' },
+    }),
+  );
+  return tmpFile;
+}
+
 async function runAutoFix(port, eventFile, { extraEnv = {}, cwd = null } = {}) {
   const env = {
     PATH: process.env.PATH,
@@ -414,6 +427,98 @@ test('auto_fix_pr logs token_estimate before calling LLM', async () => {
   }
 });
 
+// MODEL_CONTEXT_WINDOW coverage: Anthropic named model uses 200 000-token window
+test('auto_fix_pr uses 200 000-token context window for claude-opus-4-7', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-ctx-anthropic-'));
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeEventFile();
+  try {
+    // Default Anthropic model is claude-opus-4-7 (no ANTHROPIC_MODEL override needed)
+    const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
+      extraEnv: { ANTHROPIC_MODEL: 'claude-opus-4-7' },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const estimateLine = result.stdout.split('\n').find((l) => l.includes('token_estimate'));
+    const parsed = JSON.parse(estimateLine);
+    // With a 200 000-token window the input budget must be well above the Groq default of 32 768
+    assert.ok(
+      parsed.budget.input > 32768,
+      `expected input budget > 32768 for 200k context, got ${parsed.budget.input}`,
+    );
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// MODEL_CONTEXT_WINDOW coverage: unknown Groq model falls back to 32 768
+test('auto_fix_pr uses 32 768-token fallback for unknown Groq model', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-ctx-groq-unknown-'));
+  const groqResponse = JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ summary: 'fixed', changes: [{ target_path: 'out.txt', file_content: 'x' }] }) } }],
+  });
+  // Custom handler that serves the Groq completions path alongside the standard GitHub API routes
+  const groqHandler = (req, res) => {
+    if (req.url === '/v1/chat/completions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(groqResponse);
+    }
+    makeHandler({})(req, res);
+  };
+  const server = await startMockServer(groqHandler);
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
+      extraEnv: {
+        ANTHROPIC_API_KEY: '',
+        GROQ_API_KEY: 'groq-test',
+        GROQ_MODEL: 'unknown-groq-model-xyz',
+        GROQ_API_URL: `http://127.0.0.1:${server.address().port}/v1/chat/completions`,
+        ANTHROPIC_API_URL: `http://127.0.0.1:${server.address().port}/v1/messages`,
+      },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const estimateLine = result.stdout.split('\n').find((l) => l.includes('token_estimate'));
+    const parsed = JSON.parse(estimateLine);
+    // 32 768-token window minus safety margin, system tokens, and max_tokens leaves < 32 768 input budget
+    assert.ok(
+      parsed.budget.input <= 32768,
+      `expected input budget <= 32768 for unknown Groq model, got ${parsed.budget.input}`,
+    );
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// MODEL_CONTEXT_WINDOW coverage: unknown Anthropic model falls back to 200 000
+test('auto_fix_pr uses 200 000-token fallback for unknown Anthropic model', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-ctx-ant-unknown-'));
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
+      extraEnv: { ANTHROPIC_MODEL: 'claude-unknown-future-model' },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const estimateLine = result.stdout.split('\n').find((l) => l.includes('token_estimate'));
+    const parsed = JSON.parse(estimateLine);
+    assert.ok(
+      parsed.budget.input > 32768,
+      `expected input budget > 32768 for unknown Anthropic model fallback, got ${parsed.budget.input}`,
+    );
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test('auto_fix_pr creates attempt label in repo before applying it', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-run-'));
   const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));
@@ -523,5 +628,38 @@ test('auto_fix_pr resets labels when english rerun checkbox text is used', async
     server.close();
     await fs.unlink(eventFile).catch(() => {});
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr extracts PR number from issue.number for issue_comment events', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-ic-'));
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('ic-fix.txt') }));
+  const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 for issue_comment event, stderr: ${result.stderr}`);
+
+    const labelRequests = server.requests.filter(
+      (r) => r.method === 'GET' && new RegExp(`/issues/${PR_NUMBER}/labels`).test(r.url),
+    );
+    assert.ok(labelRequests.length > 0, `expected label fetch for PR #${PR_NUMBER} via issue.number`);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr exits 1 when event has neither pull_request.number nor issue.number', async () => {
+  const tmpFile = path.join(os.tmpdir(), `auto-fix-evt-bad-${Date.now()}.json`);
+  await fs.writeFile(tmpFile, JSON.stringify({ action: 'created' }));
+  const server = await startMockServer(makeHandler());
+  try {
+    const result = await runAutoFix(server.address().port, tmpFile);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /pull_request.number or issue.number/);
+  } finally {
+    server.close();
+    await fs.unlink(tmpFile).catch(() => {});
   }
 });

@@ -18,6 +18,12 @@ These instructions apply to the entire repository.
 - Prefer safe, deterministic behavior over broad automation.
 - Fail fast on external API errors; never open PRs on failed generation.
 
+## Models
+
+Default Groq models (all stages): `qwen/qwen3-32b`. See `config/models.yaml` for per-stage overrides.
+Default Anthropic model (all stages): `claude-opus-4-7`.
+Context windows: Groq models cap at 32 768 tokens; Anthropic models at 200 000 tokens. `scripts/auto_fix_pr.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
+
 ## Engineering Rules
 
 - Keep workflow YAML files dumb: orchestration only, business logic in Node.js scripts/modules.
