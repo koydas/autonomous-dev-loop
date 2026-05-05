@@ -78,44 +78,7 @@ https://github.com/koydas/autonomous-dev-loop/issues/129
 **Title**
 `[FEATURE] Structured logs and pipeline health metrics`
 
-**Body (copy/paste):**
-```md
-## 🎯 Goal
-Add a feature that addresses a clear product need.
-
-## 📍 Context
-- Repo: autonomous-dev-loop
-- Domain: Operational diagnosability
-- Component: `scripts/lib/logger.mjs` + orchestration hooks
-
-## 🚀 Description
-Standardize structured logs and produce key metrics (success, retries, error classes, per-step latency) to accelerate failure diagnosis.
-
-Current state:
-- `logger.mjs` already emits JSON lines with `{ level, msg, ...data }` — good foundation.
-- Missing fields: `run_id`, `step`, `attempt`, `duration_ms`, `error_class`.
-- Without `run_id`, log lines from a single run cannot be correlated in multi-job workflows.
-- No end-of-run summary is emitted.
-
-## 🧩 Scope
-- In:
-  - Standard fields (`run_id`, `step`, `attempt`, `duration_ms`, `error_class`) added to `logger.mjs`.
-  - End-of-run summary for success/failure.
-  - Basic metric export through logs.
-- Out:
-  - Mandating an external observability platform.
-
-## 🧪 Acceptance criteria
-- [ ] Functional
-  - Each run emits end-to-end correlatable logs.
-- [ ] Edge cases covered
-  - Errors before full initialization are still traceable.
-- [ ] Tests included
-  - Unit tests for logger + smoke checks for required fields.
-
-## ⚙️ Constraints
-Keep logs useful and stable; avoid excessive verbosity by default.
-```
+https://github.com/koydas/autonomous-dev-loop/issues/132
 
 ---
 
