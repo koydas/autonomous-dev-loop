@@ -12,6 +12,8 @@
 | `pr-review` never posts a comment | No open PR found for the push branch (exits silently by design); LLM API error; `pull-requests: write` permission missing |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
+| Checkbox rerun (`- [x] Relancer Auto Fixer`) posted but no auto-fix triggered | Comment does not contain the exact text (case-insensitive alternatives: `rerun auto-fix`, `rerun auto fixer`); comment is on an issue that is **not** a PR; `issue_comment` trigger not present in `auto-fix-pr.yml` |
+| Auto-fix triggered via checkbox but fails at checkout | "Resolve PR payload for issue_comment" step failed — check that `AI_PR_TOKEN` or `GITHUB_TOKEN` has `pull-requests: read` and `contents: read`; `jq` parse error indicates malformed API response |
 | Auto-fix loop stops at attempt 3 | Expected: 3-attempt hard limit reached — manual intervention required (see below) |
 | Auto-fix posts "Auto-Fix Skipped" comment and stops | PR modifies `scripts/auto_fix_pr.mjs` — self-modification guard triggered (expected) |
 | Auto-fix workflow succeeds but pushes nothing | Checkpoint resume: attempt was already completed in a previous run |
@@ -41,7 +43,10 @@ Key steps to expand per workflow:
 - **Run PR review** — PR resolution, LLM call, comment upsert, review submit, label swap, re-pulse guard result
 
 ### `auto-fix-pr` (`auto-fix-pr.yml`)
-- **Run auto-fix** — attempt count read, LLM call, file writes, commit push, attempt label apply
+- **Resolve PR payload for issue_comment** _(only for checkbox-rerun triggers)_ — GitHub PR API call; extracts `head.ref` branch name needed for the checkout step. Failure here means the checkout will not have the correct branch ref.
+- **Checkout PR branch** — verifies the correct PR branch is checked out (uses `head_ref` from the resolve step for `issue_comment` events, `pull_request.head.ref` for label events)
+- **Apply AI fixes** — attempt count read, LLM call, file writes, attempt label apply
+- **Commit and push fixes** — commit push to PR branch
 
 ---
 
@@ -85,6 +90,8 @@ Key steps to expand per workflow:
 | Auto-fix skipped on a PR that modifies `auto_fix_pr.mjs` | Expected — self-modification guard is active. Fix the script manually and push directly. |
 | Workflow re-run completes immediately with no commit | No files changed by the model output for that run; inspect logs and review feedback context. |
 | Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and checkpoint files automatically before rerun. |
+| Checkbox rerun fails at "Resolve PR payload" step | Confirm the token (`AI_PR_TOKEN` or `GITHUB_TOKEN`) has `pull-requests: read`; inspect the curl output in the step log for HTTP errors |
+| Checkbox rerun triggers but commits to wrong branch | Indicates an older workflow version without the step-ordering fix — ensure `auto-fix-pr.yml` has "Resolve PR payload for issue_comment" listed **before** "Checkout PR branch" |
 
 ---
 
