@@ -247,3 +247,26 @@ The auto-fix workflow creates and manages these labels automatically:
 - `auto-fix-attempt-1`, `auto-fix-attempt-2`, `auto-fix-attempt-3` — each applied after the corresponding fix cycle completes.
 
 All label names, colors, and descriptions are configurable in `config/labels.yaml` under the `autofix` key.
+
+## changes-requested Label Reset
+
+When the PR review verdict is `REQUEST_CHANGES`, the workflow resets the `changes-requested` label to guarantee a fresh `labeled` event that re-triggers the auto-fix pipeline:
+
+1. **DELETE** `changes-requested` via `DELETE /repos/{owner}/{repo}/issues/{number}/labels/changes-requested`
+2. **POST** `changes-requested` via `POST /repos/{owner}/{repo}/issues/{number}/labels`
+
+The DELETE must occur before the POST so the `pull_request labeled` event fires on the re-application rather than being silently swallowed by GitHub's deduplication logic.
+
+Re-pulse is **skipped** when an auto-fix run is already `queued` or `in_progress` (checked via the Actions API) to prevent loop amplification. If the run-status check itself fails, the workflow defaults to skipping re-pulse (fail-closed).
+
+This behaviour is tested by the `pr_review re-pulses changes-requested label to reset auto-fix workflow cycle` integration test in `scripts/tests/pr_review.test.mjs`.
+
+## Test Coverage Requirement
+
+All automation-scope changes (`.github/workflows/`, `scripts/`, `prompts/`, `docs/code-generation.md`) must maintain a **minimum 85% test coverage** for critical-path logic, including:
+
+- Label management and idempotency error handling
+- Configuration validation
+- Workflow execution paths (label reset, review verdict parsing, auto-fix iteration limit)
+
+Coverage reports must be reviewed in pull requests to ensure no regression in automation reliability.
