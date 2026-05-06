@@ -87,45 +87,7 @@ https://github.com/koydas/autonomous-dev-loop/issues/132
 **Title**
 `[FEATURE] Chaos test scenarios for transient failure recovery`
 
-**Body (copy/paste):**
-```md
-## 🎯 Goal
-Add a feature that addresses a clear product need.
-
-## 📍 Context
-- Repo: autonomous-dev-loop
-- Domain: Robustness validation
-- Component: `scripts/tests/*.test.mjs` (including smoke)
-
-## 🚀 Description
-Add tests that simulate timeouts, 429, 5xx, and intermittent failures to validate automatic recovery and prevent regressions.
-
-Current state:
-- `groq_client.test.mjs` covers 429 retry — good.
-- No tests simulate 5xx on Anthropic or Groq.
-- No tests verify that `llm_client.mjs` does NOT fall back on permanent 4xx errors.
-- No timeout injection tests.
-
-## 🧩 Scope
-- In:
-  - Mocks/stubs for network/API failure simulation.
-  - Recoverable vs non-recoverable cases.
-  - Verification of attempt counters.
-  - Regression guard: `llm_client.mjs` fallback must not trigger on 401/403.
-- Out:
-  - E2E tests requiring real third-party services.
-
-## 🧪 Acceptance criteria
-- [ ] Functional
-  - Transient scenarios pass with retries.
-- [ ] Edge cases covered
-  - Permanent scenarios fail fast without excessive retries.
-- [ ] Tests included
-  - New targeted unit + smoke suites.
-
-## ⚙️ Constraints
-Tests must be deterministic (no flakes).
-```
+https://github.com/koydas/autonomous-dev-loop/issues/134
 
 ---
 
