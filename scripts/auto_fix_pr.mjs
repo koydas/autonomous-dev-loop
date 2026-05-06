@@ -9,6 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
+import { randomUUID } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -183,7 +184,7 @@ const nextAttempt = attemptCount + 1;
 
 log('Starting auto-fix', { prNumber, attempt: nextAttempt });
 
-setLogContext({ run_id: process.env.GITHUB_RUN_ID ?? crypto.randomUUID(), step: 'auto-fix', attempt: nextAttempt });
+setLogContext({ run_id: process.env.GITHUB_RUN_ID ?? randomUUID(), step: 'auto-fix', attempt: nextAttempt });
 
 const feedbackParts = [];
 if (reviewBody) feedbackParts.push(reviewBody);
