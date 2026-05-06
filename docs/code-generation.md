@@ -97,6 +97,55 @@ sequenceDiagram
 
 ```
 
+## Structured Logging API (`scripts/lib/logger.mjs`)
+
+All automation scripts share a structured JSON logger. Each line written to stdout/stderr is a valid JSON object.
+
+### Core functions
+
+```js
+import { log, error, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
+```
+
+| Function | Output stream | `level` field | Description |
+|---|---|---|---|
+| `log(msg, data?)` | stdout | `info` | General informational event |
+| `error(msg, data?)` | stderr | `error` | Error or warning event |
+| `logSummary({ success, stepsCompleted, errors })` | stdout | `info` | Emits a `run_summary` entry at script exit |
+| `logStart(step)` | — | — | Records start timestamp for a named step |
+| `logEnd(step, result)` | stdout | `info` | Emits `step_end` with elapsed `durationMs` |
+
+### Log context
+
+Call `setLogContext(fields)` once at startup to attach fields (e.g. `run_id`, `step`, `attempt`) to every subsequent `log` and `error` call. Per-call `data` fields override context fields with the same key.
+
+```js
+setLogContext({ run_id: process.env.GITHUB_RUN_ID, step: 'auto-fix', attempt: 1 });
+log('Starting', { prNumber: 42 });
+// → {"level":"info","msg":"Starting","run_id":"…","step":"auto-fix","attempt":1,"prNumber":42}
+```
+
+### Run summary
+
+Emit a terminal summary in the `unhandledRejection` handler and at normal exit so log consumers can detect silent failures:
+
+```js
+// on failure
+logSummary({ success: false, stepsCompleted: ['labels'], errors: [err.message] });
+
+// on success
+logSummary({ success: true, stepsCompleted: ['labels', 'diff', 'llm', 'write', 'label'], errors: [] });
+```
+
+### Step timing
+
+```js
+logStart('llm-call');
+const raw = await callLLM(…);
+logEnd('llm-call', 'ok');
+// → {"level":"info","msg":"step_end","step":"llm-call","result":"ok","durationMs":1234.5}
+```
+
 ## Minimum Test Coverage Policy
 
 The config validation logic must have a minimum test coverage of 80%. This ensures that all critical paths are properly tested and validated before deployment.

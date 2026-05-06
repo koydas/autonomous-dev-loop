@@ -1,6 +1,6 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { log, error } from '../lib/logger.mjs';
+import { log, error, setLogContext, logStart, logEnd, logSummary } from '../lib/logger.mjs';
 
 test('log writes JSON with level info to stdout', (t) => {
   const captured = [];
@@ -125,4 +125,81 @@ test('error does not throw on circular reference data', (t) => {
   assert.equal(parsed.level, 'error');
   assert.equal(parsed.msg, 'circular');
   assert.equal(parsed.self.self, '[Circular]');
+});
+
+test('setLogContext propagates fields into log output', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  setLogContext({ run_id: 'abc123', step: 'auto-fix' });
+  log('test message');
+  setLogContext({});
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.run_id, 'abc123');
+  assert.equal(parsed.step, 'auto-fix');
+  assert.equal(parsed.msg, 'test message');
+});
+
+test('setLogContext propagates fields into error output', (t) => {
+  const captured = [];
+  t.mock.method(console, 'error', (s) => captured.push(s));
+
+  setLogContext({ run_id: 'xyz789' });
+  error('something bad');
+  setLogContext({});
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.run_id, 'xyz789');
+  assert.equal(parsed.level, 'error');
+});
+
+test('log call data overrides context field with same key', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  setLogContext({ step: 'from-context' });
+  log('msg', { step: 'from-call' });
+  setLogContext({});
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.step, 'from-call');
+});
+
+test('logSummary emits level info with msg run_summary', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  logSummary({ success: true, stepsCompleted: ['diff', 'llm'], errors: [] });
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.level, 'info');
+  assert.equal(parsed.msg, 'run_summary');
+});
+
+test('logSummary includes success, stepsCompleted, and errors fields', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  logSummary({ success: false, stepsCompleted: ['labels'], errors: ['network timeout'] });
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.success, false);
+  assert.deepEqual(parsed.stepsCompleted, ['labels']);
+  assert.deepEqual(parsed.errors, ['network timeout']);
+});
+
+test('logEnd emits step_end with measured duration', (t) => {
+  const captured = [];
+  t.mock.method(console, 'log', (s) => captured.push(s));
+
+  logStart('fetch');
+  logEnd('fetch', 'ok');
+
+  const parsed = JSON.parse(captured[0]);
+  assert.equal(parsed.msg, 'step_end');
+  assert.equal(parsed.step, 'fetch');
+  assert.equal(parsed.result, 'ok');
+  assert.ok(typeof parsed.durationMs === 'number', 'durationMs should be a number');
+  assert.ok(parsed.durationMs >= 0);
 });
