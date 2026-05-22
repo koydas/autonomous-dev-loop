@@ -53,14 +53,18 @@ CI: `.github/workflows/test.yml` runs the full suite on every push and PR. Guide
 - ADR index: `docs/adr/README.md`
 
 ## Flow Diagram
-
 ```mermaid
 graph LR
-    A[Issue Validation] --> B[Code Generation]
-    B --> C[PR Review]
-    C --> D{Auto-Fix Needed?}
-    D -->|Yes| E[Auto-Fix Attempts]
-    E --> F[Update Code]
-    F --> C
-    D -->|No| G[Process Complete]
+    A[Issue created] --> B[Validator]
+    B -->|invalid| Z[Exit — no PR]
+    B -->|valid| C[Apply label: ready-for-dev]
+    C --> D[Code Generation]
+    D -->|API failure| D
+    D --> E[PR opened]
+    E --> F[PR Review]
+    F -->|APPROVE| G[Human merge gate]
+    F -->|REQUEST_CHANGES| H{Attempt ≤ 3?}
+    H -->|Yes| I[Auto-Fix]
+    I --> F
+    H -->|No| J[Manual intervention requested]
 ```
