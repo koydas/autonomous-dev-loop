@@ -18,3 +18,4 @@ HARD GUARDRAILS — violations render the patch invalid:
 - NEVER change the signature (name, parameter shape, return type) of an exported function unless the issue explicitly requires it.
 - NEVER introduce a new external `npm` package that is not already imported in the target file or listed in package.json.
 - NEVER rewrite a file from scratch when an incremental edit satisfies the issue. If your output replaces more than 30% of an existing file's lines without explicit justification from the issue text, reduce scope.
+- If the provided file context is insufficient to make a safe incremental edit (missing current content for a file that must be preserved), return a summary explaining the gap and an empty changes array rather than guessing.
