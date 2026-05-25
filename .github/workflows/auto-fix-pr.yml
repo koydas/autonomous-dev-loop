@@ -10,6 +10,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write
 
 jobs:
   load-labels:
@@ -60,9 +61,47 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Find latest PR review run for checkpoint
+        id: review_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BRANCH="${{ github.event.pull_request.head.ref }}"
+          else
+            BRANCH="${{ steps.pr.outputs.head_ref }}"
+          fi
+          RUN_ID=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow pr-review.yml \
+            --branch "$BRANCH" \
+            --status completed \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
+          echo "id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Download checkpoint artifact
+        if: steps.review_run.outputs.id != ''
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+          run-id: ${{ steps.review_run.outputs.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./checkpoints
+
+      - name: Check prerequisite checkpoint
+        run: |
+          RUNID="pr-${{ github.event.pull_request.number || github.event.issue.number }}"
+          if [ ! -f "./checkpoints/${RUNID}/review.json" ]; then
+            echo "::error::Checkpoint 'review' not found for run '${RUNID}'. The pr-review workflow must complete successfully before auto-fix can proceed."
+            exit 1
+          fi
+
       - name: Apply AI fixes
         id: fix
         env:
+          CHECKPOINT_RUN_ID: pr-${{ github.event.pull_request.number || github.event.issue.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
@@ -83,3 +122,12 @@ jobs:
           git add -A
           git diff --staged --quiet || git commit -m "fix(ai): auto-fix attempt ${ATTEMPT}"
           git push origin HEAD:"${PR_BRANCH}"
+
+      - name: Upload checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true

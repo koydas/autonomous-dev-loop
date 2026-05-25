@@ -22,9 +22,17 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Download checkpoint artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: checkpoints-issue-${{ github.event.issue.number }}
+          path: ./checkpoints
+
       - name: Validate issue
         id: validate
         env:
+          CHECKPOINT_RUN_ID: issue-${{ github.event.issue.number }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
@@ -60,4 +68,14 @@ jobs:
           gh workflow run code-generation.yml \
             --repo "${{ github.repository }}" \
             --ref "${{ github.event.repository.default_branch }}" \
-            -f issue_number=${{ github.event.issue.number }}
+            -f issue_number=${{ github.event.issue.number }} \
+            -f validate_run_id=${{ github.run_id }}
+
+      - name: Upload checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-issue-${{ github.event.issue.number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true

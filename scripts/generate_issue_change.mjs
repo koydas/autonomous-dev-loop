@@ -6,6 +6,7 @@ import { loadPrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { buildFileContentsBlock } from './lib/file_injector.mjs';
+import { writeCheckpoint } from './lib/checkpoint.mjs';
 import fs from 'node:fs/promises';
 
 process.on('unhandledRejection', (reason) => {
@@ -54,6 +55,10 @@ async function main() {
 
   log('Wrote generated changes', { paths: outputPaths.join(', ') });
   log('Exported workflow outputs: summary, generated_paths');
+
+  const runId = process.env.CHECKPOINT_RUN_ID ?? `issue-${process.env.ISSUE_NUMBER ?? 'unknown'}`;
+  await writeCheckpoint(runId, 'generate', { summary, outputPaths });
+  log('Checkpoint written', { runId, step: 'generate' });
 }
 
 main().catch((err) => {

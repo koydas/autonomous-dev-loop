@@ -9,6 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
+import { writeCheckpoint } from './lib/checkpoint.mjs';
 import { randomUUID } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
@@ -335,4 +336,7 @@ if (process.env.GITHUB_OUTPUT) {
   );
 }
 
+const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
+await writeCheckpoint(checkpointRunId, 'autofix', { prNumber, attempt: nextAttempt, outputPaths });
+log('Checkpoint written', { runId: checkpointRunId, step: 'autofix' });
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
