@@ -4,6 +4,7 @@ import { validateIssue, VALIDATION_SYSTEM_PROMPT, formatGitHubComment } from './
 import { callLLM } from './lib/llm_client.mjs';
 import { requireEnv, loadLLMConfig } from './lib/config.mjs';
 import { log, error as logError } from './lib/logger.mjs';
+import { writeCheckpoint } from './lib/checkpoint.mjs';
 import fs from 'node:fs/promises';
 
 process.on('unhandledRejection', (reason) => {
@@ -40,6 +41,10 @@ async function main() {
     await fs.appendFile(process.env.GITHUB_OUTPUT, output, 'utf8');
     log('Exported workflow outputs: valid, score, comment');
   }
+
+  const runId = process.env.CHECKPOINT_RUN_ID ?? `issue-${issueNumber}`;
+  await writeCheckpoint(runId, 'validate', { valid: result.valid, score: result.score });
+  log('Checkpoint written', { runId, step: 'validate' });
 }
 
 main().catch((err) => {

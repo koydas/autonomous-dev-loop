@@ -8,6 +8,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
+import { writeCheckpoint } from './lib/checkpoint.mjs';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -271,3 +272,7 @@ if (!isApproved) {
 await addLabel(apply);
 await removeLabel(remove);
 log('PR review labels applied', { prNumber, added: apply, removed: remove });
+
+const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
+await writeCheckpoint(checkpointRunId, 'review', { isApproved, prNumber });
+log('Checkpoint written', { runId: checkpointRunId, step: 'review' });

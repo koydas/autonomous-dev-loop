@@ -9,11 +9,16 @@ on:
         description: 'Issue number to process'
         required: true
         type: number
+      validate_run_id:
+        description: 'Run ID of the validate-issue workflow (for checkpoint resume)'
+        required: false
+        type: string
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write
 
 jobs:
   load-labels:
@@ -70,9 +75,29 @@ jobs:
           echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
           echo "title=$TITLE" >> "$GITHUB_OUTPUT"
 
+      - name: Download checkpoint artifact
+        if: inputs.validate_run_id != ''
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: checkpoints-issue-${{ steps.issue.outputs.number }}
+          run-id: ${{ inputs.validate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./checkpoints
+
+      - name: Check prerequisite checkpoint
+        if: inputs.validate_run_id != ''
+        run: |
+          RUNID="issue-${{ steps.issue.outputs.number }}"
+          if [ ! -f "./checkpoints/${RUNID}/validate.json" ]; then
+            echo "::error::Checkpoint 'validate' not found for run '${RUNID}'. The validate-issue job must complete successfully before code-generation can proceed."
+            exit 1
+          fi
+
       - name: Generate AI change
         id: generate
         env:
+          CHECKPOINT_RUN_ID: issue-${{ steps.issue.outputs.number }}
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}
           ISSUE_BODY: ${{ steps.issue.outputs.body }}
@@ -100,3 +125,12 @@ jobs:
             Closes #${{ steps.issue.outputs.number }}
           add-paths: |
             ${{ steps.generate.outputs.generated_paths }}
+
+      - name: Upload checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-issue-${{ steps.issue.outputs.number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true

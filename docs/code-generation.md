@@ -148,7 +148,49 @@ logEnd('llm-call', 'ok');
 
 ## Minimum Test Coverage Policy
 
-The config validation logic must have a minimum test coverage of 80%. This ensures that all critical paths are properly tested and validated before deployment.
+The following modules must maintain **≥ 80% test coverage**, enforced in CI by `test.yml` via `c8 --check-coverage`:
+
+- **Config validation logic** (`scripts/lib/config.mjs`): ≥ 80% across all metrics.
+- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): ≥ 80% across statements, branches, functions, and lines. Every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
+
+## Checkpoint Resume
+
+Critical job outputs are persisted to `./checkpoints/<runId>/<step>.json` via `scripts/lib/checkpoint.mjs` and exchanged between jobs as GitHub Actions artifacts. This allows a re-triggered run to resume from the last successful step rather than starting from scratch.
+
+### RunId naming conventions
+
+| Workflow chain | RunId format | Artifact name |
+|---|---|---|
+| `validate-issue` → `code-generation` | `issue-<number>` | `checkpoints-issue-<number>` |
+| `pr-review` → `auto-fix-pr` | `pr-<number>` | `checkpoints-pr-<number>` |
+
+The `CHECKPOINT_RUN_ID` environment variable overrides the default; each script falls back to deriving the ID from `ISSUE_NUMBER` or the resolved PR number if the variable is absent.
+
+### Step names written per job
+
+| Job script | Step name | Persisted fields |
+|---|---|---|
+| `validate_issue.mjs` | `validate` | `valid`, `score` |
+| `generate_issue_change.mjs` | `generate` | `summary`, `outputPaths` |
+| `pr_review.mjs` | `review` | `isApproved`, `prNumber` |
+| `auto_fix_pr.mjs` | `autofix` | `prNumber`, `attempt`, `outputPaths` |
+
+### Prerequisite enforcement
+
+`code-generation` (when triggered by the automated pipeline via `validate_run_id` dispatch input) and `auto-fix-pr` both fail explicitly with `::error::` if the expected upstream checkpoint file is not present, preventing execution in an incoherent state.
+
+### Cross-workflow artifact download
+
+- `validate-issue` passes its `GITHUB_RUN_ID` as the `validate_run_id` workflow-dispatch input when triggering `code-generation`. The generate job uses this run-id to download the artifact.
+- `auto-fix-pr` uses `gh run list` to find the latest successful `pr-review.yml` run for the PR branch and downloads its artifact by run-id.
+
+### Artifact retention
+
+GitHub Actions artifact retention applies (default 90 days). Old checkpoint artifacts for the same issue or PR number are overwritten (`overwrite: true`) on each new run.
+
+### Test coverage requirement
+
+`scripts/lib/checkpoint.mjs` and all code paths that call `writeCheckpoint`/`readCheckpoint` must maintain **≥ 80% test coverage**. Every distinct failure branch (e.g. ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
 
 ## Startup Fail-Fast Validation (automation entrypoints)
 

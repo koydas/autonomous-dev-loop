@@ -10,7 +10,7 @@ permissions:
   pull-requests: write
   contents: read
   issues: write
-  actions: read
+  actions: write
 
 jobs:
   review:
@@ -21,8 +21,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Resolve PR number for checkpoint
+        id: ckpt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "pr_number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            BRANCH="${{ github.ref_name }}"
+            PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
+            echo "pr_number=${PR:-${{ github.run_id }}}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download checkpoint artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
+          path: ./checkpoints
+
       - name: Run automated review
         env:
+          CHECKPOINT_RUN_ID: pr-${{ steps.ckpt.outputs.pr_number }}
           GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
@@ -31,3 +53,12 @@ jobs:
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
         run: node scripts/pr_review.mjs
+
+      - name: Upload checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
