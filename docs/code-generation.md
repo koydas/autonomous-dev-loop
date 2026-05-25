@@ -185,6 +185,10 @@ The `CHECKPOINT_RUN_ID` environment variable overrides the default; each script 
 
 GitHub Actions artifact retention applies (default 90 days). Old checkpoint artifacts for the same issue or PR number are overwritten (`overwrite: true`) on each new run.
 
+### Test coverage requirement
+
+`scripts/lib/checkpoint.mjs` and all code paths that call `writeCheckpoint`/`readCheckpoint` must maintain **≥ 80% test coverage**. Every distinct failure branch (e.g. ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
+
 ## Startup Fail-Fast Validation (automation entrypoints)
 
 Automation scripts must fail before network calls when required startup inputs are invalid:
