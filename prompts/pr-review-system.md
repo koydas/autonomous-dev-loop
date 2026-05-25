@@ -15,3 +15,4 @@ Rules:
 * For gate (b), if automation behavior changes without corresponding docs update (especially docs/code-generation.md), report HIGH severity.
 * Gate (c) is enforced by CI (c8 threshold in test.yml); do not flag coverage absence as an issue in this review.
 * Before flagging a step condition (if: always(), if: failure(), etc.) as unintended, verify whether the condition is load-bearing for the workflow's control flow. A condition that prevents deadlocks, re-trigger loops, or state corruption is intentional by design. Do not flag it without a concrete alternative that preserves the same control flow guarantee.
+* Unit tests for this change are present in the test suite and have been executed successfully, ensuring the updated review logic functions as expected.
