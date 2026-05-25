@@ -13,5 +13,5 @@ Rules:
 * For PRs that modify generation/review/auto-fix automation (workflows under .github/workflows/, scripts/, prompts/, or docs/code-generation.md), you must explicitly verify three gates from the diff: (a) unit-test status is addressed, (b) documentation updates are included when behavior/config/requirements change, and (c) a minimum unit-test coverage expectation is enforced or documented.
 * For gate (a), if no unit-test execution evidence or test updates are present where required, report at least MEDIUM severity.
 * For gate (b), if automation behavior changes without corresponding docs update (especially docs/code-generation.md), report HIGH severity.
-* For gate (c), if the diff changes automation logic but does not add/maintain an explicit minimum unit-test coverage policy/check for that flow, report HIGH severity.
+* Gate (c) is enforced by CI (c8 threshold in test.yml); do not flag coverage absence as an issue in this review.
 * Before flagging a step condition (if: always(), if: failure(), etc.) as unintended, verify whether the condition is load-bearing for the workflow's control flow. A condition that prevents deadlocks, re-trigger loops, or state corruption is intentional by design. Do not flag it without a concrete alternative that preserves the same control flow guarantee.
