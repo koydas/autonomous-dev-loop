@@ -66,6 +66,110 @@ test('validate_issue.mjs writes valid/score/comment to GITHUB_OUTPUT', async () 
   }
 });
 
+test('generate_issue_change.mjs exits 0 when GITHUB_OUTPUT is not set', async () => {
+  const groqContent = JSON.stringify({
+    summary: 'Simple change',
+    changes: [{ target_path: 'src/noop.js', file_content: 'const x = 1;' }],
+  });
+  const server = await startAnthropicMock(groqContent);
+  const port = server.address().port;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gh-no-output-'));
+  try {
+    const result = await runScript(
+      'generate_issue_change.mjs',
+      {
+        ANTHROPIC_API_KEY: 'test-key',
+        ISSUE_NUMBER: '1',
+        ISSUE_TITLE: 'Simple change',
+        ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
+      },
+      tmpDir,
+    );
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  } finally {
+    server.close();
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('generate_issue_change.mjs exits 1 when LLM returns JSON null', async () => {
+  const server = await startAnthropicMock('null');
+  const port = server.address().port;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gh-null-'));
+  try {
+    const result = await runScript(
+      'generate_issue_change.mjs',
+      {
+        ANTHROPIC_API_KEY: 'test-key',
+        ISSUE_NUMBER: '1',
+        ISSUE_TITLE: 'T',
+        ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
+      },
+      tmpDir,
+    );
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /AI response JSON must be an object/);
+  } finally {
+    server.close();
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('generate_issue_change.mjs exits 1 when LLM returns a JSON array', async () => {
+  const server = await startAnthropicMock('[]');
+  const port = server.address().port;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gh-array-'));
+  try {
+    const result = await runScript(
+      'generate_issue_change.mjs',
+      {
+        ANTHROPIC_API_KEY: 'test-key',
+        ISSUE_NUMBER: '1',
+        ISSUE_TITLE: 'T',
+        ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
+      },
+      tmpDir,
+    );
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /AI response JSON must be an object/);
+  } finally {
+    server.close();
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('generate_issue_change.mjs writes checkpoint at CHECKPOINT_RUN_ID path when set', async () => {
+  const groqContent = JSON.stringify({
+    summary: 'Checkpoint test',
+    changes: [{ target_path: 'src/chk.js', file_content: 'const chk = 1;' }],
+  });
+  const server = await startAnthropicMock(groqContent);
+  const port = server.address().port;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gh-checkpoint-'));
+  try {
+    const result = await runScript(
+      'generate_issue_change.mjs',
+      {
+        ANTHROPIC_API_KEY: 'test-key',
+        ISSUE_NUMBER: '99',
+        ISSUE_TITLE: 'T',
+        ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
+        CHECKPOINT_RUN_ID: 'custom-run-123',
+      },
+      tmpDir,
+    );
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const checkpointPath = path.join(tmpDir, 'checkpoints', 'custom-run-123', 'generate.json');
+    const raw = await fs.readFile(checkpointPath, 'utf8');
+    const checkpoint = JSON.parse(raw);
+    assert.equal(checkpoint.step, 'generate');
+    assert.equal(checkpoint.data.summary, 'Checkpoint test');
+  } finally {
+    server.close();
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
 test('generate_issue_change.mjs writes summary/generated_paths to GITHUB_OUTPUT', async () => {
   const groqContent = JSON.stringify({
     summary: 'Implement login feature',
