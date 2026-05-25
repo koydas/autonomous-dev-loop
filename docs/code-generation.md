@@ -148,7 +148,10 @@ logEnd('llm-call', 'ok');
 
 ## Minimum Test Coverage Policy
 
-The config validation logic must have a minimum test coverage of 80%. This ensures that all critical paths are properly tested and validated before deployment.
+The following modules must maintain **≥ 80% test coverage**, enforced in CI by `test.yml` via `c8 --check-coverage`:
+
+- **Config validation logic** (`scripts/lib/config.mjs`): ≥ 80% across all metrics.
+- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): ≥ 80% across statements, branches, functions, and lines. Every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
 
 ## Checkpoint Resume
 
