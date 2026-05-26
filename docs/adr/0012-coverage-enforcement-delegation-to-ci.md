@@ -1,39 +1,41 @@
-# ADR-0012: Coverage enforcement delegated to CI, not the reviewer agent
+# ADR-0012: Scoped coverage enforcement — CI for checkpoint, reviewer policy for the rest
 
 - **Date:** 2026-05-25
 - **Status:** Accepted
 
 ## Context
 
-The PR reviewer agent (`scripts/pr_review.mjs`) was responsible for two separate concerns:
+The PR reviewer agent's system prompt contained a broad gate (c): "if the diff changes automation logic but does not add/maintain an explicit minimum unit-test coverage policy/check for that flow, report HIGH severity." This instruction was accurate in intent but misleading in practice because it implied CI enforced coverage uniformly across the codebase, when in fact only `scripts/lib/checkpoint.mjs` had a machine-enforced coverage check.
 
-1. **Reviewing code quality** — correctness, style, architecture.
-2. **Enforcing coverage gates** — checking whether unit test coverage meets a minimum threshold and requesting changes if it does not.
+The old wording caused the reviewer to flag PRs for lacking "coverage enforcement" even when no CI mechanism existed to enforce it — producing review noise without a corresponding CI gate.
 
-This conflation caused two problems:
-
-- The reviewer parsed coverage signals from the raw diff text and inferred a minimum percentage. This heuristic was fragile: it missed cases where coverage was reported in CI artifacts rather than in the diff, and it triggered false "changes requested" reviews when coverage was fine.
-- Coverage enforcement is fundamentally a machine-checkable binary gate (pass/fail), not a qualitative review concern. Mixing them made reviewer prompts longer and harder to tune.
+Separately, `scripts/pr_review.mjs` appends `buildAutomationGateContext(rawDiff)` to the LLM user prompt to inform the reviewer which automation-scope files changed and whether test/doc signals are present. This context injection is unchanged by this decision.
 
 ## Decision
 
-Remove coverage enforcement from the reviewer agent. Coverage is now enforced exclusively by the CI workflow (`test.yml`):
+Update gate (c) in `prompts/pr-review-system.md` to reflect the actual CI coverage landscape:
 
-- `test.yml` runs `node --experimental-vm-modules node_modules/.bin/jest --coverage` and fails the job if coverage drops below the configured threshold.
-- `scripts/lib/coverage_checker.mjs` is retained but its output (`buildAutomationGateContext`) is no longer injected into the reviewer's LLM prompt. The module remains available for diagnostic tooling.
-- The reviewer agent's system prompt no longer contains coverage-related instructions.
+> CI enforces coverage only for `scripts/lib/checkpoint.mjs` via c8 in `test.yml`. For all other changed automation logic, if the diff does not add/maintain an explicit minimum unit-test coverage policy/check for that flow, report HIGH severity.
 
-The PR merge gate blocks on CI status checks, so a coverage regression cannot be merged even if the reviewer agent approves.
+CI state at this commit:
+- `test.yml` runs `node --test scripts/tests/*.test.mjs` for all tests (no coverage measurement).
+- A separate c8 step covers **only** `scripts/lib/checkpoint.mjs` with an 80% line/branch/function/statement threshold.
+
+The reviewer continues to:
+- Inject `buildAutomationGateContext(rawDiff)` into the LLM user prompt (unchanged).
+- Apply gates (a) and (b) for test and docs signals.
+- Apply gate (c) — but now with accurate guidance: flag missing *explicit coverage policy* for non-checkpoint files, not missing CI enforcement (since CI does not provide it).
 
 ## Alternatives Considered
 
-**Keep coverage in the reviewer but fix the heuristic** — would require parsing CI artifact URLs and making an additional API call per review. Adds latency and complexity for a check that CI already owns. Rejected.
+**Extend c8 coverage to the full `scripts/` tree** — would make the reviewer instruction accurate without changes to the prompt, and would provide machine enforcement. Deferred: requires setting a baseline threshold that accounts for existing coverage gaps without breaking CI on merge.
 
-**Add a separate coverage-check script called before the reviewer** — adds a step but still mixes the concern into the automation pipeline. CI is the canonical owner of build health. Rejected.
+**Remove gate (c) entirely** — removes the noise but also removes any coverage signal from reviews. Rejected: reviewer awareness of coverage gaps remains valuable even without CI enforcement.
 
 ## Consequences
 
-- ✅ Reviewer agent focuses solely on code quality; prompts are shorter and outputs are more targeted.
-- ✅ Coverage gate is authoritative (actual test run) rather than heuristic (diff-text parsing).
-- ✅ No new infrastructure needed — CI already ran tests; adding `--coverage` and a threshold is a one-line change.
-- ⚠️ Coverage failures now block the merge gate rather than appearing as reviewer comments. Teams that relied on the reviewer comment for coverage feedback will need to look at CI logs instead.
+- ✅ Reviewer instruction matches CI reality; false HIGH findings for missing coverage CI stop occurring.
+- ✅ `checkpoint.mjs` coverage is machine-enforced at ≥80%; no reviewer judgement required for that file.
+- ✅ `buildAutomationGateContext` context injection is preserved; reviewers still receive automation-scope signals.
+- ⚠️ For all files other than `checkpoint.mjs`, coverage remains a reviewer-opinion gate, not a hard CI block. A PR can be merged with reduced test coverage if the reviewer does not flag it.
+- ⚠️ If c8 coverage is extended to the full `scripts/` tree in a future increment, gate (c) in the system prompt should be updated again to reflect the broader enforcement.
