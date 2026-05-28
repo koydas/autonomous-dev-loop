@@ -9,7 +9,8 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
-import { writeCheckpoint } from './lib/checkpoint.mjs';
+import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
+import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
@@ -178,6 +179,27 @@ if (attemptCount >= MAX_ATTEMPTS) {
     body: JSON.stringify({ body: exhaustedBody }),
   });
   log('Max auto-fix attempts reached', { prNumber, attemptCount });
+
+  const exhaustedRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
+  const exhaustedMetricsCheckpoint = await readCheckpoint(exhaustedRunId, 'pr_metrics');
+  if (exhaustedMetricsCheckpoint?.data) {
+    const m = exhaustedMetricsCheckpoint.data;
+    await appendMetric({
+      type: 'pr',
+      pr_number: prNumber,
+      issue_number: m.issue_number,
+      final_verdict: 'MANUAL',
+      review_cycles: m.review_cycles,
+      request_changes_count: m.request_changes_count,
+      auto_fix_pushes: m.auto_fix_pushes,
+      started_at: m.started_at,
+      ended_at: new Date().toISOString(),
+      total_input_tokens_est: m.total_input_tokens_est,
+      total_output_tokens_est: m.total_output_tokens_est,
+    });
+    log('PR metrics recorded', { prNumber, verdict: 'MANUAL' });
+  }
+
   process.exit(0);
 }
 
@@ -339,4 +361,24 @@ if (process.env.GITHUB_OUTPUT) {
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
 await writeCheckpoint(checkpointRunId, 'autofix', { prNumber, attempt: nextAttempt, outputPaths });
 log('Checkpoint written', { runId: checkpointRunId, step: 'autofix' });
+
+const prMetricsCheckpoint = await readCheckpoint(checkpointRunId, 'pr_metrics');
+const prMetrics = prMetricsCheckpoint?.data ?? {
+  pr_number: prNumber,
+  issue_number: null,
+  started_at: new Date().toISOString(),
+  request_changes_count: 0,
+  auto_fix_pushes: 0,
+  review_cycles: 0,
+  total_input_tokens_est: 0,
+  total_output_tokens_est: 0,
+};
+await writeCheckpoint(checkpointRunId, 'pr_metrics', {
+  ...prMetrics,
+  auto_fix_pushes: prMetrics.auto_fix_pushes + 1,
+  total_input_tokens_est: prMetrics.total_input_tokens_est + estimateTokens(systemPrompt + userPrompt),
+  total_output_tokens_est: prMetrics.total_output_tokens_est + estimateTokens(raw),
+});
+log('PR metrics checkpoint updated', { prNumber, auto_fix_pushes: prMetrics.auto_fix_pushes + 1 });
+
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });

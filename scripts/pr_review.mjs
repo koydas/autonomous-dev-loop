@@ -8,7 +8,15 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
-import { writeCheckpoint } from './lib/checkpoint.mjs';
+import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
+import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+
+const _reviewStartedAt = new Date().toISOString();
+
+function extractIssueNumber(text) {
+  const m = (text ?? '').match(/[Cc]loses?\s+#(\d+)/);
+  return m ? Number(m[1]) : null;
+}
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -276,3 +284,43 @@ log('PR review labels applied', { prNumber, added: apply, removed: remove });
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
 await writeCheckpoint(checkpointRunId, 'review', { isApproved, prNumber });
 log('Checkpoint written', { runId: checkpointRunId, step: 'review' });
+
+const prMetricsCheckpoint = await readCheckpoint(checkpointRunId, 'pr_metrics');
+const prMetrics = prMetricsCheckpoint?.data ?? {
+  pr_number: prNumber,
+  issue_number: extractIssueNumber(prBody),
+  started_at: _reviewStartedAt,
+  request_changes_count: 0,
+  auto_fix_pushes: 0,
+  review_cycles: 0,
+  total_input_tokens_est: 0,
+  total_output_tokens_est: 0,
+};
+
+const updatedPrMetrics = {
+  ...prMetrics,
+  review_cycles: prMetrics.review_cycles + 1,
+  request_changes_count: prMetrics.request_changes_count + (isApproved ? 0 : 1),
+  total_input_tokens_est: prMetrics.total_input_tokens_est + estimateTokens(systemPrompt + userPrompt),
+  total_output_tokens_est: prMetrics.total_output_tokens_est + estimateTokens(cleanReview),
+};
+
+await writeCheckpoint(checkpointRunId, 'pr_metrics', updatedPrMetrics);
+log('PR metrics checkpoint updated', { prNumber, review_cycles: updatedPrMetrics.review_cycles });
+
+if (isApproved) {
+  await appendMetric({
+    type: 'pr',
+    pr_number: prNumber,
+    issue_number: updatedPrMetrics.issue_number,
+    final_verdict: 'APPROVE',
+    review_cycles: updatedPrMetrics.review_cycles,
+    request_changes_count: updatedPrMetrics.request_changes_count,
+    auto_fix_pushes: updatedPrMetrics.auto_fix_pushes,
+    started_at: updatedPrMetrics.started_at,
+    ended_at: new Date().toISOString(),
+    total_input_tokens_est: updatedPrMetrics.total_input_tokens_est,
+    total_output_tokens_est: updatedPrMetrics.total_output_tokens_est,
+  });
+  log('PR metrics recorded', { prNumber, verdict: 'APPROVE' });
+}

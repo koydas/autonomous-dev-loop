@@ -98,6 +98,10 @@ jobs:
             exit 1
           fi
 
+      - name: Capture metrics baseline
+        id: mbl
+        run: echo "count=$(wc -l < metrics/runs.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+
       - name: Apply AI fixes
         id: fix
         env:
@@ -120,6 +124,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
+          git reset HEAD -- metrics/
           git diff --staged --quiet || git commit -m "fix(ai): auto-fix attempt ${ATTEMPT}"
           git push origin HEAD:"${PR_BRANCH}"
 
@@ -131,3 +136,23 @@ jobs:
           path: ./checkpoints
           if-no-files-found: ignore
           overwrite: true
+
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE: ${{ steps.mbl.outputs.count }}
+        run: |
+          NEW_LINES=$(tail -n +$((BASELINE + 1)) metrics/runs.jsonl 2>/dev/null || true)
+          [ -z "$NEW_LINES" ] && exit 0
+          for i in 1 2 3; do
+            RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" 2>/dev/null || echo '{}')
+            SHA=$(echo "$RESP" | jq -r '.sha // empty')
+            CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
+            NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
+            jq -nc --arg m "metrics: pr ${{ github.event.pull_request.number || github.event.issue.number }} auto-fix [skip ci]" \
+              --arg c "$NEW_B64" --arg s "$SHA" \
+              '{message:$m,content:$c}+if $s!="" then {sha:$s} else {} end' \
+              | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
+              && break || sleep $((2**i))
+          done
