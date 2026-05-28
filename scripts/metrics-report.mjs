@@ -48,8 +48,10 @@ const avgPRDuration = prRecords.length
     })()
   : 'N/A';
 
-const totalInputTokens = records.reduce((s, r) => s + (r.input_tokens_est ?? 0), 0);
-const totalOutputTokens = records.reduce((s, r) => s + (r.output_tokens_est ?? 0), 0);
+const totalInputTokens = records.reduce(
+  (s, r) => s + (r.input_tokens_est ?? r.total_input_tokens_est ?? 0), 0);
+const totalOutputTokens = records.reduce(
+  (s, r) => s + (r.output_tokens_est ?? r.total_output_tokens_est ?? 0), 0);
 // Claude Sonnet 4.6: $3/MTok input, $15/MTok output
 const estimatedCost = (totalInputTokens * 3e-6 + totalOutputTokens * 15e-6).toFixed(4);
 

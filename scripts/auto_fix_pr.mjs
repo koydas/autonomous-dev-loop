@@ -10,7 +10,7 @@ import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
-import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { appendMetric } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
