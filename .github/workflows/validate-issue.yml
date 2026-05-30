@@ -86,6 +86,7 @@ jobs:
             RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" 2>/dev/null || echo '{}')
             SHA=$(echo "$RESP" | jq -r '.sha // empty')
             CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
+            [ -n "$CURRENT" ] && CURRENT="${CURRENT}"$'\n'
             NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
             jq -nc --arg m "metrics: issue ${{ github.event.issue.number }} [skip ci]" \
               --arg c "$NEW_B64" --arg s "$SHA" \

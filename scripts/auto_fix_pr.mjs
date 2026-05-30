@@ -10,7 +10,7 @@ import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
-import { appendMetric } from './lib/metrics.mjs';
+import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
 
 process.on('unhandledRejection', (reason) => {
@@ -34,10 +34,6 @@ const MODEL_CONTEXT_WINDOW = {
   'claude-sonnet-4-6': 200000,
   'claude-haiku-4-5-20251001': 200000,
 };
-
-function estimateTokens(text) {
-  return Math.ceil(text.length / 4);
-}
 
 function truncateToTokenBudget(text, tokenBudget) {
   if (tokenBudget <= 0) return '';
