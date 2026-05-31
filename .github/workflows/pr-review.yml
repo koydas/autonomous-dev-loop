@@ -35,11 +35,33 @@ jobs:
             echo "pr_number=${PR:-${{ github.run_id }}}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Find latest auto-fix run for checkpoint
+        id: fix_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BRANCH="${{ github.event.pull_request.head.ref }}"
+          else
+            BRANCH="${{ github.ref_name }}"
+          fi
+          RUN_ID=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow auto-fix-pr.yml \
+            --branch "$BRANCH" \
+            --status completed \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
+          echo "id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
       - name: Download checkpoint artifact
+        if: steps.fix_run.outputs.id != ''
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
+          run-id: ${{ steps.fix_run.outputs.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ./checkpoints
 
       - name: Capture metrics baseline
