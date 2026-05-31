@@ -136,6 +136,7 @@ async function runPrReview(port, eventFile, extraEnv = {}) {
     GITHUB_EVENT_PATH: eventFile,
     GITHUB_API_URL: `http://127.0.0.1:${port}`,
     ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
+    METRICS_FILE: '/dev/null',
     ...extraEnv,
   };
   return new Promise((resolve) => {

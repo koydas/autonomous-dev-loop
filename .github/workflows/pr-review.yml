@@ -88,4 +88,4 @@ jobs:
               | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
               && { UPLOADED=1; break; } || sleep $((2**i))
           done
-          [ "$UPLOADED" -eq 1 ] || { echo "::error::Failed to commit metrics after 3 attempts"; exit 1; }
+          [ "$UPLOADED" -eq 1 ] || echo "::warning::Failed to commit metrics after 3 attempts; data may be lost"
