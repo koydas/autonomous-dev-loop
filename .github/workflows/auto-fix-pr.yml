@@ -115,6 +115,15 @@ jobs:
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
         run: node scripts/auto_fix_pr.mjs
 
+      - name: Upload checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
+
       - name: Commit and push fixes
         if: steps.fix.outputs.fixed_paths != ''
         env:
@@ -127,15 +136,6 @@ jobs:
           git reset HEAD -- metrics/
           git diff --staged --quiet || git commit -m "fix(ai): auto-fix attempt ${ATTEMPT}"
           git push origin HEAD:"${PR_BRANCH}"
-
-      - name: Upload checkpoint artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
-          path: ./checkpoints
-          if-no-files-found: ignore
-          overwrite: true
 
       - name: Commit metrics
         if: always()
