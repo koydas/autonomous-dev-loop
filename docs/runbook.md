@@ -12,11 +12,11 @@ Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one
 | `pr` | `pr-review.yml` | When PR verdict is APPROVE |
 | `pr` | `auto-fix-pr.yml` | When auto-fix attempt limit is exhausted (verdict MANUAL) |
 
-**Key fields — issue records:** `run_id` (GitHub Actions `GITHUB_RUN_ID`; `local-<timestamp>` for local runs), `issue_number`, `verdict` (APPROVE/MANUAL), `score`, `started_at`, `ended_at`, `duration_ms`, `input_tokens_est`, `output_tokens_est`.
+**Key fields — issue records:** `run_id` (`{GITHUB_RUN_ID}-{GITHUB_RUN_ATTEMPT}`; `local-<timestamp>` for local runs), `issue_number`, `verdict` (APPROVE/MANUAL), `score`, `started_at`, `ended_at`, `duration_ms`, `input_tokens_est`, `output_tokens_est`.
 
-**Key fields — PR records:** `run_id` (GitHub Actions `GITHUB_RUN_ID`; `local-<timestamp>` for local runs), `pr_number`, `issue_number`, `final_verdict`, `review_cycles`, `request_changes_count`, `auto_fix_pushes`, `started_at`, `ended_at`, `total_input_tokens_est`, `total_output_tokens_est`.
+**Key fields — PR records:** `run_id` (`{GITHUB_RUN_ID}-{GITHUB_RUN_ATTEMPT}`; `local-<timestamp>` for local runs), `pr_number`, `issue_number`, `final_verdict`, `review_cycles`, `request_changes_count`, `auto_fix_pushes`, `started_at`, `ended_at`, `total_input_tokens_est`, `total_output_tokens_est`.
 
-> **`run_id` field:** Equals `GITHUB_RUN_ID`, which is unique per GitHub Actions workflow run. `deduplicateMetrics` in `metrics-report.mjs` uses it to drop records written more than once by the same run (belt-and-suspenders guard). It does **not** deduplicate records from two *different* concurrent runs for the same issue/PR — those have distinct `GITHUB_RUN_ID` values. Cross-run duplicates remain possible and should be removed manually from `metrics/runs.jsonl` if they occur (see troubleshooting table below). Records without `run_id` (written before this field was introduced) are always included (backward-compatible).
+> **`run_id` field:** Composite of `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` (e.g. `12345678-1`), unique per workflow execution *and* per operator re-run. `deduplicateMetrics` in `metrics-report.mjs` uses it to drop records written more than once within the exact same attempt (belt-and-suspenders guard). It does **not** deduplicate records from two *different* concurrent runs — those have distinct `GITHUB_RUN_ID` values. Cross-run duplicates remain possible and should be removed manually from `metrics/runs.jsonl` if they occur (see troubleshooting table below). Records without `run_id` are always included (backward-compatible).
 
 **Generate a markdown summary report:**
 ```bash

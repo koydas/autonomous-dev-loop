@@ -13,7 +13,7 @@ Pipeline performance needs to be recorded after each completed workflow run (iss
 
 **Storage format:** append-only JSONL committed to the default branch via the GitHub Contents API. Each workflow's "Commit metrics" step retries up to three times with exponential backoff to handle concurrent commit conflicts.
 
-**`run_id` field:** each record carries `GITHUB_RUN_ID` (the unique numeric ID assigned by GitHub Actions to each workflow run; `local-<epoch-ms>` for local invocations). `deduplicateMetrics` in `scripts/lib/metrics.mjs` filters the record list at report time, keeping only the first occurrence of each `run_id`. Records without `run_id` (written before this field was introduced) are kept unconditionally.
+**`run_id` field:** each record carries a composite `{GITHUB_RUN_ID}-{GITHUB_RUN_ATTEMPT}` (e.g. `12345678-1`; `local-<epoch-ms>` for local invocations). Using both variables ensures that operator re-runs of a workflow — where GitHub keeps `GITHUB_RUN_ID` constant and increments `GITHUB_RUN_ATTEMPT` — produce distinct `run_id` values and are not dropped. `deduplicateMetrics` in `scripts/lib/metrics.mjs` filters the record list at report time, keeping only the first occurrence of each `run_id`. Records without `run_id` (written before this field was introduced) are kept unconditionally.
 
 **Accepted limitation:** `deduplicateMetrics` acts as a same-run safety net only. Two *different* concurrent workflow runs for the same issue/PR have distinct `GITHUB_RUN_ID` values, so cross-run duplicates are not caught automatically. They may be removed manually by deleting lines with identical content (`type`, `issue_number`/`pr_number`, `verdict`/`final_verdict`) from `metrics/runs.jsonl`.
 

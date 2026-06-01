@@ -182,7 +182,7 @@ if (attemptCount >= MAX_ATTEMPTS) {
     const m = exhaustedMetricsCheckpoint.data;
     await appendMetric({
       type: 'pr',
-      run_id: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`,
+      run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}` : `local-${Date.now()}`,
       pr_number: prNumber,
       issue_number: m.issue_number,
       final_verdict: 'MANUAL',
