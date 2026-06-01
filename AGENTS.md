@@ -82,6 +82,16 @@ Any PR that adds a new exported function to `scripts/lib/` must include tests fo
 - Auto-fix only addresses issues explicitly named in the review feedback. It does not make speculative improvements.
 
 
+## PR Review Comment Workflow (interactive agents)
+
+When reading and acting on review comments or inline threads on a pull request:
+
+1. **Fix the code** — implement the requested change and push the commit.
+2. **Reply to each thread** — for every inline review thread addressed, post a reply explaining what was changed and which commit contains the fix (e.g. "Fixed in `abc1234` — …").
+3. **Resolve each thread** — after replying, mark the thread as resolved so reviewers can see at a glance what is still open.
+
+Do not resolve a thread without first posting a reply, and do not reply without resolving. Both steps are required.
+
 ## Review Hygiene (explicit)
 
 For any change to workflow behavior (for example files under `.github/workflows/` or automation scripts under `scripts/`):
