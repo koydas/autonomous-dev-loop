@@ -16,3 +16,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0010: Error taxonomy and bounded retry with jitter](./0010-error-taxonomy-and-retry.md)
 - [ADR-0011: Checkpoint-resume for state persistence across Actions jobs](./0011-checkpoint-resume-state-persistence.md)
 - [ADR-0012: Coverage enforcement delegated to CI](./0012-coverage-enforcement-delegation-to-ci.md)
+- [ADR-0013: Metrics storage as append-only JSONL and same-run deduplication via GITHUB_RUN_ID](./0013-metrics-append-only-jsonl-and-deduplication.md)
