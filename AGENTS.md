@@ -89,8 +89,9 @@ When reading and acting on review comments or inline threads on a pull request:
 1. **Fix the code** — implement the requested change and push the commit.
 2. **Reply to each thread** — for every inline review thread addressed, post a reply explaining what was changed and which commit contains the fix (e.g. "Fixed in `abc1234` — …").
 3. **Resolve each thread** — after replying, mark the thread as resolved so reviewers can see at a glance what is still open.
+4. **Request a new review** — once all threads are resolved, post a PR comment with `@Codex review` to trigger the next automated review cycle.
 
-Do not resolve a thread without first posting a reply, and do not reply without resolving. Both steps are required.
+Do not resolve a thread without first posting a reply, and do not reply without resolving. Steps 2, 3, and 4 are all required.
 
 ## Review Hygiene (explicit)
 
