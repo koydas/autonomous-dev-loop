@@ -162,7 +162,7 @@ logEnd('llm-call', 'ok');
 }
 ```
 
-No beta header is required — this is a GA feature. Prompts shorter than the model's minimum cacheable prefix (1024–4096 tokens depending on model) are silently not cached. The `validation-system` prompt exceeds 4000 characters and qualifies on all supported models. Cache reads cost ~10% of the normal input token price; cache writes cost ~1.25×.
+No beta header is required — this is a GA feature. Prompts shorter than the model's minimum cacheable prefix are silently not cached without error. The threshold is **2 048 tokens** for Haiku 4.5 and Sonnet 4.6, and **4 096 tokens** for Opus 4.7. The `validation-system` prompt is ~8 600 characters (~2 100 tokens), which clears the Haiku/Sonnet threshold but not the Opus 4.7 threshold — cache hits will not occur with the default `claude-opus-4-7` model unless the prompt is extended past ~16 000 characters. Cache reads cost ~10% of the normal input token price; cache writes cost ~1.25×.
 
 ## Minimum Test Coverage Policy
 
