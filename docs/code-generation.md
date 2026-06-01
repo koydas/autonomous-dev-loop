@@ -171,7 +171,7 @@ The following modules must maintain **≥ 80% test coverage** across statements,
 - **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
 - **Configuration** (`scripts/lib/config.mjs`): provider detection, environment variable loading, and LLM config construction paths.
 - **LLM client** (`scripts/lib/llm_client.mjs`): provider routing, fallback on transient errors, and permanent-error short-circuit.
-- **Output writer** (`scripts/lib/output_writer.mjs`): JSON parsing fallbacks, validation error branches, and file write paths.
+- **Output writer** (`scripts/lib/output_writer.mjs`): JSON parsing (fence-first strategy, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), validation error branches, and file write paths.
 
 ## Checkpoint Resume
 

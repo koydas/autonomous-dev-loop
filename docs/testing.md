@@ -30,7 +30,7 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 
 | File | Tests | What is covered |
 |------|-------|-----------------|
-| `scripts/lib/output_writer.mjs` | 10 | Field validation, path safety (absolute paths, `..` traversal), 16 000-char size limit, type coercion |
+| `scripts/lib/output_writer.mjs` | 30 | JSON parsing (fence-first, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), field validation, path safety (absolute paths, `..` traversal), 16 000-char size limit, type coercion |
 | `scripts/lib/config.mjs` | 12 | `requireEnv` missing/empty vars, `loadConfigFromEnv` defaults and required fields, `buildDeterministicPrompt` output structure, `loadLabelsConfig` group resolution |
 | `scripts/lib/groq_client.mjs` | 7 | HTTP errors, non-JSON response, malformed `choices`, Authorization header, temperature payload |
 | `scripts/lib/anthropic_client.mjs` | 10 | HTTP errors, non-JSON response, malformed `content`, `x-api-key` header, `anthropic-version` header, temperature, `max_tokens`, system prompt placement |

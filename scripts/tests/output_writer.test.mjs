@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError } from '../lib/output_writer.mjs';
 
 // parseJsonResponse tests
 
@@ -29,6 +29,58 @@ test('parseJsonResponse extracts JSON when there is surrounding prose', () => {
 
 test('parseJsonResponse throws for completely non-JSON text', () => {
   assert.throws(() => parseJsonResponse('not json at all'), /not valid JSON/);
+});
+
+test('parseJsonResponse parses JSON wrapped in ```JSON (uppercase) fences', () => {
+  const result = parseJsonResponse('```JSON\n{"summary":"fix","changes":[]}\n```');
+  assert.deepEqual(result, { summary: 'fix', changes: [] });
+});
+
+test('parseJsonResponse parses JSON wrapped in ```Json (mixed-case) fences', () => {
+  const result = parseJsonResponse('```Json\n{"summary":"fix","changes":[]}\n```');
+  assert.deepEqual(result, { summary: 'fix', changes: [] });
+});
+
+test('parseJsonResponse throws JsonParseError (not generic Error) for invalid input', () => {
+  assert.throws(
+    () => parseJsonResponse('not json at all'),
+    (err) => err instanceof JsonParseError,
+  );
+});
+
+test('parseJsonResponse error includes all three strategy entries in parseErrors', () => {
+  let caught;
+  try {
+    parseJsonResponse('not json at all');
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof JsonParseError);
+  assert.ok(caught.parseErrors.some((e) => e.startsWith('fenced parse:')));
+  assert.ok(caught.parseErrors.some((e) => e.startsWith('direct parse:')));
+  assert.ok(caught.parseErrors.some((e) => e.startsWith('slice parse:')));
+});
+
+test('parseJsonResponse error attaches raw input to JsonParseError.raw', () => {
+  const input = 'totally not json';
+  let caught;
+  try {
+    parseJsonResponse(input);
+  } catch (err) {
+    caught = err;
+  }
+  assert.equal(caught.raw, input);
+});
+
+test('parseJsonResponse records fenced parse error first when fence contains invalid JSON', () => {
+  let caught;
+  try {
+    parseJsonResponse('```json\nnot valid json\n```');
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(caught instanceof JsonParseError);
+  assert.match(caught.parseErrors[0], /^fenced parse:/);
 });
 
 test('validateAiOutput returns trimmed fields for valid input', () => {
