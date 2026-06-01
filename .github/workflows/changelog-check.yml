@@ -1,0 +1,19 @@
+name: Changelog Check
+
+on:
+  pull_request:
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify CHANGELOG.md updated for entrypoint or ADR changes
+        run: node scripts/check_changelog.mjs
+        env:
+          BASE_REF: ${{ github.base_ref }}
