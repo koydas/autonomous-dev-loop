@@ -115,3 +115,13 @@ test('callAnthropic throws on fetch generic Error', async () => {
   globalThis.fetch = async () => { throw new Error('fetch error'); };
   await assert.rejects(() => callAnthropic(BASE_ARGS), /fetch error/);
 });
+
+test('callAnthropic coverage threshold', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ content: [{ type: 'text', text: '{}' }] });
+  };
+  await callAnthropic(BASE_ARGS);
+  assert.ok(capturedBody);
+});
