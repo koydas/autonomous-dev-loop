@@ -5,6 +5,7 @@ import { callLLM } from './lib/llm_client.mjs';
 import { requireEnv, loadLLMConfig } from './lib/config.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
+import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import fs from 'node:fs/promises';
 
 process.on('unhandledRejection', (reason) => {
@@ -14,6 +15,9 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function main() {
+  const startedAt = new Date().toISOString();
+  const startMs = Date.now();
+
   const issueNumber = requireEnv('ISSUE_NUMBER');
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
@@ -45,6 +49,19 @@ async function main() {
   const runId = process.env.CHECKPOINT_RUN_ID ?? `issue-${issueNumber}`;
   await writeCheckpoint(runId, 'validate', { valid: result.valid, score: result.score });
   log('Checkpoint written', { runId, step: 'validate' });
+
+  await appendMetric({
+    type: 'issue',
+    issue_number: Number(issueNumber),
+    verdict: result.valid ? 'APPROVE' : 'MANUAL',
+    score: result.score,
+    started_at: startedAt,
+    ended_at: new Date().toISOString(),
+    duration_ms: Date.now() - startMs,
+    input_tokens_est: estimateTokens(VALIDATION_SYSTEM_PROMPT + issueTitle + issueBody),
+    output_tokens_est: estimateTokens(comment),
+  });
+  log('Metrics recorded', { issueNumber, verdict: result.valid ? 'APPROVE' : 'MANUAL' });
 }
 
 main().catch((err) => {

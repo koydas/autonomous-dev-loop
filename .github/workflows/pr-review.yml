@@ -8,7 +8,7 @@ on:
 
 permissions:
   pull-requests: write
-  contents: read
+  contents: write
   issues: write
   actions: write
 
@@ -35,12 +35,48 @@ jobs:
             echo "pr_number=${PR:-${{ github.run_id }}}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Find latest auto-fix run for checkpoint
+        id: fix_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BRANCH="${{ github.event.pull_request.head.ref }}"
+          else
+            BRANCH="${{ github.ref_name }}"
+          fi
+          RUN_ID=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow auto-fix-pr.yml \
+            --branch "$BRANCH" \
+            --status completed \
+            --limit 20 \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow auto-fix-pr.yml \
+              --status completed \
+              --limit 20 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
+          fi
+          echo "id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
       - name: Download checkpoint artifact
+        if: steps.fix_run.outputs.id != ''
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
+          run-id: ${{ steps.fix_run.outputs.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ./checkpoints
+
+      - name: Capture metrics baseline
+        id: mbl
+        run: echo "count=$(wc -l < metrics/runs.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
 
       - name: Run automated review
         env:
@@ -62,3 +98,26 @@ jobs:
           path: ./checkpoints
           if-no-files-found: ignore
           overwrite: true
+
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE: ${{ steps.mbl.outputs.count }}
+        run: |
+          NEW_LINES=$(tail -n +$((BASELINE + 1)) metrics/runs.jsonl 2>/dev/null || true)
+          [ -z "$NEW_LINES" ] && exit 0
+          UPLOADED=0
+          for i in 1 2 3; do
+            RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" 2>/dev/null || echo '{}')
+            SHA=$(echo "$RESP" | jq -r '.sha // empty')
+            CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
+            [ -n "$CURRENT" ] && CURRENT="${CURRENT}"$'\n'
+            NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
+            jq -nc --arg m "metrics: pr ${{ steps.ckpt.outputs.pr_number }} [skip ci]" \
+              --arg c "$NEW_B64" --arg s "$SHA" \
+              '{message:$m,content:$c}+if $s!="" then {sha:$s} else {} end' \
+              | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
+              && { UPLOADED=1; break; } || sleep $((2**i))
+          done
+          [ "$UPLOADED" -eq 1 ] || echo "::warning::Failed to commit metrics after 3 attempts; data may be lost"

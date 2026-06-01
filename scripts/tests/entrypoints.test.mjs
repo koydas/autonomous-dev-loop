@@ -11,7 +11,7 @@ const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..'
 function runScript(scriptName, env = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(SCRIPTS_DIR, scriptName)], {
-      env: { PATH: process.env.PATH, ...env },
+      env: { PATH: process.env.PATH, METRICS_FILE: '/dev/null', ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

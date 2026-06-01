@@ -1,5 +1,37 @@
 # Operator Runbook — Failure Triage
 
+## Metrics System
+
+Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step.
+
+**Record types:**
+
+| `type` | Written by | When |
+|--------|-----------|------|
+| `issue` | `validate-issue.yml` | After every issue validation (APPROVE or MANUAL) |
+| `pr` | `pr-review.yml` | When PR verdict is APPROVE |
+| `pr` | `auto-fix-pr.yml` | When auto-fix attempt limit is exhausted (verdict MANUAL) |
+
+**Key fields — issue records:** `issue_number`, `verdict` (APPROVE/MANUAL), `score`, `started_at`, `ended_at`, `duration_ms`, `input_tokens_est`, `output_tokens_est`.
+
+**Key fields — PR records:** `pr_number`, `issue_number`, `final_verdict`, `review_cycles`, `request_changes_count`, `auto_fix_pushes`, `started_at`, `ended_at`, `total_input_tokens_est`, `total_output_tokens_est`.
+
+**Generate a markdown summary report:**
+```bash
+node scripts/metrics-report.mjs
+```
+
+**Metrics troubleshooting:**
+
+| Symptom | Probable Cause |
+|---------|----------------|
+| `metrics/runs.jsonl` not updating after runs | Workflow `contents: write` permission missing; or the GitHub Contents API call failed (check "Commit metrics" step logs) |
+| Cost/token totals seem too low | PR records use `total_input_tokens_est` / `total_output_tokens_est`; verify the report script is picking up both field names |
+| MANUAL verdict recorded but PR was actually approved | Auto-fix exhaustion ran in the same session as a later manual approval — the MANUAL record is correct for that snapshot; future APPROVE records will appear separately |
+| `metrics/runs.jsonl` has duplicate lines | Two concurrent workflow runs both succeeded in pushing — safe to deduplicate manually; JSONL lines are self-contained |
+
+---
+
 ## Symptom → Probable Cause Mapping
 
 | Symptom | Probable Cause |

@@ -98,6 +98,10 @@ jobs:
             exit 1
           fi
 
+      - name: Capture metrics baseline
+        id: mbl
+        run: echo "count=$(wc -l < metrics/runs.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+
       - name: Apply AI fixes
         id: fix
         env:
@@ -111,6 +115,15 @@ jobs:
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
         run: node scripts/auto_fix_pr.mjs
 
+      - name: Upload checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
+
       - name: Commit and push fixes
         if: steps.fix.outputs.fixed_paths != ''
         env:
@@ -120,14 +133,29 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
+          git reset HEAD -- metrics/
           git diff --staged --quiet || git commit -m "fix(ai): auto-fix attempt ${ATTEMPT}"
           git push origin HEAD:"${PR_BRANCH}"
 
-      - name: Upload checkpoint artifact
+      - name: Commit metrics
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
-          path: ./checkpoints
-          if-no-files-found: ignore
-          overwrite: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE: ${{ steps.mbl.outputs.count }}
+        run: |
+          NEW_LINES=$(tail -n +$((BASELINE + 1)) metrics/runs.jsonl 2>/dev/null || true)
+          [ -z "$NEW_LINES" ] && exit 0
+          UPLOADED=0
+          for i in 1 2 3; do
+            RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" 2>/dev/null || echo '{}')
+            SHA=$(echo "$RESP" | jq -r '.sha // empty')
+            CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
+            [ -n "$CURRENT" ] && CURRENT="${CURRENT}"$'\n'
+            NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
+            jq -nc --arg m "metrics: pr ${{ github.event.pull_request.number || github.event.issue.number }} auto-fix [skip ci]" \
+              --arg c "$NEW_B64" --arg s "$SHA" \
+              '{message:$m,content:$c}+if $s!="" then {sha:$s} else {} end' \
+              | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
+              && { UPLOADED=1; break; } || sleep $((2**i))
+          done
+          [ "$UPLOADED" -eq 1 ] || echo "::warning::Failed to commit metrics after 3 attempts; data may be lost"

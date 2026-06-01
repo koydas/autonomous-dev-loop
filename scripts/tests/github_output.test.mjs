@@ -53,6 +53,7 @@ test('validate_issue.mjs writes valid/score/comment to GITHUB_OUTPUT', async () 
       ISSUE_TITLE: 'Add login feature',
       ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
       GITHUB_OUTPUT: outputFile,
+      METRICS_FILE: '/dev/null',
     });
 
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);

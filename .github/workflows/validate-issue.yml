@@ -5,7 +5,7 @@ on:
     types: [opened, edited]
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   actions: write
 
@@ -28,6 +28,10 @@ jobs:
         with:
           name: checkpoints-issue-${{ github.event.issue.number }}
           path: ./checkpoints
+
+      - name: Capture metrics baseline
+        id: mbl
+        run: echo "count=$(wc -l < metrics/runs.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
 
       - name: Validate issue
         id: validate
@@ -68,6 +72,29 @@ jobs:
           path: ./checkpoints
           if-no-files-found: ignore
           overwrite: true
+
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASELINE: ${{ steps.mbl.outputs.count }}
+        run: |
+          NEW_LINES=$(tail -n +$((BASELINE + 1)) metrics/runs.jsonl 2>/dev/null || true)
+          [ -z "$NEW_LINES" ] && exit 0
+          UPLOADED=0
+          for i in 1 2 3; do
+            RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" 2>/dev/null || echo '{}')
+            SHA=$(echo "$RESP" | jq -r '.sha // empty')
+            CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
+            [ -n "$CURRENT" ] && CURRENT="${CURRENT}"$'\n'
+            NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
+            jq -nc --arg m "metrics: issue ${{ github.event.issue.number }} [skip ci]" \
+              --arg c "$NEW_B64" --arg s "$SHA" \
+              '{message:$m,content:$c}+if $s!="" then {sha:$s} else {} end' \
+              | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
+              && { UPLOADED=1; break; } || sleep $((2**i))
+          done
+          [ "$UPLOADED" -eq 1 ] || echo "::warning::Failed to commit metrics after 3 attempts; data may be lost"
 
       - name: Trigger Code Generation
         if: steps.validate.outputs.valid == 'true'
