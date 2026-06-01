@@ -6,7 +6,7 @@ This repository includes an MVP workflow that converts validated issues into AI-
 
 For a first-time setup, complete these steps in order:
 
-1. Configure required secrets in **Settings → Secrets and variables → Actions**:
+1. Configure required secrets in **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests**:
    - `ANTHROPIC_API_KEY` and/or `GROQ_API_KEY`
    - `AI_PR_TOKEN` (recommended for reliable PR/label/review writes)
 2. (Optional) Configure provider variables:
@@ -119,6 +119,54 @@ The system prompt is now wrapped in an array with `cache_control: {type: "epheme
   ]
 }
 ```
+## Structured Logging API (`scripts/lib/logger.mjs`)
+
+All automation scripts share a structured JSON logger. Each line written to stdout/stderr is a valid JSON object.
+
+### Core functions
+
+```js
+import { log, error, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
+```
+
+| Function | Output stream | `level` field | Description |
+|---|---|---|---|
+| `log(msg, data?)` | stdout | `info` | General informational event |
+| `error(msg, data?)` | stderr | `error` | Error or warning event |
+| `logSummary({ success, stepsCompleted, errors })` | stdout | `info` | Emits a `run_summary` entry at script exit |
+| `logStart(step)` | — | — | Records start timestamp for a named step |
+| `logEnd(step, result)` | stdout | `info` | Emits `step_end` with elapsed `durationMs` |
+
+### Log context
+
+Call `setLogContext(fields)` once at startup to attach fields (e.g. `run_id`, `step`, `attempt`) to every subsequent `log` and `error` call. Per-call `data` fields override context fields with the same key.
+
+```js
+setLogContext({ run_id: process.env.GITHUB_RUN_ID, step: 'auto-fix', attempt: 1 });
+log('Starting', { prNumber: 42 });
+// → {"level":"info","msg":"Starting","run_id":"…","step":"auto-fix","attempt":1,"prNumber":42}
+```
+
+### Run summary
+
+Emit a terminal summary in the `unhandledRejection` handler and at normal exit so log consumers can detect silent failures:
+
+```js
+// on failure
+logSummary({ success: false, stepsCompleted: ['labels'], errors: [err.message] });
+
+// on success
+logSummary({ success: true, stepsCompleted: ['labels', 'diff', 'llm', 'write', 'label'], errors: [] });
+```
+
+### Step timing
+
+```js
+logStart('llm-call');
+const raw = await callLLM(…);
+logEnd('llm-call', 'ok');
+// → {"level":"info","msg":"step_end","step":"llm-call","result":"ok","durationMs":1234.5}
+```
 ## Cache Control Requirements
 The `cache_control` object is required for the system prompt and must have a `type` property set to `ephemeral`.
 
@@ -155,43 +203,4 @@ The `CHECKPOINT_RUN_ID` environment variable overrides the default; each script 
 
 ### Prerequisite enforcement
 
-`code-generation` (when triggered by the automated pipeline via `validate_run_id` dispatch input) and `auto-fix-pr` both fail explicitly with `::error::` if the expected upstream checkpoint file is not present, preventing execution in an incoherent state.
-
-### Cross-workflow artifact download
-
-- `validate-issue` passes its `GITHUB_RUN_ID` as the `validate_run_id` workflow-dispatch input when triggering `code-generation`. The generate job uses this run-id to download the artifact.
-- `auto-fix-pr` uses `gh run list` to find the latest successful `pr-review.yml` run for the PR branch and downloads its artifact by run-id.
-
-### Artifact retention
-
-GitHub Actions artifact retention applies (default 90 days). Old checkpoint artifacts for the same issue or PR number are overwritten (`overwrite: true`) on each new run.
-
-### Test coverage requirement
-
-`scripts/lib/checkpoint.mjs` and all code paths that call `writeCheckpoint`/`readCheckpoint` must maintain **≥ 80% test coverage**. Every distinct failure branch (e.g. ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
-
-## Startup Fail-Fast Validation (automation entrypoints)
-
-Automation scripts must fail before network calls when required startup inputs are invalid:
-
-- **Environment**: required vars are validated synchronously at process start (`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, provider API key, etc.).
-- **Prompts**: prompt files are loaded and validated as existing + non-empty at startup, with explicit file-path errors when missing/empty.
-- **GitHub payload**: required fields are validated with path-based errors:
-  - PR number: `pull_request.number` or fallback `issue.number`.
-  - Branch reference (when needed): `pull_request.head.ref` or fallback `ref`.
-- **Provider payload parsing**: response-shape failures include concrete expected paths:
-  - Anthropic: `content[0].text`
-  - Groq: `choices[0].message.content`
-
-## CI Coverage Enforcement
-
-The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. Each of the following modules must maintain **≥ 80% test coverage** (statements, branches, functions, lines). The gate runs as a separate named step in `test.yml` immediately after the full test suite:
-
-| Module | Test file |
-|---|---|
-| `scripts/lib/checkpoint.mjs` | `scripts/tests/checkpoint.test.mjs` |
-| `scripts/lib/config.mjs` | `scripts/tests/config.test.mjs` |
-| `scripts/lib/llm_client.mjs` | `scripts/tests/llm_client.test.mjs` |
-| `scripts/lib/output_writer.mjs` | `scripts/tests/output_writer.test.mjs` |
-
-A CI step failure means the named module has dropped below the threshold; fix by adding targeted tests before merging.
+`code-generation` (when triggered by the automated pipeline via `validate_run_id` dispatch input) and 
