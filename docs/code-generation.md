@@ -25,6 +25,7 @@ All four workflows pass both provider key sets, so provider selection is driven 
 | `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 | `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 | `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `changelog-check.yml` | _(none)_ | `BASE_REF` (set automatically from `github.base_ref`) | Fails if an entrypoint or ADR file is changed without a `## [Unreleased]` entry in `CHANGELOG.md` |
 
 `AI_PR_TOKEN` is used only by `code-generation.yml`, `pr-review.yml`, and `auto-fix-pr.yml` for GitHub API write operations.
 
@@ -224,6 +225,23 @@ Automation scripts must fail before network calls when required startup inputs a
 - **Provider payload parsing**: response-shape failures include concrete expected paths:
   - Anthropic: `content[0].text`
   - Groq: `choices[0].message.content`
+
+## Changelog Gate (`changelog-check.yml`)
+
+Runs on every pull request. Calls `node scripts/check_changelog.mjs` to verify that:
+
+1. If the PR touches any **entrypoint script** (`scripts/*.mjs`, top-level only) or any **ADR file** (`docs/adr/NNNN-*.md`), then `CHANGELOG.md` must also be modified.
+2. The modification must include at least one added non-empty line inside the `## [Unreleased]` section (editing a historical entry or fixing a typo does not satisfy the gate).
+
+The check is skipped automatically if neither entrypoints nor ADRs are in the diff. No secrets or LLM calls are required — it runs as a pure git/Node.js step.
+
+**Adding a changelog entry** (see `CONTRIBUTING.md § Changelog Policy`):
+```markdown
+## [Unreleased]
+
+### Added | Changed | Fixed | Removed
+- Brief description of the change (ADR-XXXX or PR #NNN)
+```
 
 ## CI Coverage Enforcement
 

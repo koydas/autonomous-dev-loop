@@ -38,6 +38,8 @@ node scripts/metrics-report.mjs
 
 | Symptom | Probable Cause |
 |---------|----------------|
+| `changelog-check` fails on a PR | PR modifies an entrypoint (`scripts/*.mjs`) or ADR (`docs/adr/NNNN-*.md`) without adding a line under `## [Unreleased]` in `CHANGELOG.md` — add the entry and push |
+| `changelog-check` fails with "Failed to get changed files" | Checkout step is missing `fetch-depth: 0`; ensure `changelog-check.yml` has `fetch-depth: 0` on the `actions/checkout` step |
 | `validate-issue` never starts after issue open/edit | Missing `issues: write` permission on `GITHUB_TOKEN`; workflow file syntax error; branch protection blocking Actions |
 | Issue stays unlabelled after validation run | LLM API key missing or invalid; `manage_labels.mjs` failed to create labels (check for 403/404 in logs) |
 | `ready-for-dev` applied but `code-generation` never triggers | Workflow trigger mismatch (label name drift vs `config/labels.yaml`); `AI_PR_TOKEN` / `GITHUB_TOKEN` lacks `contents: write` |
@@ -75,6 +77,9 @@ Key steps to expand per workflow:
 
 ### `pr-review` (`pr-review.yml`)
 - **Run PR review** — PR resolution, LLM call, comment upsert, review submit, label swap, re-pulse guard result
+
+### `changelog-check` (`changelog-check.yml`)
+- **Verify CHANGELOG.md updated for entrypoint or ADR changes** — exits 0 (skipped) when no entrypoints or ADRs changed; exits 1 with a plain-text error message describing which trigger files were found and what is missing
 
 ### `auto-fix-pr` (`auto-fix-pr.yml`)
 - **Resolve PR payload for issue_comment** _(only for checkbox-rerun triggers)_ — GitHub PR API call; extracts `head.ref` branch name needed for the checkout step. Failure here means the checkout will not have the correct branch ref.
