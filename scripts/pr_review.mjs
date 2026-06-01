@@ -311,7 +311,7 @@ log('PR metrics checkpoint updated', { prNumber, review_cycles: updatedPrMetrics
 if (isApproved) {
   await appendMetric({
     type: 'pr',
-    run_id: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`,
+    run_id: checkpointRunId,
     pr_number: prNumber,
     issue_number: updatedPrMetrics.issue_number,
     final_verdict: 'APPROVE',

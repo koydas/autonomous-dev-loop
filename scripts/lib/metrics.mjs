@@ -28,3 +28,13 @@ export async function readMetrics() {
     throw err;
   }
 }
+
+export function deduplicateMetrics(records) {
+  const seen = new Set();
+  return records.filter((r) => {
+    if (r.run_id == null) return true;
+    if (seen.has(r.run_id)) return false;
+    seen.add(r.run_id);
+    return true;
+  });
+}

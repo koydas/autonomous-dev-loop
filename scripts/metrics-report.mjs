@@ -1,22 +1,10 @@
 #!/usr/bin/env node
 
-import { readMetrics } from './lib/metrics.mjs';
+import { readMetrics, deduplicateMetrics } from './lib/metrics.mjs';
 
 const records = await readMetrics();
-
-const seenRunIds = new Set();
-const deduped = [];
-let droppedCount = 0;
-for (const r of records) {
-  if (r.run_id == null) {
-    deduped.push(r);
-  } else if (!seenRunIds.has(r.run_id)) {
-    seenRunIds.add(r.run_id);
-    deduped.push(r);
-  } else {
-    droppedCount++;
-  }
-}
+const deduped = deduplicateMetrics(records);
+const droppedCount = records.length - deduped.length;
 
 if (deduped.length === 0) {
   console.log('# Metrics Report\n\n_No data recorded yet._');
