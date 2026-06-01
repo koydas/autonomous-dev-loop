@@ -148,11 +148,12 @@ logEnd('llm-call', 'ok');
 
 ## Minimum Test Coverage Policy
 
-The following module must maintain **≥ 80% test coverage**, enforced in CI by `test.yml` via `c8 --check-coverage`:
+The following modules must maintain **≥ 80% test coverage** across statements, branches, functions, and lines, enforced in CI by `test.yml` via `c8 --check-coverage`:
 
-- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): ≥ 80% across statements, branches, functions, and lines. Every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
-
-Coverage for other modules (e.g. `scripts/lib/config.mjs`) is not currently enforced by CI and must be addressed by code review.
+- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
+- **Configuration** (`scripts/lib/config.mjs`): provider detection, environment variable loading, and LLM config construction paths.
+- **LLM client** (`scripts/lib/llm_client.mjs`): provider routing, fallback on transient errors, and permanent-error short-circuit.
+- **Output writer** (`scripts/lib/output_writer.mjs`): JSON parsing fallbacks, validation error branches, and file write paths.
 
 ## Checkpoint Resume
 
@@ -208,8 +209,13 @@ Automation scripts must fail before network calls when required startup inputs a
 
 ## CI Coverage Enforcement
 
-The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. The following module must maintain **≥ 80% test coverage**:
+The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. Each of the following modules must maintain **≥ 80% test coverage** (statements, branches, functions, lines). The gate runs as a separate named step in `test.yml` immediately after the full test suite:
 
-- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`)
+| Module | Test file |
+|---|---|
+| `scripts/lib/checkpoint.mjs` | `scripts/tests/checkpoint.test.mjs` |
+| `scripts/lib/config.mjs` | `scripts/tests/config.test.mjs` |
+| `scripts/lib/llm_client.mjs` | `scripts/tests/llm_client.test.mjs` |
+| `scripts/lib/output_writer.mjs` | `scripts/tests/output_writer.test.mjs` |
 
-`scripts/lib/config.mjs` is not currently in the c8 scope; its coverage is enforced by code review only.
+A CI step failure means the named module has dropped below the threshold; fix by adding targeted tests before merging.
