@@ -202,7 +202,7 @@ The `CHECKPOINT_RUN_ID` environment variable overrides the default; each script 
 ### Cross-workflow artifact download
 
 - `validate-issue` passes its `GITHUB_RUN_ID` as the `validate_run_id` workflow-dispatch input when triggering `code-generation`. The generate job uses this run-id to download the artifact.
-- `auto-fix-pr` uses `gh run list` to find the latest successful `pr-review.yml` run for the PR branch and downloads its artifact by run-id.
+- `auto-fix-pr` queries the GitHub Actions artifacts API (`GET /repos/{owner}/{repo}/actions/artifacts?name=checkpoints-pr-{N}`) to find the most recent non-expired artifact by name, then downloads it via `curl`. This avoids a race condition where the triggering `pr-review.yml` run may not yet be listed as `completed` by `gh run list` at the moment the auto-fix job begins.
 
 ### Artifact retention
 
