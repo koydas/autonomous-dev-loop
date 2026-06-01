@@ -52,7 +52,7 @@ async function main() {
 
   await appendMetric({
     type: 'issue',
-    run_id: runId,
+    run_id: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`,
     issue_number: Number(issueNumber),
     verdict: result.valid ? 'APPROVE' : 'MANUAL',
     score: result.score,
