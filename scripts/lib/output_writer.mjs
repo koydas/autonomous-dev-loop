@@ -15,7 +15,16 @@ export class JsonParseError extends Error {
 export function parseJsonResponse(raw) {
   const parseErrors = [];
 
-  // Tier 1: strip markdown code fence, then parse the interior
+  // Tier 1: direct parse — wins for any clean JSON (including JSON whose
+  // string fields contain triple-backtick snippets that would confuse the
+  // fence regex below)
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    parseErrors.push(`direct parse: ${err.message}`);
+  }
+
+  // Tier 2: strip markdown code fence, then parse the interior
   const fenced = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
   if (fenced) {
     try {
@@ -25,13 +34,6 @@ export function parseJsonResponse(raw) {
     }
   } else {
     parseErrors.push('fenced parse: no fence found');
-  }
-
-  // Tier 2: direct parse (handles clean JSON with no wrapping)
-  try {
-    return JSON.parse(raw);
-  } catch (err) {
-    parseErrors.push(`direct parse: ${err.message}`);
   }
 
   // Tier 3: brace-extraction slice (handles prose-wrapped JSON)

@@ -72,7 +72,7 @@ test('parseJsonResponse error attaches raw input to JsonParseError.raw', () => {
   assert.equal(caught.raw, input);
 });
 
-test('parseJsonResponse records fenced parse error first when fence contains invalid JSON', () => {
+test('parseJsonResponse records direct parse error first, then fenced parse error', () => {
   let caught;
   try {
     parseJsonResponse('```json\nnot valid json\n```');
@@ -80,7 +80,8 @@ test('parseJsonResponse records fenced parse error first when fence contains inv
     caught = err;
   }
   assert.ok(caught instanceof JsonParseError);
-  assert.match(caught.parseErrors[0], /^fenced parse:/);
+  assert.match(caught.parseErrors[0], /^direct parse:/);
+  assert.match(caught.parseErrors[1], /^fenced parse:/);
 });
 
 test('validateAiOutput returns trimmed fields for valid input', () => {

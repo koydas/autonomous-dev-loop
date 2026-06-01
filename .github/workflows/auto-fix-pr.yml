@@ -62,12 +62,23 @@ jobs:
           node-version: '20'
 
       - name: Download checkpoint artifact
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: ./checkpoints
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
+          ARTIFACT_NAME="checkpoints-pr-${PR_NUMBER}"
+          ARTIFACT_URL=$(gh api \
+            "repos/${{ github.repository }}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1" \
+            --jq '[.artifacts[] | select(.expired == false)] | .[0].archive_download_url // ""' \
+            2>/dev/null || echo "")
+          if [ -n "$ARTIFACT_URL" ]; then
+            mkdir -p ./checkpoints
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${ARTIFACT_URL}" -o /tmp/checkpoint.zip
+            unzip -o /tmp/checkpoint.zip -d ./checkpoints/
+            rm -f /tmp/checkpoint.zip
+          else
+            echo "No checkpoint artifact found for ${ARTIFACT_NAME}"
+          fi
 
       - name: Check prerequisite checkpoint
         run: |
