@@ -47,7 +47,7 @@ export function hasUnreleasedEntry(diff, changelogContent = '') {
 
     if (line.startsWith('+')) {
       if (newLineNum >= sectionStart && newLineNum < sectionEnd &&
-          line.slice(1).trim().length > 0) return true;
+          /^[-*] /.test(line.slice(1))) return true;
       newLineNum++;
     } else if (!line.startsWith('-')) {
       newLineNum++; // context line

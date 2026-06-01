@@ -219,6 +219,29 @@ test('hasUnreleasedEntry: new file with empty [Unreleased] section', () => {
   assert.equal(hasUnreleasedEntry(diff, content), false);
 });
 
+test('hasUnreleasedEntry: section heading ### Added alone is not a valid entry', () => {
+  const content = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '### Added',
+    '',
+    '## [2026-06-01]',
+  ].join('\n');
+  const diff = [
+    '--- a/CHANGELOG.md',
+    '+++ b/CHANGELOG.md',
+    '@@ -3,4 +3,6 @@',
+    ' ## [Unreleased]',
+    '+',
+    '+### Added',
+    ' ',
+    ' ## [2026-06-01]',
+  ].join('\n');
+  assert.equal(hasUnreleasedEntry(diff, content), false);
+});
+
 test('hasUnreleasedEntry: empty diff string', () => {
   assert.equal(hasUnreleasedEntry('', ''), false);
 });
