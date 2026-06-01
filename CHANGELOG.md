@@ -7,6 +7,9 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+### Added
+- Automated changelog gate: `scripts/check_changelog.mjs` verifies that any PR touching entrypoint scripts or ADR files adds an entry under `## [Unreleased]`; enforced by `.github/workflows/changelog-check.yml` on every PR
+
 ## [2026-06-01]
 
 ### Added

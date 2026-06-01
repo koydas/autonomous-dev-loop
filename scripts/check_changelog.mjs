@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * Fails if a PR modifies entrypoint scripts or ADR files without updating CHANGELOG.md.
+ * Fails if a PR modifies entrypoint scripts or ADR files without adding an entry
+ * under ## [Unreleased] in CHANGELOG.md.
  * Called by .github/workflows/changelog-check.yml on pull_request events.
  */
 import { execSync } from 'node:child_process';
+import { findTriggerFiles, hasUnreleasedEntry } from './lib/changelog_checker.mjs';
 
+const CHANGELOG = 'CHANGELOG.md';
 const baseRef = process.env.BASE_REF ?? 'main';
 
 let changedFiles;
@@ -18,13 +21,7 @@ try {
   process.exit(1);
 }
 
-// Top-level scripts only (not lib/ or tests/)
-const ENTRYPOINT_RE = /^scripts\/[^/]+\.mjs$/;
-// ADR records (docs/adr/NNNN-*.md)
-const ADR_RE = /^docs\/adr\/\d{4}-[^/]+\.md$/;
-const CHANGELOG = 'CHANGELOG.md';
-
-const triggerFiles = changedFiles.filter(f => ENTRYPOINT_RE.test(f) || ADR_RE.test(f));
+const triggerFiles = findTriggerFiles(changedFiles);
 
 if (triggerFiles.length === 0) {
   console.log('No entrypoint or ADR files changed — changelog check skipped.');
@@ -42,4 +39,21 @@ if (!changedFiles.includes(CHANGELOG)) {
   process.exit(1);
 }
 
-console.log(`Changelog check passed (${triggerFiles.length} trigger file(s), CHANGELOG.md updated).`);
+let changelogDiff;
+try {
+  changelogDiff = execSync(`git diff origin/${baseRef}...HEAD -- ${CHANGELOG}`, { encoding: 'utf8' });
+} catch {
+  changelogDiff = '';
+}
+
+if (!hasUnreleasedEntry(changelogDiff)) {
+  console.error(
+    `\nChangelog check failed.\n` +
+    `CHANGELOG.md was modified but no entry was added under ## [Unreleased].\n` +
+    `Add a new entry at the top of CHANGELOG.md under the [Unreleased] section.\n` +
+    `See CONTRIBUTING.md § Changelog Policy for format and examples.\n`
+  );
+  process.exit(1);
+}
+
+console.log(`Changelog check passed (${triggerFiles.length} trigger file(s), [Unreleased] entry verified).`);
