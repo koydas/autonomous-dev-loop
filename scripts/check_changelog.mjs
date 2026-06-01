@@ -5,6 +5,7 @@
  * Called by .github/workflows/changelog-check.yml on pull_request events.
  */
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { findTriggerFiles, hasUnreleasedEntry } from './lib/changelog_checker.mjs';
 
 const CHANGELOG = 'CHANGELOG.md';
@@ -46,7 +47,9 @@ try {
   changelogDiff = '';
 }
 
-if (!hasUnreleasedEntry(changelogDiff)) {
+const changelogContent = (() => { try { return readFileSync(CHANGELOG, 'utf8'); } catch { return ''; } })();
+
+if (!hasUnreleasedEntry(changelogDiff, changelogContent)) {
   console.error(
     `\nChangelog check failed.\n` +
     `CHANGELOG.md was modified but no entry was added under ## [Unreleased].\n` +

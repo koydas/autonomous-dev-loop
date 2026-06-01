@@ -53,12 +53,38 @@ test('findTriggerFiles: returns empty array when no triggers', () => {
 });
 
 // --- hasUnreleasedEntry ---
+// All calls pass (diff, changelogContent) — content is the post-change file state.
 
-test('hasUnreleasedEntry: added bullet under [Unreleased]', () => {
+const CONTENT_WITH_ENTRY = [
+  '# Changelog',
+  '',
+  '## [Unreleased]',
+  '',
+  '### Added',
+  '- New feature (PR #99)',
+  '',
+  '## [2026-06-01]',
+  '',
+  '### Added',
+  '- Old entry',
+].join('\n');
+
+const CONTENT_EMPTY_UNRELEASED = [
+  '# Changelog',
+  '',
+  '## [Unreleased]',
+  '',
+  '## [2026-06-01]',
+  '',
+  '### Added',
+  '- Old entry',
+].join('\n');
+
+test('hasUnreleasedEntry: added bullet under [Unreleased] — heading in same hunk', () => {
   const diff = [
     '--- a/CHANGELOG.md',
     '+++ b/CHANGELOG.md',
-    '@@ -3,6 +3,9 @@',
+    '@@ -3,4 +3,7 @@',
     ' ## [Unreleased]',
     '+',
     '+### Added',
@@ -66,40 +92,100 @@ test('hasUnreleasedEntry: added bullet under [Unreleased]', () => {
     ' ',
     ' ## [2026-06-01]',
   ].join('\n');
-  assert.equal(hasUnreleasedEntry(diff), true);
+  assert.equal(hasUnreleasedEntry(diff, CONTENT_WITH_ENTRY), true);
+});
+
+test('hasUnreleasedEntry: added bullet — hunk omits [Unreleased] heading (long section)', () => {
+  // Section has many existing lines; only the tail of it appears in the hunk.
+  const content = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '### Added',
+    '- Entry A',
+    '- Entry B',
+    '- Entry C',
+    '- Entry D',
+    '- Entry E',
+    '- New entry',   // line 11 — added in this PR
+    '',
+    '## [2026-06-01]',
+  ].join('\n');
+  // Hunk starts at line 8 of new file (after 3-line context), heading not shown.
+  const diff = [
+    '--- a/CHANGELOG.md',
+    '+++ b/CHANGELOG.md',
+    '@@ -8,5 +8,6 @@',
+    ' - Entry C',
+    ' - Entry D',
+    ' - Entry E',
+    '+- New entry',
+    ' ',
+    ' ## [2026-06-01]',
+  ].join('\n');
+  assert.equal(hasUnreleasedEntry(diff, content), true);
 });
 
 test('hasUnreleasedEntry: only dated section edited — no [Unreleased] addition', () => {
+  const content = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '## [2026-06-01]',
+    '',
+    '### Added',
+    '- Fixed typo',
+  ].join('\n');
   const diff = [
     '--- a/CHANGELOG.md',
     '+++ b/CHANGELOG.md',
-    '@@ -8,1 +8,1 @@',
-    ' ## [2026-06-01]',
+    '@@ -7,2 +7,2 @@',
+    ' ### Added',
     '-Old text',
     '+Fixed typo',
   ].join('\n');
-  assert.equal(hasUnreleasedEntry(diff), false);
+  assert.equal(hasUnreleasedEntry(diff, content), false);
 });
 
 test('hasUnreleasedEntry: [Unreleased] section present but no added content in it', () => {
+  const content = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '## [2026-06-01]',
+    '',
+    '### Added',
+    '- New dated entry',
+  ].join('\n');
   const diff = [
     '--- a/CHANGELOG.md',
     '+++ b/CHANGELOG.md',
-    '@@ -3,5 +3,5 @@',
-    ' ## [Unreleased]',
+    '@@ -6,2 +6,2 @@',
     ' ',
-    ' ## [2026-06-01]',
     '-Old dated entry',
     '+New dated entry',
   ].join('\n');
-  assert.equal(hasUnreleasedEntry(diff), false);
+  assert.equal(hasUnreleasedEntry(diff, content), false);
 });
 
 test('hasUnreleasedEntry: new file with [Unreleased] section and content', () => {
+  const content = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '### Added',
+    '- Something new',
+    '',
+    '## [2026-06-01]',
+  ].join('\n');
   const diff = [
     '--- /dev/null',
     '+++ b/CHANGELOG.md',
-    '@@ -0,0 +1,10 @@',
+    '@@ -0,0 +1,8 @@',
     '+# Changelog',
     '+',
     '+## [Unreleased]',
@@ -109,10 +195,17 @@ test('hasUnreleasedEntry: new file with [Unreleased] section and content', () =>
     '+',
     '+## [2026-06-01]',
   ].join('\n');
-  assert.equal(hasUnreleasedEntry(diff), true);
+  assert.equal(hasUnreleasedEntry(diff, content), true);
 });
 
 test('hasUnreleasedEntry: new file with empty [Unreleased] section', () => {
+  const content = [
+    '# Changelog',
+    '',
+    '## [Unreleased]',
+    '',
+    '## [2026-06-01]',
+  ].join('\n');
   const diff = [
     '--- /dev/null',
     '+++ b/CHANGELOG.md',
@@ -123,9 +216,9 @@ test('hasUnreleasedEntry: new file with empty [Unreleased] section', () => {
     '+',
     '+## [2026-06-01]',
   ].join('\n');
-  assert.equal(hasUnreleasedEntry(diff), false);
+  assert.equal(hasUnreleasedEntry(diff, content), false);
 });
 
 test('hasUnreleasedEntry: empty diff string', () => {
-  assert.equal(hasUnreleasedEntry(''), false);
+  assert.equal(hasUnreleasedEntry('', ''), false);
 });
