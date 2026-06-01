@@ -146,6 +146,24 @@ logEnd('llm-call', 'ok');
 // → {"level":"info","msg":"step_end","step":"llm-call","result":"ok","durationMs":1234.5}
 ```
 
+## Prompt Caching
+
+`callAnthropic` in `scripts/lib/anthropic_client.mjs` passes the system prompt as a single-element array with `cache_control: { type: "ephemeral" }`, enabling Anthropic's prompt caching:
+
+```json
+{
+  "system": [
+    {
+      "type": "text",
+      "text": "<system prompt>",
+      "cache_control": { "type": "ephemeral" }
+    }
+  ]
+}
+```
+
+No beta header is required — this is a GA feature. Prompts shorter than the model's minimum cacheable prefix are silently not cached without error. The threshold is **2 048 tokens** for Haiku 4.5 and Sonnet 4.6, and **4 096 tokens** for Opus 4.7. The `validation-system` prompt is ~8 600 characters (~2 100 tokens), which clears the Haiku/Sonnet threshold but not the Opus 4.7 threshold — cache hits will not occur with the default `claude-opus-4-7` model unless the prompt is extended past ~16 000 characters. Cache reads cost ~10% of the normal input token price; cache writes cost ~1.25×.
+
 ## Minimum Test Coverage Policy
 
 The following modules must maintain **≥ 80% test coverage** across statements, branches, functions, and lines, enforced in CI by `test.yml` via `c8 --check-coverage`:

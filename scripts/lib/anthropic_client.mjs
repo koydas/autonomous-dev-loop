@@ -19,7 +19,7 @@ export async function callAnthropic({
     model,
     max_tokens: maxTokens,
     temperature,
-    system: systemPrompt,
+    system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: prompt }],
   };
 

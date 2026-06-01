@@ -79,14 +79,18 @@ test('callAnthropic sends temperature 0 by default', async () => {
   assert.equal(capturedBody.temperature, 0);
 });
 
-test('callAnthropic sends system prompt at root level', async () => {
+test('callAnthropic sends system prompt as a cacheable text block', async () => {
   let capturedBody;
   globalThis.fetch = async (_url, opts) => {
     capturedBody = JSON.parse(opts.body);
     return makeResponse({ content: [{ type: 'text', text: '{}' }] });
   };
   await callAnthropic(BASE_ARGS);
-  assert.equal(capturedBody.system, 'You are a test assistant.');
+  assert.ok(Array.isArray(capturedBody.system), 'system must be an array');
+  assert.equal(capturedBody.system.length, 1);
+  assert.equal(capturedBody.system[0].type, 'text');
+  assert.equal(capturedBody.system[0].text, 'You are a test assistant.');
+  assert.deepEqual(capturedBody.system[0].cache_control, { type: 'ephemeral' });
   assert.ok(Array.isArray(capturedBody.messages));
   assert.equal(capturedBody.messages[0].role, 'user');
   assert.equal(capturedBody.messages[0].content, 'go');
