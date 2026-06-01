@@ -49,8 +49,7 @@ function isManualRerunRequested(eventPayload) {
   return /-\s*\[x\]\s*(relancer\s+auto\s*fixer|rerun\s+auto\s*-?\s*fix(er)?)/i.test(body);
 }
 
-const WORKSPACE_ROOT = path.resolve(process.env.GITHUB_WORKSPACE || process.cwd());
-const CHECKPOINT_DIR = path.join(WORKSPACE_ROOT, '.github', 'checkpoints');
+const CHECKPOINT_DIR = path.resolve('./checkpoints');
 
 async function cleanupCheckpointFiles() {
   let entries;

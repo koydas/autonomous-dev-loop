@@ -3,23 +3,40 @@ import path from 'node:path';
 
 const MAX_FILE_COUNT = 6;
 
+export class JsonParseError extends Error {
+  constructor(message, { raw, parseErrors }) {
+    super(message);
+    this.name = 'JsonParseError';
+    this.raw = raw;
+    this.parseErrors = parseErrors;
+  }
+}
+
 export function parseJsonResponse(raw) {
   const parseErrors = [];
+
+  // Tier 1: direct parse — wins for any clean JSON (including JSON whose
+  // string fields contain triple-backtick snippets that would confuse the
+  // fence regex below)
   try {
     return JSON.parse(raw);
   } catch (err) {
     parseErrors.push(`direct parse: ${err.message}`);
   }
 
-  const fenced = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  // Tier 2: strip markdown code fence, then parse the interior
+  const fenced = raw.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/i);
   if (fenced) {
     try {
       return JSON.parse(fenced[1].trim());
     } catch (err) {
       parseErrors.push(`fenced parse: ${err.message}`);
     }
+  } else {
+    parseErrors.push('fenced parse: no fence found');
   }
 
+  // Tier 3: brace-extraction slice (handles prose-wrapped JSON)
   const start = raw.indexOf('{');
   const end = raw.lastIndexOf('}');
   if (start !== -1 && end > start) {
@@ -28,9 +45,14 @@ export function parseJsonResponse(raw) {
     } catch (err) {
       parseErrors.push(`slice parse: ${err.message}`);
     }
+  } else {
+    parseErrors.push('slice parse: no brace pair found');
   }
 
-  throw new Error(`AI response was not valid JSON (${parseErrors.join('; ')})`);
+  throw new JsonParseError(
+    `AI response was not valid JSON (${parseErrors.join('; ')})`,
+    { raw, parseErrors },
+  );
 }
 const MAX_FILE_CONTENT_LENGTH = 16000;
 
