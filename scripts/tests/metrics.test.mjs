@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { appendMetric, readMetrics, estimateTokens } from '../lib/metrics.mjs';
+import { appendMetric, readMetrics, estimateTokens, deduplicateMetrics } from '../lib/metrics.mjs';
 
 // --- estimateTokens ---
 
@@ -95,4 +95,52 @@ test('readMetrics rethrows non-ENOENT errors', async (t) => {
   t.mock.method(fs, 'readFile', async () => { throw err; });
 
   await assert.rejects(() => readMetrics(), { code: 'EACCES' });
+});
+
+// --- deduplicateMetrics ---
+
+test('deduplicateMetrics returns empty array for empty input', () => {
+  assert.deepEqual(deduplicateMetrics([]), []);
+});
+
+test('deduplicateMetrics keeps all records without run_id (backward compat)', () => {
+  const records = [
+    { type: 'issue', issue_number: 1 },
+    { type: 'issue', issue_number: 2 },
+  ];
+  assert.deepEqual(deduplicateMetrics(records), records);
+});
+
+test('deduplicateMetrics keeps all records when all run_ids are unique', () => {
+  const records = [
+    { type: 'issue', run_id: 'issue-1' },
+    { type: 'issue', run_id: 'issue-2' },
+    { type: 'pr', run_id: 'pr-3' },
+  ];
+  assert.deepEqual(deduplicateMetrics(records), records);
+});
+
+test('deduplicateMetrics drops subsequent occurrences of a duplicate run_id', () => {
+  const first = { type: 'issue', run_id: 'issue-1', verdict: 'APPROVE' };
+  const dup   = { type: 'issue', run_id: 'issue-1', verdict: 'APPROVE' };
+  const other = { type: 'issue', run_id: 'issue-2', verdict: 'MANUAL' };
+  const result = deduplicateMetrics([first, dup, other]);
+  assert.deepEqual(result, [first, other]);
+});
+
+test('deduplicateMetrics handles mixed records (with and without run_id)', () => {
+  const noId  = { type: 'issue', issue_number: 99 };
+  const r1    = { type: 'issue', run_id: 'issue-1' };
+  const r1dup = { type: 'issue', run_id: 'issue-1' };
+  const r2    = { type: 'pr',    run_id: 'pr-5' };
+  const result = deduplicateMetrics([noId, r1, r1dup, r2]);
+  assert.deepEqual(result, [noId, r1, r2]);
+});
+
+test('deduplicateMetrics treats null run_id same as missing (kept unconditionally)', () => {
+  const records = [
+    { type: 'issue', run_id: null },
+    { type: 'issue', run_id: null },
+  ];
+  assert.deepEqual(deduplicateMetrics(records), records);
 });
