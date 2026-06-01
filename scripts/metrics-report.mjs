@@ -4,13 +4,27 @@ import { readMetrics } from './lib/metrics.mjs';
 
 const records = await readMetrics();
 
-if (records.length === 0) {
+const seenRunIds = new Set();
+const deduped = [];
+let droppedCount = 0;
+for (const r of records) {
+  if (r.run_id == null) {
+    deduped.push(r);
+  } else if (!seenRunIds.has(r.run_id)) {
+    seenRunIds.add(r.run_id);
+    deduped.push(r);
+  } else {
+    droppedCount++;
+  }
+}
+
+if (deduped.length === 0) {
   console.log('# Metrics Report\n\n_No data recorded yet._');
   process.exit(0);
 }
 
-const issueRecords = records.filter((r) => r.type === 'issue');
-const prRecords = records.filter((r) => r.type === 'pr');
+const issueRecords = deduped.filter((r) => r.type === 'issue');
+const prRecords = deduped.filter((r) => r.type === 'pr');
 
 const approvedIssues = issueRecords.filter((r) => r.verdict === 'APPROVE');
 const manualIssues = issueRecords.filter((r) => r.verdict === 'MANUAL');
@@ -48,9 +62,9 @@ const avgPRDuration = prRecords.length
     })()
   : 'N/A';
 
-const totalInputTokens = records.reduce(
+const totalInputTokens = deduped.reduce(
   (s, r) => s + (r.input_tokens_est ?? r.total_input_tokens_est ?? 0), 0);
-const totalOutputTokens = records.reduce(
+const totalOutputTokens = deduped.reduce(
   (s, r) => s + (r.output_tokens_est ?? r.total_output_tokens_est ?? 0), 0);
 // Claude Sonnet 4.6: $3/MTok input, $15/MTok output
 const estimatedCost = (totalInputTokens * 3e-6 + totalOutputTokens * 15e-6).toFixed(4);
@@ -66,7 +80,7 @@ for (const r of prRecords) prVerdictDist[r.final_verdict] = (prVerdictDist[r.fin
 const lines = [
   `# Metrics Report`,
   ``,
-  `Generated: ${new Date().toISOString()}  |  Total records: ${records.length}`,
+  `Generated: ${new Date().toISOString()}  |  Total records: ${deduped.length}${droppedCount > 0 ? ` (${droppedCount} duplicate${droppedCount === 1 ? '' : 's'} dropped)` : ''}`,
   ``,
   `## Issue Validation`,
   ``,

@@ -12,9 +12,11 @@ Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one
 | `pr` | `pr-review.yml` | When PR verdict is APPROVE |
 | `pr` | `auto-fix-pr.yml` | When auto-fix attempt limit is exhausted (verdict MANUAL) |
 
-**Key fields — issue records:** `issue_number`, `verdict` (APPROVE/MANUAL), `score`, `started_at`, `ended_at`, `duration_ms`, `input_tokens_est`, `output_tokens_est`.
+**Key fields — issue records:** `run_id` (GitHub Actions run ID; `local-<timestamp>` for local runs), `issue_number`, `verdict` (APPROVE/MANUAL), `score`, `started_at`, `ended_at`, `duration_ms`, `input_tokens_est`, `output_tokens_est`.
 
-**Key fields — PR records:** `pr_number`, `issue_number`, `final_verdict`, `review_cycles`, `request_changes_count`, `auto_fix_pushes`, `started_at`, `ended_at`, `total_input_tokens_est`, `total_output_tokens_est`.
+**Key fields — PR records:** `run_id` (GitHub Actions run ID; `local-<timestamp>` for local runs), `pr_number`, `issue_number`, `final_verdict`, `review_cycles`, `request_changes_count`, `auto_fix_pushes`, `started_at`, `ended_at`, `total_input_tokens_est`, `total_output_tokens_est`.
+
+> **`run_id` field:** Each record carries the originating `$GITHUB_RUN_ID`, which is unique per GitHub Actions workflow run. Local/manual runs use `local-<epoch-ms>` as a fallback. Records written before this field was introduced have no `run_id` and are always included in reports (backward-compatible).
 
 **Generate a markdown summary report:**
 ```bash
@@ -28,7 +30,7 @@ node scripts/metrics-report.mjs
 | `metrics/runs.jsonl` not updating after runs | Workflow `contents: write` permission missing; or the GitHub Contents API call failed (check "Commit metrics" step logs) |
 | Cost/token totals seem too low | PR records use `total_input_tokens_est` / `total_output_tokens_est`; verify the report script is picking up both field names |
 | MANUAL verdict recorded but PR was actually approved | Auto-fix exhaustion ran in the same session as a later manual approval — the MANUAL record is correct for that snapshot; future APPROVE records will appear separately |
-| `metrics/runs.jsonl` has duplicate lines | Two concurrent workflow runs both succeeded in pushing — safe to deduplicate manually; JSONL lines are self-contained |
+| `metrics/runs.jsonl` has duplicate lines | Two concurrent workflow runs both succeeded in pushing. Each record now carries a `run_id`; `scripts/metrics-report.mjs` deduplicates automatically at report time (keeps first occurrence, logs count of dropped duplicates in the report header). Historical records without `run_id` are retained as-is. |
 
 ---
 
