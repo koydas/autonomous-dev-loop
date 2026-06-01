@@ -32,6 +32,10 @@ jobs:
           else
             BRANCH="${{ github.ref_name }}"
             PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
+            if [ -z "$PR" ]; then
+              sleep 5
+              PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
+            fi
             echo "pr_number=${PR:-${{ github.run_id }}}" >> "$GITHUB_OUTPUT"
           fi
 

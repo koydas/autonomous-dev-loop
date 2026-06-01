@@ -546,7 +546,7 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
   const server = await startMockServer(makeHandler({ labelsBody: existingLabels }));
   const eventFile = await writeEventFile();
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-'));
-  const checkpointDir = path.join(tmpDir, '.github', 'checkpoints');
+  const checkpointDir = path.join(tmpDir, 'checkpoints');
   const outputFile = path.join(os.tmpdir(), `autofix-output-reset-${Date.now()}.txt`);
   try {
     await fs.mkdir(checkpointDir, { recursive: true });
