@@ -42,7 +42,7 @@ class in `scripts/lib/output_writer.mjs`.
 |------|----------|-----------|
 | 1 | `JSON.parse(raw)` directly | Must be first: valid JSON strings may contain `` ``` `` sequences that the Tier 2 regex would incorrectly match as a fence |
 | 2 | Strip markdown fence (`` ```[json]…``` ``), then `JSON.parse` interior | Handles the common model behaviour of wrapping output in a code block |
-| 3 | Slice from first `{` to last `}`, then `JSON.parse` | Handles prose-prefixed JSON; only entered if Tier 2 finds no fence |
+| 3 | Slice from first `{` to last `}`, then `JSON.parse` | Handles prose-prefixed JSON; entered whenever Tier 2 did not return — either no fence was found, or a fence was found but its content was not valid JSON |
 
 Each tier records its failure reason (or "no fence found" / "no brace pair found") into
 `parseErrors[]` unconditionally. If all three fail, a `JsonParseError` is thrown with
