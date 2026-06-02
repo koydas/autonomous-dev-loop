@@ -101,3 +101,21 @@ export function buildDeterministicPrompt({
   const template = loadPrompt('generation-user');
   return interpolatePrompt(template, { issueNumber, issueTitle, issueBody, fileContents });
 }
+
+export function validateStartup() {
+  requireEnv('GITHUB_TOKEN');
+  requireEnv('GITHUB_REPOSITORY');
+  requireEnv('GITHUB_EVENT_PATH');
+  requireEnv('ISSUE_NUMBER');
+  requireEnv('ISSUE_TITLE');
+  requireEnv('ISSUE_BODY');
+  const promptsDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
+  const autoFixSystemPromptPath = resolve(promptsDir, 'auto-fix-system.md');
+  const generationUserPromptPath = resolve(promptsDir, 'generation-user.md');
+  if (!require('fs').existsSync(autoFixSystemPromptPath)) {
+    throw new Error(`Prompt file not found: ${autoFixSystemPromptPath}`);
+  }
+  if (!require('fs').existsSync(generationUserPromptPath)) {
+    throw new Error(`Prompt file not found: ${generationUserPromptPath}`);
+  }
+}
