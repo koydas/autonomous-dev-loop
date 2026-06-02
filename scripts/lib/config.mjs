@@ -110,10 +110,10 @@ export function validateStartup() {
   requireEnv('ISSUE_TITLE');
   requireEnv('ISSUE_BODY');
   const promptsDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
-  const autoFixSystemPromptPath = resolve(promptsDir, 'auto-fix-system.md');
+  const generationSystemPromptPath = resolve(promptsDir, 'generation-system.md');
   const generationUserPromptPath = resolve(promptsDir, 'generation-user.md');
-  if (!existsSync(autoFixSystemPromptPath)) {
-    throw new Error(`Prompt file not found: ${autoFixSystemPromptPath}`);
+  if (!existsSync(generationSystemPromptPath)) {
+    throw new Error(`Prompt file not found: ${generationSystemPromptPath}`);
   }
   if (!existsSync(generationUserPromptPath)) {
     throw new Error(`Prompt file not found: ${generationUserPromptPath}`);
