@@ -18,8 +18,8 @@ Groq, the other supported provider, does not offer an equivalent prompt-caching
 mechanism. Any caching behaviour must therefore be provider-specific.
 
 Token thresholds for cache eligibility differ by model family:
-- Haiku and Sonnet models: ≥2048 tokens in the cached block.
-- Opus models: ≥4096 tokens in the cached block.
+- Opus and Sonnet models: ≥1024 tokens in the cached block.
+- Haiku models: ≥2048 tokens in the cached block.
 
 System prompts shorter than these thresholds are never cached by Anthropic, even if
 `cache_control` is present. This is a silent no-op: the API accepts the field without
@@ -64,8 +64,8 @@ unnecessary complexity.
   loops) pay reduced input-token cost when the system prompt meets the cache threshold.
 - ✅ Change is confined to `anthropic_client.mjs`; no caller or router changes needed.
 - ✅ Groq calls are unaffected; the providers remain independently isolated.
-- ⚠️ Caching is silently skipped for prompts below the token threshold (≥2048 for
-  Haiku/Sonnet, ≥4096 for Opus). Operators cannot observe whether a given call was
+- ⚠️ Caching is silently skipped for prompts below the token threshold (≥1024 for
+  Opus/Sonnet, ≥2048 for Haiku). Operators cannot observe whether a given call was
   actually served from cache without inspecting the `usage` field in the API response.
 - ⚠️ This creates a behavioural asymmetry between the Anthropic and Groq providers:
   Anthropic calls benefit from cache savings on repeated system prompts; Groq calls do
