@@ -8,7 +8,7 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 ## [Unreleased]
 
 ### Changed
-- `scripts/generate_issue_change.mjs` now calls `validateStartup()` at startup for early validation of required env vars (`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`) and prompt files before any external API call (PR #149)
+- `scripts/generate_issue_change.mjs` now calls `validateStartup()` at startup for early validation of required env vars (`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, `ISSUE_NUMBER`, `ISSUE_TITLE`) and prompt files (`generation-system.md`, `generation-user.md`) before any external API call; `ISSUE_BODY` is intentionally not required as it has a `(no body provided)` fallback (PR #149)
 
 ### Added
 - Automated changelog gate: `scripts/check_changelog.mjs` verifies that any PR touching entrypoint scripts or ADR files adds an entry under `## [Unreleased]`; enforced by `.github/workflows/changelog-check.yml` on every PR

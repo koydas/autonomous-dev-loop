@@ -245,15 +245,6 @@ test('validateStartup throws when ISSUE_TITLE is missing', () => {
   }
 });
 
-test('validateStartup throws when ISSUE_BODY is missing', () => {
-  setStartupEnv();
-  delete process.env.ISSUE_BODY;
-  try {
-    assert.throws(() => validateStartup(), /ISSUE_BODY/);
-  } finally {
-    unsetStartupEnv();
-  }
-});
 
 // loadLLMConfig temperature validation
 // GROQ_MODEL_DEFAULTS is a mutable module-level object; we mutate generation_temperature

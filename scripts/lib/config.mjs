@@ -108,7 +108,6 @@ export function validateStartup() {
   requireEnv('GITHUB_EVENT_PATH');
   requireEnv('ISSUE_NUMBER');
   requireEnv('ISSUE_TITLE');
-  requireEnv('ISSUE_BODY');
   const promptsDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
   const generationSystemPromptPath = resolve(promptsDir, 'generation-system.md');
   const generationUserPromptPath = resolve(promptsDir, 'generation-user.md');
