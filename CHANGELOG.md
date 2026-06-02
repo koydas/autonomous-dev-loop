@@ -10,12 +10,16 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 ### Added
 - Automated changelog gate: `scripts/check_changelog.mjs` verifies that any PR touching entrypoint scripts or ADR files adds an entry under `## [Unreleased]`; enforced by `.github/workflows/changelog-check.yml` on every PR
 - Context-aware PR review: `scripts/lib/change_classifier.mjs` classifies changed files before the LLM review and sets `tests_expected` so documentation-only, configuration-only, and lock-file-only PRs no longer receive irrelevant test-coverage findings (PR #148)
+- ADR-0014: Anthropic prompt caching on system prompts — documents the `cache_control: { type: 'ephemeral' }` decision in `anthropic_client.mjs` (PR #143)
+- ADR-0015: Three-tier JSON parsing with typed errors — documents `JsonParseError` class and Tier 1→2→3 cascade ordering invariant in `output_writer.mjs` (PR #144)
+- ADR-0016: Changelog CI gate for entrypoint scripts and ADR files — documents `check_changelog.mjs`, `changelog_checker.mjs`, and `changelog-check.yml` (PR #146)
 
 ## [2026-06-01]
 
 ### Added
 - Metrics storage as append-only JSONL (`metrics/runs.jsonl`) with same-run deduplication via `GITHUB_RUN_ID`+`GITHUB_RUN_ATTEMPT` composite key; `deduplicateMetrics` in `scripts/lib/metrics.mjs` filters duplicate records at report time (ADR-0013)
 - Anthropic prompt caching on system prompts — reduces token cost on repeated LLM calls with identical system content (PR #143)
+- Three-tier JSON parsing in `scripts/lib/output_writer.mjs`: `JsonParseError` typed error with `raw` and `parseErrors[]` fields; direct parse (Tier 1) → fence-strip (Tier 2) → brace-extraction (Tier 3) cascade (PR #144)
 
 ## [2026-05-25]
 

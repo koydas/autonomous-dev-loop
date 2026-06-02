@@ -17,3 +17,6 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0011: Checkpoint-resume for state persistence across Actions jobs](./0011-checkpoint-resume-state-persistence.md)
 - [ADR-0012: Coverage enforcement delegated to CI](./0012-coverage-enforcement-delegation-to-ci.md)
 - [ADR-0013: Metrics storage as append-only JSONL and same-run deduplication via GITHUB_RUN_ID](./0013-metrics-append-only-jsonl-and-deduplication.md)
+- [ADR-0014: Anthropic prompt caching on system prompts](./0014-anthropic-prompt-caching.md)
+- [ADR-0015: Three-tier JSON parsing with typed errors](./0015-three-tier-json-parsing.md)
+- [ADR-0016: Changelog CI gate for entrypoint scripts and ADR files](./0016-changelog-ci-gate.md)
