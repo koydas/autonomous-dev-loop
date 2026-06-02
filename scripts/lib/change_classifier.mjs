@@ -85,6 +85,10 @@ function isTestFile(filePath) {
 export function classifyChangedFiles(changedFiles) {
   const categories = new Set();
   let hasCode = false;
+  // True only when an uncategorised file (not docs/ci_cd/config/dep/test) is
+  // found — used to distinguish "workflow-only" (hasCode via automation scope,
+  // but still a single category) from "code + something" (mixed).
+  let hasUncategorizedCode = false;
 
   for (const filePath of changedFiles) {
     if (isDocumentationFile(filePath)) {
@@ -101,10 +105,11 @@ export function classifyChangedFiles(changedFiles) {
       categories.add('test_only');
     } else {
       hasCode = true;
+      hasUncategorizedCode = true;
     }
   }
 
-  return { categories: [...categories], hasCode };
+  return { categories: [...categories], hasCode, hasUncategorizedCode };
 }
 
 const NON_BEHAVIORAL = new Set(['documentation', 'ci_cd', 'configuration', 'dependency_update', 'test_only']);
@@ -169,13 +174,19 @@ export function buildChangeClassificationContext(rawDiff) {
   const changedFiles = extractChangedFiles(rawDiff);
   if (!changedFiles.length) return '';
 
-  const { categories, hasCode } = classifyChangedFiles(changedFiles);
+  const { categories, hasCode, hasUncategorizedCode } = classifyChangedFiles(changedFiles);
   const { tests_expected, reason } = determineTestExpectation(categories, hasCode);
 
   const classification = categories.length > 0 ? categories.join(', ') : 'none';
-  const changeType = hasCode
-    ? categories.length > 0 ? 'mixed' : 'feature_or_bugfix'
-    : categories.length === 1 ? categories[0] : categories.length > 1 ? 'mixed' : 'unknown';
+  // "mixed" only when there are genuinely distinct kinds of changes.
+  // A workflow-only PR has hasCode=true (automation scope) but a single
+  // category, so it stays "ci_cd" rather than "mixed".
+  const changeType =
+    hasUncategorizedCode && categories.length > 0 ? 'mixed'
+    : hasUncategorizedCode ? 'feature_or_bugfix'
+    : categories.length === 1 ? categories[0]
+    : categories.length > 1 ? 'mixed'
+    : 'unknown';
 
   return [
     '',

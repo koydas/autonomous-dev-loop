@@ -67,9 +67,16 @@ test('classifyChangedFiles: test-only files', () => {
   assert.equal(hasCode, false);
 });
 
-test('classifyChangedFiles: executable scripts set hasCode', () => {
-  const { categories, hasCode } = classifyChangedFiles(['scripts/lib/change_classifier.mjs']);
+test('classifyChangedFiles: executable scripts set hasCode and hasUncategorizedCode', () => {
+  const { hasCode, hasUncategorizedCode } = classifyChangedFiles(['scripts/lib/change_classifier.mjs']);
   assert.equal(hasCode, true);
+  assert.equal(hasUncategorizedCode, true);
+});
+
+test('classifyChangedFiles: workflow files set hasCode but not hasUncategorizedCode', () => {
+  const { hasCode, hasUncategorizedCode } = classifyChangedFiles(['.github/workflows/pr-review.yml']);
+  assert.equal(hasCode, true);
+  assert.equal(hasUncategorizedCode, false);
 });
 
 test('classifyChangedFiles: automation-scope md files are treated as code', () => {
@@ -191,6 +198,7 @@ test('buildChangeClassificationContext: workflow-only diff produces tests_expect
   const ctx = buildChangeClassificationContext(diff);
   assert.match(ctx, /tests_expected: true/);
   assert.match(ctx, /detected_categories: ci_cd/);
+  assert.match(ctx, /change_type: ci_cd/);
 });
 
 test('buildChangeClassificationContext: mixed PR (code + docs) produces tests_expected: true', () => {
