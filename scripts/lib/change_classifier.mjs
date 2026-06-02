@@ -29,7 +29,9 @@ const CONFIGURATION_PATTERNS = [
 ];
 
 const DEPENDENCY_PATTERNS = [
-  /^package\.json$/,
+  // package.json is intentionally excluded: it also owns behavioural fields
+  // (type, scripts, engines) so any edit to it is treated as executable code.
+  // Lock files are auto-generated and safe to classify as pure dependency updates.
   /^package-lock\.json$/,
   /^yarn\.lock$/,
   /^pnpm-lock\.yaml$/,
@@ -89,6 +91,8 @@ export function classifyChangedFiles(changedFiles) {
       categories.add('documentation');
     } else if (isCiCdFile(filePath)) {
       categories.add('ci_cd');
+      // Workflow files are automation scope — behaviour changes require tests.
+      if (isAutomationScopeFile(filePath)) hasCode = true;
     } else if (isConfigurationFile(filePath)) {
       categories.add('configuration');
     } else if (isDependencyFile(filePath)) {

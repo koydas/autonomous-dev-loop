@@ -26,10 +26,10 @@ test('classifyChangedFiles: changelog and contributing are documentation', () =>
   assert.equal(hasCode, false);
 });
 
-test('classifyChangedFiles: CI/CD workflow files', () => {
+test('classifyChangedFiles: CI/CD workflow files in automation scope set hasCode', () => {
   const { categories, hasCode } = classifyChangedFiles(['.github/workflows/pr-review.yml']);
   assert.ok(categories.includes('ci_cd'));
-  assert.equal(hasCode, false);
+  assert.equal(hasCode, true);
 });
 
 test('classifyChangedFiles: configuration files', () => {
@@ -44,10 +44,21 @@ test('classifyChangedFiles: tsconfig is configuration', () => {
   assert.equal(hasCode, false);
 });
 
-test('classifyChangedFiles: dependency files', () => {
-  const { categories, hasCode } = classifyChangedFiles(['package.json', 'package-lock.json']);
+test('classifyChangedFiles: lock files are dependency_update', () => {
+  const { categories, hasCode } = classifyChangedFiles(['package-lock.json', 'yarn.lock']);
   assert.ok(categories.includes('dependency_update'));
   assert.equal(hasCode, false);
+});
+
+test('classifyChangedFiles: package.json alone is treated as executable code', () => {
+  const { hasCode } = classifyChangedFiles(['package.json']);
+  assert.equal(hasCode, true);
+});
+
+test('classifyChangedFiles: workflow files are ci_cd with hasCode true (automation scope)', () => {
+  const { categories, hasCode } = classifyChangedFiles(['.github/workflows/pr-review.yml']);
+  assert.ok(categories.includes('ci_cd'));
+  assert.equal(hasCode, true);
 });
 
 test('classifyChangedFiles: test-only files', () => {
@@ -171,15 +182,15 @@ test('buildChangeClassificationContext: code change produces tests_expected: tru
   assert.match(ctx, /has_executable_code_changes: true/);
 });
 
-test('buildChangeClassificationContext: workflow-only diff produces tests_expected: false', () => {
+test('buildChangeClassificationContext: workflow-only diff produces tests_expected: true (automation scope)', () => {
   const diff = [
     'diff --git a/.github/workflows/pr-review.yml b/.github/workflows/pr-review.yml',
     '+++ b/.github/workflows/pr-review.yml',
     '+    - uses: actions/checkout@v4',
   ].join('\n');
   const ctx = buildChangeClassificationContext(diff);
-  assert.match(ctx, /tests_expected: false/);
-  assert.match(ctx, /change_type: ci_cd/);
+  assert.match(ctx, /tests_expected: true/);
+  assert.match(ctx, /detected_categories: ci_cd/);
 });
 
 test('buildChangeClassificationContext: mixed PR (code + docs) produces tests_expected: true', () => {
@@ -196,15 +207,26 @@ test('buildChangeClassificationContext: mixed PR (code + docs) produces tests_ex
   assert.match(ctx, /change_type: mixed/);
 });
 
-test('buildChangeClassificationContext: dependency update produces tests_expected: false', () => {
+test('buildChangeClassificationContext: lock-file-only diff produces tests_expected: false', () => {
   const diff = [
-    'diff --git a/package.json b/package.json',
-    '+++ b/package.json',
+    'diff --git a/package-lock.json b/package-lock.json',
+    '+++ b/package-lock.json',
     '+  "some-dep": "^2.0.0"',
   ].join('\n');
   const ctx = buildChangeClassificationContext(diff);
   assert.match(ctx, /tests_expected: false/);
   assert.match(ctx, /dependency_update/);
+});
+
+test('buildChangeClassificationContext: package.json alone produces tests_expected: true', () => {
+  const diff = [
+    'diff --git a/package.json b/package.json',
+    '+++ b/package.json',
+    '+  "type": "commonjs"',
+  ].join('\n');
+  const ctx = buildChangeClassificationContext(diff);
+  assert.match(ctx, /tests_expected: true/);
+  assert.match(ctx, /has_executable_code_changes: true/);
 });
 
 test('buildChangeClassificationContext: prompts md file is treated as code', () => {
