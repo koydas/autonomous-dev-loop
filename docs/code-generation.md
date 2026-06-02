@@ -174,6 +174,34 @@ The following modules must maintain **≥ 80% test coverage** across statements,
 - **LLM client** (`scripts/lib/llm_client.mjs`): provider routing, fallback on transient errors, and permanent-error short-circuit.
 - **Output writer** (`scripts/lib/output_writer.mjs`): JSON parsing (fence-first strategy, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), validation error branches, and file write paths.
 
+## PR Review: Context-Aware Change Classification
+
+Before generating review findings, `scripts/pr_review.mjs` injects two context blocks into the LLM prompt:
+
+1. **Change classification** (`scripts/lib/change_classifier.mjs`) — inspects changed file paths from the diff and emits a structured block with:
+   - `change_type` — dominant category (`documentation`, `ci_cd`, `configuration`, `dependency_update`, `test_only`, `feature_or_bugfix`, `mixed`)
+   - `detected_categories` — all matched categories
+   - `has_executable_code_changes` — true when any file falls outside the non-behavioral set
+   - `tests_expected` / `tests_expected_reason` — whether test coverage findings should be generated
+
+2. **Automation gate context** (`scripts/lib/coverage_checker.mjs`) — existing gate that checks whether automation-scope changes (scripts/, prompts/, .github/workflows/, docs/code-generation.md) include test and doc updates.
+
+### Classification rules
+
+| File pattern | Category | `tests_expected` |
+|---|---|---|
+| `.md` files outside automation scope (`docs/adr/`, `README.md`, etc.) | `documentation` | false |
+| `.github/workflows/*.yml` (automation scope) | `ci_cd` | **true** |
+| `config/`, `tsconfig*.json`, `.eslintrc*`, etc. | `configuration` | false |
+| `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` | `dependency_update` | false |
+| `package.json` | _(executable code)_ | **true** |
+| `scripts/tests/*.test.mjs`, `*.spec.*` | `test_only` | false |
+| All other files (scripts/, prompts/, etc.) | _(executable code)_ | **true** |
+
+When `tests_expected` is false the LLM is instructed to omit all test-coverage findings and not lower its verdict score because of absent tests.
+
+`package.json` is treated as executable code (not `dependency_update`) because it owns behavioural fields (`type`, `scripts`, `engines`). Only auto-generated lock files are classified as pure dependency updates.
+
 ## Changelog Gate (`changelog-check.yml`)
 
 Runs on every pull request. Calls `node scripts/check_changelog.mjs` to verify that:

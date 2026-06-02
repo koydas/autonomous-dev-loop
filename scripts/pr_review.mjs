@@ -8,6 +8,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
+import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 
@@ -168,7 +169,7 @@ const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
 
 const baseUserPrompt = interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: prBody });
-const userPrompt = `${baseUserPrompt}${buildAutomationGateContext(rawDiff)}`;
+const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff)}${buildAutomationGateContext(rawDiff)}`;
 
 const rawReview = await callLLM({
   prompt: userPrompt,
