@@ -7,6 +7,9 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+### Changed
+- `scripts/generate_issue_change.mjs` now calls `validateStartup()` at startup for early validation of required env vars (`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, `ISSUE_NUMBER`, `ISSUE_TITLE`, `ISSUE_BODY`) and prompt files before any external API call (PR #149)
+
 ### Added
 - Automated changelog gate: `scripts/check_changelog.mjs` verifies that any PR touching entrypoint scripts or ADR files adds an entry under `## [Unreleased]`; enforced by `.github/workflows/changelog-check.yml` on every PR
 - Context-aware PR review: `scripts/lib/change_classifier.mjs` classifies changed files before the LLM review and sets `tests_expected` so documentation-only, configuration-only, and lock-file-only PRs no longer receive irrelevant test-coverage findings (PR #148)
