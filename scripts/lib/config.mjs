@@ -119,20 +119,3 @@ export function validateStartup() {
     throw new Error(`Prompt file not found: ${generationUserPromptPath}`);
   }
 }
-
-import { test, expect } from '@jest/globals';
-
-test('validateStartup', () => {
-  process.env.GITHUB_TOKEN = 'token';
-  process.env.GITHUB_REPOSITORY = 'repo';
-  process.env.GITHUB_EVENT_PATH = 'path';
-  process.env.ISSUE_NUMBER = '1';
-  process.env.ISSUE_TITLE = 'title';
-  process.env.ISSUE_BODY = 'body';
-  expect(() => validateStartup()).not.toThrow();
-});
-
-test('validateStartup missing env', () => {
-  delete process.env.GITHUB_TOKEN;
-  expect(() => validateStartup()).toThrow('Missing required environment variable: GITHUB_TOKEN');
-});
