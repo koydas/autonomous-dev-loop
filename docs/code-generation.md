@@ -25,6 +25,7 @@ All four workflows pass both provider key sets, so provider selection is driven 
 | `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 | `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 | `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `changelog-check.yml` | _(none)_ | `BASE_REF` (set automatically from `github.base_ref`) | Fails if an entrypoint or ADR file is changed without a bullet entry under `## [Unreleased]` in `CHANGELOG.md` |
 
 `AI_PR_TOKEN` is used only by `code-generation.yml`, `pr-review.yml`, and `auto-fix-pr.yml` for GitHub API write operations.
 
@@ -172,6 +173,23 @@ The following modules must maintain **≥ 80% test coverage** across statements,
 - **Configuration** (`scripts/lib/config.mjs`): provider detection, environment variable loading, and LLM config construction paths.
 - **LLM client** (`scripts/lib/llm_client.mjs`): provider routing, fallback on transient errors, and permanent-error short-circuit.
 - **Output writer** (`scripts/lib/output_writer.mjs`): JSON parsing (fence-first strategy, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), validation error branches, and file write paths.
+
+## Changelog Gate (`changelog-check.yml`)
+
+Runs on every pull request. Calls `node scripts/check_changelog.mjs` to verify that:
+
+1. If the PR touches any **entrypoint script** (`scripts/*.mjs`, top-level only) or any **ADR file** (`docs/adr/NNNN-*.md`), then `CHANGELOG.md` must also be modified.
+2. The modification must include at least one added bullet line (starting with `- ` or `* `) inside the `## [Unreleased]` section. Adding only a section heading like `### Added` is not sufficient.
+
+The check is skipped automatically if neither entrypoints nor ADRs are in the diff. No secrets or LLM calls are required.
+
+**Adding a changelog entry** (see `CONTRIBUTING.md § Changelog Policy`):
+```markdown
+## [Unreleased]
+
+### Added | Changed | Fixed | Removed
+- Brief description of the change (ADR-XXXX or PR #NNN)
+```
 
 ## Checkpoint Resume
 

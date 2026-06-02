@@ -45,7 +45,7 @@ Optional future enhancement: add a stricter risk→test table when coverage expa
 
 ---
 
-### 4) Missing changelog policy for automation behavior changes — **Open**
+### 4) Missing changelog policy for automation behavior changes — **Closed**
 
 **Gap**
 Major behavior shifts are partly reflected in ADRs, but there is no explicit contributor-facing rule for when to update docs + ADR + release/changelog notes together.
@@ -53,8 +53,8 @@ Major behavior shifts are partly reflected in ADRs, but there is no explicit con
 **Impact**
 Documentation drift risk increases as workflows evolve. This analysis itself was 26 days out of date before the 2026-05-25 revalidation.
 
-**Recommendation**
-Add a short documentation governance section (or `CONTRIBUTING.md` subsection) specifying minimum update set for behavior changes: when to create a new ADR vs. amend an existing one, and who is responsible for keeping this gap analysis current.
+**Disposition**
+Closed 2026-06-01: `CHANGELOG.md` created with retroactive entries for ADR-0009 through ADR-0013 and other May–June 2026 features. `CONTRIBUTING.md` updated with a Changelog Policy section. `scripts/check_changelog.mjs` and `.github/workflows/changelog-check.yml` added to enforce the rule in CI on every PR touching entrypoint scripts or ADR files.
 
 ---
 

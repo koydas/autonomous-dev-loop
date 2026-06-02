@@ -41,3 +41,21 @@ docs/             Setup guides and architecture decisions (ADRs)
 - Document major architectural choices in `docs/adr/` as numbered ADR files.
 
 See `AGENTS.md` for the full engineering rules and `docs/testing.md` for test conventions.
+
+## Changelog Policy
+
+Update `CHANGELOG.md` whenever your PR modifies:
+
+- **Entrypoint scripts** — any `scripts/*.mjs` file (not `scripts/lib/` or `scripts/tests/`)
+- **ADR files** — any `docs/adr/NNNN-*.md` record
+
+Add your entry under the `[Unreleased]` section using [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) conventions:
+
+```
+## [Unreleased]
+
+### Added | Changed | Fixed | Removed
+- Brief description of the behavior change (ADR-XXXX or PR #NNN)
+```
+
+A CI job (`changelog-check.yml`) enforces this rule on every PR and will fail if `CHANGELOG.md` is not updated.
