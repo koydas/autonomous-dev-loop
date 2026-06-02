@@ -15,3 +15,15 @@ Rules:
 * For gate (b), if automation behavior changes without corresponding docs update (especially docs/code-generation.md), report HIGH severity.
 * For gate (c), CI enforces coverage only for `scripts/lib/checkpoint.mjs` via c8 in test.yml. For all other changed automation logic, if the diff does not add/maintain an explicit minimum unit-test coverage policy/check for that flow, report HIGH severity.
 * Before flagging a step condition (if: always(), if: failure(), etc.) as unintended, verify whether the condition is load-bearing for the workflow's control flow. A condition that prevents deadlocks, re-trigger loops, or state corruption is intentional by design. Do not flag it without a concrete alternative that preserves the same control flow guarantee.
+
+Context-aware review:
+* The user message contains a "Change classification context" block produced by static analysis of the diff. Read it before generating findings.
+* Respect the `tests_expected` field exactly: if it is false, do NOT generate any finding related to missing tests, insufficient test coverage, or lack of test updates — and do not lower the verdict because of it.
+* Adapt evaluation criteria to the detected change type:
+  - documentation: evaluate correctness, clarity, consistency with existing docs, and broken references. Do not require tests.
+  - ci_cd: evaluate correctness, deployment impact, rollback risk, and environment compatibility. Tests are optional.
+  - configuration: evaluate correctness, maintainability, and environment compatibility. Tests are optional.
+  - dependency_update: evaluate breaking changes, version compatibility, and security impact. Discuss tests only if runtime behavior is affected.
+  - test_only: evaluate test correctness, coverage of the targeted behaviour, and absence of false assertions.
+  - feature / bugfix / refactor / security: apply the full rubric including test coverage where tests_expected is true.
+  - mixed: apply the strictest applicable criteria for each changed file category.
