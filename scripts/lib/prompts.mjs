@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 
@@ -6,7 +6,7 @@ const PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../prom
 
 export function loadPrompt(name) {
   const promptPath = resolve(PROMPTS_DIR, `${name}.md`);
-  if (!require('fs').existsSync(promptPath)) {
+  if (!existsSync(promptPath)) {
     throw new Error(`Prompt file not found for "${name}" at ${promptPath}`);
   }
   let content;
@@ -23,7 +23,7 @@ export function loadPrompt(name) {
 }
 
 export function interpolatePrompt(template, vars) {
-  return template.replace(/\{\{(w+)\}\}/g, (match, key) => {
+  return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     return key in vars ? String(vars[key]) : match;
   });
 }

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
@@ -112,10 +112,10 @@ export function validateStartup() {
   const promptsDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
   const autoFixSystemPromptPath = resolve(promptsDir, 'auto-fix-system.md');
   const generationUserPromptPath = resolve(promptsDir, 'generation-user.md');
-  if (!require('fs').existsSync(autoFixSystemPromptPath)) {
+  if (!existsSync(autoFixSystemPromptPath)) {
     throw new Error(`Prompt file not found: ${autoFixSystemPromptPath}`);
   }
-  if (!require('fs').existsSync(generationUserPromptPath)) {
+  if (!existsSync(generationUserPromptPath)) {
     throw new Error(`Prompt file not found: ${generationUserPromptPath}`);
   }
 }
