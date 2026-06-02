@@ -29,23 +29,25 @@ function assertFails(result, pattern) {
 
 // generate_issue_change.mjs
 
+const STARTUP_BASE = { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: 'o/r', GITHUB_EVENT_PATH: '/dev/null', ISSUE_BODY: 'b' };
+
 test('generate_issue_change exits 1 when GROQ_API_KEY is missing', async () => {
   assertFails(
-    await runScript('generate_issue_change.mjs', { ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' }),
+    await runScript('generate_issue_change.mjs', { ...STARTUP_BASE, ISSUE_NUMBER: '1', ISSUE_TITLE: 'T' }),
     /GROQ_API_KEY/,
   );
 });
 
 test('generate_issue_change exits 1 when ISSUE_NUMBER is missing', async () => {
   assertFails(
-    await runScript('generate_issue_change.mjs', { ANTHROPIC_API_KEY: 'key', ISSUE_TITLE: 'T' }),
+    await runScript('generate_issue_change.mjs', { ...STARTUP_BASE, ANTHROPIC_API_KEY: 'key', ISSUE_TITLE: 'T' }),
     /ISSUE_NUMBER/,
   );
 });
 
 test('generate_issue_change exits 1 when ISSUE_TITLE is missing', async () => {
   assertFails(
-    await runScript('generate_issue_change.mjs', { ANTHROPIC_API_KEY: 'key', ISSUE_NUMBER: '1' }),
+    await runScript('generate_issue_change.mjs', { ...STARTUP_BASE, ANTHROPIC_API_KEY: 'key', ISSUE_NUMBER: '1' }),
     /ISSUE_TITLE/,
   );
 });
