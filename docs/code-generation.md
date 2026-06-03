@@ -212,8 +212,9 @@ Automation scripts must fail before network calls when required startup inputs a
 
 ## CI Coverage Enforcement
 
-The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. The following module must maintain **≥ 80% test coverage**:
+The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. The following modules must maintain **≥ 80% test coverage**, each enforced by a dedicated step in `test.yml`:
 
 - **Checkpoint resume** (`scripts/lib/checkpoint.mjs`)
-
-`scripts/lib/config.mjs` is not currently in the c8 scope; its coverage is enforced by code review only.
+- **Configuration** (`scripts/lib/config.mjs`)
+- **LLM client** (`scripts/lib/llm_client.mjs`)
+- **Output writer** (`scripts/lib/output_writer.mjs`)
