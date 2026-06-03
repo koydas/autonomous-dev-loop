@@ -97,6 +97,9 @@ jobs:
       - name: Generate AI change
         id: generate
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
           CHECKPOINT_RUN_ID: issue-${{ steps.issue.outputs.number }}
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { buildDeterministicPrompt, loadConfigFromEnv } from './lib/config.mjs';
+import { buildDeterministicPrompt, loadConfigFromEnv, validateStartup } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
@@ -16,6 +16,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 async function main() {
+  validateStartup();
   const config = loadConfigFromEnv();
   const fileContents = await buildFileContentsBlock(config.issueTitle, config.issueBody, process.cwd());
   const prompt = buildDeterministicPrompt({ ...config, fileContents });

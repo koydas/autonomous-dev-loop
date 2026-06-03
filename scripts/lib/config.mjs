@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
@@ -100,4 +100,21 @@ export function buildDeterministicPrompt({
 }) {
   const template = loadPrompt('generation-user');
   return interpolatePrompt(template, { issueNumber, issueTitle, issueBody, fileContents });
+}
+
+export function validateStartup(promptsDirOverride) {
+  requireEnv('GITHUB_TOKEN');
+  requireEnv('GITHUB_REPOSITORY');
+  requireEnv('GITHUB_EVENT_PATH');
+  requireEnv('ISSUE_NUMBER');
+  requireEnv('ISSUE_TITLE');
+  const promptsDir = promptsDirOverride ?? resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
+  const generationSystemPromptPath = resolve(promptsDir, 'generation-system.md');
+  const generationUserPromptPath = resolve(promptsDir, 'generation-user.md');
+  if (!existsSync(generationSystemPromptPath)) {
+    throw new Error(`Prompt file not found: ${generationSystemPromptPath}`);
+  }
+  if (!existsSync(generationUserPromptPath)) {
+    throw new Error(`Prompt file not found: ${generationUserPromptPath}`);
+  }
 }

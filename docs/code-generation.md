@@ -25,7 +25,6 @@ All four workflows pass both provider key sets, so provider selection is driven 
 | `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 | `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 | `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
-| `changelog-check.yml` | _(none)_ | `BASE_REF` (set automatically from `github.base_ref`) | Fails if an entrypoint or ADR file is changed without a bullet entry under `## [Unreleased]` in `CHANGELOG.md` |
 
 `AI_PR_TOKEN` is used only by `code-generation.yml`, `pr-review.yml`, and `auto-fix-pr.yml` for GitHub API write operations.
 
@@ -147,77 +146,17 @@ logEnd('llm-call', 'ok');
 // → {"level":"info","msg":"step_end","step":"llm-call","result":"ok","durationMs":1234.5}
 ```
 
-## Prompt Caching
-
-`callAnthropic` in `scripts/lib/anthropic_client.mjs` passes the system prompt as a single-element array with `cache_control: { type: "ephemeral" }`, enabling Anthropic's prompt caching:
-
-```json
-{
-  "system": [
-    {
-      "type": "text",
-      "text": "<system prompt>",
-      "cache_control": { "type": "ephemeral" }
-    }
-  ]
-}
-```
-
-No beta header is required — this is a GA feature. Prompts shorter than the model's minimum cacheable prefix are silently not cached without error. The threshold is **2 048 tokens** for Haiku 4.5 and Sonnet 4.6, and **4 096 tokens** for Opus 4.7. The `validation-system` prompt is ~8 600 characters (~2 100 tokens), which clears the Haiku/Sonnet threshold but not the Opus 4.7 threshold — cache hits will not occur with the default `claude-opus-4-7` model unless the prompt is extended past ~16 000 characters. Cache reads cost ~10% of the normal input token price; cache writes cost ~1.25×.
-
 ## Minimum Test Coverage Policy
 
-The following modules must maintain **≥ 80% test coverage** across statements, branches, functions, and lines, enforced in CI by `test.yml` via `c8 --check-coverage`:
+The following module must maintain **≥ 80% test coverage**, enforced in CI by `test.yml` via `c8 --check-coverage`:
 
-- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
-- **Configuration** (`scripts/lib/config.mjs`): provider detection, environment variable loading, and LLM config construction paths.
-- **LLM client** (`scripts/lib/llm_client.mjs`): provider routing, fallback on transient errors, and permanent-error short-circuit.
-- **Output writer** (`scripts/lib/output_writer.mjs`): JSON parsing (fence-first strategy, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), validation error branches, and file write paths.
+- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): ≥ 80% across statements, branches, functions, and lines. Every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
 
-## PR Review: Context-Aware Change Classification
+The following modules also maintain **≥ 80% test coverage**, each enforced by a dedicated `c8 --check-coverage` step in `test.yml`:
 
-Before generating review findings, `scripts/pr_review.mjs` injects two context blocks into the LLM prompt:
-
-1. **Change classification** (`scripts/lib/change_classifier.mjs`) — inspects changed file paths from the diff and emits a structured block with:
-   - `change_type` — dominant category (`documentation`, `ci_cd`, `configuration`, `dependency_update`, `test_only`, `feature_or_bugfix`, `mixed`)
-   - `detected_categories` — all matched categories
-   - `has_executable_code_changes` — true when any file falls outside the non-behavioral set
-   - `tests_expected` / `tests_expected_reason` — whether test coverage findings should be generated
-
-2. **Automation gate context** (`scripts/lib/coverage_checker.mjs`) — existing gate that checks whether automation-scope changes (scripts/, prompts/, .github/workflows/, docs/code-generation.md) include test and doc updates.
-
-### Classification rules
-
-| File pattern | Category | `tests_expected` |
-|---|---|---|
-| `.md` files outside automation scope (`docs/adr/`, `README.md`, etc.) | `documentation` | false |
-| `.github/workflows/*.yml` (automation scope) | `ci_cd` | **true** |
-| `config/`, `tsconfig*.json`, `.eslintrc*`, etc. | `configuration` | false |
-| `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` | `dependency_update` | false |
-| `package.json` | _(executable code)_ | **true** |
-| `scripts/tests/*.test.mjs`, `*.spec.*` | `test_only` | false |
-| All other files (scripts/, prompts/, etc.) | _(executable code)_ | **true** |
-
-When `tests_expected` is false the LLM is instructed to omit all test-coverage findings and not lower its verdict score because of absent tests.
-
-`package.json` is treated as executable code (not `dependency_update`) because it owns behavioural fields (`type`, `scripts`, `engines`). Only auto-generated lock files are classified as pure dependency updates.
-
-## Changelog Gate (`changelog-check.yml`)
-
-Runs on every pull request. Calls `node scripts/check_changelog.mjs` to verify that:
-
-1. If the PR touches any **entrypoint script** (`scripts/*.mjs`, top-level only) or any **ADR file** (`docs/adr/NNNN-*.md`), then `CHANGELOG.md` must also be modified.
-2. The modification must include at least one added bullet line (starting with `- ` or `* `) inside the `## [Unreleased]` section. Adding only a section heading like `### Added` is not sufficient.
-
-The check is skipped automatically if neither entrypoints nor ADRs are in the diff. No secrets or LLM calls are required.
-
-**Adding a changelog entry** (see `CONTRIBUTING.md § Changelog Policy`):
-```markdown
-## [Unreleased]
-
-### Added | Changed | Fixed | Removed
-- Brief description of the change (ADR-XXXX or PR #NNN)
-```
+- **Config** (`scripts/lib/config.mjs`)
+- **LLM client** (`scripts/lib/llm_client.mjs`)
+- **Output writer** (`scripts/lib/output_writer.mjs`)
 
 ## Checkpoint Resume
 
@@ -248,7 +187,7 @@ The `CHECKPOINT_RUN_ID` environment variable overrides the default; each script 
 ### Cross-workflow artifact download
 
 - `validate-issue` passes its `GITHUB_RUN_ID` as the `validate_run_id` workflow-dispatch input when triggering `code-generation`. The generate job uses this run-id to download the artifact.
-- `auto-fix-pr` queries the GitHub Actions artifacts API (`GET /repos/{owner}/{repo}/actions/artifacts?name=checkpoints-pr-{N}`) to find the most recent non-expired artifact by name, then downloads it via `curl`. This avoids a race condition where the triggering `pr-review.yml` run may not yet be listed as `completed` by `gh run list` at the moment the auto-fix job begins.
+- `auto-fix-pr` uses `gh api repos/{owner}/{repo}/actions/artifacts?name=checkpoints-pr-{PR_NUMBER}` to locate the latest non-expired checkpoint artifact and downloads it with `curl`.
 
 ### Artifact retention
 
@@ -273,13 +212,9 @@ Automation scripts must fail before network calls when required startup inputs a
 
 ## CI Coverage Enforcement
 
-The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. Each of the following modules must maintain **≥ 80% test coverage** (statements, branches, functions, lines). The gate runs as a separate named step in `test.yml` immediately after the full test suite:
+The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. The following modules must maintain **≥ 80% test coverage**, each enforced by a dedicated step in `test.yml`:
 
-| Module | Test file |
-|---|---|
-| `scripts/lib/checkpoint.mjs` | `scripts/tests/checkpoint.test.mjs` |
-| `scripts/lib/config.mjs` | `scripts/tests/config.test.mjs` |
-| `scripts/lib/llm_client.mjs` | `scripts/tests/llm_client.test.mjs` |
-| `scripts/lib/output_writer.mjs` | `scripts/tests/output_writer.test.mjs` |
-
-A CI step failure means the named module has dropped below the threshold; fix by adding targeted tests before merging.
+- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`)
+- **Configuration** (`scripts/lib/config.mjs`)
+- **LLM client** (`scripts/lib/llm_client.mjs`)
+- **Output writer** (`scripts/lib/output_writer.mjs`)

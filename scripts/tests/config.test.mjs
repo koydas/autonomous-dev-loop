@@ -1,6 +1,9 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, loadLLMConfig, GROQ_MODEL_DEFAULTS } from '../lib/config.mjs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, loadLLMConfig, GROQ_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
 
 const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
@@ -165,6 +168,110 @@ test('buildDeterministicPrompt returns a non-empty string', () => {
   assert.equal(typeof prompt, 'string');
   assert.ok(prompt.length > 0);
 });
+
+// validateStartup
+
+const STARTUP_VARS = ['GITHUB_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_EVENT_PATH', 'ISSUE_NUMBER', 'ISSUE_TITLE', 'ISSUE_BODY'];
+
+function setStartupEnv(overrides = {}) {
+  const defaults = {
+    GITHUB_TOKEN: 'token',
+    GITHUB_REPOSITORY: 'owner/repo',
+    GITHUB_EVENT_PATH: '/tmp/event.json',
+    ISSUE_NUMBER: '1',
+    ISSUE_TITLE: 'title',
+    ISSUE_BODY: 'body',
+  };
+  for (const [k, v] of Object.entries({ ...defaults, ...overrides })) process.env[k] = v;
+}
+
+function unsetStartupEnv() {
+  for (const k of STARTUP_VARS) delete process.env[k];
+}
+
+test('validateStartup passes when all env vars are set and prompt files exist', () => {
+  setStartupEnv();
+  try {
+    assert.doesNotThrow(() => validateStartup());
+  } finally {
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when GITHUB_TOKEN is missing', () => {
+  setStartupEnv();
+  delete process.env.GITHUB_TOKEN;
+  try {
+    assert.throws(() => validateStartup(), /GITHUB_TOKEN/);
+  } finally {
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when GITHUB_REPOSITORY is missing', () => {
+  setStartupEnv();
+  delete process.env.GITHUB_REPOSITORY;
+  try {
+    assert.throws(() => validateStartup(), /GITHUB_REPOSITORY/);
+  } finally {
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when GITHUB_EVENT_PATH is missing', () => {
+  setStartupEnv();
+  delete process.env.GITHUB_EVENT_PATH;
+  try {
+    assert.throws(() => validateStartup(), /GITHUB_EVENT_PATH/);
+  } finally {
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when ISSUE_NUMBER is missing', () => {
+  setStartupEnv();
+  delete process.env.ISSUE_NUMBER;
+  try {
+    assert.throws(() => validateStartup(), /ISSUE_NUMBER/);
+  } finally {
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when ISSUE_TITLE is missing', () => {
+  setStartupEnv();
+  delete process.env.ISSUE_TITLE;
+  try {
+    assert.throws(() => validateStartup(), /ISSUE_TITLE/);
+  } finally {
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when generation-system.md is missing', () => {
+  setStartupEnv();
+  const dir = mkdtempSync(join(tmpdir(), 'prompts-test-'));
+  writeFileSync(join(dir, 'generation-user.md'), 'dummy');
+  try {
+    assert.throws(() => validateStartup(dir), /generation-system\.md/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when generation-user.md is missing', () => {
+  setStartupEnv();
+  const dir = mkdtempSync(join(tmpdir(), 'prompts-test-'));
+  writeFileSync(join(dir, 'generation-system.md'), 'dummy');
+  try {
+    assert.throws(() => validateStartup(dir), /generation-user\.md/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    unsetStartupEnv();
+  }
+});
+
 
 // loadLLMConfig temperature validation
 // GROQ_MODEL_DEFAULTS is a mutable module-level object; we mutate generation_temperature
