@@ -152,7 +152,11 @@ The following module must maintain **≥ 80% test coverage**, enforced in CI by 
 
 - **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): ≥ 80% across statements, branches, functions, and lines. Every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
 
-Coverage for other modules (e.g. `scripts/lib/config.mjs`) is not currently enforced by CI and must be addressed by code review.
+The following modules also maintain **≥ 80% test coverage**, each enforced by a dedicated `c8 --check-coverage` step in `test.yml`:
+
+- **Config** (`scripts/lib/config.mjs`)
+- **LLM client** (`scripts/lib/llm_client.mjs`)
+- **Output writer** (`scripts/lib/output_writer.mjs`)
 
 ## Checkpoint Resume
 
@@ -183,7 +187,7 @@ The `CHECKPOINT_RUN_ID` environment variable overrides the default; each script 
 ### Cross-workflow artifact download
 
 - `validate-issue` passes its `GITHUB_RUN_ID` as the `validate_run_id` workflow-dispatch input when triggering `code-generation`. The generate job uses this run-id to download the artifact.
-- `auto-fix-pr` uses `gh run list` to find the latest successful `pr-review.yml` run for the PR branch and downloads its artifact by run-id.
+- `auto-fix-pr` uses `gh api repos/{owner}/{repo}/actions/artifacts?name=checkpoints-pr-{PR_NUMBER}` to locate the latest non-expired checkpoint artifact and downloads it with `curl`.
 
 ### Artifact retention
 
