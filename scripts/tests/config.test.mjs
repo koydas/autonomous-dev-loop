@@ -1,6 +1,11 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { renameSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, loadLLMConfig, GROQ_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
+
+const PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
 
 const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
@@ -241,6 +246,32 @@ test('validateStartup throws when ISSUE_TITLE is missing', () => {
   try {
     assert.throws(() => validateStartup(), /ISSUE_TITLE/);
   } finally {
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when generation-system.md is missing', () => {
+  setStartupEnv();
+  const src = resolve(PROMPTS_DIR, 'generation-system.md');
+  const tmp = src + '.bak';
+  renameSync(src, tmp);
+  try {
+    assert.throws(() => validateStartup(), /generation-system\.md/);
+  } finally {
+    renameSync(tmp, src);
+    unsetStartupEnv();
+  }
+});
+
+test('validateStartup throws when generation-user.md is missing', () => {
+  setStartupEnv();
+  const src = resolve(PROMPTS_DIR, 'generation-user.md');
+  const tmp = src + '.bak';
+  renameSync(src, tmp);
+  try {
+    assert.throws(() => validateStartup(), /generation-user\.md/);
+  } finally {
+    renameSync(tmp, src);
     unsetStartupEnv();
   }
 });
