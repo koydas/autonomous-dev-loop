@@ -158,6 +158,34 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 - **LLM client** (`scripts/lib/llm_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
 
+## Auto-Fix Token Budget
+
+The auto-fix stage constructs an LLM prompt from three sources — PR diff, review feedback, and current file contents. The total request size is capped to respect provider per-request limits (notably Groq on_demand's 12,000 TPM hard limit).
+
+Three keys in `config/models.yaml` control the budget for the `autofix` stage:
+
+| Key | Default | Description |
+|---|---|---|
+| `autofix_max_input_tokens` | `7400` | Hard ceiling on total input tokens (diff + feedback + files). Set to stay within `12000 − system_tokens − max_output_tokens`. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_diff_ratio` | `0.45` | Fraction of the input budget allocated to the PR diff. |
+| `autofix_feedback_ratio` | `0.25` | Fraction of the input budget allocated to review feedback. The remainder goes to file contents. |
+
+**Tuning for your provider tier:**
+
+| Provider / Tier | Recommended `autofix_max_input_tokens` |
+|---|---|
+| Groq on_demand (`llama-3.3-70b-versatile`) | `7400` (default) |
+| Groq Dev Tier | Remove the key (no cap needed — 12k TPM limit applies per-minute, not per-request) |
+| Anthropic (`claude-opus-4-7`) | Remove the key (200k context window; no per-request TPM limit) |
+
+The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual token counts for each section:
+
+```json
+{"level":"info","msg":"token_estimate","system":459,"diff":3330,"feedback":1850,"files":2220,"max_tokens":4096,"total":11955}
+```
+
+Monitor this to detect systematic truncation of diff or file contents.
+
 ## Checkpoint Resume
 
 Critical job outputs are persisted to `./checkpoints/<runId>/<step>.json` via `scripts/lib/checkpoint.mjs` and exchanged between jobs as GitHub Actions artifacts. This allows a re-triggered run to resume from the last successful step rather than starting from scratch.

@@ -7,7 +7,12 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+### Added
+- ADR-0017: Configurable per-stage token budget in `config/models.yaml` — documents `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio` and the Groq on_demand 12k TPM constraint that motivated the design
+
 ### Changed
+- `scripts/auto_fix_pr.mjs` and `scripts/lib/config.mjs`: auto-fix token budget is now configurable via `config/models.yaml` — `autofix_max_input_tokens` (default 7 400) caps the input to stay within Groq on_demand's 12k per-request limit; `autofix_diff_ratio` (0.45) and `autofix_feedback_ratio` (0.25) control section allocation (ADR-0017)
+- All GitHub Actions workflows (`auto-fix-pr.yml`, `pr-review.yml`, `code-generation.yml`, `validate-issue.yml`, `test.yml`, `changelog-check.yml`, `reset-auto-fix.yml`): `node-version` updated from `'20'` to `'24'` ahead of the Node.js 20 deprecation on GitHub-hosted runners (forced transition 2026-06-16)
 - `scripts/generate_issue_change.mjs` now calls `validateStartup()` at startup for early validation of required env vars (`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH`, `ISSUE_NUMBER`, `ISSUE_TITLE`) and prompt files (`generation-system.md`, `generation-user.md`) before any external API call; `ISSUE_BODY` is intentionally not required as it has a `(no body provided)` fallback (PR #149)
 
 ### Added
