@@ -34,19 +34,23 @@ Add three optional per-stage keys to `config/models.yaml` and surface them throu
 `auto_fix_pr.mjs` applies them as:
 
 ```js
+const userWrapperTokens = estimateTokens(userPromptTemplate.replace(/\{\{[^}]+\}\}/g, ''));
 const contextWindowBudget = contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget;
-const inputBudget = cfgMaxInputTokens != null
+const rawInputBudget = cfgMaxInputTokens != null
   ? Math.min(contextWindowBudget, cfgMaxInputTokens)
   : contextWindowBudget;
+const inputBudget    = Math.max(0, rawInputBudget - userWrapperTokens);
 const diffBudget     = Math.floor(inputBudget * (cfgDiffRatio     ?? 0.45));
 const feedbackBudget = Math.floor(inputBudget * (cfgFeedbackRatio ?? 0.25));
 const fileBudget     = inputBudget - diffBudget - feedbackBudget;
 ```
 
+`userWrapperTokens` is the token count of the static wrapper text in `prompts/auto-fix-user.md` (placeholders stripped), approximately **218 tokens**. It is subtracted from the raw cap before dividing into sections, so the three section budgets together never exceed `cfgMaxInputTokens - userWrapperTokens`.
+
 The repository default for `autofix_max_input_tokens` is **7,400**, calculated to keep the total request within Groq on_demand's 12k limit:
 
 ```
-system (~460) + input (7,400) + max_output (4,096) = 11,956 < 12,000
+system (~460) + wrapper (~218) + sections (≤7,182) + max_output (4,096) ≈ 11,956 < 12,000
 ```
 
 ## Consequences

@@ -198,6 +198,20 @@ test('loadLLMConfig rejects feedback_ratio outside (0,1)', () => {
   }
 });
 
+test('loadLLMConfig rejects diff_ratio + feedback_ratio >= 1', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const origDiff = GROQ_MODEL_DEFAULTS.autofix_diff_ratio;
+  const origFeedback = GROQ_MODEL_DEFAULTS.autofix_feedback_ratio;
+  GROQ_MODEL_DEFAULTS.autofix_diff_ratio = 0.6;
+  GROQ_MODEL_DEFAULTS.autofix_feedback_ratio = 0.4;
+  try {
+    assert.throws(() => loadLLMConfig('autofix'), /must sum to less than 1\.0/);
+  } finally {
+    GROQ_MODEL_DEFAULTS.autofix_diff_ratio = origDiff;
+    GROQ_MODEL_DEFAULTS.autofix_feedback_ratio = origFeedback;
+  }
+});
+
 // buildDeterministicPrompt
 
 test('buildDeterministicPrompt includes issue fields', () => {

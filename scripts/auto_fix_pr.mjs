@@ -229,13 +229,21 @@ if (!feedbackParts.length) {
   }
 }
 
+const effectiveDiffRatio = cfgDiffRatio ?? 0.45;
+const effectiveFeedbackRatio = cfgFeedbackRatio ?? 0.25;
+if (effectiveDiffRatio + effectiveFeedbackRatio >= 1) {
+  throw new Error(`Token budget config error: autofix_diff_ratio (${effectiveDiffRatio}) + autofix_feedback_ratio (${effectiveFeedbackRatio}) must sum to less than 1.0; adjust config/models.yaml`);
+}
+
 const systemTokens = estimateTokens(systemPrompt);
+const userWrapperTokens = estimateTokens(userPromptTemplate.replace(/\{\{[^}]+\}\}/g, ''));
 const contextWindow = MODEL_CONTEXT_WINDOW[model] ?? (llmProvider === 'groq' ? 32768 : 200000);
 const maxOutputBudget = llmMaxTokens ?? 4096;
 const contextWindowBudget = Math.max(0, contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
-const inputBudget = cfgMaxInputTokens != null ? Math.min(contextWindowBudget, cfgMaxInputTokens) : contextWindowBudget;
-const diffBudget = Math.floor(inputBudget * (cfgDiffRatio ?? 0.45));
-const feedbackBudget = Math.floor(inputBudget * (cfgFeedbackRatio ?? 0.25));
+const rawInputBudget = cfgMaxInputTokens != null ? Math.min(contextWindowBudget, cfgMaxInputTokens) : contextWindowBudget;
+const inputBudget = Math.max(0, rawInputBudget - userWrapperTokens);
+const diffBudget = Math.floor(inputBudget * effectiveDiffRatio);
+const feedbackBudget = Math.floor(inputBudget * effectiveFeedbackRatio);
 const fileBudget = Math.max(0, inputBudget - diffBudget - feedbackBudget);
 
 const reviewFeedback = truncateToTokenBudget(
@@ -294,12 +302,13 @@ const userPrompt = interpolatePrompt(userPromptTemplate, {
 
 log('token_estimate', {
   system: systemTokens,
+  wrapper: userWrapperTokens,
   diff: estimateTokens(diff),
   feedback: estimateTokens(reviewFeedback),
   files: estimateTokens(fileContents),
   max_tokens: maxOutputBudget,
   budget: { input: inputBudget, diff: diffBudget, feedback: feedbackBudget, files: fileBudget },
-  total: systemTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
+  total: systemTokens + userWrapperTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
 });
 
 const raw = await callLLM({

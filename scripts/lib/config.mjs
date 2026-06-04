@@ -98,6 +98,10 @@ export function loadLLMConfig(stage = 'generation') {
     }
   }
 
+  if (diffRatio !== undefined && feedbackRatio !== undefined && diffRatio + feedbackRatio >= 1) {
+    throw new Error(`Invalid ratio config for stage "${stage}": autofix_diff_ratio (${diffRatio}) + autofix_feedback_ratio (${feedbackRatio}) must sum to less than 1.0`);
+  }
+
   return { provider, apiKey, model, apiUrl, temperature, maxTokens, maxInputTokens, diffRatio, feedbackRatio };
 }
 

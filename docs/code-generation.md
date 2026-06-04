@@ -166,9 +166,9 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `7400` | Hard ceiling on total input tokens (diff + feedback + files). Set to stay within `12000 − system_tokens − max_output_tokens`. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
-| `autofix_diff_ratio` | `0.45` | Fraction of the input budget allocated to the PR diff. |
-| `autofix_feedback_ratio` | `0.25` | Fraction of the input budget allocated to review feedback. The remainder goes to file contents. |
+| `autofix_max_input_tokens` | `7400` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `12000 − system_tokens − max_output_tokens`. The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_diff_ratio` | `0.45` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. |
+| `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents. |
 
 **Tuning for your provider tier:**
 
@@ -181,7 +181,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual token counts for each section:
 
 ```json
-{"level":"info","msg":"token_estimate","system":459,"diff":3330,"feedback":1850,"files":2220,"max_tokens":4096,"total":11955}
+{"level":"info","msg":"token_estimate","system":459,"wrapper":218,"diff":3330,"feedback":1850,"files":2220,"max_tokens":4096,"total":12173}
 ```
 
 Monitor this to detect systematic truncation of diff or file contents.
