@@ -14,5 +14,11 @@ review_temperature:     0.6
 autofix:                llama-3.3-70b-versatile
 autofix_temperature:    0.2
 autofix_max_tokens:     4096
+# Cap input tokens to stay within Groq on_demand TPM limit (12k).
+# Total sent = system (~460) + autofix_max_input_tokens + autofix_max_tokens ≈ 11,956.
+# Raise this value if you upgrade to Groq Dev Tier (higher TPM) or switch to Anthropic.
+autofix_max_input_tokens: 7400
+autofix_diff_ratio:     0.45
+autofix_feedback_ratio: 0.25
 
 groq_max_retries:       3

@@ -146,6 +146,58 @@ test('loadLLMConfig uses llama-3.3-70b-versatile defaults for generation and aut
   assert.equal(autofixCfg.model, 'llama-3.3-70b-versatile');
 });
 
+test('loadLLMConfig returns maxInputTokens, diffRatio, feedbackRatio for autofix stage', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const cfg = loadLLMConfig('autofix');
+  assert.equal(typeof cfg.maxInputTokens, 'number');
+  assert.ok(cfg.maxInputTokens > 0, 'maxInputTokens should be positive');
+  assert.equal(typeof cfg.diffRatio, 'number');
+  assert.ok(cfg.diffRatio > 0 && cfg.diffRatio < 1, 'diffRatio must be in (0,1)');
+  assert.equal(typeof cfg.feedbackRatio, 'number');
+  assert.ok(cfg.feedbackRatio > 0 && cfg.feedbackRatio < 1, 'feedbackRatio must be in (0,1)');
+});
+
+test('loadLLMConfig returns undefined budget fields for stages without them', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const cfg = loadLLMConfig('generation');
+  assert.equal(cfg.maxInputTokens, undefined);
+  assert.equal(cfg.diffRatio, undefined);
+  assert.equal(cfg.feedbackRatio, undefined);
+});
+
+test('loadLLMConfig rejects invalid max_input_tokens', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const original = GROQ_MODEL_DEFAULTS.autofix_max_input_tokens;
+  GROQ_MODEL_DEFAULTS.autofix_max_input_tokens = -1;
+  try {
+    assert.throws(() => loadLLMConfig('autofix'), /Invalid max_input_tokens/);
+  } finally {
+    GROQ_MODEL_DEFAULTS.autofix_max_input_tokens = original;
+  }
+});
+
+test('loadLLMConfig rejects diff_ratio outside (0,1)', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const original = GROQ_MODEL_DEFAULTS.autofix_diff_ratio;
+  GROQ_MODEL_DEFAULTS.autofix_diff_ratio = 1.5;
+  try {
+    assert.throws(() => loadLLMConfig('autofix'), /Invalid diff_ratio/);
+  } finally {
+    GROQ_MODEL_DEFAULTS.autofix_diff_ratio = original;
+  }
+});
+
+test('loadLLMConfig rejects feedback_ratio outside (0,1)', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const original = GROQ_MODEL_DEFAULTS.autofix_feedback_ratio;
+  GROQ_MODEL_DEFAULTS.autofix_feedback_ratio = 0;
+  try {
+    assert.throws(() => loadLLMConfig('autofix'), /Invalid feedback_ratio/);
+  } finally {
+    GROQ_MODEL_DEFAULTS.autofix_feedback_ratio = original;
+  }
+});
+
 // buildDeterministicPrompt
 
 test('buildDeterministicPrompt includes issue fields', () => {

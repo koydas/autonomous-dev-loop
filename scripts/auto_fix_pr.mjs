@@ -72,7 +72,7 @@ async function cleanupCheckpointFiles() {
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens } = loadLLMConfig('autofix');
+const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens, maxInputTokens: cfgMaxInputTokens, diffRatio: cfgDiffRatio, feedbackRatio: cfgFeedbackRatio } = loadLLMConfig('autofix');
 const systemPrompt = loadPrompt('auto-fix-system');
 const userPromptTemplate = loadPrompt('auto-fix-user');
 
@@ -232,9 +232,10 @@ if (!feedbackParts.length) {
 const systemTokens = estimateTokens(systemPrompt);
 const contextWindow = MODEL_CONTEXT_WINDOW[model] ?? (llmProvider === 'groq' ? 32768 : 200000);
 const maxOutputBudget = llmMaxTokens ?? 4096;
-const inputBudget = Math.max(0, contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
-const diffBudget = Math.floor(inputBudget * 0.45);
-const feedbackBudget = Math.floor(inputBudget * 0.25);
+const contextWindowBudget = Math.max(0, contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
+const inputBudget = cfgMaxInputTokens != null ? Math.min(contextWindowBudget, cfgMaxInputTokens) : contextWindowBudget;
+const diffBudget = Math.floor(inputBudget * (cfgDiffRatio ?? 0.45));
+const feedbackBudget = Math.floor(inputBudget * (cfgFeedbackRatio ?? 0.25));
 const fileBudget = Math.max(0, inputBudget - diffBudget - feedbackBudget);
 
 const reviewFeedback = truncateToTokenBudget(

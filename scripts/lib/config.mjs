@@ -70,7 +70,35 @@ export function loadLLMConfig(stage = 'generation') {
       throw new Error(`Invalid max_tokens for stage "${stage}": ${rawMaxTokens} (must be a positive integer)`);
     }
   }
-  return { provider, apiKey, model, apiUrl, temperature, maxTokens };
+
+  const rawMaxInputTokens = GROQ_MODEL_DEFAULTS[`${stage}_max_input_tokens`] ?? GROQ_MODEL_DEFAULTS.max_input_tokens;
+  let maxInputTokens;
+  if (rawMaxInputTokens !== undefined) {
+    maxInputTokens = parseInt(rawMaxInputTokens, 10);
+    if (isNaN(maxInputTokens) || maxInputTokens <= 0) {
+      throw new Error(`Invalid max_input_tokens for stage "${stage}": ${rawMaxInputTokens} (must be a positive integer)`);
+    }
+  }
+
+  const rawDiffRatio = GROQ_MODEL_DEFAULTS[`${stage}_diff_ratio`] ?? GROQ_MODEL_DEFAULTS.diff_ratio;
+  let diffRatio;
+  if (rawDiffRatio !== undefined) {
+    diffRatio = parseFloat(rawDiffRatio);
+    if (isNaN(diffRatio) || diffRatio <= 0 || diffRatio >= 1) {
+      throw new Error(`Invalid diff_ratio for stage "${stage}": ${rawDiffRatio} (must be a number between 0 and 1 exclusive)`);
+    }
+  }
+
+  const rawFeedbackRatio = GROQ_MODEL_DEFAULTS[`${stage}_feedback_ratio`] ?? GROQ_MODEL_DEFAULTS.feedback_ratio;
+  let feedbackRatio;
+  if (rawFeedbackRatio !== undefined) {
+    feedbackRatio = parseFloat(rawFeedbackRatio);
+    if (isNaN(feedbackRatio) || feedbackRatio <= 0 || feedbackRatio >= 1) {
+      throw new Error(`Invalid feedback_ratio for stage "${stage}": ${rawFeedbackRatio} (must be a number between 0 and 1 exclusive)`);
+    }
+  }
+
+  return { provider, apiKey, model, apiUrl, temperature, maxTokens, maxInputTokens, diffRatio, feedbackRatio };
 }
 
 export function loadConfigFromEnv() {
