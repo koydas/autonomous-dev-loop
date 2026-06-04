@@ -20,3 +20,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0014: Anthropic prompt caching on system prompts](./0014-anthropic-prompt-caching.md)
 - [ADR-0015: Three-tier JSON parsing with typed errors](./0015-three-tier-json-parsing.md)
 - [ADR-0016: Changelog CI gate for entrypoint scripts and ADR files](./0016-changelog-ci-gate.md)
+- [ADR-0017: Configurable per-stage token budget in `config/models.yaml`](./0017-configurable-token-budget.md)

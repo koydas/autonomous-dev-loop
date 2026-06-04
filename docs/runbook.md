@@ -123,6 +123,8 @@ Key steps to expand per workflow:
 | Failure | Recovery |
 |---------|----------|
 | Attempt limit reached (3/3) | Review the PR manually; apply fixes, push, then remove `changes-requested` and apply `review-approved` if satisfied, or leave for human merge decision |
+| Groq API 413 — Request too large (`Limit 12000, Requested …`) | Input prompt exceeds Groq on_demand per-request limit. Lower `autofix_max_input_tokens` in `config/models.yaml` (default `7400` already accounts for this; may have been raised). Alternatively upgrade to Groq Dev Tier (higher limit) or set `AI_PROVIDER=anthropic`. |
+| Anthropic API 401 — Invalid API Key | `ANTHROPIC_API_KEY` secret is expired or incorrect. Generate a new key at [console.anthropic.com](https://console.anthropic.com) and update it in **Settings → Secrets and variables → Actions → `ANTHROPIC_API_KEY`**. |
 | LLM returns invalid JSON | Check `auto-fix-system.md` for prompt integrity; re-trigger by removing and re-applying `changes-requested` label |
 | Commit push fails (branch protection) | Ensure `AI_PR_TOKEN` has `contents: write` and branch protection allows bot pushes |
 | `auto-fix-attempt-N` label missing | Labels are auto-created on first use; if creation fails (403), grant `issues: write` to the token used |

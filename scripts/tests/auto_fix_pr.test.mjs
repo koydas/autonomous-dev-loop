@@ -665,6 +665,68 @@ test('auto_fix_pr exits 1 when event has neither pull_request.number nor issue.n
   }
 });
 
+test('auto_fix_pr token_estimate includes wrapper field and total accounts for wrapper', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-wrapper-'));
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const estimateLine = result.stdout.split('\n').find((l) => l.includes('token_estimate'));
+    assert.ok(estimateLine, 'expected token_estimate log line');
+    const parsed = JSON.parse(estimateLine);
+    assert.ok(typeof parsed.wrapper === 'number' && parsed.wrapper > 0, `expected wrapper > 0, got ${parsed.wrapper}`);
+    const expectedTotal = parsed.system + parsed.wrapper + parsed.diff + parsed.feedback + parsed.files + parsed.max_tokens;
+    assert.equal(parsed.total, expectedTotal, `total should equal system+wrapper+diff+feedback+files+max_tokens`);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr input budget is reduced by wrapper tokens when cfgMaxInputTokens is set (Groq)', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-wrapper-groq-'));
+  const groqResponse = JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ summary: 'fixed', changes: [{ target_path: 'out.txt', file_content: 'x' }] }) } }],
+  });
+  const groqHandler = (req, res) => {
+    if (req.url === '/v1/chat/completions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(groqResponse);
+    }
+    makeHandler({})(req, res);
+  };
+  const server = await startMockServer(groqHandler);
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
+      extraEnv: {
+        ANTHROPIC_API_KEY: '',
+        GROQ_API_KEY: 'groq-test',
+        GROQ_API_URL: `http://127.0.0.1:${server.address().port}/v1/chat/completions`,
+        ANTHROPIC_API_URL: `http://127.0.0.1:${server.address().port}/v1/messages`,
+      },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const estimateLine = result.stdout.split('\n').find((l) => l.includes('token_estimate'));
+    assert.ok(estimateLine, 'expected token_estimate log line');
+    const parsed = JSON.parse(estimateLine);
+    assert.ok(typeof parsed.wrapper === 'number' && parsed.wrapper > 0, 'expected wrapper > 0 for Groq path');
+    // With cfgMaxInputTokens set (default 7400), input budget = max(0, 7400 - wrapper)
+    // so budget.input must be strictly less than 7400
+    assert.ok(
+      parsed.budget.input < 7400,
+      `expected budget.input < cfgMaxInputTokens (7400) after wrapper deduction, got ${parsed.budget.input}`,
+    );
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test('auto_fix_pr unhandledRejection handler logs run_summary with success false', async () => {
   // In Node.js v22 ESM, top-level await rejections bypass unhandledRejection and crash directly.
   // The handler is a safety net for detached (fire-and-forget) promises. We exercise it by
