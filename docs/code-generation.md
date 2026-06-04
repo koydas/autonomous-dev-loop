@@ -181,7 +181,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual token counts for each section:
 
 ```json
-{"level":"info","msg":"token_estimate","system":459,"wrapper":218,"diff":3330,"feedback":1850,"files":2220,"max_tokens":4096,"total":12173}
+{"level":"info","msg":"token_estimate","system":459,"wrapper":218,"diff":3231,"feedback":1795,"files":2156,"max_tokens":4096,"total":11955}
 ```
 
 Monitor this to detect systematic truncation of diff or file contents.
