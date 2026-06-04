@@ -21,3 +21,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0015: Three-tier JSON parsing with typed errors](./0015-three-tier-json-parsing.md)
 - [ADR-0016: Changelog CI gate for entrypoint scripts and ADR files](./0016-changelog-ci-gate.md)
 - [ADR-0017: Configurable per-stage token budget in `config/models.yaml`](./0017-configurable-token-budget.md)
+- [ADR-0018: Structured observability — JSON events to stderr + per-run trace files](./0018-structured-observability.md)

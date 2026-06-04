@@ -97,6 +97,41 @@ sequenceDiagram
 
 ```
 
+## Observability
+
+Every workflow run produces two observable outputs on top of GitHub Actions step logs.
+
+### Structured JSON events (stderr)
+
+Each instrumented pipeline script writes one JSON line to stderr per meaningful event. Schema:
+
+```json
+{ "ts": "<ISO8601>", "run_id": "<GITHUB_RUN_ID>", "stage": "<stage>", "event": "<event>", "level": "info|warn|error", "duration_ms": <number|null>, "meta": {} }
+```
+
+`duration_ms` is populated on all terminal events (`*.complete`, `*.pass`, `*.fail`, `*.verdict`). Error-level events also emit `::error::` GitHub Actions annotations, which surface in the PR checks UI.
+
+Stages and minimum events:
+
+| Stage | Script | Events |
+|---|---|---|
+| `issue_validation` | `validate_issue.mjs` | `start`, `pass`/`fail` |
+| `code_gen` | `generate_issue_change.mjs` | `start`, `llm_request`, `llm_response`, `complete`, `error` |
+| `pr_open` | `generate_issue_change.mjs` | `start`, `complete`, `error` |
+| `review` | `pr_review.mjs` | `start`, `llm_request`, `llm_response`, `verdict`, `error` |
+| `autofix` | `auto_fix_pr.mjs` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `error` |
+
+### Run trace file
+
+Each workflow writes `observability/traces/<GITHUB_RUN_ID>.json` and uploads it as the artifact `run-trace-<GITHUB_RUN_ID>` (`if: always()`). The file is written incrementally so it contains partial data even if the job is killed.
+
+```bash
+# Read a trace after downloading the artifact:
+cat observability/traces/<run_id>.json | jq '[.spans[] | {stage, outcome, duration_ms}]'
+```
+
+Full schema and event tables: `docs/observability.md`. Design rationale: [ADR-0018](adr/0018-structured-observability.md).
+
 ## Structured Logging API (`scripts/lib/logger.mjs`)
 
 All automation scripts share a structured JSON logger. Each line written to stdout/stderr is a valid JSON object.

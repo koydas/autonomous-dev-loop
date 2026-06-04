@@ -24,6 +24,11 @@ This document specifies the interface contract for each entrypoint script: requi
 | `GROQ_MODEL` | provider default | LLM model identifier |
 | `GROQ_API_URL` | provider default | LLM API base URL |
 | `GITHUB_OUTPUT` | — | Path to GitHub Actions output file; outputs are skipped if absent |
+| `GITHUB_RUN_ID` | `local-<timestamp>` | Used as the trace file name and `run_id` in structured log events |
+
+### Side effects
+
+- Writes `observability/traces/<GITHUB_RUN_ID>.json` (run trace file, incremental).
 
 ### Workflow outputs
 
@@ -62,6 +67,12 @@ This document specifies the interface contract for each entrypoint script: requi
 | `GROQ_MODEL` | provider default | LLM model identifier |
 | `GROQ_API_URL` | provider default | LLM API base URL |
 | `GITHUB_OUTPUT` | — | Path to GitHub Actions output file; outputs are skipped if absent |
+| `GITHUB_RUN_ID` | `local-<timestamp>` | Used as the trace file name and `run_id` in structured log events |
+
+### Side effects
+
+- Writes generated source files to disk (paths determined by LLM output).
+- Writes `observability/traces/<GITHUB_RUN_ID>.json` with spans for both `code_gen` and `pr_open` stages.
 
 ### Workflow outputs
 
@@ -100,6 +111,12 @@ This document specifies the interface contract for each entrypoint script: requi
 | `GROQ_API_URL` | provider default | LLM API base URL |
 | `GITHUB_API_URL` | `https://api.github.com` | GitHub API base URL |
 | `GITHUB_OUTPUT` | — | Path to GitHub Actions output file; outputs are skipped if absent |
+| `GITHUB_RUN_ID` | `randomUUID()` | Used as the trace file name and `run_id` in structured log events |
+
+### Side effects
+
+- Writes generated fix files to disk.
+- Writes `observability/traces/<GITHUB_RUN_ID>.json` with a span for the `autofix` stage.
 
 ### Workflow outputs
 
@@ -161,6 +178,11 @@ Written to `checkpoint-attempt-N.json` in the working directory:
 | `GROQ_MODEL` | provider default | LLM model identifier |
 | `GROQ_API_URL` | provider default | LLM API base URL |
 | `GITHUB_API_URL` | `https://api.github.com` | GitHub API base URL |
+| `GITHUB_RUN_ID` | `local-<timestamp>` | Used as the trace file name and `run_id` in structured log events |
+
+### Side effects
+
+- Writes `observability/traces/<GITHUB_RUN_ID>.json` with a span for the `review` stage.
 
 ### Workflow outputs
 

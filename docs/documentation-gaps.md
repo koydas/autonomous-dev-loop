@@ -95,3 +95,9 @@ ADR-0010, ADR-0011, and ADR-0012 created. Idempotence and structured logging do 
 
 1. Add documentation governance rules in `CONTRIBUTING.md` for when to update docs/ADR/changelog together (Gap #4 — still open).
 2. Consider automating the "ADR check" in CI: a script that verifies every file in `docs/adr/` is listed in `docs/adr/README.md`.
+
+---
+
+## Revalidation note — 2026-06-04
+
+Structured observability was previously noted as "implementation detail, no ADR needed" (gap #6, structured logs entry). The new observability system (ADR-0018, `scripts/lib/observability.mjs`, per-run trace files, GitHub Actions artifact uploads) is architecturally significant and has been given a full ADR. All documentation has been updated: `docs/observability.md` (schema reference), `docs/code-generation.md` (observability section), `docs/runbook.md` (trace artifact triage), `docs/testing.md` (observability test groups), `docs/contracts.md` (`GITHUB_RUN_ID` opt-var and side effects per script), `AGENTS.md` (observability rules), `CHANGELOG.md` (feature entry), and `docs/adr/README.md` (ADR-0018 indexed).

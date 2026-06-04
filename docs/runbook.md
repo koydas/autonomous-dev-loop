@@ -34,6 +34,41 @@ node scripts/metrics-report.mjs
 
 ---
 
+## Run Trace Artifacts
+
+Every pipeline run uploads a `run-trace-<GITHUB_RUN_ID>` artifact (JSON) via `if: always()`. Download it from **Actions → \<Run\> → Artifacts** to inspect stage-level timing and outcomes without reading raw log lines.
+
+```bash
+# After unzipping the artifact:
+# Overall outcome and timing
+cat <run_id>.json | jq '{run_id, outcome, started_at, completed_at}'
+
+# All spans with outcome + duration
+cat <run_id>.json | jq '[.spans[] | {stage, outcome, duration_ms}]'
+
+# Only failed spans
+cat <run_id>.json | jq '[.spans[] | select(.outcome == "failed")]'
+```
+
+**Trace field quick reference:**
+
+| Field | Description |
+|-------|-------------|
+| `outcome` | `success` — all work done; `partial` — non-fatal outcome (e.g. issue rejected, review requested changes); `failed` — terminated by error; `skipped` — stage bypassed (e.g. max attempts) |
+| `duration_ms` | Wall-clock time for the span; `null` if the stage was killed before `endSpan` ran |
+| `meta` | Stage-specific fields — e.g. `score`, `verdict`, `attempt`, `paths`, `changes_count` |
+
+**Trace troubleshooting:**
+
+| Symptom | Probable Cause |
+|---------|----------------|
+| No trace artifact for a run | Job was cancelled before the `Upload run trace` step ran (known GitHub Actions limitation with `if: always()` + cancellation) |
+| Trace file exists but `completed_at` is null | Script was killed after `startSpan` but before `finalize()` — the spans present are still valid |
+| Trace `outcome: "partial"` for a review run | Expected: verdict was `REQUEST_CHANGES`; auto-fix loop continues |
+| `duration_ms: null` on a span | `endSpan` was never called for that stage — check the step log for an uncaught exception before the terminal event |
+
+---
+
 ## Symptom → Probable Cause Mapping
 
 | Symptom | Probable Cause |
@@ -62,7 +97,9 @@ node scripts/metrics-report.mjs
 
 For every workflow run, navigate to:
 
-**Actions → \<Workflow Name\> → \<Run\> → \<Job\> → Step logs**
+**Actions → \<Workflow Name\> → \<Run\> → Artifacts** to download the `run-trace-<run_id>` JSON file for structured stage-level data.
+
+**Actions → \<Workflow Name\> → \<Run\> → \<Job\> → Step logs** for raw line-by-line output.
 
 Key steps to expand per workflow:
 

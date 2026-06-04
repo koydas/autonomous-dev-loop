@@ -103,6 +103,14 @@ For any change to workflow behavior (for example files under `.github/workflows/
 - **Tests are mandatory in the same PR**: add or update targeted tests that cover the new behavior (not only happy-path execution), in addition to running the full `node --test scripts/tests/*.test.mjs` suite.
 - **No "code-only" automation behavior changes**: behavior updates without matching doc + test updates are considered incomplete.
 
+## Observability Rules
+
+- All pipeline event logging must go through `scripts/lib/observability.mjs` — use `log()` for structured JSON events (stderr) and `createTracer()` for span tracking. Never construct JSON log lines inline in business logic files.
+- Every new pipeline stage script must emit at minimum: a `<stage>.start` event at entry and a `<stage>.complete` / `<stage>.error` event at exit, with `duration_ms` populated on terminal events.
+- Observability failures must never abort business logic. The `log()` and tracer methods catch their own errors — do not add extra try/catch around them.
+- The `observability/traces/` directory is git-tracked; the `*.json` files it contains are git-ignored (written at runtime and uploaded as CI artifacts). Do not commit trace files.
+- When adding a new workflow that runs an instrumented script, add `GITHUB_RUN_ID: ${{ github.run_id }}` to the step env and an `upload-artifact` step for the trace file (`if: always()`). See existing workflows for the pattern.
+
 ## Documentation Rules
 
 - Update `docs/code-generation.md` when workflow inputs, setup requirements, or pipeline behavior change.
