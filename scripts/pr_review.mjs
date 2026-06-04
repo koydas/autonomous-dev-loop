@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
+import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
 import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
@@ -13,15 +15,20 @@ import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
+const _reviewStartMs = Date.now();
 
 function extractIssueNumber(text) {
   const m = (text ?? '').match(/[Cc]loses?\s+#(\d+)/);
   return m ? Number(m[1]) : null;
 }
 
+const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
+const traceDir = path.join(process.cwd(), 'observability', 'traces');
+
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
+  obsLog({ stage: 'review', event: 'review.error', level: 'error', meta: { error: err.message } });
   process.exit(1);
 });
 
@@ -68,6 +75,10 @@ if (!prNumber) {
   }
   prNumber = prs[0].number;
 }
+
+const tracer = createTracer({ runId, issueNumber: null, traceDir });
+obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber, model } });
+tracer.startSpan('review', { prNumber, model });
 
 
 async function ghFetch(path, options = {}) {
@@ -171,6 +182,8 @@ const diff = filterDiff(rawDiff);
 const baseUserPrompt = interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: prBody });
 const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff)}${buildAutomationGateContext(rawDiff)}`;
 
+obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
+
 const rawReview = await callLLM({
   prompt: userPrompt,
   systemPrompt,
@@ -181,6 +194,8 @@ const rawReview = await callLLM({
   maxTokens: llmMaxTokens,
   responseFormat: null,
 });
+
+obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { output_tokens_est: estimateTokens(rawReview), prNumber } });
 
 const HEADING = '## 🔍 Automated Code Review';
 const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
@@ -308,6 +323,17 @@ const updatedPrMetrics = {
 
 await writeCheckpoint(checkpointRunId, 'pr_metrics', updatedPrMetrics);
 log('PR metrics checkpoint updated', { prNumber, review_cycles: updatedPrMetrics.review_cycles });
+
+const reviewDurationMs = Date.now() - _reviewStartMs;
+obsLog({
+  stage: 'review',
+  event: 'review.verdict',
+  level: 'info',
+  duration_ms: reviewDurationMs,
+  meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles, prNumber },
+});
+tracer.endSpan('review', { outcome: 'success', meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles } });
+await tracer.finalize(isApproved ? 'success' : 'partial');
 
 if (isApproved) {
   await appendMetric({

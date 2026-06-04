@@ -24,6 +24,7 @@ import {
 } from '../lib/issue_validator.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from '../lib/output_writer.mjs';
 import { buildDeterministicPrompt } from '../lib/config.mjs';
+import { createTracer } from '../lib/observability.mjs';
 
 const PIPELINE_STAGES = ['validation', 'generation', 'review', 'autofix'];
 const ALL_PROMPTS = [
@@ -356,4 +357,73 @@ test('loadLLMConfig: autofix stage has maxTokens set from models.yaml', () => {
   } finally {
     restoreEnv(snapshot);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 7. Observability smoke: trace file written after full pipeline run
+// ---------------------------------------------------------------------------
+
+test('observability: trace file exists and contains all expected spans after full mocked pipeline run', async () => {
+  const runId = `smoke-${Date.now()}`;
+  const smokeTraceDir = path.join(tmpDir, 'traces');
+  const EXPECTED_STAGES = ['issue_validation', 'code_gen', 'pr_open', 'review', 'autofix'];
+
+  const tracer = createTracer({ runId, issueNumber: 42, traceDir: smokeTraceDir });
+
+  // Simulate each pipeline stage
+  tracer.startSpan('issue_validation', { issueNumber: '42' });
+  tracer.endSpan('issue_validation', { outcome: 'success', meta: { score: 85 } });
+
+  tracer.startSpan('code_gen', { issueNumber: '42', model: 'test-model' });
+  tracer.endSpan('code_gen', { outcome: 'success', meta: { changes_count: 2 } });
+
+  tracer.startSpan('pr_open', { changes_count: 2 });
+  tracer.endSpan('pr_open', { outcome: 'success', meta: { paths: ['src/foo.mjs'] } });
+
+  tracer.startSpan('review', { prNumber: 1 });
+  tracer.endSpan('review', { outcome: 'success', meta: { verdict: 'APPROVE', attempt: 1 } });
+
+  tracer.startSpan('autofix', { prNumber: 1, attempt: 1 });
+  tracer.endSpan('autofix', { outcome: 'success', meta: { attempt: 1 } });
+
+  await tracer.finalize('success');
+
+  // Assert trace file exists
+  const tracePath = path.join(smokeTraceDir, `${runId}.json`);
+  const stat = await fs.stat(tracePath);
+  assert.ok(stat.isFile(), 'trace file must exist after finalize()');
+
+  // Assert structure
+  const trace = JSON.parse(await fs.readFile(tracePath, 'utf8'));
+  assert.equal(trace.run_id, runId);
+  assert.equal(trace.issue_number, 42);
+  assert.equal(trace.outcome, 'success');
+  assert.ok(typeof trace.started_at === 'string');
+  assert.ok(typeof trace.completed_at === 'string');
+
+  // Assert all expected stages have spans with outcome populated
+  for (const stage of EXPECTED_STAGES) {
+    const span = trace.spans.find(s => s.stage === stage);
+    assert.ok(span, `trace must contain a span for stage "${stage}"`);
+    assert.ok(span.outcome !== null && span.outcome !== undefined, `span "${stage}" must have outcome populated`);
+    assert.ok(typeof span.started_at === 'string', `span "${stage}" must have started_at`);
+    assert.ok(typeof span.completed_at === 'string', `span "${stage}" must have completed_at`);
+    assert.ok(typeof span.duration_ms === 'number', `span "${stage}" must have duration_ms`);
+  }
+});
+
+test('observability: trace file outcome is "partial" when validation fails', async () => {
+  const runId = `smoke-fail-${Date.now()}`;
+  const smokeTraceDir = path.join(tmpDir, 'traces');
+
+  const tracer = createTracer({ runId, issueNumber: 99, traceDir: smokeTraceDir });
+
+  tracer.startSpan('issue_validation', { issueNumber: '99' });
+  tracer.endSpan('issue_validation', { outcome: 'failed', meta: { score: 20, valid: false } });
+
+  await tracer.finalize('partial');
+
+  const trace = JSON.parse(await fs.readFile(path.join(smokeTraceDir, `${runId}.json`), 'utf8'));
+  assert.equal(trace.outcome, 'partial');
+  assert.equal(trace.spans[0].outcome, 'failed');
 });
