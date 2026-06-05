@@ -117,7 +117,7 @@ Stages and minimum events:
 |---|---|---|
 | `issue_validation` | `validate_issue.mjs` | `start`, `pass`/`fail` |
 | `code_gen` | `generate_issue_change.mjs` | `start`, `llm_request`, `llm_response`, `complete`, `error` |
-| `pr_open` | `generate_issue_change.mjs` | `start`, `complete`, `error` |
+| `pr_prepare` | `generate_issue_change.mjs` | `start`, `complete`, `error` |
 | `review` | `pr_review.mjs` | `start`, `llm_request`, `llm_response`, `verdict`, `error` |
 | `autofix` | `auto_fix_pr.mjs` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `error` |
 

@@ -366,7 +366,7 @@ test('loadLLMConfig: autofix stage has maxTokens set from models.yaml', () => {
 test('observability: trace file exists and contains all expected spans after full mocked pipeline run', async () => {
   const runId = `smoke-${Date.now()}`;
   const smokeTraceDir = path.join(tmpDir, 'traces');
-  const EXPECTED_STAGES = ['issue_validation', 'code_gen', 'pr_open', 'review', 'autofix'];
+  const EXPECTED_STAGES = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'autofix'];
 
   const tracer = createTracer({ runId, issueNumber: 42, traceDir: smokeTraceDir });
 
@@ -377,8 +377,8 @@ test('observability: trace file exists and contains all expected spans after ful
   tracer.startSpan('code_gen', { issueNumber: '42', model: 'test-model' });
   tracer.endSpan('code_gen', { outcome: 'success', meta: { changes_count: 2 } });
 
-  tracer.startSpan('pr_open', { changes_count: 2 });
-  tracer.endSpan('pr_open', { outcome: 'success', meta: { paths: ['src/foo.mjs'] } });
+  tracer.startSpan('pr_prepare', { changes_count: 2 });
+  tracer.endSpan('pr_prepare', { outcome: 'success', meta: { paths: ['src/foo.mjs'] } });
 
   tracer.startSpan('review', { prNumber: 1 });
   tracer.endSpan('review', { outcome: 'success', meta: { verdict: 'APPROVE', attempt: 1 } });

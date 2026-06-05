@@ -67,13 +67,13 @@ If `meta.file` is absent, the annotation has no file reference.
 | `code_gen.complete`    | info   | ✓             | `changes_count`                           |
 | `code_gen.error`       | error  | ✓             | `error`                                   |
 
-### `pr_open`
+### `pr_prepare`
 
 | Event              | Level  | `duration_ms` | Key `meta` fields              |
 |--------------------|--------|---------------|--------------------------------|
-| `pr_open.start`    | info   | —             | `changes_count`                |
-| `pr_open.complete` | info   | ✓             | `paths`                        |
-| `pr_open.error`    | error  | ✓             | `error`                        |
+| `pr_prepare.start`    | info   | —             | `changes_count`                |
+| `pr_prepare.complete` | info   | ✓             | `paths`                        |
+| `pr_prepare.error`    | error  | ✓             | `error`                        |
 
 > Emitted by `generate_issue_change.mjs` when files are written to disk.
 > The actual GitHub PR creation is performed by the `peter-evans/create-pull-request` action in the subsequent CI step.

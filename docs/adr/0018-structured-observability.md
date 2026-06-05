@@ -59,7 +59,7 @@ Written in the Actions runner working directory. The `observability/traces/` dir
 |---|---|
 | `issue_validation` | `start`, `pass`, `fail` |
 | `code_gen` | `start`, `llm_request`, `llm_response`, `complete`, `error` |
-| `pr_open` | `start`, `complete`, `error` |
+| `pr_prepare` | `start`, `complete`, `error` |
 | `review` | `start`, `llm_request`, `llm_response`, `verdict`, `error` |
 | `autofix` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `error` |
 

@@ -79,23 +79,23 @@ async function main() {
   obsLog({ stage: 'code_gen', event: 'code_gen.complete', level: 'info', duration_ms: codeGenMs, meta: { changes_count: changes.length } });
   tracer.endSpan('code_gen', { outcome: 'success', meta: { changes_count: changes.length } });
 
-  // PR open stage: write files to disk (the GitHub Action step creates the actual PR)
-  const prOpenStartMs = Date.now();
-  obsLog({ stage: 'pr_open', event: 'pr_open.start', level: 'info', meta: { changes_count: changes.length } });
-  tracer.startSpan('pr_open', { changes_count: changes.length });
+  // PR prepare stage: write files to disk (the GitHub Action step creates the actual PR)
+  const prPrepareStartMs = Date.now();
+  obsLog({ stage: 'pr_prepare', event: 'pr_prepare.start', level: 'info', meta: { changes_count: changes.length } });
+  tracer.startSpan('pr_prepare', { changes_count: changes.length });
 
   let outputPaths;
   try {
     outputPaths = await writeGeneratedFiles(changes);
   } catch (err) {
-    obsLog({ stage: 'pr_open', event: 'pr_open.error', level: 'error', duration_ms: Date.now() - prOpenStartMs, meta: { error: err.message } });
-    tracer.endSpan('pr_open', { outcome: 'failed', meta: { error: err.message } });
+    obsLog({ stage: 'pr_prepare', event: 'pr_prepare.error', level: 'error', duration_ms: Date.now() - prPrepareStartMs, meta: { error: err.message } });
+    tracer.endSpan('pr_prepare', { outcome: 'failed', meta: { error: err.message } });
     await tracer.finalize('failed');
     throw err;
   }
 
-  obsLog({ stage: 'pr_open', event: 'pr_open.complete', level: 'info', duration_ms: Date.now() - prOpenStartMs, meta: { paths: outputPaths } });
-  tracer.endSpan('pr_open', { outcome: 'success', meta: { paths: outputPaths } });
+  obsLog({ stage: 'pr_prepare', event: 'pr_prepare.complete', level: 'info', duration_ms: Date.now() - prPrepareStartMs, meta: { paths: outputPaths } });
+  tracer.endSpan('pr_prepare', { outcome: 'success', meta: { paths: outputPaths } });
 
   if (process.env.GITHUB_OUTPUT) {
     await fs.appendFile(

@@ -25,7 +25,7 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 | Generation pipeline | Realistic LLM JSON (plain and markdown-fenced) → `parseJsonResponse` → `validateAiOutput` → `writeGeneratedFiles` with real temp files |
 | `buildDeterministicPrompt` | Real `generation-user.md` template used; all placeholders substituted; output schema keys present |
 | `loadLLMConfig` | All four stages (`validation`, `generation`, `review`, `autofix`) produce a valid config shape for both Groq and Anthropic; `autofix` exposes `maxTokens` from `models.yaml` |
-| Observability | After a full mocked pipeline run, trace file exists at the expected path; contains spans for all 5 stages (`issue_validation`, `code_gen`, `pr_open`, `review`, `autofix`) with `outcome` populated; top-level `outcome` reflects pipeline result |
+| Observability | After a full mocked pipeline run, trace file exists at the expected path; contains spans for all 5 stages (`issue_validation`, `code_gen`, `pr_prepare`, `review`, `autofix`) with `outcome` populated; top-level `outcome` reflects pipeline result |
 
 ## Observability Tests
 

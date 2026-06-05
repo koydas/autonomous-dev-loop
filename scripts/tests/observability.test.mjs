@@ -186,14 +186,14 @@ test('tracer accumulates multiple spans in insertion order', async () => {
   const runId = `multi-${Date.now()}`;
   const tracer = createTracer({ runId, issueNumber: 10, traceDir });
 
-  for (const stage of ['issue_validation', 'code_gen', 'pr_open']) {
+  for (const stage of ['issue_validation', 'code_gen', 'pr_prepare']) {
     tracer.startSpan(stage, {});
     tracer.endSpan(stage, { outcome: 'success' });
   }
   await tracer.finalize('success');
 
   const trace = readTrace(runId, traceDir);
-  assert.deepEqual(trace.spans.map(s => s.stage), ['issue_validation', 'code_gen', 'pr_open']);
+  assert.deepEqual(trace.spans.map(s => s.stage), ['issue_validation', 'code_gen', 'pr_prepare']);
   assert.ok(trace.spans.every(s => s.outcome === 'success'));
 });
 

@@ -115,15 +115,6 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-      - name: Upload run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}
-          path: ./observability/traces/${{ github.run_id }}.json
-          if-no-files-found: ignore
-          overwrite: true
-
       - name: Commit and push fixes
         if: steps.fix.outputs.fixed_paths != ''
         env:
@@ -136,6 +127,15 @@ jobs:
           git reset HEAD -- metrics/
           git diff --staged --quiet || git commit -m "fix(ai): auto-fix attempt ${ATTEMPT}"
           git push origin HEAD:"${PR_BRANCH}"
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
 
       - name: Commit metrics
         if: always()

@@ -72,7 +72,7 @@ This document specifies the interface contract for each entrypoint script: requi
 ### Side effects
 
 - Writes generated source files to disk (paths determined by LLM output).
-- Writes `observability/traces/<GITHUB_RUN_ID>.json` with spans for both `code_gen` and `pr_open` stages.
+- Writes `observability/traces/<GITHUB_RUN_ID>.json` with spans for both `code_gen` and `pr_prepare` stages.
 
 ### Workflow outputs
 
