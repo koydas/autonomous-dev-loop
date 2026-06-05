@@ -24,11 +24,14 @@ function extractIssueNumber(text) {
 
 const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
 const traceDir = path.join(process.cwd(), 'observability', 'traces');
+let tracer;
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
   obsLog({ stage: 'review', event: 'review.error', level: 'error', meta: { error: err.message } });
+  tracer?.endSpan('review', { outcome: 'failed', meta: { error: err.message } });
+  await tracer?.finalize('failed');
   process.exit(1);
 });
 
@@ -76,7 +79,7 @@ if (!prNumber) {
   prNumber = prs[0].number;
 }
 
-const tracer = createTracer({ runId, issueNumber: null, traceDir });
+tracer = createTracer({ runId, issueNumber: null, traceDir });
 obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber, model } });
 tracer.startSpan('review', { prNumber, model });
 

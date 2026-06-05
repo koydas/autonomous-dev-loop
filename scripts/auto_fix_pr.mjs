@@ -14,11 +14,15 @@ import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
 
-process.on('unhandledRejection', (reason) => {
+let tracer;
+
+process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
   logSummary({ success: false, stepsCompleted: [], errors: [err.message] });
   obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', meta: { error: err.message } });
+  tracer?.endSpan('autofix', { outcome: 'failed', meta: { error: err.message } });
+  await tracer?.finalize('failed');
   process.exit(1);
 });
 
@@ -171,7 +175,7 @@ const attemptCount = refreshedLabels.filter((l) => l.name.startsWith(ATTEMPT_LAB
 
 const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
 const traceDir = path.join(process.cwd(), 'observability', 'traces');
-const tracer = createTracer({ runId, issueNumber: null, traceDir });
+tracer = createTracer({ runId, issueNumber: null, traceDir });
 
 if (attemptCount >= MAX_ATTEMPTS) {
   const exhaustedBody = `## \u{1F92A} Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
