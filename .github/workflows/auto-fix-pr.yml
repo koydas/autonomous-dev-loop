@@ -122,6 +122,7 @@ jobs:
           name: run-trace-${{ github.run_id }}
           path: ./observability/traces/${{ github.run_id }}.json
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Commit and push fixes
         if: steps.fix.outputs.fixed_paths != ''
