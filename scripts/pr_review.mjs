@@ -83,8 +83,6 @@ tracer = createTracer({ runId, issueNumber: null, traceDir });
 obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber, model } });
 tracer.startSpan('review', { prNumber, model });
 
-try {
-
 async function ghFetch(path, options = {}) {
   return await retryWithBackoff(async () => {
     let res;
@@ -167,6 +165,7 @@ async function hasActiveAutoFixRun(branchName) {
   return false;
 }
 
+try {
 const [prMetaRes, diffRes] = await Promise.all([
   ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`),
   ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
