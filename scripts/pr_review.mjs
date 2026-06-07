@@ -83,6 +83,7 @@ tracer = createTracer({ runId, issueNumber: null, traceDir });
 obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber, model } });
 tracer.startSpan('review', { prNumber, model });
 
+try {
 
 async function ghFetch(path, options = {}) {
   return await retryWithBackoff(async () => {
@@ -354,4 +355,10 @@ if (isApproved) {
     total_output_tokens_est: updatedPrMetrics.total_output_tokens_est,
   });
   log('PR metrics recorded', { prNumber, verdict: 'APPROVE' });
+}
+} catch (err) {
+  obsLog({ stage: 'review', event: 'review.error', level: 'error', meta: { error: err.message } });
+  tracer.endSpan('review', { outcome: 'failed', meta: { error: err.message } });
+  await tracer.finalize('failed');
+  throw err;
 }

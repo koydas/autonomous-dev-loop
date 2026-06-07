@@ -222,6 +222,7 @@ tracer.startSpan('autofix', { prNumber, attempt: nextAttempt });
 
 setLogContext({ run_id: runId, step: 'auto-fix', attempt: nextAttempt });
 
+try {
 const feedbackParts = [];
 if (reviewBody) feedbackParts.push(reviewBody);
 
@@ -424,3 +425,9 @@ tracer.endSpan('autofix', { outcome: 'success', meta: { attempt: nextAttempt, pa
 await tracer.finalize('success');
 
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
+} catch (err) {
+  obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', duration_ms: Date.now() - autofixStartMs, meta: { error: err.message, attempt: nextAttempt, prNumber } });
+  tracer.endSpan('autofix', { outcome: 'failed', meta: { error: err.message } });
+  await tracer.finalize('failed');
+  throw err;
+}
