@@ -74,7 +74,15 @@ async function main() {
     throw new Error('AI response JSON must be an object');
   }
 
-  const { summary, changes } = validateAiOutput(aiOutput);
+  let summary, changes;
+  try {
+    ({ summary, changes } = validateAiOutput(aiOutput));
+  } catch (err) {
+    obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
+    tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: err.message } });
+    await tracer.finalize('failed');
+    throw err;
+  }
   const codeGenMs = Date.now() - startMs;
   obsLog({ stage: 'code_gen', event: 'code_gen.complete', level: 'info', duration_ms: codeGenMs, meta: { changes_count: changes.length } });
   tracer.endSpan('code_gen', { outcome: 'success', meta: { changes_count: changes.length } });
