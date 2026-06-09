@@ -22,13 +22,13 @@ process.on('unhandledRejection', async (reason) => {
 });
 
 async function main() {
-  validateStartup();
-  const config = loadConfigFromEnv();
   const startMs = Date.now();
-
   const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
   const traceDir = path.join(process.cwd(), 'observability', 'traces');
-  tracer = createTracer({ runId, issueNumber: Number(config.issueNumber) || null, traceDir });
+  tracer = createTracer({ runId, issueNumber: null, traceDir });
+
+  validateStartup();
+  const config = loadConfigFromEnv();
 
   obsLog({ stage: 'code_gen', event: 'code_gen.start', level: 'info', meta: { issueNumber: config.issueNumber, model: config.model } });
   tracer.startSpan('code_gen', { issueNumber: config.issueNumber, model: config.model });
