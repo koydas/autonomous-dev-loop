@@ -145,6 +145,7 @@ async function loadLatestAutomatedReviewComment() {
 const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
 const traceDir = path.join(process.cwd(), 'observability', 'traces');
 tracer = createTracer({ runId, issueNumber: null, traceDir });
+tracer.startSpan('autofix', { prNumber });
 
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
