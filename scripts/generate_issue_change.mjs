@@ -33,9 +33,17 @@ async function main() {
   obsLog({ stage: 'code_gen', event: 'code_gen.start', level: 'info', meta: { issueNumber: config.issueNumber, model: config.model } });
   tracer.startSpan('code_gen', { issueNumber: config.issueNumber, model: config.model });
 
-  const fileContents = await buildFileContentsBlock(config.issueTitle, config.issueBody, process.cwd());
-  const prompt = buildDeterministicPrompt({ ...config, fileContents });
-  const systemPrompt = loadPrompt('generation-system');
+  let fileContents, prompt, systemPrompt;
+  try {
+    fileContents = await buildFileContentsBlock(config.issueTitle, config.issueBody, process.cwd());
+    prompt = buildDeterministicPrompt({ ...config, fileContents });
+    systemPrompt = loadPrompt('generation-system');
+  } catch (err) {
+    obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
+    tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: err.message } });
+    await tracer.finalize('failed');
+    throw err;
+  }
 
   const inputTokensEst = estimateTokens(systemPrompt + prompt);
   obsLog({ stage: 'code_gen', event: 'code_gen.llm_request', level: 'info', meta: { model: config.model, input_tokens_est: inputTokensEst } });
