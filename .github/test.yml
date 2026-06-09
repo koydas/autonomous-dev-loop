@@ -1,0 +1,19 @@
+name: Test
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Run tests
+        run: node --test scripts/tests/*.test.mjs
+      - name: Check coverage
+        run: |
+          coverage=$(jest --coverage)
+          if [[ $coverage =~ "Statements.*:.*80%" ]]; then
+            echo "Test coverage meets requirements"
+          else
+            echo "Test coverage does not meet requirements"
+            exit 1
+          fi
