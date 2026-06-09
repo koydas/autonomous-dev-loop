@@ -12,9 +12,12 @@ import { estimateTokens } from './lib/metrics.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-process.on('unhandledRejection', (reason) => {
+let tracer;
+
+process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
+  await tracer?.finalize('failed');
   process.exit(1);
 });
 
@@ -25,7 +28,7 @@ async function main() {
 
   const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
   const traceDir = path.join(process.cwd(), 'observability', 'traces');
-  const tracer = createTracer({ runId, issueNumber: Number(config.issueNumber) || null, traceDir });
+  tracer = createTracer({ runId, issueNumber: Number(config.issueNumber) || null, traceDir });
 
   obsLog({ stage: 'code_gen', event: 'code_gen.start', level: 'info', meta: { issueNumber: config.issueNumber, model: config.model } });
   tracer.startSpan('code_gen', { issueNumber: config.issueNumber, model: config.model });
@@ -125,5 +128,6 @@ async function main() {
 
 main().catch(async (err) => {
   logError('Fatal error', { error: err.message, stack: err.stack });
+  await tracer?.finalize('failed');
   process.exit(1);
 });
