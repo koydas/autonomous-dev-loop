@@ -22,15 +22,14 @@ process.on('unhandledRejection', async (reason) => {
 async function main() {
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
+  const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
+  const traceDir = path.join(process.cwd(), 'observability', 'traces');
+  tracer = createTracer({ runId, issueNumber: null, traceDir });
 
   const issueNumber = requireEnv('ISSUE_NUMBER');
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
   const { apiKey, model, apiUrl, temperature, maxTokens } = loadLLMConfig('validation');
-
-  const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
-  const traceDir = path.join(process.cwd(), 'observability', 'traces');
-  tracer = createTracer({ runId, issueNumber: Number(issueNumber), traceDir });
 
   obsLog({ stage: 'issue_validation', event: 'issue_validation.start', level: 'info', meta: { issueNumber, issueTitle, model } });
   tracer.startSpan('issue_validation', { issueNumber, issueTitle, model });
