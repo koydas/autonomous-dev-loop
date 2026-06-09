@@ -29,7 +29,7 @@ let tracer;
 process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
-  obsLog({ stage: 'review', event: 'review.error', level: 'error', meta: { error: err.message } });
+  obsLog({ stage: 'review', event: 'review.error', level: 'error', duration_ms: Date.now() - _reviewStartMs, meta: { error: err.message } });
   tracer?.endSpan('review', { outcome: 'failed', meta: { error: err.message } });
   await tracer?.finalize('failed');
   process.exit(1);
@@ -356,7 +356,7 @@ if (isApproved) {
   log('PR metrics recorded', { prNumber, verdict: 'APPROVE' });
 }
 } catch (err) {
-  obsLog({ stage: 'review', event: 'review.error', level: 'error', meta: { error: err.message } });
+  obsLog({ stage: 'review', event: 'review.error', level: 'error', duration_ms: Date.now() - _reviewStartMs, meta: { error: err.message } });
   tracer.endSpan('review', { outcome: 'failed', meta: { error: err.message } });
   await tracer.finalize('failed');
   throw err;
