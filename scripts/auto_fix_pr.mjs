@@ -147,6 +147,10 @@ const traceDir = path.join(process.cwd(), 'observability', 'traces');
 tracer = createTracer({ runId, issueNumber: null, traceDir });
 tracer.startSpan('autofix', { prNumber });
 
+let nextAttempt = null;
+let autofixStartMs = Date.now();
+
+try {
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
 const prLabels = await labelsRes.json();
@@ -214,8 +218,8 @@ if (attemptCount >= MAX_ATTEMPTS) {
   process.exit(0);
 }
 
-const nextAttempt = attemptCount + 1;
-const autofixStartMs = Date.now();
+nextAttempt = attemptCount + 1;
+autofixStartMs = Date.now();
 
 log('Starting auto-fix', { prNumber, attempt: nextAttempt });
 obsLog({ stage: 'autofix', event: 'autofix.start', level: 'info', meta: { attempt: nextAttempt, prNumber } });
@@ -223,7 +227,6 @@ tracer.startSpan('autofix', { prNumber, attempt: nextAttempt });
 
 setLogContext({ run_id: runId, step: 'auto-fix', attempt: nextAttempt });
 
-try {
 const feedbackParts = [];
 if (reviewBody) feedbackParts.push(reviewBody);
 
