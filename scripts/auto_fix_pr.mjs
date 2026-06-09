@@ -142,6 +142,10 @@ async function loadLatestAutomatedReviewComment() {
   }
 }
 
+const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
+const traceDir = path.join(process.cwd(), 'observability', 'traces');
+tracer = createTracer({ runId, issueNumber: null, traceDir });
+
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
 const prLabels = await labelsRes.json();
@@ -172,10 +176,6 @@ const refreshedLabelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNum
 if (!refreshedLabelsRes.ok) throw new Error(`Label list failed after reset: ${refreshedLabelsRes.status}`);
 const refreshedLabels = await refreshedLabelsRes.json();
 const attemptCount = refreshedLabels.filter((l) => l.name.startsWith(ATTEMPT_LABEL_PREFIX)).length;
-
-const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
-const traceDir = path.join(process.cwd(), 'observability', 'traces');
-tracer = createTracer({ runId, issueNumber: null, traceDir });
 
 if (attemptCount >= MAX_ATTEMPTS) {
   const exhaustedBody = `## \u{1F92A} Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
@@ -422,7 +422,7 @@ await writeCheckpoint(checkpointRunId, 'pr_metrics', {
 log('PR metrics checkpoint updated', { prNumber, auto_fix_pushes: prMetrics.auto_fix_pushes + 1 });
 
 tracer.endSpan('autofix', { outcome: 'success', meta: { attempt: nextAttempt, paths: outputPaths } });
-await tracer.finalize('success');
+await tracer.finalize('partial');
 
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
 } catch (err) {

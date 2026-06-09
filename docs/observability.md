@@ -136,9 +136,11 @@ Created incrementally as each stage starts and ends. Finalized (with `completed_
 | Value     | Meaning                                                         |
 |-----------|-----------------------------------------------------------------|
 | `success` | All expected work completed without errors.                     |
-| `partial` | Completed but with a non-fatal outcome (e.g. validation failed, review requested changes). |
+| `partial` | Script work completed, but with a non-fatal or pending outcome. Examples: issue validation rejected, review requested changes, or autofix files were written and outputs set but the downstream git push CI step has not yet run. |
 | `failed`  | Terminated due to an error.                                     |
 | `skipped` | Stage was intentionally bypassed (e.g. max attempts reached).   |
+
+> **`autofix` stage and `partial`**: `auto_fix_pr.mjs` finalizes as `partial` (not `success`) because the git commit and push are performed by the CI step that runs *after* the script exits. The trace accurately records script-level completion; the workflow artifact upload (which runs after the push step) reflects whether the overall job succeeded.
 
 ### Artifact
 
