@@ -15,7 +15,7 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 
 ## Smoke Tests
 
-`scripts/tests/smoke.test.mjs` — 20 tests across 6 groups:
+`scripts/tests/smoke.test.mjs` — 22 tests across 7 groups:
 
 | Group | What is covered |
 |-------|-----------------|
@@ -25,6 +25,16 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 | Generation pipeline | Realistic LLM JSON (plain and markdown-fenced) → `parseJsonResponse` → `validateAiOutput` → `writeGeneratedFiles` with real temp files |
 | `buildDeterministicPrompt` | Real `generation-user.md` template used; all placeholders substituted; output schema keys present |
 | `loadLLMConfig` | All four stages (`validation`, `generation`, `review`, `autofix`) produce a valid config shape for both Groq and Anthropic; `autofix` exposes `maxTokens` from `models.yaml` |
+| Observability | After a full mocked pipeline run, trace file exists at the expected path; contains spans for all 5 stages (`issue_validation`, `code_gen`, `pr_prepare`, `review`, `autofix`) with `outcome` populated; top-level `outcome` reflects pipeline result |
+
+## Observability Tests
+
+`scripts/tests/observability.test.mjs` — 20 unit tests across two groups:
+
+| Group | What is covered |
+|-------|-----------------|
+| `log()` | Emits one JSON line to stderr; correct schema fields (`ts`, `run_id`, `stage`, `event`, `level`, `duration_ms`, `meta`); `GITHUB_RUN_ID` env var used as `run_id`; falls back to `"local"`; emits `::error::` GHA annotation on error level when `GITHUB_ACTIONS=true`; no annotation for non-error levels; never throws on circular meta; output is always valid JSON |
+| `createTracer()` | `startSpan` creates trace file immediately; `endSpan` populates `completed_at`, `duration_ms`, `outcome`; `finalize` writes `completed_at` and top-level `outcome`; multiple spans accumulate in insertion order; re-using a stage name updates rather than duplicates; nested `traceDir` is created automatically; `endSpan` without prior `startSpan` is safe; I/O failure in `finalize` emits warn log rather than throwing; I/O failure in `startSpan` emits warn log rather than throwing |
 
 ## Unit Test Coverage
 

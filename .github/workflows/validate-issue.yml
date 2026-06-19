@@ -36,6 +36,7 @@ jobs:
       - name: Validate issue
         id: validate
         env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
           CHECKPOINT_RUN_ID: issue-${{ github.event.issue.number }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -70,6 +71,15 @@ jobs:
         with:
           name: checkpoints-issue-${{ github.event.issue.number }}
           path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
           if-no-files-found: ignore
           overwrite: true
 

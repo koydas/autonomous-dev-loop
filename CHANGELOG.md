@@ -8,6 +8,11 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 ## [Unreleased]
 
 ### Added
+- Structured end-to-end observability: `scripts/lib/observability.mjs` provides `log()` (structured JSON to stderr, per-event) and `createTracer()` (incremental per-run trace file at `observability/traces/<GITHUB_RUN_ID>.json`). All four pipeline stages (issue_validation, code_gen/pr_prepare, review, autofix) now emit required events with `duration_ms` on terminal events. Error-level events emit `::error::` GitHub Actions annotations automatically (ADR-0018).
+- Run trace artifact: each of the four main workflows uploads `run-trace-<GITHUB_RUN_ID>` as a GitHub Actions artifact (`if: always()`), so trace files are preserved even on failure.
+- `scripts/tests/observability.test.mjs` — 20 unit tests covering `log()` schema, GHA annotations, error containment, tracer happy-path and I/O failure isolation.
+- `docs/observability.md` — schema reference, per-stage event tables, trace file format, `jq` reading guide, and API reference.
+- ADR-0018: Structured observability — JSON events to stderr + per-run trace files — documents the two-output design, rejected alternatives (OTEL, stdout-only, post-run aggregation), and the incremental-write rationale.
 - ADR-0017: Configurable per-stage token budget in `config/models.yaml` — documents `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio` and the Groq on_demand 12k TPM constraint that motivated the design
 
 ### Changed

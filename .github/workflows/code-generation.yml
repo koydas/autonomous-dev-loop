@@ -97,6 +97,7 @@ jobs:
       - name: Generate AI change
         id: generate
         env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
@@ -135,5 +136,14 @@ jobs:
         with:
           name: checkpoints-issue-${{ steps.issue.outputs.number }}
           path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
           if-no-files-found: ignore
           overwrite: true
