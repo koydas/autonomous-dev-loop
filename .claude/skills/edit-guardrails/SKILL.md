@@ -1,3 +1,7 @@
+---
+description: Hard guardrails for editing existing files in scripts/ or prompts/ — prevents test shrinkage, ESM/CJS mixing, signature changes, undeclared deps, and >30% rewrites.
+---
+
 # edit-guardrails
 
 ## When to Apply

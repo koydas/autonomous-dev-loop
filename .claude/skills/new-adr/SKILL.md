@@ -1,3 +1,7 @@
+---
+description: Procedure for adding a new ADR — numbered file in docs/adr/, index update in README.md, mandatory CHANGELOG.md entry, and optional doc updates for behavior changes.
+---
+
 # new-adr
 
 ## When to Apply

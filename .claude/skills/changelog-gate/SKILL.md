@@ -1,3 +1,7 @@
+---
+description: CI gate requiring a CHANGELOG.md entry under [Unreleased] whenever a PR touches scripts/*.mjs entrypoints or docs/adr/NNNN-*.md files.
+---
+
 # changelog-gate
 
 ## When to Apply

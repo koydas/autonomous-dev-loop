@@ -1,3 +1,7 @@
+---
+description: Test runner conventions — node:test only (no Jest/Mocha), no-shrink rule on test count, mandatory failure-branch coverage for new exports, smoke tests required.
+---
+
 # test-protocol
 
 ## When to Apply

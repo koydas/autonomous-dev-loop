@@ -7,9 +7,9 @@ See `AGENTS.md` for engineering rules, `docs/code-generation.md` for setup, and 
 
 ## Skills
 
-@.claude/skills/edit-guardrails.md
-@.claude/skills/changelog-gate.md
-@.claude/skills/test-protocol.md
-@.claude/skills/observability-contract.md
-@.claude/skills/pr-review-workflow.md
-@.claude/skills/new-adr.md
+@.claude/skills/edit-guardrails/SKILL.md
+@.claude/skills/changelog-gate/SKILL.md
+@.claude/skills/test-protocol/SKILL.md
+@.claude/skills/observability-contract/SKILL.md
+@.claude/skills/pr-review-workflow/SKILL.md
+@.claude/skills/new-adr/SKILL.md

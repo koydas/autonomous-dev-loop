@@ -1,3 +1,7 @@
+---
+description: Four-step PR review response sequence — fix code, reply to thread, resolve thread, conditionally post @Codex review only if code was changed.
+---
+
 # pr-review-workflow
 ## When to Apply
 When acting on review comments or inline threads on a pull request in this repository — whether from a human reviewer or from the automated PR review bot.

@@ -1,3 +1,7 @@
+---
+description: Instrumentation contract for pipeline stages — all events route through observability.mjs, required start/complete events, GITHUB_RUN_ID env, and trace artifact upload in new workflows.
+---
+
 # observability-contract
 
 ## When to Apply
