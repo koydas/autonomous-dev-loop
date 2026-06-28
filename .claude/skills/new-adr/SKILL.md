@@ -12,7 +12,7 @@ When adding a new Architecture Decision Record (ADR) to document a significant d
 
 ### Step 1 — Determine the next ADR number
 
-Check the highest existing number in `docs/adr/` (e.g., `ls docs/adr/*.md | sort`) and increment by one. Use four digits zero-padded (e.g., `0019`).
+Check the highest existing number in `docs/adr/` (e.g., `ls docs/adr/[0-9][0-9][0-9][0-9]-*.md | sort`) and increment by one. Use four digits zero-padded (e.g., `0019`). Use the numeric glob to exclude `README.md` and other non-ADR files from the sort.
 
 ### Step 2 — Create the ADR file
 
