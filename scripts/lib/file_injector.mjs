@@ -110,7 +110,26 @@ export async function readPackageJsonDependencies(repoRoot) {
 }
 
 export function formatDependencyAllowlist(deps) {
-  if (!deps || Object.keys(deps).length === 0) return '';
+  // `deps === null` means no manifest was readable at all (missing/malformed package.json) —
+  // stay silent, since this pipeline also runs against non-Node.js repos with nothing to say here.
+  // `deps === {}` means a real package.json exists and declares zero dependencies — that's a
+  // meaningful, exhaustive answer ("no npm packages are allowed") and must still be emitted;
+  // treating it the same as "no manifest" would silently drop the constraint precisely when a
+  // repo (like this one) declares no runtime dependencies, letting an import like the
+  // motivating abort-controller incident through unchallenged.
+  if (!deps) return '';
+  if (Object.keys(deps).length === 0) {
+    return (
+      '### Allowed npm dependencies (from the repository root package.json)\n' +
+      '(none — package.json declares zero dependencies)\n\n' +
+      'Do not introduce ANY new external npm package. Language/runtime built-ins ' +
+      '(e.g. AbortController, fetch, crypto, fs, path) do not need to be listed here ' +
+      'and are always allowed. This reflects only the repository root manifest — it ' +
+      "doesn't override the separate allowance for a package already imported " +
+      'elsewhere in the target file, and it may not cover nested workspace-package ' +
+      'manifests this scan does not read.'
+    );
+  }
   const allNames = Object.keys(deps).sort();
   const truncated = allNames.length > MAX_DEPENDENCIES;
   const names = truncated ? allNames.slice(0, MAX_DEPENDENCIES) : allNames;

@@ -344,8 +344,11 @@ describe('formatDependencyAllowlist', () => {
     assert.equal(formatDependencyAllowlist(null), '');
   });
 
-  test('returns an empty string for an empty object', () => {
-    assert.equal(formatDependencyAllowlist({}), '');
+  test('emits an explicit zero-dependencies block for an empty object (not silence)', () => {
+    const block = formatDependencyAllowlist({});
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('zero dependencies'));
+    assert.ok(block.includes('Do not introduce ANY new external npm package'));
   });
 
   test('lists dependency names sorted alphabetically', () => {
@@ -435,5 +438,24 @@ describe('buildFileContentsBlock with package.json present', () => {
     const block = await buildFileContentsBlock('Fix login bug', 'no file mentioned here', tmpDir);
     assert.ok(block.includes('### Allowed npm dependencies'));
     assert.ok(block.includes('No existing files identified as relevant to this issue.'));
+  });
+});
+
+describe('buildFileContentsBlock with package.json declaring zero dependencies', () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-empty-int-'));
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'x' }), 'utf8');
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('still emits an explicit zero-dependencies allowlist block rather than staying silent', async () => {
+    const block = await buildFileContentsBlock('Fix login bug', '', tmpDir);
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('zero dependencies'));
   });
 });
