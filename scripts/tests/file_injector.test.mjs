@@ -262,12 +262,45 @@ describe('readPackageJsonDependencies', () => {
     await fs.rm(depDir, { recursive: true, force: true });
   });
 
+  test('also merges peerDependencies and optionalDependencies', async () => {
+    const depDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-peer-'));
+    await fs.writeFile(
+      path.join(depDir, 'package.json'),
+      JSON.stringify({
+        dependencies: { react: '18.0.0' },
+        devDependencies: { vitest: '1.0.0' },
+        peerDependencies: { 'react-dom': '18.0.0' },
+        optionalDependencies: { fsevents: '2.3.0' },
+      }),
+      'utf8',
+    );
+    const deps = await readPackageJsonDependencies(depDir);
+    assert.deepEqual(deps, {
+      react: '18.0.0',
+      vitest: '1.0.0',
+      'react-dom': '18.0.0',
+      fsevents: '2.3.0',
+    });
+    await fs.rm(depDir, { recursive: true, force: true });
+  });
+
   test('returns an empty object when package.json has no dependency fields', async () => {
     const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-empty-'));
     await fs.writeFile(path.join(emptyDir, 'package.json'), JSON.stringify({ name: 'x' }), 'utf8');
     const deps = await readPackageJsonDependencies(emptyDir);
     assert.deepEqual(deps, {});
     await fs.rm(emptyDir, { recursive: true, force: true });
+  });
+
+  test('rethrows unexpected non-ENOENT read errors instead of swallowing them', async () => {
+    const dirDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-direrr-'));
+    // Make package.json a directory instead of a file: reading it throws EISDIR, not ENOENT.
+    await fs.mkdir(path.join(dirDir, 'package.json'));
+    await assert.rejects(
+      () => readPackageJsonDependencies(dirDir),
+      (err) => err.code === 'EISDIR',
+    );
+    await fs.rm(dirDir, { recursive: true, force: true });
   });
 });
 

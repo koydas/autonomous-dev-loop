@@ -84,7 +84,12 @@ export async function readPackageJsonDependencies(repoRoot) {
     return null;
   }
 
-  return { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  return {
+    ...(pkg.dependencies || {}),
+    ...(pkg.devDependencies || {}),
+    ...(pkg.peerDependencies || {}),
+    ...(pkg.optionalDependencies || {}),
+  };
 }
 
 export function formatDependencyAllowlist(deps) {

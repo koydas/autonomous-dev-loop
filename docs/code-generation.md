@@ -53,6 +53,10 @@ The PR review workflow creates and manages these labels automatically:
 
 All label names, colors, and descriptions are configurable in `config/labels.yaml`.
 
+## Dependency Allowlist Injection
+
+`scripts/lib/file_injector.mjs`'s `buildFileContentsBlock()` (used by `generate_issue_change.mjs`) reads the target repository's `package.json`, when present, and prepends a formatted "Allowed npm dependencies" block ahead of the existing file-context block — merging `dependencies`, `devDependencies`, `peerDependencies`, and `optionalDependencies`. This gives the generation prompt concrete data to check new imports against, instead of only the abstract "never introduce a new external package" guardrail. Absent or malformed `package.json` resolves to no allowlist block (not an error), since this pipeline is also used against non-Node.js repositories.
+
 ## End-to-End Test
 
 1. Ensure secrets above are configured.
