@@ -8,6 +8,7 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 ## [Unreleased]
 
 ### Added
+- ADR-0019 (proposed): Static verification backstop for generated code — proposes an import-allowlist check and opt-in `tsc --noEmit` gate after generation/auto-fix, motivated by a benchmark session where a local coding model violated existing prompt-only guardrails (unauthorized dependency import, read-only property assignment causing a guaranteed runtime crash) and the paired PR-review prompt approved the resulting diff.
 - Structured end-to-end observability: `scripts/lib/observability.mjs` provides `log()` (structured JSON to stderr, per-event) and `createTracer()` (incremental per-run trace file at `observability/traces/<GITHUB_RUN_ID>.json`). All four pipeline stages (issue_validation, code_gen/pr_prepare, review, autofix) now emit required events with `duration_ms` on terminal events. Error-level events emit `::error::` GitHub Actions annotations automatically (ADR-0018).
 - Run trace artifact: each of the four main workflows uploads `run-trace-<GITHUB_RUN_ID>` as a GitHub Actions artifact (`if: always()`), so trace files are preserved even on failure.
 - `scripts/tests/observability.test.mjs` — 20 unit tests covering `log()` schema, GHA annotations, error containment, tracer happy-path and I/O failure isolation.
