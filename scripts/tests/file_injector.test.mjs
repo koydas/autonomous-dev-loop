@@ -403,6 +403,23 @@ describe('formatDependencyAllowlist', () => {
     const block = formatDependencyAllowlist(exactlyMax);
     assert.ok(!block.includes('truncated'));
   });
+
+  test('truncates by character footprint even when well under MAX_DEPENDENCIES, for long scoped package names', () => {
+    // 60 entries at ~100 chars each = ~6000 chars, over MAX_ALLOWLIST_CHARS (4000),
+    // while staying far below the 200-entry count cap — the count cap alone would not
+    // have bounded this list's size.
+    const longNames = Object.fromEntries(
+      Array.from({ length: 60 }, (_, i) => [
+        `@some-very-long-organization-name-${String(i).padStart(3, '0')}/some-very-long-package-name-here`,
+        '1.0.0',
+      ]),
+    );
+    const block = formatDependencyAllowlist(longNames);
+    const listedCount = (block.match(/^- @some-very-long/gm) || []).length;
+    assert.ok(listedCount < 60, `expected truncation before all 60 entries, got ${listedCount}`);
+    assert.ok(block.includes('truncated'));
+    assert.ok(block.includes('60'));
+  });
 });
 
 // ---------------------------------------------------------------------------

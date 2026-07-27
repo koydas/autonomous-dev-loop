@@ -5,6 +5,12 @@ import { shouldIncludeFile } from './file_filters.mjs';
 const MAX_FILE_SIZE = 8000;
 const MAX_FILES = 10;
 const MAX_DEPENDENCIES = 200;
+// Bounds the allowlist's actual character footprint, independent of MAX_DEPENDENCIES: 200
+// entries of long scoped package names (e.g. "@some-long-org/some-long-package-name") can
+// still add tens of KB on top of the existing file-context budget (MAX_FILES * MAX_FILE_SIZE
+// = 80,000 chars), which the generation stage doesn't cap or truncate by token budget the way
+// the auto-fix stage does (autofix_max_input_tokens) — so this list must bound itself.
+const MAX_ALLOWLIST_CHARS = 4000;
 
 // Matches relative paths that contain at least one directory separator.
 // Negative lookbehind on `:` and `/` prevents matching URL segments.
@@ -131,15 +137,27 @@ export function formatDependencyAllowlist(deps) {
     );
   }
   const allNames = Object.keys(deps).sort();
-  const truncated = allNames.length > MAX_DEPENDENCIES;
-  const names = truncated ? allNames.slice(0, MAX_DEPENDENCIES) : allNames;
+  // Bound by whichever limit is hit first: entry count (MAX_DEPENDENCIES) or cumulative
+  // character footprint (MAX_ALLOWLIST_CHARS) — a manifest with few but very long scoped
+  // package names could stay under 200 entries while still ballooning the prompt.
+  const names = [];
+  let charCount = 0;
+  for (const name of allNames) {
+    if (names.length >= MAX_DEPENDENCIES) break;
+    const lineLength = name.length + 3; // "- " prefix + trailing newline, approximated
+    if (charCount + lineLength > MAX_ALLOWLIST_CHARS) break;
+    names.push(name);
+    charCount += lineLength;
+  }
+  const truncated = names.length < allNames.length;
   // When truncated, this list can no longer be treated as exhaustive — a real, already-declared
-  // dependency sorting after entry 200 would otherwise be wrongly rejected as unauthorized. The
+  // dependency sorting after the cutoff would otherwise be wrongly rejected as unauthorized. The
   // static prompt text (generation-system.md/generation-user.md) calls this list "exhaustive";
   // this note overrides that framing for this specific request when it doesn't hold.
   const truncationNote = truncated
-    ? `\n\n(List truncated to the first ${MAX_DEPENDENCIES} of ${allNames.length} declared dependencies, ` +
-      'sorted alphabetically, to bound prompt size. Because of this truncation, this list is NOT ' +
+    ? `\n\n(List truncated to ${names.length} of ${allNames.length} declared dependencies, ` +
+      `sorted alphabetically (limit: ${MAX_DEPENDENCIES} entries or ${MAX_ALLOWLIST_CHARS} characters, ` +
+      'whichever is reached first), to bound prompt size. Because of this truncation, this list is NOT ' +
       'exhaustive for this request — do not reject an import solely for not appearing here; only ' +
       'flag an import as unauthorized if it also fails to match a plausible real package name pattern ' +
       'or is otherwise clearly suspicious.)'
