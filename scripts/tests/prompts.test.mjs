@@ -114,6 +114,49 @@ describe('prompt file contents', () => {
     assert.ok(content.includes('file_content'));
   });
 
+  test('generation-system references the Allowed npm dependencies allowlist', () => {
+    const content = loadPrompt('generation-system');
+    assert.ok(content.includes('Allowed npm dependencies'));
+  });
+
+  test('generation-system distinguishes no-import globals from importable Node built-ins', () => {
+    const content = loadPrompt('generation-system');
+    assert.ok(content.includes('AbortController'));
+    assert.ok(content.includes('fetch'));
+    assert.ok(/still need an explicit.*import.*require/i.test(content));
+  });
+
+  test('generation-system requires tests for new non-trivial logic regardless of path', () => {
+    const content = loadPrompt('generation-system');
+    assert.ok(content.includes('new function, class, hook, component, or endpoint'));
+    assert.ok(content.includes('regardless of the target file'));
+  });
+
+  test('generation-system requires a read-only property self-check', () => {
+    const content = loadPrompt('generation-system');
+    assert.ok(content.includes('SELF-CHECK BEFORE RETURNING'));
+    assert.ok(content.includes('read-only/getter-only property'));
+    assert.ok(content.includes('AbortController.prototype.signal'));
+  });
+
+  test('generation-system requires a cross-render/call persistence self-check', () => {
+    const content = loadPrompt('generation-system');
+    assert.ok(content.includes('useRef'));
+    assert.ok(content.includes('re-initialized on every call'));
+  });
+
+  test('generation-user mentions the Allowed npm dependencies allowlist as exhaustive', () => {
+    const content = loadPrompt('generation-user');
+    assert.ok(content.includes('Allowed npm dependencies'));
+    assert.ok(content.includes('exhaustive'));
+  });
+
+  test('generation-user requirement 11 mandates tests independent of path', () => {
+    const content = loadPrompt('generation-user');
+    assert.ok(content.includes('whenever the issue explicitly requests them'));
+    assert.ok(content.includes('regardless of the target file'));
+  });
+
   test('pr-review-system is a non-empty string', () => {
     assert.ok(loadPrompt('pr-review-system').length > 0);
   });
