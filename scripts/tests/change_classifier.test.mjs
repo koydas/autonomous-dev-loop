@@ -4,6 +4,7 @@ import {
   classifyChangedFiles,
   determineTestExpectation,
   buildChangeClassificationContext,
+  isTestFile,
 } from '../lib/change_classifier.mjs';
 
 // ---------------------------------------------------------------------------
@@ -255,4 +256,51 @@ test('buildChangeClassificationContext: includes detected_categories in output',
   ].join('\n');
   const ctx = buildChangeClassificationContext(diff);
   assert.match(ctx, /detected_categories: configuration/);
+});
+
+test('isTestFile: recognizes common test path/extension patterns', () => {
+  assert.ok(isTestFile('scripts/tests/foo.test.mjs'));
+  assert.ok(isTestFile('src/__tests__/bar.js'));
+  assert.ok(isTestFile('src/foo.spec.ts'));
+  assert.ok(!isTestFile('scripts/lib/foo.mjs'));
+});
+
+test('buildChangeClassificationContext: has_test_file_changes is true when any changed file is a test file', () => {
+  const diff = [
+    'diff --git a/src/foo.mjs b/src/foo.mjs',
+    '+++ b/src/foo.mjs',
+    'diff --git a/scripts/tests/foo.test.mjs b/scripts/tests/foo.test.mjs',
+    '+++ b/scripts/tests/foo.test.mjs',
+  ].join('\n');
+  const ctx = buildChangeClassificationContext(diff);
+  assert.match(ctx, /has_test_file_changes: true/);
+});
+
+test('buildChangeClassificationContext: has_test_file_changes is false when no changed file is a test file', () => {
+  const diff = ['diff --git a/src/foo.mjs b/src/foo.mjs', '+++ b/src/foo.mjs'].join('\n');
+  const ctx = buildChangeClassificationContext(diff);
+  assert.match(ctx, /has_test_file_changes: false/);
+});
+
+test('buildChangeClassificationContext: has_test_file_changes reflects the full diff even for files beyond a hypothetical truncation point', () => {
+  // Simulates the real bug this fixes: extractChangedFiles/isTestFile run on the FULL rawDiff,
+  // not the separately-truncated text shown to the model, so a test file far into a huge diff
+  // still correctly flips this flag to true.
+  const filler = 'diff --git a/src/filler.mjs b/src/filler.mjs\n+++ b/src/filler.mjs\n' + '+x\n'.repeat(5000);
+  const diff = filler + 'diff --git a/scripts/tests/late.test.mjs b/scripts/tests/late.test.mjs\n+++ b/scripts/tests/late.test.mjs';
+  assert.ok(diff.length > 12000);
+  const ctx = buildChangeClassificationContext(diff);
+  assert.match(ctx, /has_test_file_changes: true/);
+});
+
+test('buildChangeClassificationContext: diff_truncated defaults to false when not passed', () => {
+  const diff = ['diff --git a/src/foo.mjs b/src/foo.mjs', '+++ b/src/foo.mjs'].join('\n');
+  const ctx = buildChangeClassificationContext(diff);
+  assert.match(ctx, /diff_truncated: false/);
+});
+
+test('buildChangeClassificationContext: diff_truncated reflects the passed flag', () => {
+  const diff = ['diff --git a/src/foo.mjs b/src/foo.mjs', '+++ b/src/foo.mjs'].join('\n');
+  const ctx = buildChangeClassificationContext(diff, true);
+  assert.match(ctx, /diff_truncated: true/);
 });

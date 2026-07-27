@@ -68,7 +68,7 @@ function isDependencyFile(filePath) {
   return DEPENDENCY_PATTERNS.some((p) => p.test(filePath));
 }
 
-function isTestFile(filePath) {
+export function isTestFile(filePath) {
   return TEST_PATTERNS.some((p) => p.test(filePath));
 }
 
@@ -170,12 +170,16 @@ export function determineTestExpectation(categories, hasCode) {
  * Returns an empty string when the diff contains no recognisable file paths so
  * that callers can safely concatenate it.
  */
-export function buildChangeClassificationContext(rawDiff) {
+export function buildChangeClassificationContext(rawDiff, diffTruncated = false) {
   const changedFiles = extractChangedFiles(rawDiff);
   if (!changedFiles.length) return '';
 
   const { categories, hasCode, hasUncategorizedCode } = classifyChangedFiles(changedFiles);
   const { tests_expected, reason } = determineTestExpectation(categories, hasCode);
+  // Computed from the full, untruncated raw diff (changedFiles comes from extractChangedFiles(rawDiff),
+  // not the truncated text shown in the prompt), so this stays accurate even when the diff hunks
+  // themselves are cut off by filterDiff's character limit.
+  const hasTestFileChanges = changedFiles.some(isTestFile);
 
   const classification = categories.length > 0 ? categories.join(', ') : 'none';
   // "mixed" only when there are genuinely distinct kinds of changes.
@@ -197,7 +201,11 @@ export function buildChangeClassificationContext(rawDiff) {
     `- has_executable_code_changes: ${hasCode}`,
     `- tests_expected: ${tests_expected}`,
     `- tests_expected_reason: ${reason}`,
+    `- has_test_file_changes: ${hasTestFileChanges}`,
+    `- diff_truncated: ${diffTruncated}`,
     '',
     'If tests_expected is false: do not generate findings about missing tests, do not recommend increasing test coverage, and do not reduce the verdict because of absent tests.',
+    'has_test_file_changes is computed from the full PR diff, including any part beyond what is shown above if the diff was truncated — trust this field over what you can see in the diff text when deciding whether to flag missing tests.',
+    'If diff_truncated is true, the diff shown above was cut off and does not include the full PR. State this explicitly in your review (e.g. a note under the summary) and do not imply full coverage in your verdict — flag only what is visible, and note that later hunks were not inspected.',
   ].join('\n');
 }

@@ -182,10 +182,14 @@ const rawDiff = await diffRes.text();
 const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
+// filterDiff(rawDiff) below without a maxChars override returns the fully filtered diff with
+// no length cap, so comparing its length against the truncated `diff` above tells us whether
+// the 12,000-char cutoff actually cut anything — used to warn the reviewer it saw a partial diff.
+const diffTruncated = filterDiff(rawDiff, Infinity).length > diff.length;
 
 const baseUserPrompt = interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: prBody });
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
-const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff)}${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}`;
+const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff, diffTruncated)}${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}`;
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
 

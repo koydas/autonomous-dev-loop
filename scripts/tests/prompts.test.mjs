@@ -124,6 +124,18 @@ describe('prompt file contents', () => {
     assert.ok(content.includes('tests_expected'));
   });
 
+  test('pr-review-system trusts has_test_file_changes over the visible diff text', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('has_test_file_changes'));
+    assert.ok(content.includes('truncated'));
+  });
+
+  test('pr-review-system requires disclosing a truncated diff', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('diff_truncated'));
+    assert.ok(content.includes('partial view'));
+  });
+
   test('pr-review-system includes the named defect checklist', () => {
     const content = loadPrompt('pr-review-system');
     assert.ok(content.includes('Read-only property assignment'));
