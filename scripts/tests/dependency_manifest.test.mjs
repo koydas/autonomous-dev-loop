@@ -39,6 +39,37 @@ describe('readPackageJsonDependencies', () => {
     await fs.rm(badDir, { recursive: true, force: true });
   });
 
+  test('returns null instead of throwing when package.json is valid JSON but not an object (null)', async () => {
+    const nullDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-null-'));
+    await fs.writeFile(path.join(nullDir, 'package.json'), 'null', 'utf8');
+    await assert.doesNotReject(async () => {
+      const deps = await readPackageJsonDependencies(nullDir);
+      assert.equal(deps, null);
+    });
+    await fs.rm(nullDir, { recursive: true, force: true });
+  });
+
+  test('returns null instead of throwing when package.json is a top-level array', async () => {
+    const arrDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-arr-'));
+    await fs.writeFile(path.join(arrDir, 'package.json'), '["react"]', 'utf8');
+    const deps = await readPackageJsonDependencies(arrDir);
+    assert.equal(deps, null);
+    await fs.rm(arrDir, { recursive: true, force: true });
+  });
+
+  test('ignores a non-object dependency field instead of spreading its indices as package names', async () => {
+    const shapeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-shape-'));
+    await fs.writeFile(
+      path.join(shapeDir, 'package.json'),
+      JSON.stringify({ dependencies: ['react'], devDependencies: { vitest: '1.0.0' } }),
+      'utf8',
+    );
+    const deps = await readPackageJsonDependencies(shapeDir);
+    assert.deepEqual(deps, { vitest: '1.0.0' });
+    assert.ok(!('0' in deps));
+    await fs.rm(shapeDir, { recursive: true, force: true });
+  });
+
   test('merges dependencies, devDependencies, peerDependencies, and optionalDependencies', async () => {
     const depDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-deps-'));
     await fs.writeFile(

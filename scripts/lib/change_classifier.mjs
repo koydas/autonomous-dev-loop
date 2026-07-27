@@ -1,4 +1,4 @@
-import { extractChangedFiles, isAutomationScopeFile } from './coverage_checker.mjs';
+import { extractChangedFiles, extractAddedOrModifiedFiles, isAutomationScopeFile } from './coverage_checker.mjs';
 
 // ---------------------------------------------------------------------------
 // File-pattern tables
@@ -38,10 +38,10 @@ const DEPENDENCY_PATTERNS = [
 ];
 
 const TEST_PATTERNS = [
-  /\/tests?\//,
+  /(^|\/)tests?\//,
   /\.test\.[cm]?[jt]sx?$/,
   /\.spec\.[cm]?[jt]sx?$/,
-  /\/__tests__\//,
+  /(^|\/)__tests__\//,
 ];
 
 // ---------------------------------------------------------------------------
@@ -176,10 +176,12 @@ export function buildChangeClassificationContext(rawDiff, diffTruncated = false)
 
   const { categories, hasCode, hasUncategorizedCode } = classifyChangedFiles(changedFiles);
   const { tests_expected, reason } = determineTestExpectation(categories, hasCode);
-  // Computed from the full, untruncated raw diff (changedFiles comes from extractChangedFiles(rawDiff),
-  // not the truncated text shown in the prompt), so this stays accurate even when the diff hunks
-  // themselves are cut off by filterDiff's character limit.
-  const hasTestFileChanges = changedFiles.some(isTestFile);
+  // Computed from the full, untruncated raw diff, so this stays accurate even when the diff
+  // hunks themselves are cut off by filterDiff's character limit. Uses extractAddedOrModifiedFiles
+  // rather than changedFiles: a test file that was only DELETED must not count as evidence of
+  // test coverage — extractChangedFiles would include it (it captures --- a/... paths too), so
+  // a PR that deletes a test alongside an untested behavior change would otherwise pass this gate.
+  const hasTestFileChanges = extractAddedOrModifiedFiles(rawDiff).some(isTestFile);
 
   const classification = categories.length > 0 ? categories.join(', ') : 'none';
   // "mixed" only when there are genuinely distinct kinds of changes.

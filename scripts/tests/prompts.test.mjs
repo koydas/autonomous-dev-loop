@@ -173,6 +173,12 @@ describe('prompt file contents', () => {
     assert.ok(content.includes('truncated'));
   });
 
+  test('pr-review-system requires judging test relevance when the test content is visible', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('coarse signal'));
+    assert.ok(content.includes('clearly unrelated'));
+  });
+
   test('pr-review-system requires disclosing a truncated diff', () => {
     const content = loadPrompt('pr-review-system');
     assert.ok(content.includes('diff_truncated'));

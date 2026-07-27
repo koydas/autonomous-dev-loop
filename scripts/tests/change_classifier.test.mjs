@@ -265,6 +265,12 @@ test('isTestFile: recognizes common test path/extension patterns', () => {
   assert.ok(!isTestFile('scripts/lib/foo.mjs'));
 });
 
+test('isTestFile: recognizes root-level test/ and tests/ directories (no leading slash)', () => {
+  assert.ok(isTestFile('test/foo.js'));
+  assert.ok(isTestFile('tests/foo.js'));
+  assert.ok(isTestFile('__tests__/foo.js'));
+});
+
 test('buildChangeClassificationContext: has_test_file_changes is true when any changed file is a test file', () => {
   const diff = [
     'diff --git a/src/foo.mjs b/src/foo.mjs',
@@ -278,6 +284,19 @@ test('buildChangeClassificationContext: has_test_file_changes is true when any c
 
 test('buildChangeClassificationContext: has_test_file_changes is false when no changed file is a test file', () => {
   const diff = ['diff --git a/src/foo.mjs b/src/foo.mjs', '+++ b/src/foo.mjs'].join('\n');
+  const ctx = buildChangeClassificationContext(diff);
+  assert.match(ctx, /has_test_file_changes: false/);
+});
+
+test('buildChangeClassificationContext: has_test_file_changes is false when a test file is only DELETED, not added/modified', () => {
+  const diff = [
+    'diff --git a/src/foo.mjs b/src/foo.mjs',
+    '+++ b/src/foo.mjs',
+    'diff --git a/scripts/tests/foo.test.mjs b/scripts/tests/foo.test.mjs',
+    'deleted file mode 100644',
+    '--- a/scripts/tests/foo.test.mjs',
+    '+++ /dev/null',
+  ].join('\n');
   const ctx = buildChangeClassificationContext(diff);
   assert.match(ctx, /has_test_file_changes: false/);
 });

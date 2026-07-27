@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   extractChangedFiles,
+  extractAddedOrModifiedFiles,
   isAutomationScopeFile,
   buildAutomationGateContext,
 } from '../lib/coverage_checker.mjs';
@@ -28,6 +29,34 @@ test('extractChangedFiles includes deleted files from --- a/... lines', () => {
     '+++ /dev/null',
   ].join('\n');
   assert.deepEqual(extractChangedFiles(diff), ['scripts/foo.mjs']);
+});
+
+// ---------------------------------------------------------------------------
+// extractAddedOrModifiedFiles
+// ---------------------------------------------------------------------------
+
+test('extractAddedOrModifiedFiles excludes purely deleted files', () => {
+  const diff = [
+    'diff --git a/scripts/foo.mjs b/scripts/foo.mjs',
+    'deleted file mode 100644',
+    '--- a/scripts/foo.mjs',
+    '+++ /dev/null',
+  ].join('\n');
+  assert.deepEqual(extractAddedOrModifiedFiles(diff), []);
+});
+
+test('extractAddedOrModifiedFiles includes added and modified files', () => {
+  const diff = [
+    'diff --git a/scripts/foo.mjs b/scripts/foo.mjs',
+    '+++ b/scripts/foo.mjs',
+    'diff --git a/scripts/bar.mjs b/scripts/bar.mjs',
+    '+++ b/scripts/bar.mjs',
+  ].join('\n');
+  assert.deepEqual(extractAddedOrModifiedFiles(diff), ['scripts/foo.mjs', 'scripts/bar.mjs']);
+});
+
+test('extractAddedOrModifiedFiles returns empty array for empty input', () => {
+  assert.deepEqual(extractAddedOrModifiedFiles(''), []);
 });
 
 test('extractChangedFiles returns empty array for a diff with no file markers', () => {

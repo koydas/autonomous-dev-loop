@@ -1,10 +1,23 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// Returns `field` only if it's a plain object (a valid package.json dependency map);
+// otherwise an empty object, so a malformed shape (array, string, null) is silently
+// ignored rather than corrupting the merged result (e.g. spreading an array would add
+// numeric-index keys like "0" as if they were package names).
+function asDependencyMap(field) {
+  return isPlainObject(field) ? field : {};
+}
+
 // Reads dependencies + devDependencies + peerDependencies + optionalDependencies from the
-// target repo's package.json, if present. Returns null when there is no package.json or it
-// isn't valid JSON — callers should treat that as "no manifest available" rather than an
-// error, since not every repo this pipeline touches is Node.js-based.
+// target repo's package.json, if present. Returns null when there is no package.json, it
+// isn't valid JSON, or it doesn't parse to a plain object (e.g. `null`, `[...]`, a string) —
+// callers should treat that as "no manifest available" rather than an error, since not every
+// repo this pipeline touches is Node.js-based.
 export async function readPackageJsonDependencies(repoRoot) {
   const absRepoRoot = path.resolve(repoRoot);
   let raw;
@@ -22,11 +35,15 @@ export async function readPackageJsonDependencies(repoRoot) {
     return null;
   }
 
+  // JSON.parse succeeds for any valid JSON value, not just objects (e.g. `null`, `"x"`,
+  // `[1,2]`) — package.json must be a top-level object for any of this to be meaningful.
+  if (!isPlainObject(pkg)) return null;
+
   return {
-    ...(pkg.dependencies || {}),
-    ...(pkg.devDependencies || {}),
-    ...(pkg.peerDependencies || {}),
-    ...(pkg.optionalDependencies || {}),
+    ...asDependencyMap(pkg.dependencies),
+    ...asDependencyMap(pkg.devDependencies),
+    ...asDependencyMap(pkg.peerDependencies),
+    ...asDependencyMap(pkg.optionalDependencies),
   };
 }
 
