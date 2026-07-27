@@ -53,6 +53,16 @@ The PR review workflow creates and manages these labels automatically:
 
 All label names, colors, and descriptions are configurable in `config/labels.yaml`.
 
+## Generation Guardrails
+
+`prompts/generation-system.md` and `prompts/generation-user.md` enforce the following beyond the base JSON contract:
+
+- **Dependency allowlist:** when the target repository has a `package.json`, `scripts/lib/file_injector.mjs` prepends an "Allowed npm dependencies" block (merged `dependencies` + `devDependencies`) to the file-context passed to the model. The model must treat this as exhaustive — any import outside it must be a relative project import or a language/runtime built-in (e.g. `AbortController`, `fetch` need no import at all; `fs`, `path`, `node:*` modules need an import but never an npm install).
+- **Test-writing is issue-driven, not path-driven:** a test file is required whenever the issue explicitly requests one, or whenever the change introduces new non-trivial logic (a function, class, hook, component, or endpoint) — regardless of the target file's path. This is broader than the pre-existing `scripts/`/`prompts/`/`.github/workflows/` coverage-policy scoping described above, which still applies additionally to those paths.
+- **Self-check before returning:** the generation prompt requires the model to trace through the primary success scenario from the issue and verify (a) no assignment targets a known read-only/getter-only built-in property (e.g. `AbortController.prototype.signal`), and (b) any value meant to persist across calls/renders is stored via `useRef`/module state/a class field rather than a re-initialized local variable.
+
+These were added after a benchmark session found a local coding model violating the dependency guardrail and producing a guaranteed-crash read-only-property bug that the paired PR-review prompt did not catch — see [ADR-0019](adr/0019-static-verification-backstop.md) for the fuller writeup and a proposed additional static-verification layer.
+
 ## End-to-End Test
 
 1. Ensure secrets above are configured.
