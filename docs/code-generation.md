@@ -63,6 +63,19 @@ All label names, colors, and descriptions are configurable in `config/labels.yam
 
 These were added after a benchmark session found a local coding model violating the dependency guardrail and producing a guaranteed-crash read-only-property bug that the paired PR-review prompt did not catch — see the proposed static-verification-backstop ADR in [PR #158](https://github.com/koydas/autonomous-dev-loop/pull/158) for the fuller writeup and a proposed additional static-verification layer (not yet merged as of this change).
 
+## Review and Auto-Fix Guardrails
+
+`prompts/pr-review-system.md` and `prompts/auto-fix-system.md` enforce the following beyond the base rubric:
+
+- **Test-coverage gate is not limited to automation paths:** whenever the diff's classification context reports `tests_expected: true` (any feature/bugfix/refactor change, regardless of path — not just `.github/workflows/`, `scripts/`, `prompts/`), the reviewer checks the `has_test_file_changes` field (computed from the full PR diff, independent of the truncation below — and only counting test files actually added/modified, not ones only deleted) rather than only what's visible in the diff text, reporting at least MEDIUM severity when it's false. This closes a gap where a diff could self-classify "Tests expected: yes" and still be `APPROVED` with no tests present. `has_test_file_changes: true` is a coarse signal, not proof of relevant coverage — when the test file's content is visible in the diff, the reviewer still judges whether it plausibly covers the new/changed logic rather than treating the boolean as conclusive, except when `diff_truncated` makes that judgment impossible.
+- **Named defect checklist:** the reviewer explicitly checks every new/changed file for three specific patterns rather than relying on open-ended "look for bugs" judgment: read-only/getter-only property assignment (e.g. `AbortController.prototype.signal`), unauthorized dependency imports, and non-persistent "ref" patterns (state meant to survive across calls/renders stored in a re-initialized local variable instead of `useRef`/module state).
+- **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`); when this actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
+- **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file regardless of path when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
+
+Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See the proposed static-verification-backstop ADR in [PR #158](https://github.com/koydas/autonomous-dev-loop/pull/158) for the fuller writeup (not yet merged as of this change).
+
+The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
+
 ## End-to-End Test
 
 1. Ensure secrets above are configured.
