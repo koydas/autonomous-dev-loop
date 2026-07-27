@@ -7,6 +7,8 @@ import {
   extractFilePaths,
   readRelevantFiles,
   formatFileContents,
+  readPackageJsonDependencies,
+  formatDependencyAllowlist,
   buildFileContentsBlock,
 } from '../lib/file_injector.mjs';
 
@@ -215,5 +217,121 @@ describe('buildFileContentsBlock', () => {
       tmpDir,
     );
     assert.equal(block, 'No existing files identified as relevant to this issue.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readPackageJsonDependencies
+// ---------------------------------------------------------------------------
+
+describe('readPackageJsonDependencies', () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-'));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('returns null when no package.json exists', async () => {
+    const deps = await readPackageJsonDependencies(tmpDir);
+    assert.equal(deps, null);
+  });
+
+  test('returns null for a malformed package.json instead of throwing', async () => {
+    const badDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-bad-'));
+    await fs.writeFile(path.join(badDir, 'package.json'), '{ not valid json', 'utf8');
+    await assert.doesNotReject(async () => {
+      const deps = await readPackageJsonDependencies(badDir);
+      assert.equal(deps, null);
+    });
+    await fs.rm(badDir, { recursive: true, force: true });
+  });
+
+  test('merges dependencies and devDependencies', async () => {
+    const depDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-deps-'));
+    await fs.writeFile(
+      path.join(depDir, 'package.json'),
+      JSON.stringify({ dependencies: { react: '18.0.0' }, devDependencies: { vitest: '1.0.0' } }),
+      'utf8',
+    );
+    const deps = await readPackageJsonDependencies(depDir);
+    assert.deepEqual(deps, { react: '18.0.0', vitest: '1.0.0' });
+    await fs.rm(depDir, { recursive: true, force: true });
+  });
+
+  test('returns an empty object when package.json has no dependency fields', async () => {
+    const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-empty-'));
+    await fs.writeFile(path.join(emptyDir, 'package.json'), JSON.stringify({ name: 'x' }), 'utf8');
+    const deps = await readPackageJsonDependencies(emptyDir);
+    assert.deepEqual(deps, {});
+    await fs.rm(emptyDir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatDependencyAllowlist
+// ---------------------------------------------------------------------------
+
+describe('formatDependencyAllowlist', () => {
+  test('returns an empty string for null', () => {
+    assert.equal(formatDependencyAllowlist(null), '');
+  });
+
+  test('returns an empty string for an empty object', () => {
+    assert.equal(formatDependencyAllowlist({}), '');
+  });
+
+  test('lists dependency names sorted alphabetically', () => {
+    const block = formatDependencyAllowlist({ zod: '1.0.0', axios: '2.0.0' });
+    assert.ok(block.indexOf('- axios') < block.indexOf('- zod'));
+  });
+
+  test('mentions that built-ins are always allowed', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(block.toLowerCase().includes('built-in'));
+  });
+
+  test('includes the section header', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(block.includes('### Allowed npm dependencies'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildFileContentsBlock — dependency allowlist integration
+// ---------------------------------------------------------------------------
+
+describe('buildFileContentsBlock with package.json present', () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-integration-'));
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ dependencies: { react: '18.0.0' } }),
+      'utf8',
+    );
+    await fs.writeFile(path.join(tmpDir, 'widget.js'), 'export function widget() {}', 'utf8');
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('prepends the allowlist block before the file contents', async () => {
+    const block = await buildFileContentsBlock('Fix widget.js', '', tmpDir);
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('- react'));
+    assert.ok(block.includes('### Current file: widget.js'));
+    assert.ok(block.indexOf('Allowed npm dependencies') < block.indexOf('Current file: widget.js'));
+  });
+
+  test('still returns the fallback file message alongside the allowlist when no files are identified', async () => {
+    const block = await buildFileContentsBlock('Fix login bug', 'no file mentioned here', tmpDir);
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('No existing files identified as relevant to this issue.'));
   });
 });

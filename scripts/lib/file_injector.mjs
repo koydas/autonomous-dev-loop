@@ -64,8 +64,48 @@ export function formatFileContents(files) {
     .join('\n\n');
 }
 
+// Reads dependencies + devDependencies from the target repo's package.json, if present.
+// Returns null when there is no package.json or it isn't valid JSON — callers should treat
+// that as "no allowlist available" rather than an error, since not every repo is Node.js-based.
+export async function readPackageJsonDependencies(repoRoot) {
+  const absRepoRoot = path.resolve(repoRoot);
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(absRepoRoot, 'package.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return null;
+    throw err;
+  }
+
+  let pkg;
+  try {
+    pkg = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  return { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+}
+
+export function formatDependencyAllowlist(deps) {
+  if (!deps || Object.keys(deps).length === 0) return '';
+  const names = Object.keys(deps).sort();
+  return (
+    '### Allowed npm dependencies (from package.json)\n' +
+    names.map((name) => `- ${name}`).join('\n') +
+    '\n\nDo not import any package outside this list. Language/runtime built-ins ' +
+    '(e.g. AbortController, fetch, crypto, fs, path) do not need to be listed here ' +
+    'and are always allowed.'
+  );
+}
+
 export async function buildFileContentsBlock(issueTitle, issueBody, repoRoot) {
   const candidates = extractFilePaths(issueTitle, issueBody);
   const files = await readRelevantFiles(candidates, repoRoot);
-  return formatFileContents(files);
+  const filesBlock = formatFileContents(files);
+
+  const deps = await readPackageJsonDependencies(repoRoot);
+  const allowlistBlock = formatDependencyAllowlist(deps);
+
+  return allowlistBlock ? `${allowlistBlock}\n\n${filesBlock}` : filesBlock;
 }
