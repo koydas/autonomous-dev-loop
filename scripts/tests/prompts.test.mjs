@@ -161,6 +161,54 @@ describe('prompt file contents', () => {
     assert.ok(loadPrompt('pr-review-system').length > 0);
   });
 
+  test('pr-review-system generalizes the test-coverage gate beyond automation paths', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('NOT limited to automation paths'));
+    assert.ok(content.includes('tests_expected'));
+  });
+
+  test('pr-review-system trusts has_test_file_changes over the visible diff text', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('has_test_file_changes'));
+    assert.ok(content.includes('truncated'));
+  });
+
+  test('pr-review-system requires judging test relevance when the test content is visible', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('coarse signal'));
+    assert.ok(content.includes('clearly unrelated'));
+  });
+
+  test('pr-review-system requires disclosing a truncated diff', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('diff_truncated'));
+    assert.ok(content.includes('partial view'));
+  });
+
+  test('pr-review-system includes the named defect checklist', () => {
+    const content = loadPrompt('pr-review-system');
+    assert.ok(content.includes('Read-only property assignment'));
+    assert.ok(content.includes('Unauthorized dependency'));
+    assert.ok(content.includes('Non-persistent "ref" pattern'));
+  });
+
+  test('auto-fix-system distinguishes no-import globals from importable Node built-ins', () => {
+    const content = loadPrompt('auto-fix-system');
+    assert.ok(content.includes('AbortController'));
+    assert.ok(/still need an explicit.*import.*require/i.test(content));
+  });
+
+  test('auto-fix-system requires including missing tests regardless of path', () => {
+    const content = loadPrompt('auto-fix-system');
+    assert.ok(content.includes('regardless of its path'));
+  });
+
+  test('auto-fix-system requires a read-only property and persistence self-check', () => {
+    const content = loadPrompt('auto-fix-system');
+    assert.ok(content.includes('read-only/getter-only built-in property'));
+    assert.ok(content.includes('useRef'));
+  });
+
   test('pr-review-user contains {{diff}} placeholder', () => {
     assert.ok(loadPrompt('pr-review-user').includes('{{diff}}'));
   });
