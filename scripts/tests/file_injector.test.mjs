@@ -331,6 +331,30 @@ describe('formatDependencyAllowlist', () => {
     const block = formatDependencyAllowlist({ react: '18.0.0' });
     assert.ok(block.includes('### Allowed npm dependencies'));
   });
+
+  test('does not claim to override imports already used in the target file', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(block.includes('already imported elsewhere in the target file'));
+  });
+
+  test('truncates to MAX_DEPENDENCIES (200) entries with a note, for very large manifests', () => {
+    const manyDeps = Object.fromEntries(
+      Array.from({ length: 250 }, (_, i) => [`pkg-${String(i).padStart(3, '0')}`, '1.0.0']),
+    );
+    const block = formatDependencyAllowlist(manyDeps);
+    const listedCount = (block.match(/^- pkg-/gm) || []).length;
+    assert.equal(listedCount, 200);
+    assert.ok(block.includes('truncated'));
+    assert.ok(block.includes('250'));
+  });
+
+  test('does not truncate when at or under MAX_DEPENDENCIES (200)', () => {
+    const exactlyMax = Object.fromEntries(
+      Array.from({ length: 200 }, (_, i) => [`pkg-${String(i).padStart(3, '0')}`, '1.0.0']),
+    );
+    const block = formatDependencyAllowlist(exactlyMax);
+    assert.ok(!block.includes('truncated'));
+  });
 });
 
 // ---------------------------------------------------------------------------

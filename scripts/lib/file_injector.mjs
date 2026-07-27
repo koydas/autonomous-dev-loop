@@ -4,6 +4,7 @@ import { shouldIncludeFile } from './file_filters.mjs';
 
 const MAX_FILE_SIZE = 8000;
 const MAX_FILES = 10;
+const MAX_DEPENDENCIES = 200;
 
 // Matches relative paths that contain at least one directory separator.
 // Negative lookbehind on `:` and `/` prevents matching URL segments.
@@ -94,13 +95,22 @@ export async function readPackageJsonDependencies(repoRoot) {
 
 export function formatDependencyAllowlist(deps) {
   if (!deps || Object.keys(deps).length === 0) return '';
-  const names = Object.keys(deps).sort();
+  const allNames = Object.keys(deps).sort();
+  const truncated = allNames.length > MAX_DEPENDENCIES;
+  const names = truncated ? allNames.slice(0, MAX_DEPENDENCIES) : allNames;
+  const truncationNote = truncated
+    ? `\n\n(List truncated to the first ${MAX_DEPENDENCIES} of ${allNames.length} declared dependencies, sorted alphabetically, to bound prompt size.)`
+    : '';
   return (
-    '### Allowed npm dependencies (from package.json)\n' +
+    '### Allowed npm dependencies (from the repository root package.json)\n' +
     names.map((name) => `- ${name}`).join('\n') +
-    '\n\nDo not import any package outside this list. Language/runtime built-ins ' +
+    truncationNote +
+    '\n\nAvoid introducing a package outside this list. Language/runtime built-ins ' +
     '(e.g. AbortController, fetch, crypto, fs, path) do not need to be listed here ' +
-    'and are always allowed.'
+    'and are always allowed. This list reflects only the repository root manifest — ' +
+    "it doesn't override the separate allowance for a package already imported " +
+    'elsewhere in the target file, and it may not cover nested workspace-package ' +
+    'manifests this scan does not read.'
   );
 }
 
