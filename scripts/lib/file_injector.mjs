@@ -114,8 +114,16 @@ export function formatDependencyAllowlist(deps) {
   const allNames = Object.keys(deps).sort();
   const truncated = allNames.length > MAX_DEPENDENCIES;
   const names = truncated ? allNames.slice(0, MAX_DEPENDENCIES) : allNames;
+  // When truncated, this list can no longer be treated as exhaustive — a real, already-declared
+  // dependency sorting after entry 200 would otherwise be wrongly rejected as unauthorized. The
+  // static prompt text (generation-system.md/generation-user.md) calls this list "exhaustive";
+  // this note overrides that framing for this specific request when it doesn't hold.
   const truncationNote = truncated
-    ? `\n\n(List truncated to the first ${MAX_DEPENDENCIES} of ${allNames.length} declared dependencies, sorted alphabetically, to bound prompt size.)`
+    ? `\n\n(List truncated to the first ${MAX_DEPENDENCIES} of ${allNames.length} declared dependencies, ` +
+      'sorted alphabetically, to bound prompt size. Because of this truncation, this list is NOT ' +
+      'exhaustive for this request — do not reject an import solely for not appearing here; only ' +
+      'flag an import as unauthorized if it also fails to match a plausible real package name pattern ' +
+      'or is otherwise clearly suspicious.)'
     : '';
   return (
     '### Allowed npm dependencies (from the repository root package.json)\n' +

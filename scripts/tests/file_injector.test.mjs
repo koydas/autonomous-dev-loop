@@ -379,6 +379,20 @@ describe('formatDependencyAllowlist', () => {
     assert.ok(block.includes('250'));
   });
 
+  test('a truncated list explicitly overrides the "exhaustive" framing for this request', () => {
+    const manyDeps = Object.fromEntries(
+      Array.from({ length: 250 }, (_, i) => [`pkg-${String(i).padStart(3, '0')}`, '1.0.0']),
+    );
+    const block = formatDependencyAllowlist(manyDeps);
+    assert.ok(block.includes('NOT'));
+    assert.ok(block.includes('exhaustive'));
+  });
+
+  test('a non-truncated list does not carry the "not exhaustive" override note', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(!block.includes('NOT'));
+  });
+
   test('does not truncate when at or under MAX_DEPENDENCIES (200)', () => {
     const exactlyMax = Object.fromEntries(
       Array.from({ length: 200 }, (_, i) => [`pkg-${String(i).padStart(3, '0')}`, '1.0.0']),
