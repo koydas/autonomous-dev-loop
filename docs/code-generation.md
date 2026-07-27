@@ -53,6 +53,16 @@ The PR review workflow creates and manages these labels automatically:
 
 All label names, colors, and descriptions are configurable in `config/labels.yaml`.
 
+## Review and Auto-Fix Guardrails
+
+`prompts/pr-review-system.md` and `prompts/auto-fix-system.md` enforce the following beyond the base rubric:
+
+- **Test-coverage gate is not limited to automation paths:** whenever the diff's classification context reports `tests_expected: true` (any feature/bugfix/refactor change, regardless of path — not just `.github/workflows/`, `scripts/`, `prompts/`), the reviewer verifies a corresponding test file was actually added/updated in the diff, reporting at least MEDIUM severity otherwise. This closes a gap where a diff could self-classify "Tests expected: yes" and still be `APPROVED` with no tests present.
+- **Named defect checklist:** the reviewer explicitly checks every new/changed file for three specific patterns rather than relying on open-ended "look for bugs" judgment: read-only/getter-only property assignment (e.g. `AbortController.prototype.signal`), unauthorized dependency imports, and non-persistent "ref" patterns (state meant to survive across calls/renders stored in a re-initialized local variable instead of `useRef`/module state).
+- **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file regardless of path when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
+
+Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See [ADR-0019](adr/0019-static-verification-backstop.md) for the fuller writeup.
+
 ## End-to-End Test
 
 1. Ensure secrets above are configured.
