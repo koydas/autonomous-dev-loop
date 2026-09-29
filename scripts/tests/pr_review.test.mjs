@@ -54,6 +54,7 @@ function makeHandler({
   removeLabelStatus = 200,
   autoFixRunsInProgress = [],
   autoFixRunsQueued = [],
+  autoFixRunsPending = [],
   prHeadRef = 'feature/test',
   autoFixRunsStatus = 200,
 } = {}) {
@@ -97,7 +98,9 @@ function makeHandler({
         res.writeHead(autoFixRunsStatus, { 'Content-Type': 'application/json' });
         return res.end('error');
       }
-      const target = url.includes('status=queued') ? autoFixRunsQueued : autoFixRunsInProgress;
+      const target = url.includes('status=queued') ? autoFixRunsQueued
+        : url.includes('status=pending') ? autoFixRunsPending
+        : autoFixRunsInProgress;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ total_count: target.length, workflow_runs: target }));
     }
@@ -783,6 +786,26 @@ test('pr_review ghFetch retries GitHub 500 responses', async () => {
     assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
     const submits = server.requests.filter((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
     assert.equal(submits.length, 2);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review does not re-pulse changes-requested while an auto-fix run is pending on its concurrency group', async () => {
+  // ADR-0020: a run waiting on the per-PR concurrency group has status "pending", not "queued".
+  const server = await startMockServer(
+    makeHandler({
+      groqContent: 'Found issues.\n\nVerdict: REQUEST_CHANGES',
+      autoFixRunsPending: [{ id: 2, head_branch: 'feature/test' }],
+    }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stdout, /Skipping changes-requested re-pulse/);
+    assert.ok(server.requests.some((r) => r.url.includes('status=pending')), 'expected a status=pending lookup');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

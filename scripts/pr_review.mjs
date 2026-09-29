@@ -151,7 +151,8 @@ async function removeLabel(labelName) {
 
 async function hasActiveAutoFixRun(branchName) {
   const encodedBranch = encodeURIComponent(branchName);
-  for (const status of ['in_progress', 'queued']) {
+  // `pending` = waiting on the per-PR concurrency group (ADR-0020).
+  for (const status of ['in_progress', 'queued', 'pending']) {
     let runsRes;
     try {
       runsRes = await ghFetch(

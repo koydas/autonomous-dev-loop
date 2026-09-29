@@ -40,6 +40,7 @@ Every workflow declares exactly one concurrency group, keyed per PR or issue and
 
 - ✅ At most one auto-fix run per PR executes at a time; the attempt counter read is no longer racy within `auto-fix-pr`.
 - ✅ No push or label write is interrupted mid-run.
+- ⚠️ Runs waiting on a group have status `pending` (not `queued`); `pr_review.mjs`'s `hasActiveAutoFixRun()` checks `pending` too, so it does not re-pulse the label behind a queued auto-fix.
 - ⚠️ GitHub keeps only one *pending* run per group: bursts collapse to "running + latest pending". For auto-fix this is the desired behavior (the latest review feedback wins).
 - ⚠️ Groups are per workflow: `pr-review` and `auto-fix-pr` can still run concurrently on the same PR. Their writes are to different labels, and the auto-fix push re-triggers `pr-review` anyway.
 - ⚠️ `reset-auto-fix` is not serialized against a running `auto-fix-pr`; resetting during an active run can still interleave with its label write.
