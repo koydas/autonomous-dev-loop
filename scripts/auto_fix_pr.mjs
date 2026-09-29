@@ -48,10 +48,14 @@ function truncateToTokenBudget(text, tokenBudget) {
   return text.slice(0, maxChars);
 }
 
+const TRUSTED_COMMENT_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
 function isManualRerunRequested(eventPayload) {
   const action = eventPayload?.action;
   const body = eventPayload?.comment?.body || '';
   if (!['created', 'edited'].includes(action) || typeof body !== 'string') return false;
+  // Defense in depth: do not rely on the workflow `if:` filter alone.
+  if (!TRUSTED_COMMENT_ASSOCIATIONS.includes(eventPayload?.comment?.author_association)) return false;
   return /-\s*\[x\]\s*(relancer\s+auto\s*fixer|rerun\s+auto\s*-?\s*fix(er)?)/i.test(body);
 }
 

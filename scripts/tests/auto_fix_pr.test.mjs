@@ -555,7 +555,7 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
 
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
     rawEvent.action = 'edited';
-    rawEvent.comment = { body: '- [x] Relancer Auto Fixer' };
+    rawEvent.comment = { body: '- [x] Relancer Auto Fixer', author_association: 'MEMBER' };
     await fs.writeFile(eventFile, JSON.stringify(rawEvent));
 
     const result = await runAutoFix(server.address().port, eventFile, {
@@ -617,7 +617,7 @@ test('auto_fix_pr resets labels when english rerun checkbox text is used', async
   try {
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
     rawEvent.action = 'created';
-    rawEvent.comment = { body: '- [x] rerun auto-fix' };
+    rawEvent.comment = { body: '- [x] rerun auto-fix', author_association: 'OWNER' };
     await fs.writeFile(eventFile, JSON.stringify(rawEvent));
 
     const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
@@ -631,6 +631,33 @@ test('auto_fix_pr resets labels when english rerun checkbox text is used', async
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', undefined]) {
+  test(`auto_fix_pr ignores checkbox rerun from untrusted commenter (author_association=${association})`, async () => {
+    const existingLabels = JSON.stringify([{ name: 'auto-fix-attempt-1' }, { name: 'auto-fix-attempt-2' }]);
+    const server = await startMockServer(makeHandler({ labelsBody: existingLabels, llmResponse: validLLMJson('out.txt') }));
+    const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-untrusted-'));
+    try {
+      const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+      rawEvent.comment = { body: '- [x] Relancer Auto Fixer', author_association: association };
+      await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+      const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+
+      const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
+      assert.equal(deleteCalls.length, 0, 'untrusted commenter must not reset attempt labels');
+      const labelApply = server.requests.find((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url));
+      assert.ok(labelApply, 'expected normal attempt progression');
+      assert.ok(JSON.parse(labelApply.body).labels.includes('auto-fix-attempt-3'));
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
 
 test('auto_fix_pr extracts PR number from issue.number for issue_comment events', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-ic-'));
