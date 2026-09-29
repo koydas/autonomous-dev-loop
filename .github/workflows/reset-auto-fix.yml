@@ -18,6 +18,10 @@ permissions:
   issues: write
   contents: read
 
+concurrency:
+  group: reset-auto-fix-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
 jobs:
   reset:
     runs-on: ubuntu-latest

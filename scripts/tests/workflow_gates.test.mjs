@@ -62,3 +62,46 @@ test('every issue_comment-triggered workflow gates on trusted comment author_ass
     assert.ok(!/"(CONTRIBUTOR|FIRST_TIME_CONTRIBUTOR|FIRST_TIMER|NONE|MANNEQUIN)"/.test(text), `${name} must not trust non-member associations`);
   }
 });
+
+// Workflows whose jobs push commits or mutate labels/comments: a run must never be
+// cancelled halfway, so they queue (cancel-in-progress: false) instead.
+const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'code-generation.yml', 'validate-issue.yml', 'reset-auto-fix.yml'];
+// Triggers fire for unrelated labels/comments too; a workflow-level group would let a
+// skipped run replace the pending real one, so the group must sit on the gated job.
+const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'code-generation.yml'];
+
+test('every workflow declares a concurrency group keyed per PR/issue', () => {
+  const workflows = readWorkflows();
+  assert.equal(workflows.length, 7, `expected 7 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  for (const { name, text } of workflows) {
+    const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1]);
+    assert.equal(groups.length, 1, `${name} must declare exactly one concurrency group`);
+    assert.match(groups[0], /\$\{\{.*(number|ref).*\}\}/, `${name} concurrency group must be keyed per PR/issue`);
+  }
+});
+
+test('mutating workflows never cancel an in-progress run', () => {
+  for (const { name, text } of readWorkflows()) {
+    const cancel = text.match(/^\s+cancel-in-progress:\s*(\S+)/m)?.[1];
+    if (MUTATING_WORKFLOWS.includes(name)) {
+      assert.equal(cancel, 'false', `${name} pushes or mutates labels and must use cancel-in-progress: false`);
+    } else {
+      assert.ok(cancel === 'true' || cancel === 'false', `${name} must set cancel-in-progress explicitly`);
+    }
+  }
+});
+
+test('auto-fix-pr.yml concurrency group handles both pull_request.number and issue.number', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+  const group = text.match(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/m)?.[1] ?? '';
+  assert.match(group, /github\.event\.pull_request\.number/);
+  assert.match(group, /github\.event\.issue\.number/);
+});
+
+test('label/comment-triggered mutating workflows scope concurrency to the gated job', () => {
+  for (const name of JOB_LEVEL_CONCURRENCY) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    assert.ok(!/^concurrency:/m.test(text), `${name} must not declare workflow-level concurrency`);
+    assert.match(text, /^    concurrency:/m, `${name} must declare job-level concurrency`);
+  }
+});

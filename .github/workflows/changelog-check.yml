@@ -3,6 +3,10 @@ name: Changelog Check
 on:
   pull_request:
 
+concurrency:
+  group: changelog-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   changelog:
     runs-on: ubuntu-latest

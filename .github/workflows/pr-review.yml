@@ -12,6 +12,10 @@ permissions:
   issues: write
   actions: write
 
+concurrency:
+  group: pr-review-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   review:
     runs-on: ubuntu-latest

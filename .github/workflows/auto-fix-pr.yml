@@ -37,6 +37,11 @@ jobs:
     if: ${{ (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == needs.load-labels.outputs.changes_requested) || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '- [x] Relancer Auto Fixer')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Job-level: every PR comment/label triggers this workflow; a workflow-level group
+    # would let skipped runs displace the pending real one. Never cancel: this job pushes.
+    concurrency:
+      group: auto-fix-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
 
     steps:
       - name: Resolve PR payload for issue_comment

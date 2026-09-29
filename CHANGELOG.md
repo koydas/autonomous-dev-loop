@@ -9,6 +9,7 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ### Security
 - `auto-fix-pr.yml` and `scripts/auto_fix_pr.mjs`: the "Relancer Auto Fixer" checkbox rerun is honored only when the comment author's `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`. Previously any commenter could reset the `auto-fix-attempt-*` labels and rerun the LLM loop indefinitely with repository secrets. The script re-checks the association so it does not rely on the workflow filter alone.
+- All 7 workflows declare a `concurrency:` group keyed per PR/issue. Workflows that push or mutate labels (`auto-fix-pr`, `pr-review`, `code-generation`, `validate-issue`, `reset-auto-fix`) use `cancel-in-progress: false`; `auto-fix-pr` and `code-generation` scope the group to the gated job so unrelated comment/label events cannot displace a pending run. Two reviews landing close together no longer spawn two auto-fix runs that read the same attempt count and both push (ADR-0020).
 
 ### Added
 - ADR-0019 (proposed): Static verification backstop for generated code — proposes an import-allowlist check and opt-in `tsc --noEmit` gate after generation/auto-fix, motivated by a benchmark session where a local coding model violated existing prompt-only guardrails (unauthorized dependency import, read-only property assignment causing a guaranteed runtime crash) and the paired PR-review prompt approved the resulting diff.
