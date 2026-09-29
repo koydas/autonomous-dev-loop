@@ -292,8 +292,8 @@ function changeAt(targetPath) {
 }
 
 test('PROTECTED_WRITE_PATHS exports every required prefix and file', () => {
-  for (const entry of ['.github/', 'scripts/', 'config/', 'prompts/', 'package.json', 'package-lock.json',
-    'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml']) {
+  for (const entry of ['.github/', 'scripts/', 'config/', 'prompts/', 'checkpoints/', 'metrics/', 'observability/',
+    'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', '.npmrc', '.yarnrc', '.yarnrc.yml']) {
     assert.ok(PROTECTED_WRITE_PATHS.includes(entry), `missing ${entry}`);
   }
   assert.ok(Object.isFrozen(PROTECTED_WRITE_PATHS), 'denylist must be immutable');
@@ -361,3 +361,22 @@ test('validateAiOutput rejects the whole batch when one change targets a protect
     /changes\[1\].*protected path/,
   );
 });
+
+// Pipeline state lives in the same working tree the model writes to: checkpoints are
+// uploaded as artifacts and metrics/runs.jsonl is PUT to the default branch by
+// "Commit metrics"; npm/yarn rc files redirect the registry used by `npx` in CI.
+for (const target of [
+  'checkpoints/pr-55/review.json',
+  './Checkpoints/issue-1/validate.json',
+  'metrics/runs.jsonl',
+  'metrics\\runs.jsonl',
+  'observability/traces/1.json',
+  '.npmrc',
+  'sub/.npmrc',
+  '.yarnrc',
+  '.yarnrc.yml',
+]) {
+  test(`validateAiOutput rejects pipeline-state / registry-config target_path ${JSON.stringify(target)}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}

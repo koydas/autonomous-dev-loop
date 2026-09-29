@@ -57,19 +57,26 @@ export function parseJsonResponse(raw) {
 const MAX_FILE_CONTENT_LENGTH = 16000;
 
 // Paths the model must never write (ADR-0021). Entries ending in "/" are root-level
-// directory prefixes; the others are manifest/lock file names matched at any depth.
-// Workflows, pipeline scripts, config and prompts run with secrets on push, and
-// manifests/lock files control what gets installed.
+// directory prefixes; the others are file names matched at any depth.
+// Workflows, pipeline scripts, config and prompts run with secrets on push; checkpoints,
+// metrics and traces are pipeline state read back from the same working tree; manifests,
+// lock files and npm/yarn rc files control what gets installed.
 export const PROTECTED_WRITE_PATHS = Object.freeze([
   '.github/',
   'scripts/',
   'config/',
   'prompts/',
+  'checkpoints/',
+  'metrics/',
+  'observability/',
   'package.json',
   'package-lock.json',
   'npm-shrinkwrap.json',
   'yarn.lock',
   'pnpm-lock.yaml',
+  '.npmrc',
+  '.yarnrc',
+  '.yarnrc.yml',
 ]);
 
 function findProtectedPathEntry(targetPath) {
