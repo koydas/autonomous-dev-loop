@@ -105,3 +105,10 @@ test('label/comment-triggered mutating workflows scope concurrency to the gated 
     assert.match(text, /^    concurrency:/m, `${name} must declare job-level concurrency`);
   }
 });
+
+test('auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB_OUTPUT', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+  // Multi-line JSON written as `name=value` without a heredoc delimiter breaks the step.
+  assert.ok(!/echo\s+"payload=\$\{?PAYLOAD\}?"\s*>>\s*"\$GITHUB_OUTPUT"/.test(text), 'payload must not be echoed to GITHUB_OUTPUT');
+  assert.match(text, /echo "head_ref=\$\(echo "\$\{PAYLOAD\}" \| jq -r '\.head\.ref'\)" >> "\$GITHUB_OUTPUT"/, 'head_ref output must remain');
+});
