@@ -24,13 +24,24 @@ export const MAX_RETRY_AFTER_MS = 10000;
 
 // fetch does not throw on HTTP errors. Returns a retryable error for 429/5xx (carrying
 // Retry-After as waitMs), or null for any other status, which callers handle via .ok (ADR-0022).
-export function transientHttpError(res, context, { maxRetryAfterMs = MAX_RETRY_AFTER_MS } = {}) {
+// A 5xx does not prove the request was not processed, so for a request that is not
+// retry-safe (see isRetrySafeGitHubRequest) only 429 — rejected before processing — is retried.
+export function transientHttpError(res, context, { maxRetryAfterMs = MAX_RETRY_AFTER_MS, retrySafe = true } = {}) {
   if (res.status !== 429 && res.status < 500) return null;
   const err = new Error(`${context} transient error: ${res.status}`);
   err.status = res.status;
   err.waitMs = parseRetryAfterMs(res.headers?.get('retry-after'));
   if (err.waitMs !== undefined && err.waitMs > maxRetryAfterMs) err.retryable = false;
+  if (!retrySafe && res.status !== 429) err.retryable = false;
   return err;
+}
+
+// GitHub requests whose replay cannot create a duplicate: every method except POST, plus
+// label POSTs (repo label create returns 422 on duplicate; adding issue labels is a set union).
+// Comment and review POSTs are not retry-safe.
+export function isRetrySafeGitHubRequest(method, path) {
+  if (String(method ?? 'GET').toUpperCase() !== 'POST') return true;
+  return /\/labels$/.test(String(path).split('?')[0]);
 }
 
 export async function retryWithBackoff(fn, options = {}) {

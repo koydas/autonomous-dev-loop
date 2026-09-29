@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { retryWithBackoff, parseRetryAfterMs, transientHttpError, MAX_RETRY_AFTER_MS } from '../lib/retry.mjs';
+import { retryWithBackoff, parseRetryAfterMs, transientHttpError, MAX_RETRY_AFTER_MS, isRetrySafeGitHubRequest } from '../lib/retry.mjs';
 
 const FAST = { baseDelayMs: 1, maxDelayMs: 10, jitter: false };
 
@@ -146,4 +146,31 @@ test('transientHttpError honors a custom maxRetryAfterMs', () => {
   const res = fakeResponse(503, { 'retry-after': '5' });
   assert.equal(transientHttpError(res, 'ctx', { maxRetryAfterMs: 1000 }).retryable, false);
   assert.notEqual(transientHttpError(res, 'ctx', { maxRetryAfterMs: 5000 }).retryable, false);
+});
+
+test('isRetrySafeGitHubRequest treats GET/HEAD/PUT/PATCH/DELETE as retry-safe', () => {
+  for (const method of [undefined, 'GET', 'get', 'HEAD', 'PUT', 'PATCH', 'DELETE']) {
+    assert.equal(isRetrySafeGitHubRequest(method, '/repos/o/r/issues/1/comments'), true, `method ${method}`);
+  }
+});
+
+test('isRetrySafeGitHubRequest treats label POSTs as retry-safe (422 on duplicate / set union)', () => {
+  assert.equal(isRetrySafeGitHubRequest('POST', '/repos/o/r/labels'), true);
+  assert.equal(isRetrySafeGitHubRequest('POST', '/repos/o/r/issues/5/labels'), true);
+});
+
+test('isRetrySafeGitHubRequest treats comment and review POSTs as not retry-safe', () => {
+  assert.equal(isRetrySafeGitHubRequest('POST', '/repos/o/r/issues/5/comments'), false);
+  assert.equal(isRetrySafeGitHubRequest('POST', '/repos/o/r/pulls/5/reviews'), false);
+  assert.equal(isRetrySafeGitHubRequest('POST', '/repos/o/r/labels/extra'), false);
+});
+
+test('transientHttpError does not retry 5xx for non-retry-safe requests', () => {
+  for (const status of [500, 502, 503, 504]) {
+    assert.equal(transientHttpError(fakeResponse(status), 'ctx', { retrySafe: false }).retryable, false, `status ${status}`);
+  }
+});
+
+test('transientHttpError still retries 429 for non-retry-safe requests (rejected before processing)', () => {
+  assert.notEqual(transientHttpError(fakeResponse(429), 'ctx', { retrySafe: false }).retryable, false);
 });

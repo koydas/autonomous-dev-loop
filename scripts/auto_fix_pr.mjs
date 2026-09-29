@@ -9,7 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { retryWithBackoff, transientHttpError } from './lib/retry.mjs';
+import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
@@ -117,15 +117,23 @@ const githubHeaders = {
 async function ghFetch(endpoint, options = {}) {
   // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
   // keep checking .ok. When retries are exhausted, the last 429/5xx Response is returned.
+  // Non-retry-safe POSTs (comments) are not replayed after a 5xx or network error.
+  const retrySafe = isRetrySafeGitHubRequest(options.method, endpoint);
   let lastTransientRes = null;
   try {
     return await retryWithBackoff(async () => {
       lastTransientRes = null;
-      const res = await fetch(`${githubApiBase}${endpoint}`, {
-        ...options,
-        headers: { ...githubHeaders, ...(options.headers || {}) },
-      });
-      const transientErr = transientHttpError(res, `GitHub API (${endpoint})`);
+      let res;
+      try {
+        res = await fetch(`${githubApiBase}${endpoint}`, {
+          ...options,
+          headers: { ...githubHeaders, ...(options.headers || {}) },
+        });
+      } catch (fetchErr) {
+        if (!retrySafe) fetchErr.retryable = false;
+        throw fetchErr;
+      }
+      const transientErr = transientHttpError(res, `GitHub API (${endpoint})`, { retrySafe });
       if (transientErr) {
         lastTransientRes = res;
         throw transientErr;

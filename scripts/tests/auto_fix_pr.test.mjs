@@ -955,3 +955,26 @@ test('auto_fix_pr ghFetch does not wait out a Retry-After beyond the retry budge
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test('auto_fix_pr ghFetch does not retry a 5xx comment POST (non-idempotent)', async () => {
+  const maxLabels = JSON.stringify([
+    { name: 'auto-fix-attempt-1' },
+    { name: 'auto-fix-attempt-2' },
+    { name: 'auto-fix-attempt-3' },
+  ]);
+  const server = await startMockServer(failOnce(
+    makeHandler({ labelsBody: maxLabels }),
+    (req) => req.method === 'POST' && /\/issues\/\d+\/comments$/.test(req.url),
+    500,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const posts = server.requests.filter((r) => r.method === 'POST' && /\/issues\/\d+\/comments$/.test(r.url));
+    assert.equal(posts.length, 1, 'a retried comment POST could post a duplicate comment');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});

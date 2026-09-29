@@ -777,15 +777,34 @@ test('pr_review ghFetch retries GitHub 429 honoring Retry-After', async () => {
 test('pr_review ghFetch retries GitHub 500 responses', async () => {
   const server = await startMockServer(failOnce(
     makeHandler(),
-    (req) => req.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(req.url),
+    (req) => req.method === 'GET' && req.url.includes('/issues/') && req.url.includes('/comments'),
     500,
   ));
   const eventFile = await writeEventFile();
   try {
     const result = await runPrReview(server.address().port, eventFile);
     assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const lists = server.requests.filter((r) => r.method === 'GET' && r.url.includes('/issues/') && r.url.includes('/comments'));
+    assert.equal(lists.length, 2);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review ghFetch does not retry a 5xx review submission (non-idempotent POST)', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(req.url),
+    502,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /Review submit failed: 502/);
     const submits = server.requests.filter((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
-    assert.equal(submits.length, 2);
+    assert.equal(submits.length, 1, 'a retried review POST could post a duplicate review');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

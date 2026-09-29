@@ -8,7 +8,7 @@ import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { retryWithBackoff, transientHttpError } from './lib/retry.mjs';
+import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
 import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
@@ -87,6 +87,8 @@ tracer.startSpan('review', { prNumber, model });
 async function ghFetch(path, options = {}) {
   // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
   // keep checking .ok. When retries are exhausted, the last 429/5xx Response is returned.
+  // Non-retry-safe POSTs (comments, reviews) are not replayed after a 5xx or network error.
+  const retrySafe = isRetrySafeGitHubRequest(options.method, path);
   let lastTransientRes = null;
   try {
     return await retryWithBackoff(async () => {
@@ -98,9 +100,12 @@ async function ghFetch(path, options = {}) {
           headers: { ...githubHeaders, ...(options.headers || {}) },
         });
       } catch (err) {
-        throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
+        throw Object.assign(
+          new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err }),
+          retrySafe ? {} : { retryable: false },
+        );
       }
-      const transientErr = transientHttpError(res, `GitHub API (${path})`);
+      const transientErr = transientHttpError(res, `GitHub API (${path})`, { retrySafe });
       if (transientErr) {
         lastTransientRes = res;
         throw transientErr;
