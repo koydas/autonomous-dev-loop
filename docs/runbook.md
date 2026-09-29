@@ -168,7 +168,7 @@ Key steps to expand per workflow:
 | `auto-fix-attempt-N` label missing | Labels are auto-created on first use; if creation fails (403), grant `issues: write` to the token used |
 | Auto-fix skipped on a PR that modifies `auto_fix_pr.mjs` | Expected — self-modification guard is active. Fix the script manually and push directly. |
 | Workflow re-run completes immediately with no commit | No files changed by the model output for that run; inspect logs and review feedback context. |
-| Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and checkpoint files automatically before rerun. |
+| Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and the `checkpoints/pr-<N>/autofix.json` checkpoint automatically before rerun (`review.json` is kept: it is the auto-fix prerequisite). |
 | Checkbox rerun fails at "Resolve PR payload" step | Confirm the token (`AI_PR_TOKEN` or `GITHUB_TOKEN`) has `pull-requests: read`; inspect the curl output in the step log for HTTP errors |
 | Checkbox rerun triggers but commits to wrong branch | Indicates an older workflow version without the step-ordering fix — ensure `auto-fix-pr.yml` has "Resolve PR payload for issue_comment" listed **before** "Checkout PR branch" |
 
@@ -210,7 +210,7 @@ git commit --allow-empty -m "re-trigger pr-review" && git push
 
 ### Reset the auto-fix attempt counter
 
-Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and checkpoint files, then start a fresh run from attempt 1.
+Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and the `autofix` checkpoint, then start a fresh run from attempt 1.
 
 ### Manually approve and close the loop
 

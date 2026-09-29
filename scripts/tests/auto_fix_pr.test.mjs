@@ -541,17 +541,29 @@ test('auto_fix_pr creates attempt label in repo before applying it', async () =>
 });
 
 
+// lib/checkpoint.mjs resolves ./checkpoints against cwd at import time; load a fresh
+// instance rooted at `cwd` so fixtures use the exact layout the script reads/writes.
+async function loadCheckpointModuleAt(cwd) {
+  const prev = process.cwd();
+  process.chdir(cwd);
+  try {
+    return await import(`../lib/checkpoint.mjs?cwd=${encodeURIComponent(cwd)}`);
+  } finally {
+    process.chdir(prev);
+  }
+}
+
 test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun is requested', async () => {
   const existingLabels = JSON.stringify([{ name: 'auto-fix-attempt-1' }, { name: 'auto-fix-attempt-2' }]);
   const server = await startMockServer(makeHandler({ labelsBody: existingLabels }));
   const eventFile = await writeEventFile();
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-'));
-  const checkpointDir = path.join(tmpDir, 'checkpoints');
+  const runDir = path.join(tmpDir, 'checkpoints', `pr-${PR_NUMBER}`);
   const outputFile = path.join(os.tmpdir(), `autofix-output-reset-${Date.now()}.txt`);
   try {
-    await fs.mkdir(checkpointDir, { recursive: true });
-    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-1.json'), '{"stage":"complete"}');
-    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-2.json'), '{"stage":"complete"}');
+    const { writeCheckpoint } = await loadCheckpointModuleAt(tmpDir);
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'review', { verdict: 'REQUEST_CHANGES' });
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'autofix', { prNumber: PR_NUMBER, attempt: 2, outputPaths: ['stale.txt'] });
 
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
     rawEvent.action = 'edited';
@@ -567,8 +579,7 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
     const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
     assert.equal(deleteCalls.length, 2, 'expected removal of auto-fix attempt labels');
 
-    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-1.json')));
-    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-2.json')));
+    await fs.access(path.join(runDir, 'review.json'));
 
     const output = await fs.readFile(outputFile, 'utf8');
     assert.match(output, /attempt_number=1/);
@@ -578,6 +589,39 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
     await fs.unlink(eventFile).catch(() => {});
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     await fs.unlink(outputFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr checkbox rerun deletes the autofix checkpoint and keeps review.json', async () => {
+  // LLM output is invalid so the run stops after the reset, before writing a new autofix checkpoint.
+  const server = await startMockServer(makeHandler({
+    labelsBody: JSON.stringify([{ name: 'auto-fix-attempt-1' }]),
+    llmResponse: anthropicJson('not json at all'),
+  }));
+  const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-ckpt-'));
+  const runDir = path.join(tmpDir, 'checkpoints', `pr-${PR_NUMBER}`);
+  const otherRunDir = path.join(tmpDir, 'checkpoints', 'pr-999');
+  try {
+    const { writeCheckpoint } = await loadCheckpointModuleAt(tmpDir);
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'review', { verdict: 'REQUEST_CHANGES' });
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'autofix', { prNumber: PR_NUMBER, attempt: 1, outputPaths: ['a.txt'] });
+    await writeCheckpoint('pr-999', 'autofix', { prNumber: 999, attempt: 1, outputPaths: ['b.txt'] });
+
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.comment.author_association = 'COLLABORATOR';
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.notEqual(result.code, 0, 'invalid LLM output should fail the run after the reset');
+
+    await assert.rejects(fs.access(path.join(runDir, 'autofix.json')), 'autofix checkpoint must be removed');
+    await fs.access(path.join(runDir, 'review.json'));
+    await fs.access(path.join(otherRunDir, 'autofix.json'));
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

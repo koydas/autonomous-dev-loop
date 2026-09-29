@@ -61,22 +61,17 @@ function isManualRerunRequested(eventPayload) {
 
 const CHECKPOINT_DIR = path.resolve('./checkpoints');
 
-async function cleanupCheckpointFiles() {
-  let entries;
+// Layout matches lib/checkpoint.mjs: checkpoints/<runId>/<step>.json. Only the
+// `autofix` step is reset; `review.json` is a workflow prerequisite and must survive.
+async function cleanupCheckpointFiles(checkpointRunId) {
+  const autofixFile = path.join(CHECKPOINT_DIR, String(checkpointRunId), 'autofix.json');
   try {
-    entries = await fsPromises.readdir(CHECKPOINT_DIR, { withFileTypes: true });
+    await fsPromises.unlink(autofixFile);
   } catch (err) {
     if (err.code === 'ENOENT') return [];
     throw err;
   }
-  const removed = [];
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (!/^checkpoint-attempt-\d+\.json$/.test(entry.name)) continue;
-    await fsPromises.unlink(path.join(CHECKPOINT_DIR, entry.name));
-    removed.push(entry.name);
-  }
-  return removed;
+  return [path.relative(CHECKPOINT_DIR, autofixFile)];
 }
 
 const githubToken = requireEnv('GITHUB_TOKEN');
@@ -184,7 +179,7 @@ if (manualRerunRequested) {
       throw new Error(`Failed to remove label ${labelName}: ${removeRes.status}`);
     }
   }
-  const removedCheckpointFiles = await cleanupCheckpointFiles();
+  const removedCheckpointFiles = await cleanupCheckpointFiles(process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`);
   if (process.env.GITHUB_OUTPUT) {
     await fsPromises.appendFile(
       process.env.GITHUB_OUTPUT,
