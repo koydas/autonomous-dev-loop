@@ -2,7 +2,7 @@
 
 ## Metrics System
 
-Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step.
+Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step. Scripts write the run's records to `$RUNNER_TEMP/pipeline-metrics.jsonl` (`METRICS_FILE`), outside the checkout, and "Commit metrics" appends only those lines, so a `metrics/runs.jsonl` in the checked-out branch is never uploaded (ADR-0021).
 
 **Record types:**
 

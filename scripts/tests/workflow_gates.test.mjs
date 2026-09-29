@@ -112,3 +112,15 @@ test('auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB_OUT
   assert.ok(!/echo\s+"payload=\$\{?PAYLOAD\}?"\s*>>\s*"\$GITHUB_OUTPUT"/.test(text), 'payload must not be echoed to GITHUB_OUTPUT');
   assert.match(text, /echo "head_ref=\$\(echo "\$\{PAYLOAD\}" \| jq -r '\.head\.ref'\)" >> "\$GITHUB_OUTPUT"/, 'head_ref output must remain');
 });
+
+// ADR-0021: the model writes into the checkout, so metrics committed to the default
+// branch must come from a file outside it, never from the working-tree metrics/runs.jsonl.
+test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkout', () => {
+  const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
+  assert.deepEqual(committing.map((w) => w.name).sort(), ['auto-fix-pr.yml', 'pr-review.yml', 'validate-issue.yml']);
+  for (const { name, text } of committing) {
+    assert.ok(!/(wc -l|tail|cat)[^\n]*metrics\/runs\.jsonl/.test(text), `${name} must not read the working-tree metrics file`);
+    const envLines = text.match(/METRICS_FILE: \$\{\{ runner\.temp \}\}\/pipeline-metrics\.jsonl/g) ?? [];
+    assert.ok(envLines.length >= 2, `${name} must pass METRICS_FILE under runner.temp to the script and to "Commit metrics"`);
+  }
+});

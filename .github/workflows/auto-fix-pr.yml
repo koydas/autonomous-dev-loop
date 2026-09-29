@@ -92,14 +92,11 @@ jobs:
             exit 1
           fi
 
-      - name: Capture metrics baseline
-        id: mbl
-        run: echo "count=$(wc -l < metrics/runs.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
-
       - name: Apply AI fixes
         id: fix
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
           CHECKPOINT_RUN_ID: pr-${{ github.event.pull_request.number || github.event.issue.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -145,9 +142,11 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASELINE: ${{ steps.mbl.outputs.count }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
         run: |
-          NEW_LINES=$(tail -n +$((BASELINE + 1)) metrics/runs.jsonl 2>/dev/null || true)
+          # Only this run's records, written outside the checkout (ADR-0021): never the
+          # working-tree metrics/runs.jsonl, which generated code could have modified.
+          NEW_LINES=$(cat "$METRICS_FILE" 2>/dev/null || true)
           [ -z "$NEW_LINES" ] && exit 0
           UPLOADED=0
           for i in 1 2 3; do
