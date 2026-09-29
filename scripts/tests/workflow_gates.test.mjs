@@ -124,3 +124,40 @@ test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkou
     assert.ok(envLines.length >= 2, `${name} must pass METRICS_FILE under runner.temp to the script and to "Commit metrics"`);
   }
 });
+
+// ADR-0023: workflows triggered by branch/PR activity hold LLM secrets and AI_PR_TOKEN;
+// they must execute pipeline code from the default branch, never from the checked-out branch.
+const BRANCH_TRIGGERED_SECRET_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml'];
+
+test('branch-triggered workflows with secrets run pipeline scripts from the trusted default-branch copy', () => {
+  for (const name of BRANCH_TRIGGERED_SECRET_WORKFLOWS) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    assert.ok(!/run:\s*node\s+scripts\//.test(text), `${name} must not run scripts/ from the checked-out branch`);
+    assert.match(text, /run: node "\$RUNNER_TEMP\/pipeline\/scripts\/[a-z_]+\.mjs"/, `${name} must run the trusted copy`);
+    assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+path: \.trusted-pipeline\n\s+persist-credentials: false/,
+      `${name} must check out the default branch as the trusted pipeline without credentials`);
+    assert.match(text, /mv \.trusted-pipeline "\$RUNNER_TEMP\/pipeline"/, `${name} must move the trusted copy out of the workspace`);
+  }
+});
+
+test('auto-fix-pr.yml load-labels job executes default-branch code only', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+  const loadLabels = text.slice(text.indexOf('  load-labels:'), text.indexOf('\n  auto-fix:'));
+  assert.match(loadLabels, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
+  assert.match(loadLabels, /persist-credentials: false/);
+});
+
+test('pr-review.yml does not persist credentials in the PR-branch checkout', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+  const checkouts = text.match(/uses: actions\/checkout@v4(\n\s+with:(\n\s{10}.+)+)?/g) ?? [];
+  assert.equal(checkouts.length, 2);
+  for (const c of checkouts) assert.match(c, /persist-credentials: false/);
+});
+
+test('workflows that run PR code without secrets use a read-only token', () => {
+  for (const name of ['test.yml', 'changelog-check.yml']) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    assert.match(text, /^permissions:\n  contents: read\n/m, `${name} must declare permissions: contents: read`);
+    assert.ok(!/secrets\./.test(text), `${name} must not use secrets`);
+  }
+});

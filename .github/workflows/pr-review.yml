@@ -22,6 +22,19 @@ jobs:
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # ADR-0023: pipeline code runs from the default branch; the branch above is data only.
+      - name: Checkout trusted pipeline (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      - name: Move trusted pipeline out of the workspace
+        run: mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -94,7 +107,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
-        run: node scripts/pr_review.mjs
+        run: node "$RUNNER_TEMP/pipeline/scripts/pr_review.mjs"
 
       - name: Upload checkpoint artifact
         if: always()
