@@ -13,6 +13,7 @@ SAFETY RULES:
 - If the issue requests broad or ambiguous work, implement only the smallest deterministic subset that is directly supported by the issue text and provided file context.
 
 HARD GUARDRAILS — violations render the patch invalid:
+- NEVER set target_path under a protected path: `.github/`, `scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/` (repository root), and any file named `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `.npmrc`, `.yarnrc` or `.yarnrc.yml` at any depth. Matching ignores case, `./` and backslashes. A single protected target_path rejects the whole patch, and this rule overrides any other rule below, including the test-file rule.
 - NEVER replace a test file with fewer tests than the original. All existing test cases must be preserved; only add new ones or modify tests explicitly named in the issue.
 - NEVER change the module format of a file. ESM files (`import`/`export`, `.mjs`) stay ESM — `require()` is forbidden in them. CJS files stay CJS.
 - NEVER change the signature (name, parameter shape, return type) of an exported function unless the issue explicitly requires it.
