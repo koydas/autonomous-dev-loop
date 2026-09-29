@@ -791,3 +791,82 @@ test('auto_fix_pr unhandledRejection handler logs run_summary with success false
     await fs.unlink(tmpScript).catch(() => {});
   }
 });
+
+// Fails the first request matching `match` with `status` (and optional headers), then delegates.
+function failOnce(handler, match, status, headers = {}) {
+  let failed = false;
+  return (req, res) => {
+    if (!failed && match(req)) {
+      failed = true;
+      res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+      return res.end('{"message":"transient"}');
+    }
+    return handler(req, res);
+  };
+}
+
+function retryLogWaits(stdout) {
+  return stdout.split('\n').flatMap((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return parsed.msg === 'retry' ? [parsed.waitMs] : [];
+    } catch { return []; }
+  });
+}
+
+test('auto_fix_pr ghFetch retries GitHub 429 and honors Retry-After', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-429-'));
+  const server = await startMockServer(failOnce(
+    makeHandler({ llmResponse: validLLMJson('out.txt') }),
+    (req) => req.method === 'GET' && /\/issues\/\d+\/labels$/.test(req.url),
+    429,
+    { 'Retry-After': '1' },
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    assert.deepEqual(retryLogWaits(result.stdout), [1000], 'expected one retry waiting Retry-After (1s)');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr ghFetch retries GitHub 5xx responses', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-503-'));
+  const server = await startMockServer(failOnce(
+    makeHandler({ llmResponse: validLLMJson('out.txt') }),
+    (req) => req.method === 'GET' && /\/pulls\/\d+$/.test(req.url),
+    503,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const diffRequests = server.requests.filter((r) => r.method === 'GET' && /\/pulls\/\d+$/.test(r.url));
+    assert.equal(diffRequests.length, 2, 'expected the 503 diff fetch to be retried once');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr ghFetch returns non-retryable statuses (422) to the caller without retrying', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-422-'));
+  const server = await startMockServer(makeHandler({ labelCreateStatus: 422, llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 (422 = label exists), stderr: ${result.stderr}`);
+    const creates = server.requests.filter((r) => r.method === 'POST' && /\/repos\/[^/]+\/[^/]+\/labels$/.test(r.url));
+    assert.equal(creates.length, 1, '422 must not be retried');
+    assert.deepEqual(retryLogWaits(result.stdout), []);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

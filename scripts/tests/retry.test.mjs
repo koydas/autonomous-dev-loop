@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { retryWithBackoff } from '../lib/retry.mjs';
+import { retryWithBackoff, parseRetryAfterMs } from '../lib/retry.mjs';
 
 const FAST = { baseDelayMs: 1, maxDelayMs: 10, jitter: false };
 
@@ -86,4 +86,26 @@ test('propagates the exact error thrown on the final attempt', async () => {
     { ...FAST, maxAttempts: 2 },
   ).catch((e) => e);
   assert.strictEqual(thrown, sentinel);
+});
+
+test('parseRetryAfterMs converts delta-seconds to milliseconds', () => {
+  assert.equal(parseRetryAfterMs('3'), 3000);
+  assert.equal(parseRetryAfterMs('0'), 0);
+  assert.equal(parseRetryAfterMs('1.5'), 1500);
+});
+
+test('parseRetryAfterMs converts an HTTP-date relative to now', () => {
+  const now = Date.parse('2026-01-01T00:00:00Z');
+  assert.equal(parseRetryAfterMs('Thu, 01 Jan 2026 00:00:05 GMT', now), 5000);
+});
+
+test('parseRetryAfterMs clamps a past HTTP-date to 0', () => {
+  const now = Date.parse('2026-01-01T00:00:10Z');
+  assert.equal(parseRetryAfterMs('Thu, 01 Jan 2026 00:00:05 GMT', now), 0);
+});
+
+test('parseRetryAfterMs returns undefined for missing, empty, negative or garbage values', () => {
+  for (const value of [null, undefined, '', '   ', '-1', 'soon']) {
+    assert.equal(parseRetryAfterMs(value), undefined, `value=${JSON.stringify(value)}`);
+  }
 });

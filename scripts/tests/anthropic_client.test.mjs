@@ -115,3 +115,32 @@ test('callAnthropic throws on fetch generic Error', async () => {
   globalThis.fetch = async () => { throw new Error('fetch error'); };
   await assert.rejects(() => callAnthropic(BASE_ARGS), /fetch error/);
 });
+
+test('callAnthropic retries when fetch throws a network error', async () => {
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  let calls = 0;
+  globalThis.fetch = async () => {
+    if (++calls === 1) throw new TypeError('fetch failed');
+    return makeResponse({ content: [{ type: 'text', text: 'recovered' }] });
+  };
+  try {
+    assert.equal(await callAnthropic(BASE_ARGS), 'recovered');
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+  }
+});
+
+test('callAnthropic rethrows the network error after exhausting retries', async () => {
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new TypeError('fetch failed'); };
+  try {
+    await assert.rejects(() => callAnthropic(BASE_ARGS), /fetch failed/);
+    assert.equal(calls, 4);
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+  }
+});

@@ -9,7 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { retryWithBackoff } from './lib/retry.mjs';
+import { retryWithBackoff, parseRetryAfterMs } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
@@ -110,14 +110,28 @@ const githubHeaders = {
 };
 
 async function ghFetch(endpoint, options = {}) {
+  // fetch does not throw on HTTP errors: surface 429/5xx as retryable errors, return
+  // every other status unchanged so callers keep checking .ok (404, 422, ...).
+  // Once retries are exhausted on 429/5xx, the last Response is returned the same way.
+  let lastTransientRes = null;
   try {
     return await retryWithBackoff(async () => {
-      return await fetch(`${githubApiBase}${endpoint}`, {
+      lastTransientRes = null;
+      const res = await fetch(`${githubApiBase}${endpoint}`, {
         ...options,
         headers: { ...githubHeaders, ...(options.headers || {}) },
       });
+      if (res.status === 429 || res.status >= 500) {
+        lastTransientRes = res;
+        throw Object.assign(new Error(`GitHub API transient error (${endpoint}): ${res.status}`), {
+          status: res.status,
+          waitMs: parseRetryAfterMs(res.headers.get('retry-after')),
+        });
+      }
+      return res;
     });
   } catch (err) {
+    if (lastTransientRes) return lastTransientRes;
     throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`, { cause: err });
   }
 }

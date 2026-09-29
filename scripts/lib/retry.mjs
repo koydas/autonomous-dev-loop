@@ -7,6 +7,17 @@ const DEFAULT_OPTIONS = {
   jitter: true,
 };
 
+// Parses an HTTP Retry-After header (delta-seconds or HTTP-date) into milliseconds.
+// Returns undefined when absent or unparseable so callers fall back to backoff.
+export function parseRetryAfterMs(value, nowMs = Date.now()) {
+  if (value == null || String(value).trim() === '') return undefined;
+  const secs = Number(value);
+  if (Number.isFinite(secs)) return secs >= 0 ? Math.ceil(secs * 1000) : undefined;
+  const dateMs = Date.parse(value);
+  if (Number.isNaN(dateMs)) return undefined;
+  return Math.max(0, dateMs - nowMs);
+}
+
 export async function retryWithBackoff(fn, options = {}) {
   const { maxAttempts, baseDelayMs, maxDelayMs, jitter } = { ...DEFAULT_OPTIONS, ...options };
 

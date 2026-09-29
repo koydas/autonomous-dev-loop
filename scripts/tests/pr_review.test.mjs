@@ -738,3 +738,53 @@ test('pr_review re-pulses changes-requested label to reset auto-fix workflow cyc
     await fs.unlink(eventFile).catch(() => {});
   }
 });
+
+function failOnce(handler, match, status, headers = {}) {
+  let failed = false;
+  return (req, res) => {
+    if (!failed && match(req)) {
+      failed = true;
+      res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+      return res.end('{"message":"transient"}');
+    }
+    return handler(req, res);
+  };
+}
+
+test('pr_review ghFetch retries GitHub 429 honoring Retry-After', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'GET' && req.url.includes('/issues/') && req.url.includes('/comments'),
+    429,
+    { 'Retry-After': '0' },
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const retryLine = result.stdout.split('\n').find((l) => l.includes('"msg":"retry"'));
+    assert.ok(retryLine, 'expected a retry log line');
+    assert.equal(JSON.parse(retryLine).waitMs, 0, 'expected Retry-After (0s) to be honored');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review ghFetch retries GitHub 500 responses', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(req.url),
+    500,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const submits = server.requests.filter((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(submits.length, 2);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});

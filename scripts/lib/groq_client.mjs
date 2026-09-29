@@ -55,7 +55,7 @@ export async function callGroq({
         body: JSON.stringify(payload),
       });
     } catch (fetchErr) {
-      fetchErr.retryable = false;
+      fetchErr.retryable = true;
       throw fetchErr;
     }
     const text = await response.text();

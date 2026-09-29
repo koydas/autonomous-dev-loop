@@ -8,7 +8,7 @@ import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { retryWithBackoff } from './lib/retry.mjs';
+import { retryWithBackoff, parseRetryAfterMs } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
 import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
@@ -85,21 +85,34 @@ obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber
 tracer.startSpan('review', { prNumber, model });
 
 async function ghFetch(path, options = {}) {
-  return await retryWithBackoff(async () => {
-    let res;
-    try {
-      res = await fetch(`${githubApiBase}${path}`, {
-        ...options,
-        headers: { ...githubHeaders, ...(options.headers || {}) },
-      });
-    } catch (err) {
-      throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
-    }
-    if (res.status === 502 || res.status === 503 || res.status === 504) {
-      throw Object.assign(new Error(`GitHub API transient error (${path}): ${res.status}`), { status: res.status });
-    }
-    return res;
-  });
+  // Retry 429/5xx (honoring Retry-After); return every other status unchanged so
+  // callers keep checking .ok. After exhausting retries, return the last 429/5xx Response.
+  let lastTransientRes = null;
+  try {
+    return await retryWithBackoff(async () => {
+      lastTransientRes = null;
+      let res;
+      try {
+        res = await fetch(`${githubApiBase}${path}`, {
+          ...options,
+          headers: { ...githubHeaders, ...(options.headers || {}) },
+        });
+      } catch (err) {
+        throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
+      }
+      if (res.status === 429 || res.status >= 500) {
+        lastTransientRes = res;
+        throw Object.assign(new Error(`GitHub API transient error (${path}): ${res.status}`), {
+          status: res.status,
+          waitMs: parseRetryAfterMs(res.headers.get('retry-after')),
+        });
+      }
+      return res;
+    });
+  } catch (err) {
+    if (lastTransientRes) return lastTransientRes;
+    throw err;
+  }
 }
 
 async function upsertLabel(label) {
