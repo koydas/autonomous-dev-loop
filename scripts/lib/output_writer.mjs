@@ -56,6 +56,34 @@ export function parseJsonResponse(raw) {
 }
 const MAX_FILE_CONTENT_LENGTH = 16000;
 
+// Paths the model must never write (ADR-0021). Entries ending in "/" are root-level
+// directory prefixes; the others are manifest/lock file names matched at any depth.
+// Workflows, pipeline scripts, config and prompts run with secrets on push, and
+// manifests/lock files control what gets installed.
+export const PROTECTED_WRITE_PATHS = Object.freeze([
+  '.github/',
+  'scripts/',
+  'config/',
+  'prompts/',
+  'package.json',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+]);
+
+function findProtectedPathEntry(targetPath) {
+  // Normalize before matching: backslashes, "./" and "." segments, repeated slashes, case.
+  const normalized = path.posix
+    .normalize(targetPath.replaceAll('\\', '/'))
+    .replace(/^(\.\/)+/, '')
+    .toLowerCase();
+  const baseName = path.posix.basename(normalized);
+  return PROTECTED_WRITE_PATHS.find((entry) => (entry.endsWith('/')
+    ? normalized.startsWith(entry) || normalized === entry.slice(0, -1)
+    : baseName === entry));
+}
+
 function validateSingleChange(change, index) {
   if (!change || typeof change !== 'object' || Array.isArray(change)) {
     throw new Error(`AI response changes[${index}] must be an object`);
@@ -72,6 +100,10 @@ function validateSingleChange(change, index) {
   }
   if (targetPath.startsWith('/') || targetPath.includes('..')) {
     throw new Error(`AI response changes[${index}] target_path must be a safe relative path`);
+  }
+  const protectedEntry = findProtectedPathEntry(targetPath);
+  if (protectedEntry) {
+    throw new Error(`AI response changes[${index}] target_path "${targetPath}" is in a protected path (${protectedEntry})`);
   }
   if (fileContent.length > MAX_FILE_CONTENT_LENGTH) {
     throw new Error(`AI response changes[${index}] file_content too large (>16000 chars)`);

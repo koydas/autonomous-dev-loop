@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS } from '../lib/output_writer.mjs';
 
 // parseJsonResponse tests
 
@@ -283,4 +283,81 @@ test('writeGeneratedFiles overwrites an existing file', async () => {
     process.chdir(originalCwd);
     await fs.rm(tmpDir, { recursive: true }).catch(() => {});
   }
+});
+
+// Protected write-path denylist (ADR-0021)
+
+function changeAt(targetPath) {
+  return { summary: 'ok', changes: [{ target_path: targetPath, file_content: 'x' }] };
+}
+
+test('PROTECTED_WRITE_PATHS exports every required prefix and file', () => {
+  for (const entry of ['.github/', 'scripts/', 'config/', 'prompts/', 'package.json', 'package-lock.json',
+    'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml']) {
+    assert.ok(PROTECTED_WRITE_PATHS.includes(entry), `missing ${entry}`);
+  }
+  assert.ok(Object.isFrozen(PROTECTED_WRITE_PATHS), 'denylist must be immutable');
+});
+
+for (const target of [
+  '.github/workflows/ci.yml',
+  '.github/actions/setup/action.yml',
+  '.github/CODEOWNERS',
+  'scripts/auto_fix_pr.mjs',
+  'scripts/lib/output_writer.mjs',
+  'config/models.yaml',
+  'prompts/generation-system.md',
+]) {
+  test(`validateAiOutput rejects protected prefix target_path ${target}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+for (const target of ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'packages/app/package.json', 'web/yarn.lock']) {
+  test(`validateAiOutput rejects protected manifest/lock file ${target}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+for (const target of [
+  './.github/workflows/ci.yml',
+  '././.github/workflows/ci.yml',
+  '.\\.github\\workflows\\ci.yml',
+  '.github\\workflows\\ci.yml',
+  '.GITHUB/workflows/ci.yml',
+  '.GitHub/Workflows/ci.yml',
+  '.github//workflows/ci.yml',
+  '.github/./workflows/ci.yml',
+  '  .github/workflows/ci.yml  ',
+  '.github',
+  'Scripts/lib/x.mjs',
+  'scripts\\lib\\x.mjs',
+  './config/./labels.yaml',
+  'PROMPTS/auto-fix-system.md',
+  'PACKAGE.JSON',
+  './Package-Lock.json',
+]) {
+  test(`validateAiOutput rejects normalization bypass ${JSON.stringify(target)}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+for (const target of ['src/config.js', 'docs/scripts/readme.md', 'scriptsx/a.js', 'githubstuff/a.md', 'src/.github-notes.md', 'package.json.md', 'docs/package-json.md']) {
+  test(`validateAiOutput accepts non-protected target_path ${target}`, () => {
+    const result = validateAiOutput(changeAt(target));
+    assert.equal(result.changes[0].targetPath, target);
+  });
+}
+
+test('validateAiOutput rejects the whole batch when one change targets a protected path', () => {
+  assert.throws(
+    () => validateAiOutput({
+      summary: 'ok',
+      changes: [
+        { target_path: 'src/a.js', file_content: '1' },
+        { target_path: '.github/workflows/pwn.yml', file_content: '2' },
+      ],
+    }),
+    /changes\[1\].*protected path/,
+  );
 });

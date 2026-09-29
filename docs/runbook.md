@@ -79,7 +79,7 @@ cat <run_id>.json | jq '[.spans[] | select(.outcome == "failed")]'
 | Issue stays unlabelled after validation run | LLM API key missing or invalid; `manage_labels.mjs` failed to create labels (check for 403/404 in logs) |
 | `ready-for-dev` applied but `code-generation` never triggers | Workflow trigger mismatch (label name drift vs `config/labels.yaml`); `AI_PR_TOKEN` / `GITHUB_TOKEN` lacks `contents: write` |
 | Generation run completes but no PR is created | Empty LLM output (no valid JSON patch); all generated paths failed safety check; `AI_PR_TOKEN` scope too narrow; **Allow GitHub Actions to create pull requests** disabled |
-| PR opens but files are wrong or empty | Prompt template issue (`generation-user.md` placeholders not resolved); model returned malformed JSON; `output_writer.mjs` rejected paths (absolute or `..` traversal) |
+| PR opens but files are wrong or empty | Prompt template issue (`generation-user.md` placeholders not resolved); model returned malformed JSON; `output_writer.mjs` rejected paths (absolute, `..` traversal, or a protected path — `.github/`, `scripts/`, `config/`, `prompts/`, `package.json`, lock files; see ADR-0021) |
 | `pr-review` never posts a comment | No open PR found for the push branch (exits silently by design); LLM API error; `pull-requests: write` permission missing |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
