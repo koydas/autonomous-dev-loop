@@ -211,3 +211,41 @@ test('callGroq rethrows the network error after exhausting retries', async () =>
     delete process.env.GROQ_MAX_RETRIES;
   }
 });
+
+test('callGroq gives up instead of waiting out a rate-limit hint beyond the retry budget', async () => {
+  const waits = [];
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms) => { waits.push(ms); fn(); return {}; };
+  process.env.GROQ_MAX_RETRIES = '3';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return makeResponse('Rate limit reached. Please try again in 45.5s', 429);
+  };
+  try {
+    await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 429/);
+    assert.equal(calls, 1, 'a 45 s wait exceeds the budget: fail fast so callLLM can fall back');
+    assert.deepEqual(waits, []);
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callGroq gives up when the Retry-After header exceeds the retry budget', async () => {
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  process.env.GROQ_MAX_RETRIES = '3';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return makeResponse('rate limited', 429, { 'Retry-After': '60' });
+  };
+  try {
+    await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 429/);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
