@@ -25,3 +25,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0019: Static verification backstop for generated code (proposal)](./0019-static-verification-backstop.md)
 - [ADR-0020: Per-PR/issue workflow concurrency groups](./0020-per-pr-workflow-concurrency.md)
 - [ADR-0021: Protected write-path denylist for AI-generated changes](./0021-protected-write-path-denylist.md)
+- [ADR-0022: HTTP-aware retry policy for GitHub and LLM calls](./0022-github-api-retry-policy.md)

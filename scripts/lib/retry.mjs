@@ -18,6 +18,21 @@ export function parseRetryAfterMs(value, nowMs = Date.now()) {
   return Math.max(0, dateMs - nowMs);
 }
 
+// Longest server-imposed wait (Retry-After) worth honoring: three retries must fit well
+// inside the shortest job timeout (pr-review: 2 min). Longer waits fail fast instead.
+export const MAX_RETRY_AFTER_MS = 10000;
+
+// fetch does not throw on HTTP errors. Returns a retryable error for 429/5xx (carrying
+// Retry-After as waitMs), or null for any other status, which callers handle via .ok (ADR-0022).
+export function transientHttpError(res, context, { maxRetryAfterMs = MAX_RETRY_AFTER_MS } = {}) {
+  if (res.status !== 429 && res.status < 500) return null;
+  const err = new Error(`${context} transient error: ${res.status}`);
+  err.status = res.status;
+  err.waitMs = parseRetryAfterMs(res.headers?.get('retry-after'));
+  if (err.waitMs !== undefined && err.waitMs > maxRetryAfterMs) err.retryable = false;
+  return err;
+}
+
 export async function retryWithBackoff(fn, options = {}) {
   const { maxAttempts, baseDelayMs, maxDelayMs, jitter } = { ...DEFAULT_OPTIONS, ...options };
 

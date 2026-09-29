@@ -932,3 +932,26 @@ test('auto_fix_pr ghFetch returns non-retryable statuses (422) to the caller wit
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test('auto_fix_pr ghFetch does not wait out a Retry-After beyond the retry budget', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-429-long-'));
+  const server = await startMockServer(failOnce(
+    makeHandler({ llmResponse: validLLMJson('out.txt') }),
+    (req) => req.method === 'GET' && /\/issues\/\d+\/labels$/.test(req.url),
+    429,
+    { 'Retry-After': '3600' },
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const started = Date.now();
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.ok(Date.now() - started < 20000, 'must fail fast instead of sleeping for an hour');
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /Label list failed: 429/, 'caller still sees the Response status');
+    assert.deepEqual(retryLogWaits(result.stdout), []);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

@@ -9,7 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { retryWithBackoff, parseRetryAfterMs } from './lib/retry.mjs';
+import { retryWithBackoff, transientHttpError } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
@@ -115,9 +115,8 @@ const githubHeaders = {
 };
 
 async function ghFetch(endpoint, options = {}) {
-  // fetch does not throw on HTTP errors: surface 429/5xx as retryable errors, return
-  // every other status unchanged so callers keep checking .ok (404, 422, ...).
-  // Once retries are exhausted on 429/5xx, the last Response is returned the same way.
+  // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
+  // keep checking .ok. When retries are exhausted, the last 429/5xx Response is returned.
   let lastTransientRes = null;
   try {
     return await retryWithBackoff(async () => {
@@ -126,12 +125,10 @@ async function ghFetch(endpoint, options = {}) {
         ...options,
         headers: { ...githubHeaders, ...(options.headers || {}) },
       });
-      if (res.status === 429 || res.status >= 500) {
+      const transientErr = transientHttpError(res, `GitHub API (${endpoint})`);
+      if (transientErr) {
         lastTransientRes = res;
-        throw Object.assign(new Error(`GitHub API transient error (${endpoint}): ${res.status}`), {
-          status: res.status,
-          waitMs: parseRetryAfterMs(res.headers.get('retry-after')),
-        });
+        throw transientErr;
       }
       return res;
     });

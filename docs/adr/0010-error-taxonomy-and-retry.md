@@ -1,7 +1,7 @@
 # ADR-0010: Error taxonomy and bounded retry with jitter
 
 - **Date:** 2026-05-01
-- **Status:** Accepted
+- **Status:** Accepted — amended by [ADR-0022](./0022-github-api-retry-policy.md) (HTTP-aware retry, Retry-After budget)
 
 ## Context
 

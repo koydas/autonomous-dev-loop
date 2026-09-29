@@ -8,7 +8,7 @@ import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { retryWithBackoff, parseRetryAfterMs } from './lib/retry.mjs';
+import { retryWithBackoff, transientHttpError } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
 import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
@@ -85,8 +85,8 @@ obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber
 tracer.startSpan('review', { prNumber, model });
 
 async function ghFetch(path, options = {}) {
-  // Retry 429/5xx (honoring Retry-After); return every other status unchanged so
-  // callers keep checking .ok. After exhausting retries, return the last 429/5xx Response.
+  // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
+  // keep checking .ok. When retries are exhausted, the last 429/5xx Response is returned.
   let lastTransientRes = null;
   try {
     return await retryWithBackoff(async () => {
@@ -100,12 +100,10 @@ async function ghFetch(path, options = {}) {
       } catch (err) {
         throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
       }
-      if (res.status === 429 || res.status >= 500) {
+      const transientErr = transientHttpError(res, `GitHub API (${path})`);
+      if (transientErr) {
         lastTransientRes = res;
-        throw Object.assign(new Error(`GitHub API transient error (${path}): ${res.status}`), {
-          status: res.status,
-          waitMs: parseRetryAfterMs(res.headers.get('retry-after')),
-        });
+        throw transientErr;
       }
       return res;
     });

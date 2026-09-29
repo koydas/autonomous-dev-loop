@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { retryWithBackoff, parseRetryAfterMs } from '../lib/retry.mjs';
+import { retryWithBackoff, parseRetryAfterMs, transientHttpError, MAX_RETRY_AFTER_MS } from '../lib/retry.mjs';
 
 const FAST = { baseDelayMs: 1, maxDelayMs: 10, jitter: false };
 
@@ -108,4 +108,42 @@ test('parseRetryAfterMs returns undefined for missing, empty, negative or garbag
   for (const value of [null, undefined, '', '   ', '-1', 'soon']) {
     assert.equal(parseRetryAfterMs(value), undefined, `value=${JSON.stringify(value)}`);
   }
+});
+
+function fakeResponse(status, headers = {}) {
+  return { status, headers: { get: (name) => headers[name.toLowerCase()] ?? null } };
+}
+
+test('transientHttpError returns null for non-transient statuses', () => {
+  for (const status of [200, 201, 204, 301, 400, 401, 403, 404, 409, 422]) {
+    assert.equal(transientHttpError(fakeResponse(status), 'ctx'), null, `status ${status}`);
+  }
+});
+
+test('transientHttpError returns a retryable error for 429 and 5xx', () => {
+  for (const status of [429, 500, 502, 503, 504]) {
+    const err = transientHttpError(fakeResponse(status), 'GitHub API (/x)');
+    assert.ok(err instanceof Error, `status ${status}`);
+    assert.equal(err.status, status);
+    assert.notEqual(err.retryable, false);
+    assert.equal(err.waitMs, undefined, 'no Retry-After => default backoff');
+    assert.match(err.message, new RegExp(`GitHub API \\(/x\\).*${status}`));
+  }
+});
+
+test('transientHttpError carries Retry-After as waitMs', () => {
+  const err = transientHttpError(fakeResponse(429, { 'retry-after': '2' }), 'ctx');
+  assert.equal(err.waitMs, 2000);
+  assert.notEqual(err.retryable, false);
+});
+
+test('transientHttpError gives up when Retry-After exceeds the wait budget', () => {
+  const err = transientHttpError(fakeResponse(429, { 'retry-after': String(MAX_RETRY_AFTER_MS / 1000 + 1) }), 'ctx');
+  assert.equal(err.retryable, false, 'a wait the job timeout cannot absorb must not be retried');
+});
+
+test('transientHttpError honors a custom maxRetryAfterMs', () => {
+  const res = fakeResponse(503, { 'retry-after': '5' });
+  assert.equal(transientHttpError(res, 'ctx', { maxRetryAfterMs: 1000 }).retryable, false);
+  assert.notEqual(transientHttpError(res, 'ctx', { maxRetryAfterMs: 5000 }).retryable, false);
 });
