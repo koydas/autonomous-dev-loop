@@ -136,7 +136,7 @@ async function writeIssueCommentEventFile(prNumber = PR_NUMBER) {
     JSON.stringify({
       action: 'created',
       issue: { number: prNumber, pull_request: { url: 'http://placeholder' } },
-      comment: { body: '- [x] Relancer Auto Fixer' },
+      comment: { body: '- [x] Relancer Auto Fixer', author_association: 'MEMBER' },
     }),
   );
   return tmpFile;
@@ -690,11 +690,10 @@ for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', unde
       const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
       assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
 
-      const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
-      assert.equal(deleteCalls.length, 0, 'untrusted commenter must not reset attempt labels');
-      const labelApply = server.requests.find((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url));
-      assert.ok(labelApply, 'expected normal attempt progression');
-      assert.ok(JSON.parse(labelApply.body).labels.includes('auto-fix-attempt-3'));
+      // Defense in depth: an issue_comment event that is not a trusted rerun must do nothing.
+      const mutations = server.requests.filter((r) => r.method !== 'GET');
+      assert.deepEqual(mutations.map((r) => `${r.method} ${r.url}`), [], 'untrusted comment must not mutate anything');
+      assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 0, 'untrusted comment must not call the LLM');
     } finally {
       server.close();
       await fs.unlink(eventFile).catch(() => {});
@@ -702,6 +701,25 @@ for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', unde
     }
   });
 }
+
+test('auto_fix_pr ignores issue_comment events from trusted authors without the rerun checkbox', async () => {
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-no-checkbox-'));
+  try {
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.comment = { body: 'LGTM, thanks', author_association: 'OWNER' };
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(server.requests.length, 0, 'plain comment must not reach GitHub or the LLM');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
 
 test('auto_fix_pr extracts PR number from issue.number for issue_comment events', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-ic-'));

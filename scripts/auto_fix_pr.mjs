@@ -92,6 +92,16 @@ if (!event || typeof event !== 'object') throw new Error('GitHub event payload i
 const prNumber = event.pull_request?.number ?? event.issue?.number;
 if (!prNumber) throw new Error('Missing GitHub payload field: expected pull_request.number or issue.number');
 
+// Defense in depth: the workflow `if:` already filters issue_comment events, but the
+// script must not run the LLM loop for any comment that is not a trusted rerun request.
+if (event.issue && event.comment && !isManualRerunRequested(event)) {
+  log('Ignoring issue_comment event: not a trusted manual rerun request', {
+    prNumber,
+    authorAssociation: event.comment.author_association ?? null,
+  });
+  process.exit(0);
+}
+
 const reviewBody = (event.review?.body || '').trim();
 const reviewId = event.review?.id;
 
