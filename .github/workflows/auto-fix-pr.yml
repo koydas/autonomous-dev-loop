@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changes_requested: ${{ steps.cfg.outputs.changes_requested }}
+      head_ref: ${{ steps.head.outputs.ref }}
     steps:
       # Default branch, not the PR merge ref: this job runs repository code (yaml.mjs).
       - uses: actions/checkout@v4
@@ -35,6 +36,13 @@ jobs:
           EOF
           )
           echo "changes_requested=$LABEL" >> "$GITHUB_OUTPUT"
+      # issue_comment payloads carry no head ref; the shared concurrency group needs it.
+      - id: head
+        if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_API_URL: ${{ github.event.issue.pull_request.url }}
+        run: echo "ref=$(gh api "$PR_API_URL" --jq '.head.ref')" >> "$GITHUB_OUTPUT"
 
   auto-fix:
     needs: load-labels
@@ -43,8 +51,9 @@ jobs:
     timeout-minutes: 10
     # Job-level: every PR comment/label triggers this workflow; a workflow-level group
     # would let skipped runs displace the pending real one. Never cancel: this job pushes.
+    # Shared with pr-review and reset-auto-fix (ADR-0020).
     concurrency:
-      group: auto-fix-pr-${{ github.event.pull_request.number || github.event.issue.number }}
+      group: pr-pipeline-${{ github.event.pull_request.head.ref || needs.load-labels.outputs.head_ref }}
       cancel-in-progress: false
 
     steps:

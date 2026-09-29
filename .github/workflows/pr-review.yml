@@ -12,8 +12,9 @@ permissions:
   issues: write
   actions: write
 
+# Shared with auto-fix-pr and reset-auto-fix (ADR-0020): one pipeline stage per PR branch at a time.
 concurrency:
-  group: pr-review-${{ github.event.pull_request.head.ref || github.ref_name }}
+  group: pr-pipeline-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:

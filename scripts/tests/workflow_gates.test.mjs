@@ -91,11 +91,33 @@ test('mutating workflows never cancel an in-progress run', () => {
   }
 });
 
-test('auto-fix-pr.yml concurrency group handles both pull_request.number and issue.number', () => {
+test('auto-fix-pr.yml concurrency group handles both pull_request and issue_comment events', () => {
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
   const group = text.match(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/m)?.[1] ?? '';
-  assert.match(group, /github\.event\.pull_request\.number/);
-  assert.match(group, /github\.event\.issue\.number/);
+  // pull_request carries the head ref; issue_comment does not, so load-labels resolves it.
+  assert.match(group, /github\.event\.pull_request\.head\.ref/);
+  assert.match(group, /needs\.load-labels\.outputs\.head_ref/);
+  const loadLabels = text.slice(text.indexOf('  load-labels:'), text.indexOf('\n  auto-fix:'));
+  assert.match(loadLabels, /head_ref: \$\{\{ steps\.head\.outputs\.ref \}\}/);
+  assert.match(loadLabels, /github\.event\.issue\.pull_request\.url/);
+});
+
+// ADR-0020 (amended): the three workflows that read/write a PR's review and attempt labels
+// serialize on one group per PR head branch (the only key available to push events).
+test('pr-review, auto-fix-pr and reset-auto-fix share one per-PR concurrency group', () => {
+  const expected = {
+    'pr-review.yml': /^pr-pipeline-\$\{\{ github\.event\.pull_request\.head\.ref \|\| github\.ref_name \}\}$/,
+    'auto-fix-pr.yml': /^pr-pipeline-\$\{\{ github\.event\.pull_request\.head\.ref \|\| needs\.load-labels\.outputs\.head_ref \}\}$/,
+    'reset-auto-fix.yml': /^pr-pipeline-\$\{\{ needs\.resolve\.outputs\.head_ref \}\}$/,
+  };
+  for (const [name, pattern] of Object.entries(expected)) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    const group = text.match(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/m)?.[1]?.trim() ?? '';
+    assert.match(group, pattern, `${name} group was ${group}`);
+  }
+  const reset = readFileSync(resolve(WORKFLOWS_DIR, 'reset-auto-fix.yml'), 'utf8');
+  assert.match(reset, /needs: resolve/);
+  assert.ok(!/^concurrency:/m.test(reset), 'reset-auto-fix group must be job-level (it needs the resolved head ref)');
 });
 
 test('label/comment-triggered mutating workflows scope concurrency to the gated job', () => {
