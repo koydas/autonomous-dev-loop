@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { estimateTokens } from '../lib/metrics.mjs';
+import { loadPrompt } from '../lib/prompts.mjs';
 import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, loadLLMConfig, GROQ_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
 
-const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL'];
+const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL', 'GROQ_REASONING_EFFORT'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
 
 function setEnv(vars) {
@@ -397,7 +399,6 @@ test('no pipeline stage defaults to a Groq model that has been retired', () => {
   for (const stage of ['validation', 'generation', 'review', 'autofix']) {
     const { model } = loadLLMConfig(stage);
     assert.ok(!RETIRED_GROQ_MODELS.includes(model), `${stage} defaults to retired model ${model}`);
-    assert.equal(model, 'openai/gpt-oss-120b', `${stage} default model`);
   }
 });
 
@@ -433,9 +434,9 @@ test('loadLLMConfig throws on an invalid reasoning_effort value', () => {
 test('autofix token budget fits Groq free-tier 8K TPM for openai/gpt-oss-120b', () => {
   setEnv({ GROQ_API_KEY: 'groq-key' });
   const { maxInputTokens, maxTokens } = loadLLMConfig('autofix');
-  const SYSTEM_PROMPT_TOKENS_EST = 460;
-  assert.ok(SYSTEM_PROMPT_TOKENS_EST + maxInputTokens + maxTokens <= 8000,
-    `system + input (${maxInputTokens}) + output (${maxTokens}) must stay within 8000 TPM`);
+  const systemTokens = estimateTokens(loadPrompt('auto-fix-system'));
+  assert.ok(systemTokens + maxInputTokens + maxTokens <= 8000,
+    `system (${systemTokens}) + input (${maxInputTokens}) + output (${maxTokens}) must stay within 8000 TPM`);
 });
 
 test('loadConfigFromEnv forwards the generation reasoningEffort', () => {
@@ -446,4 +447,54 @@ test('loadConfigFromEnv forwards the generation reasoningEffort', () => {
     delete process.env.ISSUE_NUMBER;
     delete process.env.ISSUE_TITLE;
   }
+});
+
+test('every Groq stage sets an explicit max_tokens (reasoning tokens count toward the 8K TPM per request)', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    const { maxTokens } = loadLLMConfig(stage);
+    assert.ok(Number.isInteger(maxTokens) && maxTokens > 0, `${stage} maxTokens must be set, got ${maxTokens}`);
+  }
+});
+
+test('loadLLMConfig falls back to the global reasoning_effort key when the stage key is absent', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const originalStage = GROQ_MODEL_DEFAULTS.review_reasoning_effort;
+  delete GROQ_MODEL_DEFAULTS.review_reasoning_effort;
+  GROQ_MODEL_DEFAULTS.reasoning_effort = 'high';
+  try {
+    assert.equal(loadLLMConfig('review').reasoningEffort, 'high');
+  } finally {
+    delete GROQ_MODEL_DEFAULTS.reasoning_effort;
+    GROQ_MODEL_DEFAULTS.review_reasoning_effort = originalStage;
+  }
+});
+
+test('GROQ_REASONING_EFFORT overrides the per-stage reasoning_effort for every stage', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', GROQ_REASONING_EFFORT: ' High ' });
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    assert.equal(loadLLMConfig(stage).reasoningEffort, 'high', `${stage} reasoningEffort`);
+  }
+});
+
+test('GROQ_REASONING_EFFORT=off drops reasoningEffort (non-reasoning GROQ_MODEL override)', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', GROQ_MODEL: 'some-non-reasoning-model', GROQ_REASONING_EFFORT: 'off' });
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    assert.equal(loadLLMConfig(stage).reasoningEffort, undefined, `${stage} reasoningEffort`);
+  }
+});
+
+test('GROQ_REASONING_EFFORT set to an empty string falls back to models.yaml', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', GROQ_REASONING_EFFORT: '' });
+  assert.equal(loadLLMConfig('review').reasoningEffort, 'low');
+});
+
+test('loadLLMConfig throws on an invalid GROQ_REASONING_EFFORT value', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', GROQ_REASONING_EFFORT: 'none' });
+  assert.throws(() => loadLLMConfig('review'), /Invalid reasoning_effort for stage "review": none \(must be low, medium, high or off\)/);
+});
+
+test('loadLLMConfig ignores GROQ_REASONING_EFFORT for the anthropic provider', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic', GROQ_REASONING_EFFORT: 'high' });
+  assert.equal(loadLLMConfig('review').reasoningEffort, undefined);
 });

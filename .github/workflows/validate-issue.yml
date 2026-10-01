@@ -48,6 +48,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
         run: node scripts/validate_issue.mjs
 
       - name: Upsert validation comment
