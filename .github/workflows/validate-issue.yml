@@ -9,6 +9,10 @@ permissions:
   issues: write
   actions: write
 
+concurrency:
+  group: validate-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -29,14 +33,11 @@ jobs:
           name: checkpoints-issue-${{ github.event.issue.number }}
           path: ./checkpoints
 
-      - name: Capture metrics baseline
-        id: mbl
-        run: echo "count=$(wc -l < metrics/runs.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
-
       - name: Validate issue
         id: validate
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
           CHECKPOINT_RUN_ID: issue-${{ github.event.issue.number }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -87,9 +88,11 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASELINE: ${{ steps.mbl.outputs.count }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
         run: |
-          NEW_LINES=$(tail -n +$((BASELINE + 1)) metrics/runs.jsonl 2>/dev/null || true)
+          # Only this run's records, written outside the checkout (ADR-0021): never the
+          # working-tree metrics/runs.jsonl, which generated code could have modified.
+          NEW_LINES=$(cat "$METRICS_FILE" 2>/dev/null || true)
           [ -z "$NEW_LINES" ] && exit 0
           UPLOADED=0
           for i in 1 2 3; do

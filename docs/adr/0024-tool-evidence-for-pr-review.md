@@ -1,4 +1,4 @@
-# ADR-0020: Tool evidence for PR review
+# ADR-0024: Tool evidence for PR review
 
 - **Date:** 2026-10-01
 - **Status:** Accepted
@@ -24,9 +24,10 @@ Adopt variant A.
 
 - `permissions: contents: read`, `actions/checkout` with `persist-credentials: false`.
 - Checks out the PR head SHA (`pull_request.head.sha`, falling back to `github.sha` on push), not the merge commit, so the evidence is attributable to the exact commit the reviewer sees.
-- Runs `node scripts/run_review_evidence.mjs`, which executes the checks declared in `config/review-evidence.yaml` and writes `evidence/review-evidence.json`. Uploaded as artifact `review-evidence-<run_id>`.
+- Follows ADR-0023: the PR tree is data only. The runner and its config come from a second checkout of the default branch moved to `$RUNNER_TEMP/pipeline`; the job runs `node "$RUNNER_TEMP/pipeline/scripts/run_review_evidence.mjs"` with the PR tree as cwd, and the config resolves script-relative (`config/review-evidence.yaml` of the default branch).
+- Writes `$RUNNER_TEMP/evidence/review-evidence.json` — outside the checkout, so the PR cannot ship a pre-made evidence file — uploaded as artifact `review-evidence-<run_id>` and downloaded by `review` to the same place (`REVIEW_EVIDENCE_PATH`).
 
-Executing PR code (LLM-generated, or from a contributor branch) is thereby kept out of the job that holds `AI_PR_TOKEN` and the LLM API keys. The script additionally strips from each check's environment any env var whose name matches `TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL`, and the whole env-injected git config family (`GIT_CONFIG_COUNT` / `KEY_n` / `VALUE_n`, which can carry `http.extraheader` auth and breaks git if only partially removed) — defense in depth.
+Executing PR code (LLM-generated, or from a contributor branch) is thereby kept out of the job that holds `AI_PR_TOKEN` and the LLM API keys. The script additionally strips from each check's environment any env var with a name segment `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD` or `CREDENTIAL(S)` (matched per `_`-separated segment, so `MONKEY_*` survives), and the whole env-injected git config family (`GIT_CONFIG_COUNT` / `KEY_n` / `VALUE_n`, which can carry `http.extraheader` auth and breaks git if only partially removed) — defense in depth.
 
 ### 2. Declared checks, not discovered ones
 
@@ -47,7 +48,7 @@ The evidence config is **opt-in per repo**: without `config/review-evidence.yaml
 
 ### 3. Review consumes evidence; failures override the verdict in code
 
-`review` declares `needs: evidence` with `if: ${{ !cancelled() }}`, so a crashed evidence job never blocks the review. `pr_review.mjs` reads the evidence file (`REVIEW_EVIDENCE_PATH`, default `evidence/review-evidence.json`) and assesses it:
+`review` declares `needs: evidence` with `if: ${{ !cancelled() }}`, so a crashed evidence job never blocks the review. `pr_review.mjs` reads the evidence file (`REVIEW_EVIDENCE_PATH`, set to `$RUNNER_TEMP/evidence/review-evidence.json` by the workflow) and assesses it:
 
 - **missing** (no file, unreadable, or malformed) or **stale** (`head_sha` differs from the PR head returned by the API — a push raced the run) → all checks are unverified; no override.
 - **available** → `fail` results are *failing*; `timeout` / `error` results are *unverified*.
@@ -63,14 +64,12 @@ Effects:
 
 ### 4. Self-modification of the evidence
 
-The `evidence` job executes everything from the PR head, so the PR controls more than the config. `EVIDENCE_TRUSTED_PATHS` lists every path that decides what runs or how results are reported:
+With ADR-0023, the runner (`scripts/run_review_evidence.mjs`, `scripts/lib/review_evidence.mjs`) and the commands (`config/review-evidence.yaml`) come from the default branch: a PR changing them affects reviews only once merged. Two PR-tree paths still decide what runs, listed in `EVIDENCE_TRUSTED_PATHS`:
 
-- `config/review-evidence.yaml` — the commands
 - `package.json` — what `npm test` / `npm run lint` execute
-- `scripts/run_review_evidence.mjs`, `scripts/lib/review_evidence.mjs` — the runner and its status mapping
-- `.github/workflows/pr-review.yml` — the job itself
+- `.github/workflows/pr-review.yml` — the job itself (GitHub reads the workflow from the pushed branch on `push` events)
 
-If the PR diff touches any of them, its `pass` results are not authoritative (a generated patch could neuter a check — the realistic adversary is the code-gen or auto-fix LLM gaming its own checks). The prompt block and comment section name the touched paths; `fail` results still force `REQUEST_CHANGES`. Running the runner and config from the base ref, and only the commands against the PR tree, would close this fully — left as a follow-up.
+If the PR diff touches either, its `pass` results are not authoritative (a generated patch could neuter a check — the realistic adversary is the code-gen or auto-fix LLM gaming its own checks). The prompt block and comment section name the touched paths, and the review prompt asks for HIGH scrutiny of any change that weakens a check; `fail` results still force `REQUEST_CHANGES`. Test files themselves are reviewed like any other change.
 
 ## Alternatives Considered
 
@@ -91,6 +90,8 @@ If the PR diff touches any of them, its `pass` results are not authoritative (a 
 - ⚠️ Checks run twice per push (`test.yml` and `evidence`). Acceptable at the current suite duration (~6 s); revisit if it grows.
 - ⚠️ Adds one job (checkout + setup-node) to the review critical path.
 - ⚠️ Evidence runs on push events even when the branch has no open PR (the review then exits early). Accepted to keep the workflow YAML free of PR-resolution logic; pushes to `main`, which never has an open PR, are excluded from the `push` trigger (`branches: ["**", "!main"]`).
-- ⚠️ Commands come from config in the checked-out commit; see §4 for the self-modification mitigation (flagged, not prevented).
+- ⚠️ `package.json` and the workflow still come from the PR tree; see §4 (flagged, not prevented).
+- ⚠️ Checks run as the runner user: a check that leaves a detached process behind could, in principle, tamper with the evidence file before upload. Writing it outside the checkout raises the bar; full isolation needs the checks in a container — out of scope here.
+- ⚠️ As with every ADR-0023 stage, a PR cannot exercise its own evidence changes in CI: the PR introducing this job runs it against a default branch that has no runner yet (evidence *missing*), and changes to the runner or config only take effect once merged.
 - ⚠️ The job has no install step: a target repo with dependencies must declare it in the command (`npm ci && npm test`), or every check fails on missing modules.
 - ⚠️ `timeout` / `error` results are visible but never block — a persistently hanging suite needs an operator, not auto-fix.

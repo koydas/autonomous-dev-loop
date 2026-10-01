@@ -232,27 +232,31 @@ test('parseEvidence: rejects an entry with an unknown status', () => {
 
 // --- findTouchedEvidencePaths ---
 
-test('findTouchedEvidencePaths: detects a modified evidence config', () => {
-  const diff = 'diff --git a/config/review-evidence.yaml b/config/review-evidence.yaml\n--- a/config/review-evidence.yaml\n+++ b/config/review-evidence.yaml\n';
-  assert.deepEqual(findTouchedEvidencePaths(diff), ['config/review-evidence.yaml']);
+test('findTouchedEvidencePaths: detects a modified package.json', () => {
+  const diff = 'diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n';
+  assert.deepEqual(findTouchedEvidencePaths(diff), ['package.json']);
 });
 
-test('findTouchedEvidencePaths: detects a newly added evidence config', () => {
-  const diff = '--- /dev/null\n+++ b/config/review-evidence.yaml\n';
-  assert.deepEqual(findTouchedEvidencePaths(diff), ['config/review-evidence.yaml']);
+test('findTouchedEvidencePaths: detects a newly added workflow file', () => {
+  const diff = '--- /dev/null\n+++ b/.github/workflows/pr-review.yml\n';
+  assert.deepEqual(findTouchedEvidencePaths(diff), ['.github/workflows/pr-review.yml']);
 });
 
 test('findTouchedEvidencePaths: ignores other files and empty diffs', () => {
   assert.deepEqual(findTouchedEvidencePaths('diff --git a/config/models.yaml b/config/models.yaml\n'), []);
-  assert.deepEqual(findTouchedEvidencePaths('+ mentions config/review-evidence.yaml in a line\n'), []);
+  assert.deepEqual(findTouchedEvidencePaths('+ mentions package.json in a line\n'), []);
   assert.deepEqual(findTouchedEvidencePaths(undefined), []);
 });
 
 test('findTouchedEvidencePaths: covers every path that controls the evidence', () => {
   const diff = EVIDENCE_TRUSTED_PATHS.map((p) => `diff --git a/${p} b/${p}\n--- a/${p}\n+++ b/${p}\n`).join('');
   assert.deepEqual(findTouchedEvidencePaths(diff), EVIDENCE_TRUSTED_PATHS);
-  for (const p of ['package.json', 'scripts/run_review_evidence.mjs', 'scripts/lib/review_evidence.mjs', '.github/workflows/pr-review.yml']) {
+  for (const p of ['package.json', '.github/workflows/pr-review.yml']) {
     assert.ok(EVIDENCE_TRUSTED_PATHS.includes(p), `${p} must be a trusted path`);
+  }
+  // Runner and config are read from the default branch (ADR-0023): a PR cannot change them for its own run.
+  for (const p of ['config/review-evidence.yaml', 'scripts/run_review_evidence.mjs']) {
+    assert.ok(!EVIDENCE_TRUSTED_PATHS.includes(p), `${p} comes from the default branch`);
   }
 });
 

@@ -22,7 +22,7 @@ import {
   parseGroqResponse,
   formatGitHubComment,
 } from '../lib/issue_validator.mjs';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, PROTECTED_WRITE_PATHS } from '../lib/output_writer.mjs';
 import { buildDeterministicPrompt } from '../lib/config.mjs';
 import { createTracer } from '../lib/observability.mjs';
 import { parseEvidenceConfig } from '../lib/review_evidence.mjs';
@@ -436,3 +436,14 @@ test('observability: trace file outcome is "partial" when validation fails', asy
   assert.equal(trace.outcome, 'partial');
   assert.equal(trace.spans[0].outcome, 'failed');
 });
+
+// ADR-0021: the model must be told about every protected path the writer rejects,
+// otherwise the whole patch fails at validation instead of being steered away.
+for (const name of ['generation-system', 'auto-fix-system']) {
+  test(`${name} prompt lists every PROTECTED_WRITE_PATHS entry`, () => {
+    const prompt = loadPrompt(name);
+    for (const entry of PROTECTED_WRITE_PATHS) {
+      assert.ok(prompt.includes(`\`${entry}\``), `${name}.md must mention protected path \`${entry}\``);
+    }
+  });
+}

@@ -90,7 +90,7 @@ If `meta.file` is absent, the annotation has no file reference.
 
 ### `review_evidence`
 
-Emitted by `run_review_evidence.mjs` in the `evidence` job of `pr-review.yml` (ADR-0020).
+Emitted by `run_review_evidence.mjs` in the `evidence` job of `pr-review.yml` (ADR-0024).
 
 | Event                       | Level | `duration_ms` | Key `meta` fields                                  |
 |-----------------------------|-------|---------------|----------------------------------------------------|

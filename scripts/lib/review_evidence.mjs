@@ -1,22 +1,18 @@
 import { spawn } from 'node:child_process';
 import { parseNestedYaml } from './yaml.mjs';
 
-// Tool evidence for PR review (ADR-0020): run declared checks in a secret-free job,
+// Tool evidence for PR review (ADR-0024): run declared checks in a secret-free job,
 // then let the review stage consume the results and override its verdict on failure.
 
 export const EVIDENCE_SCHEMA_VERSION = 1;
 export const EVIDENCE_CONFIG_PATH = 'config/review-evidence.yaml';
 export const DEFAULT_TIMEOUT_SECONDS = 300;
 export const OUTPUT_TAIL_CHARS = 2000;
-// Every path that decides what the evidence job runs or how it reports: a PR touching one of them
-// ran its checks under its own rules, so its passing results are not authoritative.
-export const EVIDENCE_TRUSTED_PATHS = [
-  EVIDENCE_CONFIG_PATH,
-  'package.json',
-  'scripts/run_review_evidence.mjs',
-  'scripts/lib/review_evidence.mjs',
-  '.github/workflows/pr-review.yml',
-];
+// Paths of the PR tree that still decide what the evidence job runs. The runner and its config come
+// from the default branch (ADR-0023); what `npm` executes and the workflow itself (GitHub reads it
+// from the pushed branch) do not. A PR touching one of them ran its checks under its own rules, so
+// its passing results are not authoritative.
+export const EVIDENCE_TRUSTED_PATHS = ['package.json', '.github/workflows/pr-review.yml'];
 // Grace period after the process exits (or is killed) for its pipes to close; a grandchild that
 // left the process group can hold them open forever.
 export const CLOSE_GRACE_MS = 2000;

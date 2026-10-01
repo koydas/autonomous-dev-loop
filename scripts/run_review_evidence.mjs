@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Runs the checks declared in config/review-evidence.yaml against the checked-out commit and
- * writes the results for the PR review stage (ADR-0020).
+ * writes the results for the PR review stage (ADR-0024).
  * Called by the secret-free `evidence` job in .github/workflows/pr-review.yml.
  *
  * Exits 0 whether checks pass or fail — results are data for the review, not a gate here.
@@ -11,12 +11,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { parseEvidenceConfig, runCheck, buildEvidence, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 
 const startMs = Date.now();
-const configPath = process.env.REVIEW_EVIDENCE_CONFIG ?? EVIDENCE_CONFIG_PATH;
+// Script-relative, like prompts/ and config/ elsewhere: with ADR-0023 the runner and its config come
+// from the trusted default-branch copy, while cwd is the PR tree under check.
+const configPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
 const outputPath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
 // Suffixed so the trace does not collide with the review job's trace of the same workflow run.
 const runId = `${process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`}-evidence`;

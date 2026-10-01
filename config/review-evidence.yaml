@@ -1,7 +1,8 @@
-# Checks executed on the PR head before the automated review (ADR-0020).
+# Checks executed on the PR head before the automated review (ADR-0024).
 # Each check: command (run via `bash -c`), optional timeout_seconds (default 300).
 # A non-zero exit forces the review verdict to REQUEST_CHANGES.
-# Runs in the secret-free `evidence` job of .github/workflows/pr-review.yml.
+# Runs in the secret-free `evidence` job of .github/workflows/pr-review.yml. Read from the default
+# branch (ADR-0023): a PR changing this file affects reviews only after it is merged.
 
 checks:
   tests:

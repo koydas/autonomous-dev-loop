@@ -76,14 +76,14 @@ Motivated by a benchmark session where a local coding model's generated diff —
 
 The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
 
-## Tool Evidence for Review (ADR-0020)
+## Tool Evidence for Review (ADR-0024)
 
-`pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer.
+`pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer. Per ADR-0023, the runner and its config come from the default branch (`$RUNNER_TEMP/pipeline`); the PR tree is only the working directory the checks run in.
 
-- **Isolation:** the `evidence` job has `permissions: contents: read`, checks out with `persist-credentials: false`, and receives no secrets. `run_review_evidence.mjs` also strips credential-like env vars (`TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL`) and env-injected git config (`GIT_CONFIG_*`) from each check's environment.
+- **Isolation:** the `evidence` job has `permissions: contents: read`, checks out with `persist-credentials: false`, and receives no secrets. `run_review_evidence.mjs` also strips credential-like env vars (name segment `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD`, `CREDENTIAL(S)`) and env-injected git config (`GIT_CONFIG_*`) from each check's environment.
 - **Config (opt-in per repo):** `checks.<name>.command` (run via `bash -c`; one pair of surrounding quotes is stripped, inline comments are rejected) and optional `checks.<name>.timeout_seconds` (default 300). Defaults for this repo: `npm test`, `npm run lint`. Without the file, the job exits 0 and the review reports the evidence as *missing*.
 - **No install step:** the job only checks out and sets up Node. A target repo with dependencies must install them in the command itself, e.g. `command: npm ci && npm test` — otherwise every check fails on missing modules and forces `REQUEST_CHANGES`.
-- **Results:** `pass` / `fail` (non-zero exit) / `timeout` / `error` (spawn failure, or exit 126/127: command not executable / not found), with exit code, duration and the last 2 000 output characters. Written to `evidence/review-evidence.json`, uploaded as artifact `review-evidence-<run_id>`.
+- **Results:** `pass` / `fail` (non-zero exit) / `timeout` / `error` (spawn failure, or exit 126/127: command not executable / not found), with exit code, duration and the last 2 000 output characters. Written to `$RUNNER_TEMP/evidence/review-evidence.json` (outside the checkout), uploaded as artifact `review-evidence-<run_id>`.
 - **Review behavior:**
   - A `## Tool evidence` block is appended to the review prompt.
   - **Any `fail` forces `REQUEST_CHANGES`** in code, whatever the LLM verdict.
@@ -92,7 +92,7 @@ The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_m
   - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`).
   - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run).
   - `timeout` / `error` results — shown as unverified.
-- **Self-modification:** if the PR touches a path that controls the evidence (`config/review-evidence.yaml`, `package.json`, `scripts/run_review_evidence.mjs`, `scripts/lib/review_evidence.mjs`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
+- **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
 
 To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.
 

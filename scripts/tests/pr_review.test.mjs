@@ -54,6 +54,7 @@ function makeHandler({
   removeLabelStatus = 200,
   autoFixRunsInProgress = [],
   autoFixRunsQueued = [],
+  autoFixRunsPending = [],
   prHeadRef = 'feature/test',
   prHeadSha = 'a'.repeat(40),
   autoFixRunsStatus = 200,
@@ -98,7 +99,9 @@ function makeHandler({
         res.writeHead(autoFixRunsStatus, { 'Content-Type': 'application/json' });
         return res.end('error');
       }
-      const target = url.includes('status=queued') ? autoFixRunsQueued : autoFixRunsInProgress;
+      const target = url.includes('status=queued') ? autoFixRunsQueued
+        : url.includes('status=pending') ? autoFixRunsPending
+        : autoFixRunsInProgress;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ total_count: target.length, workflow_runs: target }));
     }
@@ -742,7 +745,96 @@ test('pr_review re-pulses changes-requested label to reset auto-fix workflow cyc
   }
 });
 
-// --- Tool evidence (ADR-0020) ---
+function failOnce(handler, match, status, headers = {}) {
+  let failed = false;
+  return (req, res) => {
+    if (!failed && match(req)) {
+      failed = true;
+      res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+      return res.end('{"message":"transient"}');
+    }
+    return handler(req, res);
+  };
+}
+
+test('pr_review ghFetch retries GitHub 429 honoring Retry-After', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'GET' && req.url.includes('/issues/') && req.url.includes('/comments'),
+    429,
+    { 'Retry-After': '0' },
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const retryLine = result.stdout.split('\n').find((l) => l.includes('"msg":"retry"'));
+    assert.ok(retryLine, 'expected a retry log line');
+    assert.equal(JSON.parse(retryLine).waitMs, 0, 'expected Retry-After (0s) to be honored');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review ghFetch retries GitHub 500 responses', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'GET' && req.url.includes('/issues/') && req.url.includes('/comments'),
+    500,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const lists = server.requests.filter((r) => r.method === 'GET' && r.url.includes('/issues/') && r.url.includes('/comments'));
+    assert.equal(lists.length, 2);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review ghFetch does not retry a 5xx review submission (non-idempotent POST)', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(req.url),
+    502,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /Review submit failed: 502/);
+    const submits = server.requests.filter((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(submits.length, 1, 'a retried review POST could post a duplicate review');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review does not re-pulse changes-requested while an auto-fix run is pending on its concurrency group', async () => {
+  // ADR-0020: a run waiting on the per-PR concurrency group has status "pending", not "queued".
+  const server = await startMockServer(
+    makeHandler({
+      groqContent: 'Found issues.\n\nVerdict: REQUEST_CHANGES',
+      autoFixRunsPending: [{ id: 2, head_branch: 'feature/test' }],
+    }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stdout, /Skipping changes-requested re-pulse/);
+    assert.ok(server.requests.some((r) => r.url.includes('status=pending')), 'expected a status=pending lookup');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+// --- Tool evidence (ADR-0024) ---
 
 async function writeEvidenceFile(checks, headSha = 'a'.repeat(40)) {
   const file = path.join(os.tmpdir(), `pr-review-evidence-${Date.now()}-${Math.random()}.json`);
