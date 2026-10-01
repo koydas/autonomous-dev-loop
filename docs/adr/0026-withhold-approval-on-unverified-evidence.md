@@ -26,11 +26,11 @@ The final verdict gets a third value, computed by `decideVerdict(llmApproved, as
 `WITHHELD` in `scripts/pr_review.mjs`:
 
 - submits the GitHub review with event `COMMENT` — no approval, no change request;
-- removes both `review-approved` and `changes-requested` and applies neither, so auto-fix is not triggered and the PR does not look approved;
+- removes `review-approved` and `changes-requested` and applies **`review-withheld`** (`config/labels.yaml`), so auto-fix is not triggered (`auto-fix-pr.yml` only reacts to `changes-requested`), the PR does not look approved, and a label query still finds it; the next `APPROVE` or `REQUEST_CHANGES` removes `review-withheld`;
 - appends an **Approval withheld** note with the reason to the review comment;
 - records `verdict: "WITHHELD"` on the `review.verdict` event and in the trace; `request_changes_count` is not incremented.
 
-The next push re-runs the review with fresh evidence; an operator can also re-run the `pr-review` workflow once the cause (hanging suite, runner failure) is addressed.
+The label set therefore stays the pipeline's state (ADR-0006): `review-approved`, `changes-requested` or `review-withheld`, one at a time. The next push re-runs the review with fresh evidence; an operator can also re-run the `pr-review` workflow once the cause (hanging suite, runner failure) is addressed.
 
 **Opt-in preserved.** Evidence stays opt-in per repo (ADR-0024): without `config/review-evidence.yaml` the evidence is always *missing*. `pr_review.mjs` resolves the config exactly as `run_review_evidence.mjs` does (script-relative, or `REVIEW_EVIDENCE_CONFIG`) and passes `evidenceRequired: false` when it is absent, which keeps the pre-ADR behavior for those repos.
 
@@ -51,4 +51,5 @@ The next push re-runs the review with fresh evidence; an operator can also re-ru
 - ✅ Repos that have not opted in to evidence are unaffected.
 - ⚠️ A persistently hanging or crashing check now blocks approval until someone acts; previously it was only visible. This is the intended trade, but it makes the pipeline's own CI health a merge prerequisite.
 - ⚠️ A push racing the evidence job (*stale*) withholds approval for that run; the push's own review normally follows and resolves it.
-- ⚠️ `WITHHELD` leaves no state label on the PR. Operators read the review comment, not the label set, to see why.
+- ⚠️ `timeout` is treated as unverified, not failing. A suite that hangs because of the PR itself (infinite loop, unresolved promise, open handle) — including a hang introduced by an auto-fix attempt — therefore parks the PR under `review-withheld` instead of feeding auto-fix the output tail. This is deliberate: the evidence cannot tell a code hang from a slow or overloaded runner, and a wrong guess spends auto-fix attempts on infrastructure. A human reading `review-withheld` decides; if hangs turn out to be mostly PR-caused, moving `timeout` to the failing side is a one-line change in `decideVerdict()`.
+- ⚠️ The reason is in the review comment, which the next review run overwrites (upsert). The label persists until the next verdict; the prose does not.

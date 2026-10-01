@@ -64,7 +64,7 @@ const githubHeaders = {
 };
 
 const reviewLabels = loadLabelsConfig('review');
-const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes];
+const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes, reviewLabels.withheld];
 
 let prNumber = event.pull_request?.number;
 if (!prNumber) {
@@ -330,10 +330,12 @@ for (const label of PR_REVIEW_LABELS) {
 }
 
 if (isWithheld) {
-  // Neither label: review-approved would be wrong, changes-requested would start auto-fix (ADR-0026).
+  // review-approved would be wrong and changes-requested would start auto-fix (ADR-0026);
+  // review-withheld keeps the PR findable in the label state machine.
   await removeLabel(reviewLabels.approved.name);
   await removeLabel(reviewLabels.changes.name);
-  log('PR review labels cleared: approval withheld', { prNumber, reason: verdictReason });
+  await addLabel(reviewLabels.withheld.name);
+  log('PR review labels applied: approval withheld', { prNumber, added: reviewLabels.withheld.name, reason: verdictReason });
 } else {
   const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
   const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
@@ -355,6 +357,7 @@ if (isWithheld) {
 
   await addLabel(apply);
   await removeLabel(remove);
+  await removeLabel(reviewLabels.withheld.name);
   log('PR review labels applied', { prNumber, added: apply, removed: remove });
 }
 

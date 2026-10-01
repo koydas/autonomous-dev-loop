@@ -671,7 +671,7 @@ test('pr_review falls back to PATCH when label POST returns 422', async () => {
     const patches = server.requests.filter(
       (r) => r.method === 'PATCH' && /\/repos\/[^/]+\/[^/]+\/labels\//.test(r.url),
     );
-    assert.equal(patches.length, 2, 'expected PATCH for both PR review labels');
+    assert.equal(patches.length, Object.keys(LABELS.review).length, 'expected PATCH for every PR review label');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -1014,7 +1014,7 @@ test('pr_review withholds approval when a check timed out, and applies neither r
     );
     assert.match(JSON.parse(comment.body).body, /Approval withheld\*\* — unverified checks \(timeout or error\): tests/);
     const labels = reviewLabelCalls(server);
-    assert.deepEqual(labels.added, []);
+    assert.deepEqual(labels.added, ['review-withheld']);
     assert.deepEqual(labels.removed.sort(), ['changes-requested', 'review-approved']);
     assert.match(result.stderr, /"verdict":"WITHHELD"/);
   } finally {
@@ -1032,7 +1032,7 @@ test('pr_review withholds approval when no evidence file exists', async () => {
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
     const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
     assert.equal(JSON.parse(review.body).event, 'COMMENT');
-    assert.deepEqual(reviewLabelCalls(server).added, []);
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -1073,5 +1073,23 @@ test('pr_review keeps APPROVE with missing evidence when the repo has no evidenc
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review clears review-withheld when a later review approves or requests changes', async () => {
+  for (const [groqContent, applied] of [['Fine.\n\nVerdict: APPROVED', 'review-approved'], ['Broken.\n\nVerdict: REQUEST_CHANGES', 'changes-requested']]) {
+    const server = await startMockServer(makeHandler({ groqContent }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile);
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      const labels = reviewLabelCalls(server);
+      assert.ok(labels.added.includes(applied), `expected ${applied} to be applied`);
+      assert.ok(labels.removed.includes('review-withheld'), 'expected review-withheld to be removed');
+      assert.ok(!labels.added.includes('review-withheld'));
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+    }
   }
 });
