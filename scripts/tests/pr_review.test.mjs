@@ -830,3 +830,32 @@ test('pr_review does not re-pulse changes-requested while an auto-fix run is pen
     await fs.unlink(eventFile).catch(() => {});
   }
 });
+
+test('pr_review sends the configured reasoning_effort to Groq', async () => {
+  const handler = makeHandler();
+  const server = await startMockServer((req, res) => {
+    if (req.url === '/v1/chat/completions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ choices: [{ message: { content: 'Looks good.\n\nVerdict: APPROVED' } }] }));
+    }
+    return handler(req, res);
+  });
+  const eventFile = await writeEventFile();
+  try {
+    const port = server.address().port;
+    const result = await runPrReview(port, eventFile, {
+      ANTHROPIC_API_KEY: '',
+      GROQ_API_KEY: 'groq-test',
+      GROQ_API_URL: `http://127.0.0.1:${port}/v1/chat/completions`,
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const call = server.requests.find((r) => r.url === '/v1/chat/completions');
+    assert.ok(call, 'expected a Groq call');
+    const body = JSON.parse(call.body);
+    assert.equal(body.model, 'openai/gpt-oss-120b');
+    assert.equal(body.reasoning_effort, 'low');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});

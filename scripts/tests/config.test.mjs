@@ -138,12 +138,12 @@ test('loadConfigFromEnv uses AI_PROVIDER=groq tiebreaker when both keys set', ()
 });
 
 
-test('loadLLMConfig uses llama-3.3-70b-versatile defaults for generation and autofix', () => {
+test('loadLLMConfig uses openai/gpt-oss-120b defaults for generation and autofix', () => {
   setEnv({ GROQ_API_KEY: 'groq-key' });
   const generationCfg = loadLLMConfig('generation');
   const autofixCfg = loadLLMConfig('autofix');
-  assert.equal(generationCfg.model, 'llama-3.3-70b-versatile');
-  assert.equal(autofixCfg.model, 'llama-3.3-70b-versatile');
+  assert.equal(generationCfg.model, 'openai/gpt-oss-120b');
+  assert.equal(autofixCfg.model, 'openai/gpt-oss-120b');
 });
 
 test('loadLLMConfig returns maxInputTokens, diffRatio, feedbackRatio for autofix stage', () => {
@@ -386,5 +386,64 @@ test('loadLLMConfig rejects temperature 2.0001', () => {
     assert.throws(() => loadLLMConfig('generation'), /Invalid temperature/);
   } finally {
     GROQ_MODEL_DEFAULTS.generation_temperature = original;
+  }
+});
+
+// ADR-0024: Groq retired qwen/qwen3-32b (2026-07-17) and llama-3.3-70b-versatile (2026-08-16).
+const RETIRED_GROQ_MODELS = ['qwen/qwen3-32b', 'llama-3.3-70b-versatile'];
+
+test('no pipeline stage defaults to a Groq model that has been retired', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    const { model } = loadLLMConfig(stage);
+    assert.ok(!RETIRED_GROQ_MODELS.includes(model), `${stage} defaults to retired model ${model}`);
+    assert.equal(model, 'openai/gpt-oss-120b', `${stage} default model`);
+  }
+});
+
+test('loadLLMConfig returns the configured reasoningEffort for every Groq stage', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    assert.equal(loadLLMConfig(stage).reasoningEffort, 'low', `${stage} reasoningEffort`);
+  }
+});
+
+test('loadLLMConfig returns undefined reasoningEffort when the stage key is absent', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const original = GROQ_MODEL_DEFAULTS.review_reasoning_effort;
+  delete GROQ_MODEL_DEFAULTS.review_reasoning_effort;
+  try {
+    assert.equal(loadLLMConfig('review').reasoningEffort, undefined);
+  } finally {
+    GROQ_MODEL_DEFAULTS.review_reasoning_effort = original;
+  }
+});
+
+test('loadLLMConfig throws on an invalid reasoning_effort value', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const original = GROQ_MODEL_DEFAULTS.review_reasoning_effort;
+  GROQ_MODEL_DEFAULTS.review_reasoning_effort = 'none';
+  try {
+    assert.throws(() => loadLLMConfig('review'), /Invalid reasoning_effort for stage "review": none/);
+  } finally {
+    GROQ_MODEL_DEFAULTS.review_reasoning_effort = original;
+  }
+});
+
+test('autofix token budget fits Groq free-tier 8K TPM for openai/gpt-oss-120b', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  const { maxInputTokens, maxTokens } = loadLLMConfig('autofix');
+  const SYSTEM_PROMPT_TOKENS_EST = 460;
+  assert.ok(SYSTEM_PROMPT_TOKENS_EST + maxInputTokens + maxTokens <= 8000,
+    `system + input (${maxInputTokens}) + output (${maxTokens}) must stay within 8000 TPM`);
+});
+
+test('loadConfigFromEnv forwards the generation reasoningEffort', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', ISSUE_NUMBER: '1', ISSUE_TITLE: 't' });
+  try {
+    assert.equal(loadConfigFromEnv().reasoningEffort, 'low');
+  } finally {
+    delete process.env.ISSUE_NUMBER;
+    delete process.env.ISSUE_TITLE;
   }
 });

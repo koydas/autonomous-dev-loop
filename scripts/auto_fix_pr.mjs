@@ -36,6 +36,7 @@ const MODEL_CONTEXT_WINDOW = {
   'qwen/qwen3-32b': 32768,
   'llama-3.1-8b-instant': 32768,
   'llama-3.3-70b-versatile': 131072,
+  'openai/gpt-oss-120b': 131072,
   'claude-opus-4-7': 200000,
   'claude-sonnet-4-6': 200000,
   'claude-haiku-4-5-20251001': 200000,
@@ -77,7 +78,7 @@ async function cleanupCheckpointFiles(checkpointRunId) {
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens, maxInputTokens: cfgMaxInputTokens, diffRatio: cfgDiffRatio, feedbackRatio: cfgFeedbackRatio } = loadLLMConfig('autofix');
+const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens, maxInputTokens: cfgMaxInputTokens, diffRatio: cfgDiffRatio, feedbackRatio: cfgFeedbackRatio, reasoningEffort } = loadLLMConfig('autofix');
 const systemPrompt = loadPrompt('auto-fix-system');
 const userPromptTemplate = loadPrompt('auto-fix-user');
 
@@ -375,6 +376,7 @@ const raw = await callLLM({
   temperature: llmTemperature,
   maxTokens: maxOutputBudget,
   responseFormat: null,
+  reasoningEffort,
 });
 
 obsLog({ stage: 'autofix', event: 'autofix.llm_response', level: 'info', meta: { output_tokens_est: estimateTokens(raw), attempt: nextAttempt, prNumber } });

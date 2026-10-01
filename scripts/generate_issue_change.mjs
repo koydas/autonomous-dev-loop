@@ -59,6 +59,7 @@ async function main() {
       apiUrl: config.apiUrl,
       temperature: config.temperature,
       maxTokens: config.maxTokens,
+      reasoningEffort: config.reasoningEffort,
     });
   } catch (err) {
     obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });

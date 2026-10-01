@@ -978,3 +978,39 @@ test('auto_fix_pr ghFetch does not retry a 5xx comment POST (non-idempotent)', a
     await fs.unlink(eventFile).catch(() => {});
   }
 });
+
+test('auto_fix_pr sends the configured reasoning_effort to Groq', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-reasoning-'));
+  const groqResponse = JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ summary: 'fixed', changes: [{ target_path: 'out.txt', file_content: 'x' }] }) } }],
+  });
+  const groqHandler = (req, res) => {
+    if (req.url === '/v1/chat/completions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(groqResponse);
+    }
+    makeHandler({})(req, res);
+  };
+  const server = await startMockServer(groqHandler);
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
+      extraEnv: {
+        ANTHROPIC_API_KEY: '',
+        GROQ_API_KEY: 'groq-test',
+        GROQ_API_URL: `http://127.0.0.1:${server.address().port}/v1/chat/completions`,
+      },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const call = server.requests.find((r) => r.url === '/v1/chat/completions');
+    assert.ok(call, 'expected a Groq call');
+    const body = JSON.parse(call.body);
+    assert.equal(body.model, 'openai/gpt-oss-120b');
+    assert.equal(body.reasoning_effort, 'low');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

@@ -20,11 +20,11 @@ These instructions apply to the entire repository.
 
 ## Models
 
-Default Groq models (all stages): `qwen/qwen3-32b`. See `config/models.yaml` for per-stage overrides.
+Default Groq models (all stages): `openai/gpt-oss-120b` (ADR-0024). See `config/models.yaml` for per-stage overrides.
 Default Anthropic model (all stages): `claude-opus-4-7`.
 Context windows: Groq models cap at 32 768 tokens; Anthropic models at 200 000 tokens. `scripts/auto_fix_pr.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
 
-**Token budget (auto-fix stage):** `autofix_max_input_tokens` in `config/models.yaml` sets a hard ceiling on the input budget sent to the LLM, independently of the model's context window. The default is `7400` tokens — tuned to keep the total request (system + input + output) under Groq on_demand's 12,000 TPM per-request limit. Increase or remove this cap when using Groq Dev Tier or Anthropic. See [ADR-0017](docs/adr/0017-configurable-token-budget.md).
+**Token budget (auto-fix stage):** `autofix_max_input_tokens` in `config/models.yaml` sets a hard ceiling on the input budget sent to the LLM, independently of the model's context window. The default is `3400` tokens — tuned to keep the total request (system + input + output) under the 8,000 TPM free-tier limit of `openai/gpt-oss-120b` (ADR-0024). Increase or remove this cap when using Groq Dev Tier or Anthropic. See [ADR-0017](docs/adr/0017-configurable-token-budget.md).
 
 ## Engineering Rules
 

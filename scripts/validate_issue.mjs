@@ -29,7 +29,7 @@ async function main() {
   const issueNumber = requireEnv('ISSUE_NUMBER');
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
-  const { apiKey, model, apiUrl, temperature, maxTokens } = loadLLMConfig('validation');
+  const { apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort } = loadLLMConfig('validation');
 
   obsLog({ stage: 'issue_validation', event: 'issue_validation.start', level: 'info', meta: { issueNumber, issueTitle, model } });
   tracer.startSpan('issue_validation', { issueNumber, issueTitle, model });
@@ -37,7 +37,7 @@ async function main() {
   log('Validating issue', { issueNumber, issueTitle, model });
 
   const boundCallGroq = ({ prompt }) =>
-    callLLM({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens });
+    callLLM({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort });
 
   let result;
   try {

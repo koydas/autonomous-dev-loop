@@ -1,6 +1,6 @@
 # Code Generation MVP Setup
 
-This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: `validation`/`review` use `qwen/qwen3-32b`, while `generation`/`autofix` use `llama-3.3-70b-versatile`. Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
+This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: all four stages (`validation`, `generation`, `review`, `autofix`) use `openai/gpt-oss-120b` with `reasoning_effort: low` (ADR-0024). Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Quick Start (Operator)
 
@@ -12,7 +12,7 @@ For a first-time setup, complete these steps in order:
 2. (Optional) Configure provider variables:
    - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Groq is the default.
    - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
-   - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `generation`/`autofix` = `llama-3.3-70b-versatile`, `validation`/`review` = `qwen/qwen3-32b`).
+   - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `openai/gpt-oss-120b` for every stage). If you point it at a non-reasoning model, remove the `*_reasoning_effort` keys from `config/models.yaml`.
    - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
 
 ### Per-workflow environment variable matrix
@@ -218,13 +218,13 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 
 ## Auto-Fix Token Budget
 
-The auto-fix stage constructs an LLM prompt from three sources — PR diff, review feedback, and current file contents. The total request size is capped to respect provider per-request limits (notably Groq on_demand's 12,000 TPM hard limit).
+The auto-fix stage constructs an LLM prompt from three sources — PR diff, review feedback, and current file contents. The total request size is capped to respect provider per-request limits (notably the 8,000 TPM free-tier limit of `openai/gpt-oss-120b` on Groq).
 
 Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `7400` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `12000 − system_tokens − max_output_tokens`. The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_max_input_tokens` | `3400` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0024). The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
 | `autofix_diff_ratio` | `0.45` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. |
 | `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents. |
 
@@ -232,8 +232,8 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Provider / Tier | Recommended `autofix_max_input_tokens` |
 |---|---|
-| Groq on_demand (`llama-3.3-70b-versatile`) | `7400` (default) |
-| Groq Dev Tier | Remove the key (no cap needed — 12k TPM limit applies per-minute, not per-request) |
+| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `3400` (default) |
+| Groq Developer plan | Raise or remove the key (TPM is far above a single request) |
 | Anthropic (`claude-opus-4-7`) | Remove the key (200k context window; no per-request TPM limit) |
 
 The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual token counts for each section:

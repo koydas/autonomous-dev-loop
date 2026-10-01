@@ -1,23 +1,33 @@
 # Default Groq model per pipeline.
 # Override at runtime with the GROQ_MODEL environment variable.
 # For Anthropic, set AI_PROVIDER=anthropic and optionally ANTHROPIC_MODEL.
+#
+# openai/gpt-oss-120b replaces qwen/qwen3-32b (retired 2026-07-17) and
+# llama-3.3-70b-versatile (retired 2026-08-16) (ADR-0024).
+# It is a reasoning model: reasoning tokens count toward max_tokens and TPM.
+# <stage>_reasoning_effort (low | medium | high) is sent to Groq only; drop it if
+# GROQ_MODEL points at a non-reasoning model, which rejects the parameter.
 
-validation:             qwen/qwen3-32b
+validation:             openai/gpt-oss-120b
 validation_temperature: 0
+validation_reasoning_effort: low
 
-generation:             llama-3.3-70b-versatile
+generation:             openai/gpt-oss-120b
 generation_temperature: 0
+generation_reasoning_effort: low
 
-review:                 qwen/qwen3-32b
+review:                 openai/gpt-oss-120b
 review_temperature:     0.6
+review_reasoning_effort: low
 
-autofix:                llama-3.3-70b-versatile
+autofix:                openai/gpt-oss-120b
 autofix_temperature:    0.2
+autofix_reasoning_effort: low
 autofix_max_tokens:     4096
-# Cap input tokens to stay within Groq on_demand TPM limit (12k).
-# Total sent = system (~460) + autofix_max_input_tokens + autofix_max_tokens ≈ 11,956.
-# Raise this value if you upgrade to Groq Dev Tier (higher TPM) or switch to Anthropic.
-autofix_max_input_tokens: 7400
+# Cap input tokens to stay within Groq free-tier TPM for openai/gpt-oss-120b (8k).
+# Total sent = system (~460) + autofix_max_input_tokens + autofix_max_tokens ≈ 7,956.
+# Raise this value on the Groq Developer plan (higher TPM) or when using Anthropic.
+autofix_max_input_tokens: 3400
 autofix_diff_ratio:     0.45
 autofix_feedback_ratio: 0.25
 

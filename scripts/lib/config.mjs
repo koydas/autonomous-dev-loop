@@ -102,7 +102,12 @@ export function loadLLMConfig(stage = 'generation') {
     throw new Error(`Invalid ratio config for stage "${stage}": autofix_diff_ratio (${diffRatio}) + autofix_feedback_ratio (${feedbackRatio}) must sum to less than 1.0`);
   }
 
-  return { provider, apiKey, model, apiUrl, temperature, maxTokens, maxInputTokens, diffRatio, feedbackRatio };
+  const reasoningEffort = GROQ_MODEL_DEFAULTS[`${stage}_reasoning_effort`] ?? GROQ_MODEL_DEFAULTS.reasoning_effort;
+  if (reasoningEffort !== undefined && !['low', 'medium', 'high'].includes(reasoningEffort)) {
+    throw new Error(`Invalid reasoning_effort for stage "${stage}": ${reasoningEffort} (must be low, medium or high)`);
+  }
+
+  return { provider, apiKey, model, apiUrl, temperature, maxTokens, maxInputTokens, diffRatio, feedbackRatio, reasoningEffort };
 }
 
 export function loadConfigFromEnv() {
@@ -110,7 +115,7 @@ export function loadConfigFromEnv() {
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
 
-  const { apiKey, model, apiUrl, temperature, maxTokens } = loadLLMConfig('generation');
+  const { apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort } = loadLLMConfig('generation');
 
   return {
     issueNumber,
@@ -121,6 +126,7 @@ export function loadConfigFromEnv() {
     apiUrl,
     temperature,
     maxTokens,
+    reasoningEffort,
   };
 }
 
