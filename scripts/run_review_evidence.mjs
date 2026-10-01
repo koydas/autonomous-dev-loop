@@ -5,6 +5,7 @@
  * Called by the secret-free `evidence` job in .github/workflows/pr-review.yml.
  *
  * Exits 0 whether checks pass or fail — results are data for the review, not a gate here.
+ * Exits 0 without writing evidence when the repo has no config (opt-in per repo; the review reports it as missing).
  * Exits 1 only when the evidence itself cannot be produced (invalid config, unknown HEAD).
  */
 import fs from 'node:fs';
@@ -25,7 +26,13 @@ obsLog({ stage: 'review_evidence', event: 'review_evidence.start', level: 'info'
 tracer.startSpan('review_evidence', { configPath });
 
 try {
-  if (!fs.existsSync(configPath)) throw new Error(`Review evidence config not found: ${configPath}`);
+  if (!fs.existsSync(configPath)) {
+    log('Review evidence skipped: no config', { configPath });
+    obsLog({ stage: 'review_evidence', event: 'review_evidence.complete', level: 'info', duration_ms: Date.now() - startMs, meta: { skipped: 'no config', configPath } });
+    tracer.endSpan('review_evidence', { outcome: 'success', meta: { skipped: 'no config' } });
+    await tracer.finalize('success');
+    process.exit(0);
+  }
   const checks = parseEvidenceConfig(fs.readFileSync(configPath, 'utf8'));
   const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 

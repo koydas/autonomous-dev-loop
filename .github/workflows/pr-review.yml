@@ -2,7 +2,8 @@ name: PR Review
 
 on:
   push:
-    branches: ["**"]
+    # main never has an open PR to review: skip it instead of paying for the evidence job.
+    branches: ["**", "!main"]
   pull_request:
     types: [opened]
 

@@ -838,3 +838,21 @@ test('pr_review sends the tool evidence block to the LLM', async () => {
     await fs.unlink(evidenceFile).catch(() => {});
   }
 });
+
+test('pr_review puts the evidence section before the LLM review when a check failed', async () => {
+  const { body } = await runWithEvidence({
+    groqContent: `${HEADING}\n\nLLM findings here.\n\nVerdict: REQUEST_CHANGES`,
+    checks: [EVIDENCE_FAIL],
+  });
+  assert.ok(body.startsWith(HEADING), 'heading stays first');
+  assert.equal(body.split(HEADING).length - 1, 1, 'heading appears once');
+  assert.ok(body.indexOf('### 🧪 Tool Evidence') < body.indexOf('LLM findings here.'), 'evidence must precede the LLM text');
+});
+
+test('pr_review keeps the evidence section after the LLM review when nothing failed', async () => {
+  const { body } = await runWithEvidence({
+    groqContent: 'LLM findings here.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_PASS],
+  });
+  assert.ok(body.indexOf('LLM findings here.') < body.indexOf('### 🧪 Tool Evidence'));
+});

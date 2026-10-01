@@ -81,17 +81,18 @@ The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_m
 `pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer.
 
 - **Isolation:** the `evidence` job has `permissions: contents: read`, checks out with `persist-credentials: false`, and receives no secrets. `run_review_evidence.mjs` also strips credential-like env vars (`TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL`) and env-injected git config (`GIT_CONFIG_*`) from each check's environment.
-- **Config:** `checks.<name>.command` (run via `bash -c`) and optional `checks.<name>.timeout_seconds` (default 300). Defaults for this repo: `npm test`, `npm run lint`.
-- **Results:** `pass` / `fail` (non-zero exit) / `timeout` / `error` (spawn failure), with exit code, duration and the last 2 000 output characters. Written to `evidence/review-evidence.json`, uploaded as artifact `review-evidence-<run_id>`.
+- **Config (opt-in per repo):** `checks.<name>.command` (run via `bash -c`; one pair of surrounding quotes is stripped, inline comments are rejected) and optional `checks.<name>.timeout_seconds` (default 300). Defaults for this repo: `npm test`, `npm run lint`. Without the file, the job exits 0 and the review reports the evidence as *missing*.
+- **No install step:** the job only checks out and sets up Node. A target repo with dependencies must install them in the command itself, e.g. `command: npm ci && npm test` — otherwise every check fails on missing modules and forces `REQUEST_CHANGES`.
+- **Results:** `pass` / `fail` (non-zero exit) / `timeout` / `error` (spawn failure, or exit 126/127: command not executable / not found), with exit code, duration and the last 2 000 output characters. Written to `evidence/review-evidence.json`, uploaded as artifact `review-evidence-<run_id>`.
 - **Review behavior:**
   - A `## Tool evidence` block is appended to the review prompt.
   - **Any `fail` forces `REQUEST_CHANGES`** in code, whatever the LLM verdict.
-  - A `### 🧪 Tool Evidence` section (status table + failing output tails) is appended to the review comment, which auto-fix reads as feedback.
+  - A `### 🧪 Tool Evidence` section (status table + failing output tails) is added to the review comment, which auto-fix reads as feedback — right after the heading when a check failed (auto-fix truncates from the end), appended otherwise.
 - **Degraded modes (never block the review, never override):**
   - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`).
   - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run).
   - `timeout` / `error` results — shown as unverified.
-- **Self-modification:** if the PR touches `config/review-evidence.yaml`, passing results are flagged as not authoritative in both the prompt and the comment.
+- **Self-modification:** if the PR touches a path that controls the evidence (`config/review-evidence.yaml`, `package.json`, `scripts/run_review_evidence.mjs`, `scripts/lib/review_evidence.mjs`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
 
 To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.
 
@@ -136,7 +137,20 @@ sequenceDiagram
     participant auto-fix-pr.yml
     participant PR
 
-
+    User->>Issue: open / edit
+    Issue->>validate-issue.yml: issues event
+    validate-issue.yml->>Issue: ready-for-dev or needs-refinement
+    Issue->>code-generation.yml: labeled ready-for-dev
+    code-generation.yml->>PR: open PR (branch ai/issue-N)
+    PR->>pr-review.yml: push / opened
+    Note over pr-review.yml: evidence job (no secrets) runs declared checks on the PR head
+    pr-review.yml->>PR: review comment + Tool Evidence, APPROVE or REQUEST_CHANGES (forced on any failing check)
+    alt changes-requested and attempt ≤ 3
+        PR->>auto-fix-pr.yml: labeled changes-requested
+        auto-fix-pr.yml->>PR: push fix(ai): auto-fix attempt N
+    else review-approved
+        PR->>User: human merge gate
+    end
 ```
 
 ## Observability
@@ -234,6 +248,7 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 - **Config** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
+- **Review evidence** (`scripts/lib/review_evidence.mjs`)
 
 ## Auto-Fix Token Budget
 
@@ -323,3 +338,4 @@ The repository enforces a minimum test coverage policy through CI using `c8 --ch
 - **Configuration** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
+- **Review evidence** (`scripts/lib/review_evidence.mjs`)

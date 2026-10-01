@@ -14,7 +14,7 @@ import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { parseEvidence, assessEvidence, isEvidenceConfigTouched, formatEvidenceContext, formatEvidenceSection } from './lib/review_evidence.mjs';
+import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
 const _reviewStartMs = Date.now();
@@ -196,7 +196,7 @@ const evidenceParse = fs.existsSync(evidencePath)
   : { ok: false, reason: `no evidence file at ${evidencePath}` };
 const evidence = assessEvidence(evidenceParse, {
   prHeadSha: prMeta?.head?.sha ?? null,
-  configTouched: isEvidenceConfigTouched(rawDiff),
+  touchedPaths: findTouchedEvidencePaths(rawDiff),
 });
 log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
 const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff, diffTruncated)}${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${formatEvidenceContext(evidence)}`;
@@ -225,7 +225,11 @@ const evidenceOverride = llmApproved && evidence.failing.length > 0;
 const isApproved = llmApproved && !evidenceOverride;
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-const body = `${reviewText}\n${formatEvidenceSection(evidence, { overridden: evidenceOverride })}`;
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride });
+// Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
+const body = evidence.failing.length > 0
+  ? `${HEADING}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
+  : `${reviewText}\n${evidenceSection}`;
 
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
 if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);

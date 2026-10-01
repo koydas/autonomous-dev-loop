@@ -41,6 +41,7 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 | File | Tests | What is covered |
 |------|-------|-----------------|
 | `scripts/lib/output_writer.mjs` | 30 | JSON parsing (fence-first, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), field validation, path safety (absolute paths, `..` traversal), 16 000-char size limit, type coercion |
+| `scripts/lib/review_evidence.mjs` | 60 | Config parsing (field-path errors, timeout validation, quote stripping, inline-comment rejection), env sanitization (per-segment credential names, `GIT_CONFIG_*` family), output tail and rolling buffer, `runCheck` (pass/fail/timeout/spawn error/exit 126-127/detached grandchild), evidence validation per field, staleness, touched trusted paths, fence and table-cell escaping, `run_review_evidence.mjs` end to end (write, skip without config, invalid config). CI-enforced ≥ 80% via c8 |
 | `scripts/lib/config.mjs` | 12 | `requireEnv` missing/empty vars, `loadConfigFromEnv` defaults and required fields, `buildDeterministicPrompt` output structure, `loadLabelsConfig` group resolution |
 | `scripts/lib/groq_client.mjs` | 7 | HTTP errors, non-JSON response, malformed `choices`, Authorization header, temperature payload |
 | `scripts/lib/anthropic_client.mjs` | 10 | HTTP errors, non-JSON response, malformed `content`, `x-api-key` header, `anthropic-version` header, temperature, `max_tokens`, system prompt placement |

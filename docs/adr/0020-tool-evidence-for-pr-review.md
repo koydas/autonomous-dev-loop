@@ -37,9 +37,13 @@ Executing PR code (LLM-generated, or from a contributor branch) is thereby kept 
 | `pass` | exit code 0 |
 | `fail` | non-zero exit code within the timeout |
 | `timeout` | killed after `timeout_seconds` |
-| `error` | could not be spawned |
+| `error` | could not be spawned, or exited 126/127 (command not executable / not found — a config problem, not a code failure) |
 
-Each result carries `exit_code`, `duration_ms`, and the last 2 000 characters of combined output (ANSI stripped).
+Each result carries `exit_code`, `duration_ms`, and the last 2 000 characters of combined output (ANSI stripped, kept in a rolling buffer). After the process exits — or is killed on timeout — its pipes get a 2 s grace period to close, so a detached grandchild holding them cannot hang the job.
+
+The config parser strips one pair of surrounding quotes from `command` and rejects anything else that starts with a quote: the flat YAML parser would otherwise keep quotes and inline comments in the command, which `bash -c` then fails to find (exit 127).
+
+The evidence config is **opt-in per repo**: without `config/review-evidence.yaml`, the job exits 0 without writing evidence (`review_evidence.complete` with `meta.skipped: "no config"`) and the review reports the evidence as *missing*. An invalid config still fails the job.
 
 ### 3. Review consumes evidence; failures override the verdict in code
 
@@ -52,14 +56,21 @@ Effects:
 
 1. An `## Tool evidence` block is appended to the LLM user prompt; the system prompt instructs the model to treat failing checks as authoritative and unverified ones as unknown.
 2. **Any failing check forces `REQUEST_CHANGES`**, regardless of the LLM verdict. This is enforced in code, not in the prompt.
-3. A deterministic `### 🧪 Tool Evidence` section is appended to the review comment (status table + output tail of failing checks). Auto-fix already reads that comment as feedback, so the failure output reaches the fixer verbatim.
+3. A deterministic `### 🧪 Tool Evidence` section is added to the review comment (status table + output tail of failing checks, in a fence longer than any backtick run in the output; table cells escape `|`). Auto-fix reads that comment as feedback and truncates it from the end, so when a check failed the section goes **right after the heading**, before the LLM text; otherwise it is appended.
 4. The `review.verdict` event gains `meta.evidence_state` and `meta.evidence_override`.
 
 `timeout` / `error` do not force a verdict: they are usually infrastructure, and forcing `REQUEST_CHANGES` would spend auto-fix attempts on something code cannot fix.
 
-### 4. Self-modification of the evidence config
+### 4. Self-modification of the evidence
 
-If the PR diff touches `config/review-evidence.yaml`, the checks ran under the PR's own config, so a `pass` is not authoritative (a generated patch could neuter a check). The prompt block and comment section say so explicitly; `fail` results still force `REQUEST_CHANGES`.
+The `evidence` job executes everything from the PR head, so the PR controls more than the config. `EVIDENCE_TRUSTED_PATHS` lists every path that decides what runs or how results are reported:
+
+- `config/review-evidence.yaml` — the commands
+- `package.json` — what `npm test` / `npm run lint` execute
+- `scripts/run_review_evidence.mjs`, `scripts/lib/review_evidence.mjs` — the runner and its status mapping
+- `.github/workflows/pr-review.yml` — the job itself
+
+If the PR diff touches any of them, its `pass` results are not authoritative (a generated patch could neuter a check — the realistic adversary is the code-gen or auto-fix LLM gaming its own checks). The prompt block and comment section name the touched paths; `fail` results still force `REQUEST_CHANGES`. Running the runner and config from the base ref, and only the commands against the PR tree, would close this fully — left as a follow-up.
 
 ## Alternatives Considered
 
@@ -79,6 +90,7 @@ If the PR diff touches `config/review-evidence.yaml`, the checks ran under the P
 - ✅ Natural home for ADR-0019's import-allowlist check: it becomes one more declared check.
 - ⚠️ Checks run twice per push (`test.yml` and `evidence`). Acceptable at the current suite duration (~6 s); revisit if it grows.
 - ⚠️ Adds one job (checkout + setup-node) to the review critical path.
-- ⚠️ Evidence runs on push events even when the branch has no open PR (the review then exits early). Accepted to keep the workflow YAML free of PR-resolution logic.
-- ⚠️ Commands come from config in the checked-out commit; see §4 for the self-modification mitigation. Reading the config from the base branch would close this fully but needs base-ref resolution on push events — left as a follow-up.
+- ⚠️ Evidence runs on push events even when the branch has no open PR (the review then exits early). Accepted to keep the workflow YAML free of PR-resolution logic; pushes to `main`, which never has an open PR, are excluded from the `push` trigger (`branches: ["**", "!main"]`).
+- ⚠️ Commands come from config in the checked-out commit; see §4 for the self-modification mitigation (flagged, not prevented).
+- ⚠️ The job has no install step: a target repo with dependencies must declare it in the command (`npm ci && npm test`), or every check fails on missing modules.
 - ⚠️ `timeout` / `error` results are visible but never block — a persistently hanging suite needs an operator, not auto-fix.

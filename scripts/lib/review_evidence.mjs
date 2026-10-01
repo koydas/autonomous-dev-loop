@@ -8,9 +8,24 @@ export const EVIDENCE_SCHEMA_VERSION = 1;
 export const EVIDENCE_CONFIG_PATH = 'config/review-evidence.yaml';
 export const DEFAULT_TIMEOUT_SECONDS = 300;
 export const OUTPUT_TAIL_CHARS = 2000;
+// Every path that decides what the evidence job runs or how it reports: a PR touching one of them
+// ran its checks under its own rules, so its passing results are not authoritative.
+export const EVIDENCE_TRUSTED_PATHS = [
+  EVIDENCE_CONFIG_PATH,
+  'package.json',
+  'scripts/run_review_evidence.mjs',
+  'scripts/lib/review_evidence.mjs',
+  '.github/workflows/pr-review.yml',
+];
+// Grace period after the process exits (or is killed) for its pipes to close; a grandchild that
+// left the process group can hold them open forever.
+export const CLOSE_GRACE_MS = 2000;
 
 const CHECK_STATUSES = new Set(['pass', 'fail', 'timeout', 'error']);
-const SECRET_ENV_PATTERN = /TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL/i;
+// Shell exit codes for "found but not executable" / "command not found": a config problem, not a code failure.
+const COMMAND_ERROR_EXIT_CODES = new Set([126, 127]);
+// Matched per `_`-separated name segment, so MONKEY_* or KEYBOARD_* survive.
+const SECRET_ENV_PATTERN = /(?:^|_)(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIALS?)(?:_|$)/i;
 // Env-injected git config (e.g. http.extraheader auth) is dropped as a whole family: removing only the
 // KEY_n entries the pattern above matches would leave GIT_CONFIG_COUNT dangling and make git fail.
 const GIT_CONFIG_ENV_PATTERN = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
@@ -27,7 +42,7 @@ export function parseEvidenceConfig(content) {
     throw new Error('Review evidence config must declare at least one check under `checks`');
   }
   return Object.entries(checks).map(([name, fields]) => {
-    const command = (fields.command ?? '').trim();
+    const command = unquoteCommand(name, (fields.command ?? '').trim());
     if (!command) throw new Error(`Missing review evidence config field: checks.${name}.command`);
     let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
     if (fields.timeout_seconds !== undefined) {
@@ -40,6 +55,17 @@ export function parseEvidenceConfig(content) {
     }
     return { name, command, timeoutMs: timeoutSeconds * 1000 };
   });
+}
+
+// The flat YAML parser keeps quotes and trailing comments as part of the value. Strip one pair of
+// matching surrounding quotes; reject anything else that starts with a quote (e.g. `"cmd" # note`).
+function unquoteCommand(name, raw) {
+  const quote = raw[0];
+  if (quote !== '"' && quote !== "'") return raw;
+  if (raw.length >= 2 && raw.at(-1) === quote) return raw.slice(1, -1).trim();
+  throw new Error(
+    `Invalid review evidence config field: checks.${name}.command has unbalanced quotes or a trailing comment (inline comments are not supported)`,
+  );
 }
 
 /** Drops env vars whose name looks like a credential, and env-injected git config, before handing env to PR code. */
@@ -58,19 +84,31 @@ export function tailOutput(text, maxChars = OUTPUT_TAIL_CHARS) {
 
 /**
  * Runs one check through `bash -c` in its own process group so a timeout kills the whole tree.
- * Never rejects: spawn failures resolve to status `error`.
+ * Never rejects: spawn failures and command-not-found resolve to status `error`.
  */
-export function runCheck(check, { spawnFn = spawn, env = process.env, cwd = process.cwd(), now = Date.now } = {}) {
+export function runCheck(
+  check,
+  { spawnFn = spawn, env = process.env, cwd = process.cwd(), now = Date.now, closeGraceMs = CLOSE_GRACE_MS } = {},
+) {
   const startedAt = now();
   return new Promise((resolve) => {
     let output = '';
     let timedOut = false;
     let settled = false;
     let timer;
+    let graceTimer;
+    // Rolling buffer: only the tail is reported, so a chatty suite must not grow memory unbounded.
+    const append = (d) => {
+      output += d;
+      if (output.length > 2 * OUTPUT_TAIL_CHARS) output = output.slice(-2 * OUTPUT_TAIL_CHARS);
+    };
     const finish = (status, exitCode) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
+      child?.stdout?.destroy?.();
+      child?.stderr?.destroy?.();
       resolve({
         name: check.name,
         command: check.command,
@@ -95,6 +133,18 @@ export function runCheck(check, { spawnFn = spawn, env = process.env, cwd = proc
       return;
     }
 
+    const conclude = (code) => {
+      if (timedOut) {
+        append(`\nTimed out after ${check.timeoutMs / 1000}s`);
+        finish('timeout', code);
+      } else if (COMMAND_ERROR_EXIT_CODES.has(code)) {
+        append(`\nCommand could not be executed (exit ${code}): check the command in the evidence config`);
+        finish('error', code);
+      } else {
+        finish(code === 0 ? 'pass' : 'fail', code);
+      }
+    };
+
     timer = setTimeout(() => {
       timedOut = true;
       try {
@@ -102,22 +152,20 @@ export function runCheck(check, { spawnFn = spawn, env = process.env, cwd = proc
       } catch {
         child.kill?.('SIGKILL');
       }
+      graceTimer = setTimeout(() => conclude(null), closeGraceMs);
     }, check.timeoutMs);
 
-    child.stdout?.on('data', (d) => (output += d));
-    child.stderr?.on('data', (d) => (output += d));
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
     child.on('error', (err) => {
-      output += `\n${err.message}`;
+      append(`\n${err.message}`);
       finish('error', null);
     });
-    child.on('close', (code) => {
-      if (timedOut) {
-        output += `\nTimed out after ${check.timeoutMs / 1000}s`;
-        finish('timeout', code);
-      } else {
-        finish(code === 0 ? 'pass' : 'fail', code);
-      }
+    child.on('exit', (code) => {
+      clearTimeout(graceTimer);
+      graceTimer = setTimeout(() => conclude(code), closeGraceMs);
     });
+    child.on('close', (code) => conclude(code));
   });
 }
 
@@ -156,19 +204,21 @@ export function parseEvidence(raw) {
   return { ok: true, evidence: data };
 }
 
-/** True when the PR diff modifies the evidence config itself. */
-export function isEvidenceConfigTouched(rawDiff, configPath = EVIDENCE_CONFIG_PATH) {
-  const escaped = configPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^diff --git a/${escaped} |^(?:---|\\+\\+\\+) [ab]/${escaped}$`, 'm').test(rawDiff ?? '');
+/** Returns the evidence-controlling paths (see EVIDENCE_TRUSTED_PATHS) that the PR diff modifies. */
+export function findTouchedEvidencePaths(rawDiff, paths = EVIDENCE_TRUSTED_PATHS) {
+  return paths.filter((p) => {
+    const escaped = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`^diff --git a/${escaped} |^(?:---|\\+\\+\\+) [ab]/${escaped}$`, 'm').test(rawDiff ?? '');
+  });
 }
 
 /**
  * Classifies evidence relative to the PR head under review.
  * state: `available` | `missing` | `stale`. Only `available` evidence can produce `failing` checks.
  */
-export function assessEvidence(parseResult, { prHeadSha = null, configTouched = false } = {}) {
+export function assessEvidence(parseResult, { prHeadSha = null, touchedPaths = [] } = {}) {
   if (!parseResult?.ok) {
-    return { state: 'missing', reason: parseResult?.reason ?? 'no evidence file', checks: [], failing: [], unverified: [], configTouched };
+    return { state: 'missing', reason: parseResult?.reason ?? 'no evidence file', checks: [], failing: [], unverified: [], touchedPaths };
   }
   const { evidence } = parseResult;
   if (prHeadSha && evidence.head_sha !== prHeadSha) {
@@ -178,7 +228,7 @@ export function assessEvidence(parseResult, { prHeadSha = null, configTouched = 
       checks: evidence.checks,
       failing: [],
       unverified: evidence.checks.map((c) => c.name),
-      configTouched,
+      touchedPaths,
     };
   }
   return {
@@ -187,12 +237,26 @@ export function assessEvidence(parseResult, { prHeadSha = null, configTouched = 
     checks: evidence.checks,
     failing: evidence.checks.filter((c) => c.status === 'fail').map((c) => c.name),
     unverified: evidence.checks.filter((c) => c.status === 'timeout' || c.status === 'error').map((c) => c.name),
-    configTouched,
+    touchedPaths,
   };
 }
 
-const CONFIG_TOUCHED_NOTE =
-  `This PR modifies \`${EVIDENCE_CONFIG_PATH}\`: the checks ran under the PR's own config, so a passing result is not authoritative.`;
+const touchedNote = (paths) =>
+  `This PR modifies ${paths.map((p) => `\`${p}\``).join(', ')}, which control how the checks run: a passing result is not authoritative.`;
+
+/** Code fence one backtick longer than any backtick run in `text`, so the content cannot close it. */
+export function fenceFor(text) {
+  const longest = Math.max(0, ...(String(text ?? '').match(/`+/g) ?? []).map((run) => run.length));
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
+const fenced = (text) => {
+  const f = fenceFor(text);
+  return [f, text ?? '', f];
+};
+
+// Markdown table cell: a pipe would split the row, a newline would end it.
+const cell = (text) => String(text ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 /** Prompt block appended to the review user prompt. */
 export function formatEvidenceContext(assessment) {
@@ -206,13 +270,13 @@ export function formatEvidenceContext(assessment) {
     lines.push(`- ${c.name} (\`${c.command}\`): ${c.status.toUpperCase()}${c.exit_code != null ? ` (exit ${c.exit_code})` : ''}`);
   }
   for (const c of assessment.checks.filter((x) => x.status === 'fail')) {
-    lines.push('', `Output tail of failing check \`${c.name}\`:`, '```', c.output_tail ?? '', '```');
+    lines.push('', `Output tail of failing check \`${c.name}\`:`, ...fenced(c.output_tail));
   }
-  if (assessment.configTouched) lines.push('', CONFIG_TOUCHED_NOTE);
+  if (assessment.touchedPaths.length) lines.push('', touchedNote(assessment.touchedPaths));
   return lines.join('\n');
 }
 
-/** Deterministic markdown section appended to the review comment. */
+/** Deterministic markdown section of the review comment (placed first when a check failed, see pr_review.mjs). */
 export function formatEvidenceSection(assessment, { overridden = false } = {}) {
   const lines = ['', '### 🧪 Tool Evidence'];
   if (assessment.state !== 'available') {
@@ -220,12 +284,12 @@ export function formatEvidenceSection(assessment, { overridden = false } = {}) {
   } else {
     lines.push('| Check | Command | Result |', '|---|---|---|');
     for (const c of assessment.checks) {
-      lines.push(`| ${c.name} | \`${c.command}\` | ${c.status.toUpperCase()}${c.exit_code != null ? ` (exit ${c.exit_code})` : ''} |`);
+      lines.push(`| ${cell(c.name)} | \`${cell(c.command)}\` | ${c.status.toUpperCase()}${c.exit_code != null ? ` (exit ${c.exit_code})` : ''} |`);
     }
     for (const c of assessment.checks.filter((x) => x.status === 'fail')) {
-      lines.push('', `<details><summary>Output tail — ${c.name}</summary>`, '', '```', c.output_tail ?? '', '```', '', '</details>');
+      lines.push('', `<details><summary>Output tail — ${cell(c.name)}</summary>`, '', ...fenced(c.output_tail), '', '</details>');
     }
-    if (assessment.configTouched) lines.push('', `> ⚠️ ${CONFIG_TOUCHED_NOTE}`);
+    if (assessment.touchedPaths.length) lines.push('', `> ⚠️ ${touchedNote(assessment.touchedPaths)}`);
   }
   if (overridden) {
     lines.push('', `> **Verdict overridden to REQUEST_CHANGES** — failing checks: ${assessment.failing.join(', ')}.`);
