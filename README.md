@@ -75,10 +75,11 @@ graph LR
     B -->|valid| C[Apply label: ready-for-dev]
     C --> D[Code Generation]
     D -->|API failure| D
-    D --> E[PR opened]
-    E --> F[PR Review]
+    D --> E[PR opened / push]
+    E --> EV[Evidence job<br/>no secrets]
+    EV -->|review-evidence.json| F[PR Review]
     F -->|APPROVE| G[Human merge gate]
-    F -->|REQUEST_CHANGES| H{Attempt ≤ 3?}
+    F -->|REQUEST_CHANGES<br/>forced on any failing check| H{Attempt ≤ 3?}
     H -->|Yes| I[Auto-Fix]
     I --> F
     H -->|No| J[Manual intervention requested]

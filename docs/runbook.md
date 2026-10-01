@@ -81,6 +81,11 @@ cat <run_id>.json | jq '[.spans[] | select(.outcome == "failed")]'
 | Generation run completes but no PR is created | Empty LLM output (no valid JSON patch); all generated paths failed safety check; `AI_PR_TOKEN` scope too narrow; **Allow GitHub Actions to create pull requests** disabled |
 | PR opens but files are wrong or empty | Prompt template issue (`generation-user.md` placeholders not resolved); model returned malformed JSON; `output_writer.mjs` rejected paths (absolute, `..` traversal, or a protected path — `.github/`, `scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `package.json`, lock files, `.npmrc`/`.yarnrc*`; see ADR-0021) |
 | `pr-review` never posts a comment | No open PR found for the push branch (exits silently by design); LLM API error; `pull-requests: write` permission missing |
+| Review comment shows **Verdict overridden to REQUEST_CHANGES** | A check in `config/review-evidence.yaml` exited non-zero on the PR head (ADR-0024) — expand the failing check's output tail in the `🧪 Tool Evidence` section; the fix belongs in the PR, not the review |
+| `🧪 Tool Evidence` says *missing* | The default branch has no `config/review-evidence.yaml` or no evidence runner yet (expected: evidence is opt-in and read from the default branch, the job logs `skipped: "no config"` or fails to find the script), the `evidence` job crashed (invalid config, see `review_evidence.error` in its log), or the artifact upload/download failed — review ran without evidence |
+| A check reports `ERROR (exit 127)` or `(exit 126)` | The command could not be executed: typo, binary not installed in the evidence job, or quotes/inline comment in `config/review-evidence.yaml` — fix the config; never forces `REQUEST_CHANGES` |
+| `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json` or `pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
+| `🧪 Tool Evidence` says *stale* | A push landed between the evidence run and the review's PR fetch; the review of the newer push will carry fresh evidence |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
 | Checkbox rerun (`- [x] Relancer Auto Fixer`) posted but no auto-fix triggered | Comment does not contain the exact text (case-insensitive alternatives: `rerun auto-fix`, `rerun auto fixer`); comment is on an issue that is **not** a PR; comment author's `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` (untrusted commenters are ignored by both the workflow `if:` and `auto_fix_pr.mjs`); `issue_comment` trigger not present in `auto-fix-pr.yml` |
@@ -156,6 +161,9 @@ Key steps to expand per workflow:
 | Review submit 422 warning | Enable **Allow GitHub Actions to create and approve pull requests**; comment and labels still apply — auto-fix can still trigger via the `changes-requested` label |
 | Review submit 500 | Transient GitHub API issue; re-push an empty commit to re-trigger: `git commit --allow-empty -m "re-trigger review" && git push` |
 | Re-pulse skipped (auto-fix already running) | Expected guard behavior; wait for the running auto-fix job to complete |
+| `evidence` job fails with `checks.<name>.command` / `timeout_seconds` error | Fix `config/review-evidence.yaml` (each check needs a `command`; `timeout_seconds` must be a positive integer) and push |
+| A check reports `TIMEOUT` on every run | Raise `checks.<name>.timeout_seconds` or investigate the hang — timeouts never force `REQUEST_CHANGES`, so auto-fix will not address them |
+| Override persists although the check passes locally | Evidence runs with credential-like env vars and `GIT_CONFIG_*` stripped — a check that depends on one of them will fail in CI only; make it independent of those variables |
 
 ### `auto-fix-pr`
 

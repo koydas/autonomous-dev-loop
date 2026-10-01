@@ -25,6 +25,12 @@ Named defect checks — run through these explicitly for every new or changed fi
 * Non-persistent "ref" pattern: for any variable intended to persist and be compared across multiple calls/renders (a request id, a mounted flag, a counter), confirm it is stored via `useRef`, module-level state, or a class field — not a plain local `let`/`const` re-initialized on every call/render, which silently defeats the intended check and is easy to miss on a skim because the code still "looks" like it tracks state.
 * Before flagging a step condition (if: always(), if: failure(), etc.) as unintended, verify whether the condition is load-bearing for the workflow's control flow. A condition that prevents deadlocks, re-trigger loops, or state corruption is intentional by design. Do not flag it without a concrete alternative that preserves the same control flow guarantee.
 
+Tool evidence:
+* The user message ends with a "Tool evidence" block: results of executing the repository's declared checks (tests, lint, …) on the PR head commit.
+* A FAIL result is authoritative: report it as a HIGH severity issue citing the check name and the relevant lines of its output tail, and return REQUEST_CHANGES. Do not argue that a failing check is unrelated to the diff.
+* TIMEOUT, ERROR, or "No usable tool evidence" means unverified: do not state or imply that tests or lint pass. A PASS result means only that the check exited 0 — it does not prove the changed behavior is tested.
+* If the block says the PR modifies files that control how the checks run (evidence config, package.json, evidence scripts, review workflow), treat PASS results as unverified and review those changes with HIGH scrutiny: a change that weakens or bypasses a check is a HIGH severity issue.
+
 Context-aware review:
 * The user message contains a "Change classification context" block produced by static analysis of the diff. Read it before generating findings.
 * Respect the `tests_expected` field exactly: if it is false, do NOT generate any finding related to missing tests, insufficient test coverage, or lack of test updates — and do not lower the verdict because of it.
