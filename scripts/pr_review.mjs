@@ -14,6 +14,7 @@ import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { parseEvidence, assessEvidence, isEvidenceConfigTouched, formatEvidenceContext, formatEvidenceSection } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
 const _reviewStartMs = Date.now();
@@ -189,7 +190,16 @@ const diffTruncated = filterDiff(rawDiff, Infinity).length > diff.length;
 
 const baseUserPrompt = interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: prBody });
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
-const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff, diffTruncated)}${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}`;
+const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
+const evidenceParse = fs.existsSync(evidencePath)
+  ? parseEvidence(fs.readFileSync(evidencePath, 'utf8'))
+  : { ok: false, reason: `no evidence file at ${evidencePath}` };
+const evidence = assessEvidence(evidenceParse, {
+  prHeadSha: prMeta?.head?.sha ?? null,
+  configTouched: isEvidenceConfigTouched(rawDiff),
+});
+log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
+const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff, diffTruncated)}${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${formatEvidenceContext(evidence)}`;
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
 
@@ -208,10 +218,14 @@ obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { o
 
 const HEADING = '## 🔍 Automated Code Review';
 const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
-const body = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-
 const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
-const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+const llmApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+// ADR-0020: a failing check blocks APPROVE in code, whatever the LLM concluded.
+const evidenceOverride = llmApproved && evidence.failing.length > 0;
+const isApproved = llmApproved && !evidenceOverride;
+
+const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
+const body = `${reviewText}\n${formatEvidenceSection(evidence, { overridden: evidenceOverride })}`;
 
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
 if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
@@ -339,7 +353,7 @@ obsLog({
   event: 'review.verdict',
   level: 'info',
   duration_ms: reviewDurationMs,
-  meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles, prNumber },
+  meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');

@@ -76,6 +76,25 @@ Motivated by a benchmark session where a local coding model's generated diff —
 
 The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
 
+## Tool Evidence for Review (ADR-0020)
+
+`pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer.
+
+- **Isolation:** the `evidence` job has `permissions: contents: read`, checks out with `persist-credentials: false`, and receives no secrets. `run_review_evidence.mjs` also strips credential-like env vars (`TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL`) and env-injected git config (`GIT_CONFIG_*`) from each check's environment.
+- **Config:** `checks.<name>.command` (run via `bash -c`) and optional `checks.<name>.timeout_seconds` (default 300). Defaults for this repo: `npm test`, `npm run lint`.
+- **Results:** `pass` / `fail` (non-zero exit) / `timeout` / `error` (spawn failure), with exit code, duration and the last 2 000 output characters. Written to `evidence/review-evidence.json`, uploaded as artifact `review-evidence-<run_id>`.
+- **Review behavior:**
+  - A `## Tool evidence` block is appended to the review prompt.
+  - **Any `fail` forces `REQUEST_CHANGES`** in code, whatever the LLM verdict.
+  - A `### 🧪 Tool Evidence` section (status table + failing output tails) is appended to the review comment, which auto-fix reads as feedback.
+- **Degraded modes (never block the review, never override):**
+  - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`).
+  - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run).
+  - `timeout` / `error` results — shown as unverified.
+- **Self-modification:** if the PR touches `config/review-evidence.yaml`, passing results are flagged as not authoritative in both the prompt and the comment.
+
+To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.
+
 ## End-to-End Test
 
 1. Ensure secrets above are configured.

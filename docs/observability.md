@@ -85,8 +85,20 @@ If `meta.file` is absent, the annotation has no file reference.
 | `review.start`     | info   | —             | `prNumber`, `model`                                      |
 | `review.llm_request` | info | —             | `model`, `input_tokens_est`, `prNumber`                  |
 | `review.llm_response`| info | —             | `output_tokens_est`, `prNumber`                          |
-| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"`), `attempt`, `prNumber` |
+| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override` |
 | `review.error`     | error  | —             | `error`                                                  |
+
+### `review_evidence`
+
+Emitted by `run_review_evidence.mjs` in the `evidence` job of `pr-review.yml` (ADR-0020).
+
+| Event                       | Level | `duration_ms` | Key `meta` fields                                  |
+|-----------------------------|-------|---------------|----------------------------------------------------|
+| `review_evidence.start`     | info  | —             | `configPath`                                       |
+| `review_evidence.complete`  | info  | ✓             | `headSha`, `checks` (map of check name → status)   |
+| `review_evidence.error`     | error | ✓             | `error`                                            |
+
+The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trace is written to `observability/traces/<GITHUB_RUN_ID>-evidence.json` and uploaded as `run-trace-<GITHUB_RUN_ID>-evidence` to avoid overwriting the review trace.
 
 ### `autofix`
 

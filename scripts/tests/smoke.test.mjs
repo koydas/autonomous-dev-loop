@@ -25,6 +25,9 @@ import {
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from '../lib/output_writer.mjs';
 import { buildDeterministicPrompt } from '../lib/config.mjs';
 import { createTracer } from '../lib/observability.mjs';
+import { parseEvidenceConfig } from '../lib/review_evidence.mjs';
+
+const ROOT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const PIPELINE_STAGES = ['validation', 'generation', 'review', 'autofix'];
 const ALL_PROMPTS = [
@@ -86,6 +89,12 @@ test('labels.yaml: issue group has valid and invalid labels with required fields
     assert.ok(issueLabels[key].color, `Expected issue.${key}.color`);
     assert.ok(issueLabels[key].description, `Expected issue.${key}.description`);
   }
+});
+
+test('review-evidence.yaml: declares at least one check with a command', async () => {
+  const checks = parseEvidenceConfig(await fs.readFile(path.join(ROOT_DIR, 'config/review-evidence.yaml'), 'utf8'));
+  assert.ok(checks.length > 0);
+  for (const c of checks) assert.ok(c.command, `Expected checks.${c.name}.command`);
 });
 
 test('labels.yaml: review group has approved and changes labels', () => {

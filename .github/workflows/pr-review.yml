@@ -13,7 +13,48 @@ permissions:
   actions: write
 
 jobs:
+  # ADR-0020: executes PR code with no secrets and a read-only token; the review job consumes the results.
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run review evidence checks
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node scripts/run_review_evidence.mjs
+
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-evidence-${{ github.run_id }}
+          path: ./evidence/review-evidence.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload evidence run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-evidence
+          path: ./observability/traces/${{ github.run_id }}-evidence.json
+          if-no-files-found: ignore
+          overwrite: true
+
   review:
+    needs: evidence
+    # A crashed evidence job degrades the review (evidence "missing"), it never blocks it.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -77,6 +118,13 @@ jobs:
           run-id: ${{ steps.fix_run.outputs.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ./checkpoints
+
+      - name: Download review evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: review-evidence-${{ github.run_id }}
+          path: ./evidence
 
       - name: Capture metrics baseline
         id: mbl

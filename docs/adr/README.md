@@ -23,3 +23,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0017: Configurable per-stage token budget in `config/models.yaml`](./0017-configurable-token-budget.md)
 - [ADR-0018: Structured observability — JSON events to stderr + per-run trace files](./0018-structured-observability.md)
 - [ADR-0019: Static verification backstop for generated code (proposal)](./0019-static-verification-backstop.md)
+- [ADR-0020: Tool evidence for PR review](./0020-tool-evidence-for-pr-review.md)
