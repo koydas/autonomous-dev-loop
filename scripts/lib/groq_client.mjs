@@ -24,6 +24,7 @@ export async function callGroq({
   temperature = 0,
   maxTokens,
   responseFormat = { type: 'json_object' },
+  reasoningEffort,
 }) {
   const parsed = parseInt(process.env.GROQ_MAX_RETRIES, 10);
   const maxAttempts = (Number.isFinite(parsed) && parsed >= 0 ? parsed : 3) + 1;
@@ -43,6 +44,10 @@ export async function callGroq({
   }
   if (responseFormat) {
     payload.response_format = responseFormat;
+  }
+  // Only reasoning models (e.g. openai/gpt-oss-120b) accept it; others reject the parameter.
+  if (reasoningEffort) {
+    payload.reasoning_effort = reasoningEffort;
   }
 
   const rawText = await retryWithBackoff(async () => {

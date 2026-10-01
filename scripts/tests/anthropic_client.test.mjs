@@ -144,3 +144,14 @@ test('callAnthropic rethrows the network error after exhausting retries', async 
     globalThis.setTimeout = origSetTimeout;
   }
 });
+
+test('callAnthropic does not forward reasoningEffort (Groq-only parameter)', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ content: [{ type: 'text', text: '{}' }] });
+  };
+  await callAnthropic({ ...BASE_ARGS, reasoningEffort: 'low' });
+  assert.equal('reasoning_effort' in capturedBody, false);
+  assert.equal('reasoningEffort' in capturedBody, false);
+});

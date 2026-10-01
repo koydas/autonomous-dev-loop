@@ -1,7 +1,7 @@
 # ADR-0005: Switch Groq default model to Qwen3 and per-stage temperature strategy
 
 - **Date:** 2026-04-27
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0025](./0025-groq-gpt-oss-120b.md)
 
 ## Context
 

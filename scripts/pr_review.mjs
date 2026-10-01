@@ -40,7 +40,7 @@ process.on('unhandledRejection', async (reason) => {
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens } = loadLLMConfig('review');
+const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens, reasoningEffort } = loadLLMConfig('review');
 const systemPrompt = loadPrompt('pr-review-system');
 const userPromptTemplate = loadPrompt('pr-review-user');
 
@@ -229,6 +229,7 @@ const rawReview = await callLLM({
   temperature,
   maxTokens: llmMaxTokens,
   responseFormat: null,
+  reasoningEffort,
 });
 
 obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { output_tokens_est: estimateTokens(rawReview), prNumber } });

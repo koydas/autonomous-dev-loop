@@ -28,3 +28,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0022: HTTP-aware retry policy for GitHub and LLM calls](./0022-github-api-retry-policy.md)
 - [ADR-0023: Execute pipeline code from the default branch](./0023-trusted-pipeline-execution.md)
 - [ADR-0024: Tool evidence for PR review](./0024-tool-evidence-for-pr-review.md)
+- [ADR-0025: Switch Groq defaults to `openai/gpt-oss-120b` with per-stage reasoning effort](./0025-groq-gpt-oss-120b.md)

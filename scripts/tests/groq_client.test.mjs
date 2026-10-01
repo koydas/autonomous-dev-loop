@@ -285,3 +285,23 @@ test('callGroq honors LLM_MAX_RETRY_WAIT_MS for short-timeout jobs', async () =>
     delete process.env.LLM_MAX_RETRY_WAIT_MS;
   }
 });
+
+test('callGroq sends reasoning_effort when reasoningEffort is set', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  await callGroq({ ...BASE_ARGS, reasoningEffort: 'low' });
+  assert.equal(capturedBody.reasoning_effort, 'low');
+});
+
+test('callGroq omits reasoning_effort when reasoningEffort is not set (non-reasoning models reject it)', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  await callGroq(BASE_ARGS);
+  assert.equal('reasoning_effort' in capturedBody, false);
+});
