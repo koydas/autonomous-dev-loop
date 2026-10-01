@@ -6,11 +6,11 @@
 
 Label an issue → an LLM writes the PR → a second LLM reviews it against real test/lint results → an auto-fix agent addresses the findings → **you** merge. Runs entirely on GitHub Actions; Groq (`openai/gpt-oss-120b`) by default, Anthropic optional.
 
-> Built after the auto-fix agent, asked to fix one review finding, replaced a 690-line suite of 26 tests with an 18-line Jest stub that couldn't run, then rewrote an ESM module with `require()` and a changed exported signature ([ADR-0009](docs/adr/0009-llm-agent-guardrails.md)). Every boundary below exists because of an incident like that.
+> Asked to fix one review finding, the auto-fix agent replaced a 690-line, 26-test suite with an 18-line stub that couldn't run ([ADR-0009](docs/adr/0009-llm-agent-guardrails.md)). Each boundary below links to the ADR recording the incident or exposure that forced it.
 
 | | |
 |---|---|
-| **Dogfooded** | 11 of this repo's own features were [opened by the loop](https://github.com/koydas/autonomous-dev-loop/pulls?q=is%3Apr+%22%5BAI%5D+Issue%22+is%3Amerged) and merged after human review — error taxonomy, bounded retry, checkpoint resume, idempotent labels, provider fallback |
+| **Dogfooded** | The loop wrote [13 merged PRs of its own](https://github.com/koydas/autonomous-dev-loop/pulls?q=is%3Apr+is%3Amerged+head%3Aai%2Fissue-) (11 features, 2 bug fixes — error taxonomy, bounded retry, checkpoint resume, provider fallback), each merged after human review. Then it was locked out of its own code: `scripts/`, `prompts/` and `config/` are now on the write denylist ([ADR-0021](docs/adr/0021-protected-write-path-denylist.md)). |
 | **Tested** | 800+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
 | **Decided in writing** | [25 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
 
@@ -20,7 +20,7 @@ Prompts are advice; an LLM can ignore them. So the loop separates what it *asks*
 
 | Enforced in code / CI | Where |
 |---|---|
-| The review verdict is forced to `REQUEST_CHANGES` when any declared check (tests, lint) fails on the PR head — the model cannot approve red code | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
+| The review verdict is forced to `REQUEST_CHANGES` when any declared check (here: the test suite and a `node --check` syntax pass) fails on the PR head. A check that times out or crashes, or evidence that is missing or stale, is reported as unverified and does **not** block approval | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
 | PR code runs in a job holding **no secrets** (`contents: read`, no persisted credentials, credential-like env vars stripped) | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
 | Pipeline scripts, prompts and config always run from the **default branch** — a PR cannot rewrite the code that reviews it | [ADR-0023](docs/adr/0023-trusted-pipeline-execution.md) |
 | Write denylist: the model cannot touch `.github/`, `scripts/`, `prompts/`, `config/`, lockfiles, `.npmrc`, or escape via symlinks | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) |
