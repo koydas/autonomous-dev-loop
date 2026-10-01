@@ -96,7 +96,7 @@ The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_m
   - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run);
   - *unverified* — a check ended in `timeout` or `error`.
 
-  The review is posted as `COMMENT`, `review-withheld` is applied instead of `review-approved` or `changes-requested` (auto-fix is not triggered; the next verdict clears it), and the comment says **Approval withheld** with the reason. Push again or re-run `pr-review` once the cause is fixed. Without `config/review-evidence.yaml` (evidence not opted in), missing evidence does not withhold approval.
+  The review is posted as `COMMENT`, `review-withheld` is applied instead of `review-approved` or `changes-requested` (auto-fix is not triggered; the next verdict clears it), and the comment says **Approval withheld** with the reason. Push again or re-run `pr-review` once the cause is fixed. Without `config/review-evidence.yaml` (evidence not opted in), missing evidence does not withhold approval. Unit-test coverage: 100% of verdicts (`decideVerdict()` branches and the `pr_review.mjs` verdict → review event and labels mapping; AGENTS.md, Test Coverage Policy).
 - **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
 
 To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.
