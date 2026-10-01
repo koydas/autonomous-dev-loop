@@ -1,4 +1,4 @@
-# ADR-0024: Switch Groq defaults to `openai/gpt-oss-120b` with per-stage reasoning effort
+# ADR-0025: Switch Groq defaults to `openai/gpt-oss-120b` with per-stage reasoning effort
 
 - **Date:** 2026-10-01
 - **Status:** Accepted
@@ -43,7 +43,7 @@ Assumption: the repository runs on Groq's **free tier**, as ADR-0017 assumed for
 - ✅ The Groq path works again with a supported model; a test fails if any stage defaults to a retired model.
 - ✅ Reasoning effort is explicit, per stage, and validated.
 - ⚠️ On the free tier, auto-fix sees less than half the previous input budget (3,000 tokens): long diffs and feedback are truncated earlier.
-- ⚠️ Free-tier 8K TPM is marginal for `review` (~6.5K prompt tokens) and `generation` (no input cap): large PRs or issues can hit `413`/`429`. The Developer plan or Anthropic is the durable fix.
+- ⚠️ Free-tier 8K TPM is marginal for `review` (~6.5K prompt tokens) and `generation` (no input cap): large PRs or issues can hit `413`/`429`. Tool evidence (ADR-0024) adds up to 2,000 chars of output tail per failing check to the review prompt (~1K tokens with the two default checks), so a review with failing checks is the most likely to exceed 8K. The Developer plan or Anthropic is the durable fix.
 - ⚠️ If `GROQ_MODEL` points at a non-reasoning model, set `GROQ_REASONING_EFFORT=off`, or Groq rejects the request with 400.
 - ⚠️ `review` output is capped at 1,024 tokens (reasoning included); a long review can be cut before its verdict line and then counts as `REQUEST_CHANGES`.
 - ⚠️ Shutdown dates (2026-07-17, 2026-08-16), the recommended replacement and the 8K TPM / 30 RPM / 200K TPD free-tier limits were cross-checked against Groq's deprecations page as indexed by search and several independent reports; the console itself was not reachable from the authoring environment. Re-check https://console.groq.com/docs/deprecations and the account's limits page if a 413/429 pattern appears.

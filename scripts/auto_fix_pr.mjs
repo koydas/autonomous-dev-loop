@@ -33,9 +33,9 @@ const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
 const TOKEN_SAFETY_MARGIN = 200;
 
 const MODEL_CONTEXT_WINDOW = {
-  'qwen/qwen3-32b': 32768, // retired by Groq 2026-07-17 (ADR-0024)
+  'qwen/qwen3-32b': 32768, // retired by Groq 2026-07-17 (ADR-0025)
   'llama-3.1-8b-instant': 32768,
-  'llama-3.3-70b-versatile': 131072, // retired by Groq 2026-08-16 (ADR-0024)
+  'llama-3.3-70b-versatile': 131072, // retired by Groq 2026-08-16 (ADR-0025)
   'openai/gpt-oss-120b': 131072,
   'claude-opus-4-7': 200000,
   'claude-sonnet-4-6': 200000,

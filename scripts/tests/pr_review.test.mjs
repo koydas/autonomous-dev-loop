@@ -56,6 +56,7 @@ function makeHandler({
   autoFixRunsQueued = [],
   autoFixRunsPending = [],
   prHeadRef = 'feature/test',
+  prHeadSha = 'a'.repeat(40),
   autoFixRunsStatus = 200,
 } = {}) {
   return (req, res) => {
@@ -72,7 +73,7 @@ function makeHandler({
         return res.end(diffStatus < 300 ? SAMPLE_DIFF : 'Forbidden');
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ title: 'Test PR', body: 'Test PR body', head: { ref: prHeadRef } }));
+      return res.end(JSON.stringify({ title: 'Test PR', body: 'Test PR body', head: { ref: prHeadRef, sha: prHeadSha } }));
     }
 
     if (method === 'GET' && url.includes('/issues/') && url.includes('/comments')) {
@@ -140,6 +141,8 @@ async function runPrReview(port, eventFile, extraEnv = {}) {
     GITHUB_API_URL: `http://127.0.0.1:${port}`,
     ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
     METRICS_FILE: '/dev/null',
+    // Isolate from any evidence/ directory left in the repo by a local run.
+    REVIEW_EVIDENCE_PATH: path.join(os.tmpdir(), 'pr-review-no-evidence.json'),
     ...extraEnv,
   };
   return new Promise((resolve) => {
@@ -858,4 +861,119 @@ test('pr_review sends the configured reasoning_effort to Groq', async () => {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
   }
+});
+
+// --- Tool evidence (ADR-0024) ---
+
+async function writeEvidenceFile(checks, headSha = 'a'.repeat(40)) {
+  const file = path.join(os.tmpdir(), `pr-review-evidence-${Date.now()}-${Math.random()}.json`);
+  await fs.writeFile(file, JSON.stringify({ version: 1, head_sha: headSha, generated_at: 't', checks }));
+  return file;
+}
+
+const EVIDENCE_PASS = { name: 'tests', command: 'npm test', status: 'pass', exit_code: 0, duration_ms: 1, output_tail: 'ok' };
+const EVIDENCE_FAIL = { name: 'tests', command: 'npm test', status: 'fail', exit_code: 1, duration_ms: 1, output_tail: 'AssertionError: expected 2' };
+
+async function runWithEvidence({ groqContent, checks, evidenceSha }) {
+  const server = await startMockServer(makeHandler({ groqContent }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile(checks, evidenceSha);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: evidenceFile });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
+    );
+    return { result, event: JSON.parse(review.body).event, body: JSON.parse(comment.body).body };
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
+  }
+}
+
+test('pr_review overrides APPROVED to REQUEST_CHANGES when a check failed', async () => {
+  const { event, body, result } = await runWithEvidence({
+    groqContent: 'Looks fine.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_FAIL],
+  });
+  assert.equal(event, 'REQUEST_CHANGES');
+  assert.match(body, /Verdict overridden to REQUEST_CHANGES\*\* — failing checks: tests/);
+  assert.match(body, /AssertionError: expected 2/);
+  assert.match(result.stderr, /"evidence_override":true/);
+});
+
+test('pr_review keeps APPROVE and renders the evidence table when all checks pass', async () => {
+  const { event, body } = await runWithEvidence({
+    groqContent: 'Looks fine.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_PASS],
+  });
+  assert.equal(event, 'APPROVE');
+  assert.match(body, /### 🧪 Tool Evidence/);
+  assert.match(body, /\| tests \| `npm test` \| PASS \(exit 0\) \|/);
+  assert.doesNotMatch(body, /Verdict overridden/);
+});
+
+test('pr_review does not override when evidence is stale (head SHA mismatch)', async () => {
+  const { event, body } = await runWithEvidence({
+    groqContent: 'Looks fine.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_FAIL],
+    evidenceSha: 'b'.repeat(40),
+  });
+  assert.equal(event, 'APPROVE');
+  assert.match(body, /No usable tool evidence — stale/);
+});
+
+test('pr_review renders a missing-evidence notice when no evidence file exists', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Fine.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
+    );
+    assert.match(JSON.parse(comment.body).body, /No usable tool evidence — missing: no evidence file at/);
+    assert.match(result.stderr, /"evidence_state":"missing"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review sends the tool evidence block to the LLM', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Verdict: REQUEST_CHANGES' }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile([EVIDENCE_FAIL]);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: evidenceFile });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const llmCall = server.requests.find((r) => r.url === '/v1/messages');
+    const prompt = JSON.stringify(JSON.parse(llmCall.body).messages);
+    assert.match(prompt, /## Tool evidence/);
+    assert.match(prompt, /tests \(`npm test`\): FAIL \(exit 1\)/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
+  }
+});
+
+test('pr_review puts the evidence section before the LLM review when a check failed', async () => {
+  const { body } = await runWithEvidence({
+    groqContent: `${HEADING}\n\nLLM findings here.\n\nVerdict: REQUEST_CHANGES`,
+    checks: [EVIDENCE_FAIL],
+  });
+  assert.ok(body.startsWith(HEADING), 'heading stays first');
+  assert.equal(body.split(HEADING).length - 1, 1, 'heading appears once');
+  assert.ok(body.indexOf('### 🧪 Tool Evidence') < body.indexOf('LLM findings here.'), 'evidence must precede the LLM text');
+});
+
+test('pr_review keeps the evidence section after the LLM review when nothing failed', async () => {
+  const { body } = await runWithEvidence({
+    groqContent: 'LLM findings here.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_PASS],
+  });
+  assert.ok(body.indexOf('LLM findings here.') < body.indexOf('### 🧪 Tool Evidence'));
 });

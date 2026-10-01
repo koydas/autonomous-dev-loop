@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs'];
 
-test('test.yml enforces c8 coverage for all four critical modules', () => {
+test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
     assert.ok(workflow.includes(`scripts/lib/${mod}`), `Missing coverage gate for ${mod}`);
   }
@@ -35,6 +35,7 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['config.mjs', 'config.test.mjs'],
     ['llm_client.mjs', 'llm_client.test.mjs'],
     ['output_writer.mjs', 'output_writer.test.mjs'],
+    ['review_evidence.mjs', 'review_evidence.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -172,8 +173,23 @@ test('auto-fix-pr.yml load-labels job executes default-branch code only', () => 
 test('pr-review.yml does not persist credentials in the PR-branch checkout', () => {
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
   const checkouts = text.match(/uses: actions\/checkout@v4(\n\s+with:(\n\s{10}.+)+)?/g) ?? [];
-  assert.equal(checkouts.length, 2);
+  // review and evidence jobs (ADR-0024): PR branch + trusted pipeline each.
+  assert.equal(checkouts.length, 4);
   for (const c of checkouts) assert.match(c, /persist-credentials: false/);
+});
+
+test('pr-review.yml evidence job runs PR checks without secrets, from the trusted pipeline (ADR-0024)', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+  const evidence = text.slice(text.indexOf('\n  evidence:\n'), text.indexOf('\n  review:\n'));
+  assert.ok(evidence.length > 0, 'expected an evidence job before the review job');
+  assert.match(evidence, /\n    permissions:\n      contents: read\n/);
+  assert.ok(!/secrets\./.test(evidence), 'evidence job must not reference secrets');
+  assert.match(evidence, /node "\$RUNNER_TEMP\/pipeline\/scripts\/run_review_evidence\.mjs"/);
+  assert.match(evidence, /REVIEW_EVIDENCE_PATH: \$\{\{ runner\.temp \}\}\//, 'evidence must be written outside the checkout');
+  const review = text.slice(text.indexOf('\n  review:\n'));
+  assert.match(review, /needs: evidence/);
+  assert.match(review, /if: \$\{\{ !cancelled\(\) \}\}/);
+  assert.match(review, /REVIEW_EVIDENCE_PATH: \$\{\{ runner\.temp \}\}\//, 'review must read evidence from outside the checkout');
 });
 
 test('workflows that run PR code without secrets use a read-only token', () => {

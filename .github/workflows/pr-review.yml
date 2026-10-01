@@ -2,7 +2,8 @@ name: PR Review
 
 on:
   push:
-    branches: ["**"]
+    # main never has an open PR to review: skip it instead of paying for the evidence job.
+    branches: ["**", "!main"]
   pull_request:
     types: [opened]
 
@@ -18,7 +19,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ADR-0024: executes PR code with no secrets and a read-only token; the review job consumes the results.
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      # ADR-0023: the runner and its config come from the default branch; the PR tree is only checked.
+      - name: Checkout trusted pipeline (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      - name: Move trusted pipeline out of the workspace
+        run: mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run review evidence checks
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          # Outside the checkout: the PR tree must not be able to ship or overwrite its own evidence file.
+          REVIEW_EVIDENCE_PATH: ${{ runner.temp }}/evidence/review-evidence.json
+        run: node "$RUNNER_TEMP/pipeline/scripts/run_review_evidence.mjs"
+
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/review-evidence.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload evidence run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-evidence
+          path: ./observability/traces/${{ github.run_id }}-evidence.json
+          if-no-files-found: ignore
+          overwrite: true
+
   review:
+    needs: evidence
+    # A crashed evidence job degrades the review (evidence "missing"), it never blocks it.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -96,9 +151,17 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ./checkpoints
 
+      - name: Download review evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: review-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+
       - name: Run automated review
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
+          REVIEW_EVIDENCE_PATH: ${{ runner.temp }}/evidence/review-evidence.json
           METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
           # timeout-minutes: 2 — never wait out long LLM rate limits here (ADR-0022).
           LLM_MAX_RETRY_WAIT_MS: '10000'

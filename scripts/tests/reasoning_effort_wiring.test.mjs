@@ -1,4 +1,4 @@
-// ADR-0024: validate_issue and generate_issue_change must forward the stage config
+// ADR-0025: validate_issue and generate_issue_change must forward the stage config
 // (model, max_tokens, reasoning_effort) to Groq. pr_review and auto_fix_pr are covered
 // in their own test files.
 import { test } from 'node:test';

@@ -3,7 +3,7 @@
 # For Anthropic, set AI_PROVIDER=anthropic and optionally ANTHROPIC_MODEL.
 #
 # openai/gpt-oss-120b replaces qwen/qwen3-32b (retired 2026-07-17) and
-# llama-3.3-70b-versatile (retired 2026-08-16) (ADR-0024).
+# llama-3.3-70b-versatile (retired 2026-08-16) (ADR-0025).
 # It is a reasoning model: reasoning tokens count toward max_tokens and TPM.
 # <stage>_reasoning_effort (low | medium | high) is sent to Groq only; drop it if
 # GROQ_MODEL points at a non-reasoning model, which rejects the parameter, or set

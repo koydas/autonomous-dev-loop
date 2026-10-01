@@ -391,7 +391,7 @@ test('loadLLMConfig rejects temperature 2.0001', () => {
   }
 });
 
-// ADR-0024: Groq retired qwen/qwen3-32b (2026-07-17) and llama-3.3-70b-versatile (2026-08-16).
+// ADR-0025: Groq retired qwen/qwen3-32b (2026-07-17) and llama-3.3-70b-versatile (2026-08-16).
 const RETIRED_GROQ_MODELS = ['qwen/qwen3-32b', 'llama-3.3-70b-versatile'];
 
 test('no pipeline stage defaults to a Groq model that has been retired', () => {

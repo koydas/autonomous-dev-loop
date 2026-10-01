@@ -1,6 +1,6 @@
 # Code Generation MVP Setup
 
-This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: all four stages (`validation`, `generation`, `review`, `autofix`) use `openai/gpt-oss-120b` with `reasoning_effort: low` (ADR-0024). Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
+This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: all four stages (`validation`, `generation`, `review`, `autofix`) use `openai/gpt-oss-120b` with `reasoning_effort: low` (ADR-0025). Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Quick Start (Operator)
 
@@ -13,7 +13,7 @@ For a first-time setup, complete these steps in order:
    - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Groq is the default.
    - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
    - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `openai/gpt-oss-120b` for every stage). If you point it at a non-reasoning model, also set `GROQ_REASONING_EFFORT=off`.
-   - `GROQ_REASONING_EFFORT` — `low` | `medium` | `high` overrides `<stage>_reasoning_effort` for every stage; `off` stops sending `reasoning_effort` (required for non-reasoning `GROQ_MODEL` overrides). Unset: per-stage values from `config/models.yaml` (ADR-0024).
+   - `GROQ_REASONING_EFFORT` — `low` | `medium` | `high` overrides `<stage>_reasoning_effort` for every stage; `off` stops sending `reasoning_effort` (required for non-reasoning `GROQ_MODEL` overrides). Unset: per-stage values from `config/models.yaml` (ADR-0025).
    - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
 
 ### Per-workflow environment variable matrix
@@ -77,6 +77,26 @@ Motivated by a benchmark session where a local coding model's generated diff —
 
 The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
 
+## Tool Evidence for Review (ADR-0024)
+
+`pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer. Per ADR-0023, the runner and its config come from the default branch (`$RUNNER_TEMP/pipeline`); the PR tree is only the working directory the checks run in.
+
+- **Isolation:** the `evidence` job has `permissions: contents: read`, checks out with `persist-credentials: false`, and receives no secrets. `run_review_evidence.mjs` also strips credential-like env vars (name segment `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD`, `CREDENTIAL(S)`) and env-injected git config (`GIT_CONFIG_*`) from each check's environment.
+- **Config (opt-in per repo):** `checks.<name>.command` (run via `bash -c`; one pair of surrounding quotes is stripped, inline comments are rejected) and optional `checks.<name>.timeout_seconds` (default 300). Defaults for this repo: `npm test`, `npm run lint`. Without the file, the job exits 0 and the review reports the evidence as *missing*.
+- **No install step:** the job only checks out and sets up Node. A target repo with dependencies must install them in the command itself, e.g. `command: npm ci && npm test` — otherwise every check fails on missing modules and forces `REQUEST_CHANGES`.
+- **Results:** `pass` / `fail` (non-zero exit) / `timeout` / `error` (spawn failure, or exit 126/127: command not executable / not found), with exit code, duration and the last 2 000 output characters. Written to `$RUNNER_TEMP/evidence/review-evidence.json` (outside the checkout), uploaded as artifact `review-evidence-<run_id>`.
+- **Review behavior:**
+  - A `## Tool evidence` block is appended to the review prompt.
+  - **Any `fail` forces `REQUEST_CHANGES`** in code, whatever the LLM verdict.
+  - A `### 🧪 Tool Evidence` section (status table + failing output tails) is added to the review comment, which auto-fix reads as feedback — right after the heading when a check failed (auto-fix truncates from the end), appended otherwise.
+- **Degraded modes (never block the review, never override):**
+  - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`).
+  - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run).
+  - `timeout` / `error` results — shown as unverified.
+- **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
+
+To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.
+
 ## End-to-End Test
 
 1. Ensure secrets above are configured.
@@ -118,7 +138,20 @@ sequenceDiagram
     participant auto-fix-pr.yml
     participant PR
 
-
+    User->>Issue: open / edit
+    Issue->>validate-issue.yml: issues event
+    validate-issue.yml->>Issue: ready-for-dev or needs-refinement
+    Issue->>code-generation.yml: labeled ready-for-dev
+    code-generation.yml->>PR: open PR (branch ai/issue-N)
+    PR->>pr-review.yml: push / opened
+    Note over pr-review.yml: evidence job (no secrets) runs declared checks on the PR head
+    pr-review.yml->>PR: review comment + Tool Evidence, APPROVE or REQUEST_CHANGES (forced on any failing check)
+    alt changes-requested and attempt ≤ 3
+        PR->>auto-fix-pr.yml: labeled changes-requested
+        auto-fix-pr.yml->>PR: push fix(ai): auto-fix attempt N
+    else review-approved
+        PR->>User: human merge gate
+    end
 ```
 
 ## Observability
@@ -216,6 +249,7 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 - **Config** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
+- **Review evidence** (`scripts/lib/review_evidence.mjs`)
 
 ## Per-Stage Model Keys
 
@@ -226,7 +260,7 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 | `<stage>` | `openai/gpt-oss-120b` | Groq model. `GROQ_MODEL` overrides every stage. |
 | `<stage>_temperature` | per stage | `0`–`2`. |
 | `<stage>_max_tokens` | `1024` (validation, review), `4096` (generation, autofix) | Output cap, reasoning tokens included. Prompt + this value must stay under the Groq TPM per request (8K on the free tier), or Groq returns 413. |
-| `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0024). |
+| `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0025). |
 
 ## Auto-Fix Token Budget
 
@@ -236,7 +270,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `3000` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0024). The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_max_input_tokens` | `3000` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025). The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
 | `autofix_diff_ratio` | `0.45` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. |
 | `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents. |
 
@@ -316,3 +350,4 @@ The repository enforces a minimum test coverage policy through CI using `c8 --ch
 - **Configuration** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
+- **Review evidence** (`scripts/lib/review_evidence.mjs`)
