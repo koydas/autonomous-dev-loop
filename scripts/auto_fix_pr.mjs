@@ -9,7 +9,7 @@ import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { retryWithBackoff } from './lib/retry.mjs';
+import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
@@ -48,31 +48,30 @@ function truncateToTokenBudget(text, tokenBudget) {
   return text.slice(0, maxChars);
 }
 
+const TRUSTED_COMMENT_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
 function isManualRerunRequested(eventPayload) {
   const action = eventPayload?.action;
   const body = eventPayload?.comment?.body || '';
   if (!['created', 'edited'].includes(action) || typeof body !== 'string') return false;
+  // Defense in depth: do not rely on the workflow `if:` filter alone.
+  if (!TRUSTED_COMMENT_ASSOCIATIONS.includes(eventPayload?.comment?.author_association)) return false;
   return /-\s*\[x\]\s*(relancer\s+auto\s*fixer|rerun\s+auto\s*-?\s*fix(er)?)/i.test(body);
 }
 
 const CHECKPOINT_DIR = path.resolve('./checkpoints');
 
-async function cleanupCheckpointFiles() {
-  let entries;
+// Layout matches lib/checkpoint.mjs: checkpoints/<runId>/<step>.json. Only the
+// `autofix` step is reset; `review.json` is a workflow prerequisite and must survive.
+async function cleanupCheckpointFiles(checkpointRunId) {
+  const autofixFile = path.join(CHECKPOINT_DIR, String(checkpointRunId), 'autofix.json');
   try {
-    entries = await fsPromises.readdir(CHECKPOINT_DIR, { withFileTypes: true });
+    await fsPromises.unlink(autofixFile);
   } catch (err) {
     if (err.code === 'ENOENT') return [];
     throw err;
   }
-  const removed = [];
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (!/^checkpoint-attempt-\d+\.json$/.test(entry.name)) continue;
-    await fsPromises.unlink(path.join(CHECKPOINT_DIR, entry.name));
-    removed.push(entry.name);
-  }
-  return removed;
+  return [path.relative(CHECKPOINT_DIR, autofixFile)];
 }
 
 const githubToken = requireEnv('GITHUB_TOKEN');
@@ -93,6 +92,16 @@ if (!event || typeof event !== 'object') throw new Error('GitHub event payload i
 const prNumber = event.pull_request?.number ?? event.issue?.number;
 if (!prNumber) throw new Error('Missing GitHub payload field: expected pull_request.number or issue.number');
 
+// Defense in depth: the workflow `if:` already filters issue_comment events, but the
+// script must not run the LLM loop for any comment that is not a trusted rerun request.
+if (event.issue && event.comment && !isManualRerunRequested(event)) {
+  log('Ignoring issue_comment event: not a trusted manual rerun request', {
+    prNumber,
+    authorAssociation: event.comment.author_association ?? null,
+  });
+  process.exit(0);
+}
+
 const reviewBody = (event.review?.body || '').trim();
 const reviewId = event.review?.id;
 
@@ -106,14 +115,33 @@ const githubHeaders = {
 };
 
 async function ghFetch(endpoint, options = {}) {
+  // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
+  // keep checking .ok. When retries are exhausted, the last 429/5xx Response is returned.
+  // Non-retry-safe POSTs (comments) are not replayed after a 5xx or network error.
+  const retrySafe = isRetrySafeGitHubRequest(options.method, endpoint);
+  let lastTransientRes = null;
   try {
     return await retryWithBackoff(async () => {
-      return await fetch(`${githubApiBase}${endpoint}`, {
-        ...options,
-        headers: { ...githubHeaders, ...(options.headers || {}) },
-      });
+      lastTransientRes = null;
+      let res;
+      try {
+        res = await fetch(`${githubApiBase}${endpoint}`, {
+          ...options,
+          headers: { ...githubHeaders, ...(options.headers || {}) },
+        });
+      } catch (fetchErr) {
+        if (!retrySafe) fetchErr.retryable = false;
+        throw fetchErr;
+      }
+      const transientErr = transientHttpError(res, `GitHub API (${endpoint})`, { retrySafe });
+      if (transientErr) {
+        lastTransientRes = res;
+        throw transientErr;
+      }
+      return res;
     });
   } catch (err) {
+    if (lastTransientRes) return lastTransientRes;
     throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`, { cause: err });
   }
 }
@@ -166,7 +194,7 @@ if (manualRerunRequested) {
       throw new Error(`Failed to remove label ${labelName}: ${removeRes.status}`);
     }
   }
-  const removedCheckpointFiles = await cleanupCheckpointFiles();
+  const removedCheckpointFiles = await cleanupCheckpointFiles(process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`);
   if (process.env.GITHUB_OUTPUT) {
     await fsPromises.appendFile(
       process.env.GITHUB_OUTPUT,

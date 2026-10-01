@@ -2,7 +2,7 @@
 
 ## Metrics System
 
-Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step.
+Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step. Scripts write the run's records to `$RUNNER_TEMP/pipeline-metrics.jsonl` (`METRICS_FILE`), outside the checkout, and "Commit metrics" appends only those lines, so a `metrics/runs.jsonl` in the checked-out branch is never uploaded (ADR-0021).
 
 **Record types:**
 
@@ -79,12 +79,14 @@ cat <run_id>.json | jq '[.spans[] | select(.outcome == "failed")]'
 | Issue stays unlabelled after validation run | LLM API key missing or invalid; `manage_labels.mjs` failed to create labels (check for 403/404 in logs) |
 | `ready-for-dev` applied but `code-generation` never triggers | Workflow trigger mismatch (label name drift vs `config/labels.yaml`); `AI_PR_TOKEN` / `GITHUB_TOKEN` lacks `contents: write` |
 | Generation run completes but no PR is created | Empty LLM output (no valid JSON patch); all generated paths failed safety check; `AI_PR_TOKEN` scope too narrow; **Allow GitHub Actions to create pull requests** disabled |
-| PR opens but files are wrong or empty | Prompt template issue (`generation-user.md` placeholders not resolved); model returned malformed JSON; `output_writer.mjs` rejected paths (absolute or `..` traversal) |
+| PR opens but files are wrong or empty | Prompt template issue (`generation-user.md` placeholders not resolved); model returned malformed JSON; `output_writer.mjs` rejected paths (absolute, `..` traversal, or a protected path — `.github/`, `scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `package.json`, lock files, `.npmrc`/`.yarnrc*`; see ADR-0021) |
 | `pr-review` never posts a comment | No open PR found for the push branch (exits silently by design); LLM API error; `pull-requests: write` permission missing |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
-| Checkbox rerun (`- [x] Relancer Auto Fixer`) posted but no auto-fix triggered | Comment does not contain the exact text (case-insensitive alternatives: `rerun auto-fix`, `rerun auto fixer`); comment is on an issue that is **not** a PR; `issue_comment` trigger not present in `auto-fix-pr.yml` |
+| Checkbox rerun (`- [x] Relancer Auto Fixer`) posted but no auto-fix triggered | Comment does not contain the exact text (case-insensitive alternatives: `rerun auto-fix`, `rerun auto fixer`); comment is on an issue that is **not** a PR; comment author's `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` (untrusted commenters are ignored by both the workflow `if:` and `auto_fix_pr.mjs`); `issue_comment` trigger not present in `auto-fix-pr.yml` |
 | Auto-fix triggered via checkbox but fails at checkout | "Resolve PR payload for issue_comment" step failed — check that `AI_PR_TOKEN` or `GITHUB_TOKEN` has `pull-requests: read` and `contents: read`; `jq` parse error indicates malformed API response |
+| A PR changing `scripts/`, `prompts/` or `config/` is reviewed/auto-fixed with the old behavior | Expected: `pr-review` and `auto-fix-pr` run the pipeline from the default branch (ADR-0023); changes take effect after merge |
+| Auto-fix, PR review or reset run shows as *Queued* / *Pending*, or an earlier pending run shows *Cancelled* | Expected: the three share one concurrency group per PR branch, `pr-pipeline-<head ref>` (ADR-0020). One of them runs per PR at a time; only the latest pending run is kept. A cancelled pending review is re-triggered by the next push |
 | Auto-fix loop stops at attempt 3 | Expected: 3-attempt hard limit reached — manual intervention required (see below) |
 | Auto-fix posts "Auto-Fix Skipped" comment and stops | PR modifies `scripts/auto_fix_pr.mjs` — self-modification guard triggered (expected) |
 | Auto-fix workflow succeeds but pushes nothing | Checkpoint resume: attempt was already completed in a previous run |
@@ -167,7 +169,7 @@ Key steps to expand per workflow:
 | `auto-fix-attempt-N` label missing | Labels are auto-created on first use; if creation fails (403), grant `issues: write` to the token used |
 | Auto-fix skipped on a PR that modifies `auto_fix_pr.mjs` | Expected — self-modification guard is active. Fix the script manually and push directly. |
 | Workflow re-run completes immediately with no commit | No files changed by the model output for that run; inspect logs and review feedback context. |
-| Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and checkpoint files automatically before rerun. |
+| Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and the `checkpoints/pr-<N>/autofix.json` checkpoint automatically before rerun (`review.json` is kept: it is the auto-fix prerequisite). |
 | Checkbox rerun fails at "Resolve PR payload" step | Confirm the token (`AI_PR_TOKEN` or `GITHUB_TOKEN`) has `pull-requests: read`; inspect the curl output in the step log for HTTP errors |
 | Checkbox rerun triggers but commits to wrong branch | Indicates an older workflow version without the step-ordering fix — ensure `auto-fix-pr.yml` has "Resolve PR payload for issue_comment" listed **before** "Checkout PR branch" |
 
@@ -209,7 +211,7 @@ git commit --allow-empty -m "re-trigger pr-review" && git push
 
 ### Reset the auto-fix attempt counter
 
-Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and checkpoint files, then start a fresh run from attempt 1.
+Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and the `autofix` checkpoint, then start a fresh run from attempt 1.
 
 ### Manually approve and close the loop
 
