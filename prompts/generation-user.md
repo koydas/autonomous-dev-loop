@@ -5,7 +5,7 @@ Deterministic issue data:
 * issue_title: {{issueTitle}}
 * issue_body: {{issueBody}}
 
-Current repository files relevant to this issue are provided below.
+Current repository files relevant to this issue are provided below. If an "Allowed npm dependencies" list is present, it is the exhaustive set of external packages you may import from — anything else must be a relative project import or a language/runtime built-in.
 You MUST use these as the base for any modifications — do not reconstruct file content from memory or assumptions.
 
 {{fileContents}}
@@ -21,7 +21,7 @@ Requirements:
 8. If a file is shown in the provided current content block and you modify it, preserve unchanged sections verbatim and apply minimal edits.
 9. If the issue requires information that is missing from the issue text or provided files, choose the safest minimal implementation and avoid inventing external APIs/contracts.
 10. Do not add explanations, comments, or metadata outside the required output.
-11. For changes in scripts/, prompts/, or .github/workflows/, include/update unit tests so the change is verifiable and keeps/raises minimum unit test coverage expectations for the touched behavior.
+11. Include/update unit tests whenever the issue explicitly requests them, or whenever the change introduces new non-trivial logic (a function, class, hook, component, or endpoint) — regardless of the target file's path — so the change is verifiable. For changes in scripts/, prompts/, or .github/workflows/ specifically, this also means keeping/raising minimum unit test coverage expectations for the touched behavior.
 12. When workflow behavior, setup, or operator expectations change, update docs/code-generation.md in the same patch.
 
 Output JSON only: { "summary": "One sentence summary of the generated change", "changes": [ { "target_path": "relative/path/to/file.ext", "file_content": "Exact content to write in the file" } ] }

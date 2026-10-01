@@ -15,7 +15,7 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 
 ## Smoke Tests
 
-`scripts/tests/smoke.test.mjs` — 20 tests across 6 groups:
+`scripts/tests/smoke.test.mjs` — 22 tests across 7 groups:
 
 | Group | What is covered |
 |-------|-----------------|
@@ -25,12 +25,23 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 | Generation pipeline | Realistic LLM JSON (plain and markdown-fenced) → `parseJsonResponse` → `validateAiOutput` → `writeGeneratedFiles` with real temp files |
 | `buildDeterministicPrompt` | Real `generation-user.md` template used; all placeholders substituted; output schema keys present |
 | `loadLLMConfig` | All four stages (`validation`, `generation`, `review`, `autofix`) produce a valid config shape for both Groq and Anthropic; `autofix` exposes `maxTokens` from `models.yaml` |
+| Observability | After a full mocked pipeline run, trace file exists at the expected path; contains spans for all 5 stages (`issue_validation`, `code_gen`, `pr_prepare`, `review`, `autofix`) with `outcome` populated; top-level `outcome` reflects pipeline result |
+
+## Observability Tests
+
+`scripts/tests/observability.test.mjs` — 20 unit tests across two groups:
+
+| Group | What is covered |
+|-------|-----------------|
+| `log()` | Emits one JSON line to stderr; correct schema fields (`ts`, `run_id`, `stage`, `event`, `level`, `duration_ms`, `meta`); `GITHUB_RUN_ID` env var used as `run_id`; falls back to `"local"`; emits `::error::` GHA annotation on error level when `GITHUB_ACTIONS=true`; no annotation for non-error levels; never throws on circular meta; output is always valid JSON |
+| `createTracer()` | `startSpan` creates trace file immediately; `endSpan` populates `completed_at`, `duration_ms`, `outcome`; `finalize` writes `completed_at` and top-level `outcome`; multiple spans accumulate in insertion order; re-using a stage name updates rather than duplicates; nested `traceDir` is created automatically; `endSpan` without prior `startSpan` is safe; I/O failure in `finalize` emits warn log rather than throwing; I/O failure in `startSpan` emits warn log rather than throwing |
 
 ## Unit Test Coverage
 
 | File | Tests | What is covered |
 |------|-------|-----------------|
-| `scripts/lib/output_writer.mjs` | 30 | JSON parsing (fence-first, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), field validation, path safety (absolute paths, `..` traversal), 16 000-char size limit, type coercion |
+| `scripts/lib/output_writer.mjs` | 92 | JSON parsing (fence-first, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), field validation, path safety (absolute paths, `..` traversal, `PROTECTED_WRITE_PATHS` denylist incl. normalization bypasses, symlink-redirected writes), 16 000-char size limit, type coercion |
+| `scripts/lib/review_evidence.mjs` | 60 | Config parsing (field-path errors, timeout validation, quote stripping, inline-comment rejection), env sanitization (per-segment credential names, `GIT_CONFIG_*` family), output tail and rolling buffer, `runCheck` (pass/fail/timeout/spawn error/exit 126-127/detached grandchild), evidence validation per field, staleness, touched trusted paths, fence and table-cell escaping, `run_review_evidence.mjs` end to end (write, skip without config, invalid config). CI-enforced ≥ 80% via c8 |
 | `scripts/lib/config.mjs` | 12 | `requireEnv` missing/empty vars, `loadConfigFromEnv` defaults and required fields, `buildDeterministicPrompt` output structure, `loadLabelsConfig` group resolution |
 | `scripts/lib/groq_client.mjs` | 7 | HTTP errors, non-JSON response, malformed `choices`, Authorization header, temperature payload |
 | `scripts/lib/anthropic_client.mjs` | 10 | HTTP errors, non-JSON response, malformed `content`, `x-api-key` header, `anthropic-version` header, temperature, `max_tokens`, system prompt placement |

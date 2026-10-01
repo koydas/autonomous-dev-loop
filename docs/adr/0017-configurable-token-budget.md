@@ -1,7 +1,7 @@
 # ADR-0017: Configurable per-stage token budget in `config/models.yaml`
 
 - **Date:** 2026-06-04
-- **Status:** Accepted
+- **Status:** Accepted — amended by [ADR-0025](./0025-groq-gpt-oss-120b.md) (default `autofix_max_input_tokens` is now 3,000 for the 8K TPM free tier of `openai/gpt-oss-120b`)
 
 ## Context
 

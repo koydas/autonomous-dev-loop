@@ -20,11 +20,11 @@ These instructions apply to the entire repository.
 
 ## Models
 
-Default Groq models (all stages): `qwen/qwen3-32b`. See `config/models.yaml` for per-stage overrides.
+Default Groq models (all stages): `openai/gpt-oss-120b` (ADR-0025). See `config/models.yaml` for per-stage overrides.
 Default Anthropic model (all stages): `claude-opus-4-7`.
-Context windows: Groq models cap at 32 768 tokens; Anthropic models at 200 000 tokens. `scripts/auto_fix_pr.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
+Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; Anthropic models 200 000 tokens. On the Groq free tier the binding limit is 8 000 TPM per request, not the context window (ADR-0025). `scripts/auto_fix_pr.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
 
-**Token budget (auto-fix stage):** `autofix_max_input_tokens` in `config/models.yaml` sets a hard ceiling on the input budget sent to the LLM, independently of the model's context window. The default is `7400` tokens — tuned to keep the total request (system + input + output) under Groq on_demand's 12,000 TPM per-request limit. Increase or remove this cap when using Groq Dev Tier or Anthropic. See [ADR-0017](docs/adr/0017-configurable-token-budget.md).
+**Token budget (auto-fix stage):** `autofix_max_input_tokens` in `config/models.yaml` sets a hard ceiling on the input budget sent to the LLM, independently of the model's context window. The default is `3000` tokens — tuned to keep the total request (system + input + output) under the 8,000 TPM free-tier limit of `openai/gpt-oss-120b` (ADR-0025). Increase or remove this cap when using Groq Dev Tier or Anthropic. See [ADR-0017](docs/adr/0017-configurable-token-budget.md).
 
 ## Engineering Rules
 
@@ -102,6 +102,14 @@ For any change to workflow behavior (for example files under `.github/workflows/
 - **Documentation is mandatory in the same PR**: update `docs/code-generation.md` and/or `docs/runbook.md` whenever trigger conditions, rerun mechanics, labels, checkpoints, or operator steps change.
 - **Tests are mandatory in the same PR**: add or update targeted tests that cover the new behavior (not only happy-path execution), in addition to running the full `node --test scripts/tests/*.test.mjs` suite.
 - **No "code-only" automation behavior changes**: behavior updates without matching doc + test updates are considered incomplete.
+
+## Observability Rules
+
+- All pipeline event logging must go through `scripts/lib/observability.mjs` — use `log()` for structured JSON events (stderr) and `createTracer()` for span tracking. Never construct JSON log lines inline in business logic files.
+- Every new pipeline stage script must emit at minimum: a `<stage>.start` event at entry and a `<stage>.complete` / `<stage>.error` event at exit, with `duration_ms` populated on terminal events.
+- Observability failures must never abort business logic. The `log()` and tracer methods catch their own errors — do not add extra try/catch around them.
+- The `observability/traces/` directory is git-tracked; the `*.json` files it contains are git-ignored (written at runtime and uploaded as CI artifacts). Do not commit trace files.
+- When adding a new workflow that runs an instrumented script, add `GITHUB_RUN_ID: ${{ github.run_id }}` to the step env and an `upload-artifact` step for the trace file (`if: always()`). See existing workflows for the pattern.
 
 ## Documentation Rules
 

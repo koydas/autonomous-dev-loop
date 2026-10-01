@@ -6,7 +6,7 @@ A fully autonomous GitHub-native dev loop: Issue → AI coder → PR → AI revi
 
 ## MVP Automation Implemented
 
-The MVP issue-to-PR automation is now implemented. The default AI provider is **Groq** (`qwen/qwen3-32b`); Anthropic (Claude) is also supported via `AI_PROVIDER` when both provider keys are configured.
+The MVP issue-to-PR automation is now implemented. The default AI provider is **Groq** (`openai/gpt-oss-120b`); Anthropic (Claude) is also supported via `AI_PROVIDER` when both provider keys are configured.
 
 - Workflow: `.github/workflows/code-generation.yml` (kept minimal/orchestration-only)
 - Generator script: `scripts/generate_issue_change.mjs`
@@ -34,6 +34,21 @@ Automation entrypoints now validate critical runtime inputs before network calls
 - GitHub event payload fields are validated with explicit path-oriented messages (for example `pull_request.number`, `issue.number`, `pull_request.head.ref` / `ref`),
 - provider response parsing errors include concrete JSON paths (`content[0].text`, `choices[0].message.content`).
 
+## Observability
+
+Every pipeline run produces two complementary outputs:
+
+- **Structured JSON events** — one JSON line per event written to stderr by each script (`ts`, `run_id`, `stage`, `event`, `level`, `duration_ms`, `meta`). Error-level events also emit `::error::` GitHub Actions annotations.
+- **Run trace file** — `observability/traces/<GITHUB_RUN_ID>.json`, written incrementally so it is always readable mid-run. Uploaded as the artifact `run-trace-<GITHUB_RUN_ID>` at the end of each workflow (`if: always()`).
+
+Read a trace locally:
+
+```bash
+cat observability/traces/<run_id>.json | jq '[.spans[] | {stage, outcome, duration_ms}]'
+```
+
+All instrumentation goes through `scripts/lib/observability.mjs`. Schema reference and full event tables: `docs/observability.md`. Design rationale: [ADR-0018](docs/adr/0018-structured-observability.md).
+
 ## Tests
 
 The test suite uses the built-in `node:test` runner — no external dependencies.
@@ -43,7 +58,7 @@ node --test scripts/tests/*.test.mjs
 ```
 
 Two layers of tests:
-- **Unit tests** — each module tested in isolation (`config`, `output_writer`, `issue_validator`, etc.)
+- **Unit tests** — each module tested in isolation (`config`, `output_writer`, `issue_validator`, `observability`, etc.)
 - **Smoke tests** (`smoke.test.mjs`) — full pipelines with real config files and prompt templates, LLM mocked at the network boundary
 
 CI: `.github/workflows/test.yml` runs the full suite on every push and PR. Guide: `docs/testing.md`.
@@ -60,10 +75,11 @@ graph LR
     B -->|valid| C[Apply label: ready-for-dev]
     C --> D[Code Generation]
     D -->|API failure| D
-    D --> E[PR opened]
-    E --> F[PR Review]
+    D --> E[PR opened / push]
+    E --> EV[Evidence job<br/>no secrets]
+    EV -->|review-evidence.json| F[PR Review]
     F -->|APPROVE| G[Human merge gate]
-    F -->|REQUEST_CHANGES| H{Attempt ≤ 3?}
+    F -->|REQUEST_CHANGES<br/>forced on any failing check| H{Attempt ≤ 3?}
     H -->|Yes| I[Auto-Fix]
     I --> F
     H -->|No| J[Manual intervention requested]

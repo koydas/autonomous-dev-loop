@@ -7,6 +7,8 @@ import {
   extractFilePaths,
   readRelevantFiles,
   formatFileContents,
+  readPackageJsonDependencies,
+  formatDependencyAllowlist,
   buildFileContentsBlock,
 } from '../lib/file_injector.mjs';
 
@@ -215,5 +217,262 @@ describe('buildFileContentsBlock', () => {
       tmpDir,
     );
     assert.equal(block, 'No existing files identified as relevant to this issue.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readPackageJsonDependencies
+// ---------------------------------------------------------------------------
+
+describe('readPackageJsonDependencies', () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-'));
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('returns null when no package.json exists', async () => {
+    const deps = await readPackageJsonDependencies(tmpDir);
+    assert.equal(deps, null);
+  });
+
+  test('returns null for a malformed package.json instead of throwing', async () => {
+    const badDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-bad-'));
+    await fs.writeFile(path.join(badDir, 'package.json'), '{ not valid json', 'utf8');
+    await assert.doesNotReject(async () => {
+      const deps = await readPackageJsonDependencies(badDir);
+      assert.equal(deps, null);
+    });
+    await fs.rm(badDir, { recursive: true, force: true });
+  });
+
+  test('returns null instead of throwing when package.json is valid JSON but not an object (null)', async () => {
+    const nullDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-null-'));
+    await fs.writeFile(path.join(nullDir, 'package.json'), 'null', 'utf8');
+    await assert.doesNotReject(async () => {
+      const deps = await readPackageJsonDependencies(nullDir);
+      assert.equal(deps, null);
+    });
+    await fs.rm(nullDir, { recursive: true, force: true });
+  });
+
+  test('returns null instead of throwing when package.json is a top-level array', async () => {
+    const arrDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-arr-'));
+    await fs.writeFile(path.join(arrDir, 'package.json'), '["react"]', 'utf8');
+    const deps = await readPackageJsonDependencies(arrDir);
+    assert.equal(deps, null);
+    await fs.rm(arrDir, { recursive: true, force: true });
+  });
+
+  test('ignores a non-object dependency field instead of spreading its indices as package names', async () => {
+    const shapeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-shape-'));
+    await fs.writeFile(
+      path.join(shapeDir, 'package.json'),
+      JSON.stringify({ dependencies: ['react'], devDependencies: { vitest: '1.0.0' } }),
+      'utf8',
+    );
+    const deps = await readPackageJsonDependencies(shapeDir);
+    assert.deepEqual(deps, { vitest: '1.0.0' });
+    assert.ok(!('0' in deps));
+    await fs.rm(shapeDir, { recursive: true, force: true });
+  });
+
+  test('merges dependencies and devDependencies', async () => {
+    const depDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-deps-'));
+    await fs.writeFile(
+      path.join(depDir, 'package.json'),
+      JSON.stringify({ dependencies: { react: '18.0.0' }, devDependencies: { vitest: '1.0.0' } }),
+      'utf8',
+    );
+    const deps = await readPackageJsonDependencies(depDir);
+    assert.deepEqual(deps, { react: '18.0.0', vitest: '1.0.0' });
+    await fs.rm(depDir, { recursive: true, force: true });
+  });
+
+  test('also merges peerDependencies and optionalDependencies', async () => {
+    const depDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-peer-'));
+    await fs.writeFile(
+      path.join(depDir, 'package.json'),
+      JSON.stringify({
+        dependencies: { react: '18.0.0' },
+        devDependencies: { vitest: '1.0.0' },
+        peerDependencies: { 'react-dom': '18.0.0' },
+        optionalDependencies: { fsevents: '2.3.0' },
+      }),
+      'utf8',
+    );
+    const deps = await readPackageJsonDependencies(depDir);
+    assert.deepEqual(deps, {
+      react: '18.0.0',
+      vitest: '1.0.0',
+      'react-dom': '18.0.0',
+      fsevents: '2.3.0',
+    });
+    await fs.rm(depDir, { recursive: true, force: true });
+  });
+
+  test('returns an empty object when package.json has no dependency fields', async () => {
+    const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-empty-'));
+    await fs.writeFile(path.join(emptyDir, 'package.json'), JSON.stringify({ name: 'x' }), 'utf8');
+    const deps = await readPackageJsonDependencies(emptyDir);
+    assert.deepEqual(deps, {});
+    await fs.rm(emptyDir, { recursive: true, force: true });
+  });
+
+  test('rethrows unexpected non-ENOENT read errors instead of swallowing them', async () => {
+    const dirDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-direrr-'));
+    // Make package.json a directory instead of a file: reading it throws EISDIR, not ENOENT.
+    await fs.mkdir(path.join(dirDir, 'package.json'));
+    await assert.rejects(
+      () => readPackageJsonDependencies(dirDir),
+      (err) => err.code === 'EISDIR',
+    );
+    await fs.rm(dirDir, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatDependencyAllowlist
+// ---------------------------------------------------------------------------
+
+describe('formatDependencyAllowlist', () => {
+  test('returns an empty string for null', () => {
+    assert.equal(formatDependencyAllowlist(null), '');
+  });
+
+  test('emits an explicit zero-dependencies block for an empty object (not silence)', () => {
+    const block = formatDependencyAllowlist({});
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('zero dependencies'));
+    assert.ok(block.includes('Do not introduce ANY new external npm package'));
+  });
+
+  test('lists dependency names sorted alphabetically', () => {
+    const block = formatDependencyAllowlist({ zod: '1.0.0', axios: '2.0.0' });
+    assert.ok(block.indexOf('- axios') < block.indexOf('- zod'));
+  });
+
+  test('mentions that built-ins are always allowed', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(block.toLowerCase().includes('built-in'));
+  });
+
+  test('includes the section header', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(block.includes('### Allowed npm dependencies'));
+  });
+
+  test('does not claim to override imports already used in the target file', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(block.includes('already imported elsewhere in the target file'));
+  });
+
+  test('truncates to MAX_DEPENDENCIES (200) entries with a note, for very large manifests', () => {
+    const manyDeps = Object.fromEntries(
+      Array.from({ length: 250 }, (_, i) => [`pkg-${String(i).padStart(3, '0')}`, '1.0.0']),
+    );
+    const block = formatDependencyAllowlist(manyDeps);
+    const listedCount = (block.match(/^- pkg-/gm) || []).length;
+    assert.equal(listedCount, 200);
+    assert.ok(block.includes('truncated'));
+    assert.ok(block.includes('250'));
+  });
+
+  test('a truncated list explicitly overrides the "exhaustive" framing for this request', () => {
+    const manyDeps = Object.fromEntries(
+      Array.from({ length: 250 }, (_, i) => [`pkg-${String(i).padStart(3, '0')}`, '1.0.0']),
+    );
+    const block = formatDependencyAllowlist(manyDeps);
+    assert.ok(block.includes('NOT'));
+    assert.ok(block.includes('exhaustive'));
+  });
+
+  test('a non-truncated list does not carry the "not exhaustive" override note', () => {
+    const block = formatDependencyAllowlist({ react: '18.0.0' });
+    assert.ok(!block.includes('NOT'));
+  });
+
+  test('does not truncate when at or under MAX_DEPENDENCIES (200)', () => {
+    const exactlyMax = Object.fromEntries(
+      Array.from({ length: 200 }, (_, i) => [`pkg-${String(i).padStart(3, '0')}`, '1.0.0']),
+    );
+    const block = formatDependencyAllowlist(exactlyMax);
+    assert.ok(!block.includes('truncated'));
+  });
+
+  test('truncates by character footprint even when well under MAX_DEPENDENCIES, for long scoped package names', () => {
+    // 60 entries at ~100 chars each = ~6000 chars, over MAX_ALLOWLIST_CHARS (4000),
+    // while staying far below the 200-entry count cap — the count cap alone would not
+    // have bounded this list's size.
+    const longNames = Object.fromEntries(
+      Array.from({ length: 60 }, (_, i) => [
+        `@some-very-long-organization-name-${String(i).padStart(3, '0')}/some-very-long-package-name-here`,
+        '1.0.0',
+      ]),
+    );
+    const block = formatDependencyAllowlist(longNames);
+    const listedCount = (block.match(/^- @some-very-long/gm) || []).length;
+    assert.ok(listedCount < 60, `expected truncation before all 60 entries, got ${listedCount}`);
+    assert.ok(block.includes('truncated'));
+    assert.ok(block.includes('60'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildFileContentsBlock — dependency allowlist integration
+// ---------------------------------------------------------------------------
+
+describe('buildFileContentsBlock with package.json present', () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-integration-'));
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ dependencies: { react: '18.0.0' } }),
+      'utf8',
+    );
+    await fs.writeFile(path.join(tmpDir, 'widget.js'), 'export function widget() {}', 'utf8');
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('prepends the allowlist block before the file contents', async () => {
+    const block = await buildFileContentsBlock('Fix widget.js', '', tmpDir);
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('- react'));
+    assert.ok(block.includes('### Current file: widget.js'));
+    assert.ok(block.indexOf('Allowed npm dependencies') < block.indexOf('Current file: widget.js'));
+  });
+
+  test('still returns the fallback file message alongside the allowlist when no files are identified', async () => {
+    const block = await buildFileContentsBlock('Fix login bug', 'no file mentioned here', tmpDir);
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('No existing files identified as relevant to this issue.'));
+  });
+});
+
+describe('buildFileContentsBlock with package.json declaring zero dependencies', () => {
+  let tmpDir;
+
+  before(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-empty-int-'));
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'x' }), 'utf8');
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test('still emits an explicit zero-dependencies allowlist block rather than staying silent', async () => {
+    const block = await buildFileContentsBlock('Fix login bug', '', tmpDir);
+    assert.ok(block.includes('### Allowed npm dependencies'));
+    assert.ok(block.includes('zero dependencies'));
   });
 });

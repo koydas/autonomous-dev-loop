@@ -8,15 +8,21 @@ import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
-import { retryWithBackoff } from './lib/retry.mjs';
+import { log as obsLog, createTracer } from './lib/observability.mjs';
+import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { randomUUID } from 'node:crypto';
 
-process.on('unhandledRejection', (reason) => {
+let tracer;
+
+process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
   logSummary({ success: false, stepsCompleted: [], errors: [err.message] });
+  obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', meta: { error: err.message } });
+  tracer?.endSpan('autofix', { outcome: 'failed', meta: { error: err.message } });
+  await tracer?.finalize('failed');
   process.exit(1);
 });
 
@@ -27,9 +33,10 @@ const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
 const TOKEN_SAFETY_MARGIN = 200;
 
 const MODEL_CONTEXT_WINDOW = {
-  'qwen/qwen3-32b': 32768,
+  'qwen/qwen3-32b': 32768, // retired by Groq 2026-07-17 (ADR-0025)
   'llama-3.1-8b-instant': 32768,
-  'llama-3.3-70b-versatile': 131072,
+  'llama-3.3-70b-versatile': 131072, // retired by Groq 2026-08-16 (ADR-0025)
+  'openai/gpt-oss-120b': 131072,
   'claude-opus-4-7': 200000,
   'claude-sonnet-4-6': 200000,
   'claude-haiku-4-5-20251001': 200000,
@@ -42,37 +49,36 @@ function truncateToTokenBudget(text, tokenBudget) {
   return text.slice(0, maxChars);
 }
 
+const TRUSTED_COMMENT_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
 function isManualRerunRequested(eventPayload) {
   const action = eventPayload?.action;
   const body = eventPayload?.comment?.body || '';
   if (!['created', 'edited'].includes(action) || typeof body !== 'string') return false;
+  // Defense in depth: do not rely on the workflow `if:` filter alone.
+  if (!TRUSTED_COMMENT_ASSOCIATIONS.includes(eventPayload?.comment?.author_association)) return false;
   return /-\s*\[x\]\s*(relancer\s+auto\s*fixer|rerun\s+auto\s*-?\s*fix(er)?)/i.test(body);
 }
 
 const CHECKPOINT_DIR = path.resolve('./checkpoints');
 
-async function cleanupCheckpointFiles() {
-  let entries;
+// Layout matches lib/checkpoint.mjs: checkpoints/<runId>/<step>.json. Only the
+// `autofix` step is reset; `review.json` is a workflow prerequisite and must survive.
+async function cleanupCheckpointFiles(checkpointRunId) {
+  const autofixFile = path.join(CHECKPOINT_DIR, String(checkpointRunId), 'autofix.json');
   try {
-    entries = await fsPromises.readdir(CHECKPOINT_DIR, { withFileTypes: true });
+    await fsPromises.unlink(autofixFile);
   } catch (err) {
     if (err.code === 'ENOENT') return [];
     throw err;
   }
-  const removed = [];
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (!/^checkpoint-attempt-\d+\.json$/.test(entry.name)) continue;
-    await fsPromises.unlink(path.join(CHECKPOINT_DIR, entry.name));
-    removed.push(entry.name);
-  }
-  return removed;
+  return [path.relative(CHECKPOINT_DIR, autofixFile)];
 }
 
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens, maxInputTokens: cfgMaxInputTokens, diffRatio: cfgDiffRatio, feedbackRatio: cfgFeedbackRatio } = loadLLMConfig('autofix');
+const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens, maxInputTokens: cfgMaxInputTokens, diffRatio: cfgDiffRatio, feedbackRatio: cfgFeedbackRatio, reasoningEffort } = loadLLMConfig('autofix');
 const systemPrompt = loadPrompt('auto-fix-system');
 const userPromptTemplate = loadPrompt('auto-fix-user');
 
@@ -87,6 +93,16 @@ if (!event || typeof event !== 'object') throw new Error('GitHub event payload i
 const prNumber = event.pull_request?.number ?? event.issue?.number;
 if (!prNumber) throw new Error('Missing GitHub payload field: expected pull_request.number or issue.number');
 
+// Defense in depth: the workflow `if:` already filters issue_comment events, but the
+// script must not run the LLM loop for any comment that is not a trusted rerun request.
+if (event.issue && event.comment && !isManualRerunRequested(event)) {
+  log('Ignoring issue_comment event: not a trusted manual rerun request', {
+    prNumber,
+    authorAssociation: event.comment.author_association ?? null,
+  });
+  process.exit(0);
+}
+
 const reviewBody = (event.review?.body || '').trim();
 const reviewId = event.review?.id;
 
@@ -100,14 +116,33 @@ const githubHeaders = {
 };
 
 async function ghFetch(endpoint, options = {}) {
+  // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
+  // keep checking .ok. When retries are exhausted, the last 429/5xx Response is returned.
+  // Non-retry-safe POSTs (comments) are not replayed after a 5xx or network error.
+  const retrySafe = isRetrySafeGitHubRequest(options.method, endpoint);
+  let lastTransientRes = null;
   try {
     return await retryWithBackoff(async () => {
-      return await fetch(`${githubApiBase}${endpoint}`, {
-        ...options,
-        headers: { ...githubHeaders, ...(options.headers || {}) },
-      });
+      lastTransientRes = null;
+      let res;
+      try {
+        res = await fetch(`${githubApiBase}${endpoint}`, {
+          ...options,
+          headers: { ...githubHeaders, ...(options.headers || {}) },
+        });
+      } catch (fetchErr) {
+        if (!retrySafe) fetchErr.retryable = false;
+        throw fetchErr;
+      }
+      const transientErr = transientHttpError(res, `GitHub API (${endpoint})`, { retrySafe });
+      if (transientErr) {
+        lastTransientRes = res;
+        throw transientErr;
+      }
+      return res;
     });
   } catch (err) {
+    if (lastTransientRes) return lastTransientRes;
     throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`, { cause: err });
   }
 }
@@ -136,6 +171,15 @@ async function loadLatestAutomatedReviewComment() {
   }
 }
 
+const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
+const traceDir = path.join(process.cwd(), 'observability', 'traces');
+tracer = createTracer({ runId, issueNumber: null, traceDir });
+tracer.startSpan('autofix', { prNumber });
+
+let nextAttempt = null;
+let autofixStartMs = Date.now();
+
+try {
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
 const prLabels = await labelsRes.json();
@@ -151,7 +195,7 @@ if (manualRerunRequested) {
       throw new Error(`Failed to remove label ${labelName}: ${removeRes.status}`);
     }
   }
-  const removedCheckpointFiles = await cleanupCheckpointFiles();
+  const removedCheckpointFiles = await cleanupCheckpointFiles(process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`);
   if (process.env.GITHUB_OUTPUT) {
     await fsPromises.appendFile(
       process.env.GITHUB_OUTPUT,
@@ -174,6 +218,10 @@ if (attemptCount >= MAX_ATTEMPTS) {
     body: JSON.stringify({ body: exhaustedBody }),
   });
   log('Max auto-fix attempts reached', { prNumber, attemptCount });
+  obsLog({ stage: 'autofix', event: 'autofix.max_attempts_reached', level: 'warn', meta: { attempt: MAX_ATTEMPTS, prNumber } });
+  tracer.startSpan('autofix', { prNumber, attempt: MAX_ATTEMPTS });
+  tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason: 'max_attempts_reached' } });
+  await tracer.finalize('partial');
 
   const exhaustedRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
   const exhaustedMetricsCheckpoint = await readCheckpoint(exhaustedRunId, 'pr_metrics');
@@ -199,11 +247,14 @@ if (attemptCount >= MAX_ATTEMPTS) {
   process.exit(0);
 }
 
-const nextAttempt = attemptCount + 1;
+nextAttempt = attemptCount + 1;
+autofixStartMs = Date.now();
 
 log('Starting auto-fix', { prNumber, attempt: nextAttempt });
+obsLog({ stage: 'autofix', event: 'autofix.start', level: 'info', meta: { attempt: nextAttempt, prNumber } });
+tracer.startSpan('autofix', { prNumber, attempt: nextAttempt });
 
-setLogContext({ run_id: process.env.GITHUB_RUN_ID ?? randomUUID(), step: 'auto-fix', attempt: nextAttempt });
+setLogContext({ run_id: runId, step: 'auto-fix', attempt: nextAttempt });
 
 const feedbackParts = [];
 if (reviewBody) feedbackParts.push(reviewBody);
@@ -269,6 +320,8 @@ if (allChangedFiles.includes(SELF_PATH)) {
     }),
   });
   log('Auto-fix skipped: PR modifies auto_fix_pr.mjs itself', { prNumber });
+  tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason: 'self_modification' } });
+  await tracer.finalize('partial');
   process.exit(0);
 }
 
@@ -311,6 +364,9 @@ log('token_estimate', {
   total: systemTokens + userWrapperTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
 });
 
+const inputTokensEst = estimateTokens(systemPrompt + userPrompt);
+obsLog({ stage: 'autofix', event: 'autofix.llm_request', level: 'info', meta: { model, input_tokens_est: inputTokensEst, attempt: nextAttempt, prNumber } });
+
 const raw = await callLLM({
   prompt: userPrompt,
   systemPrompt,
@@ -320,21 +376,33 @@ const raw = await callLLM({
   temperature: llmTemperature,
   maxTokens: maxOutputBudget,
   responseFormat: null,
+  reasoningEffort,
 });
+
+obsLog({ stage: 'autofix', event: 'autofix.llm_response', level: 'info', meta: { output_tokens_est: estimateTokens(raw), attempt: nextAttempt, prNumber } });
 
 let aiOutput;
 try {
   aiOutput = parseJsonResponse(raw);
 } catch (parseErr) {
   logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
+  obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', duration_ms: Date.now() - autofixStartMs, meta: { error: 'JSON parse failed', attempt: nextAttempt, prNumber } });
+  tracer.endSpan('autofix', { outcome: 'failed', meta: { error: 'JSON parse failed' } });
+  await tracer.finalize('failed');
   throw new Error(`AI response was not valid JSON: ${parseErr.message}`, { cause: parseErr });
 }
 if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
+  obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', duration_ms: Date.now() - autofixStartMs, meta: { error: 'invalid JSON shape', attempt: nextAttempt, prNumber } });
+  tracer.endSpan('autofix', { outcome: 'failed', meta: { error: 'invalid JSON shape' } });
+  await tracer.finalize('failed');
   throw new Error('AI response JSON must be an object');
 }
 
 const { summary, changes } = validateAiOutput(aiOutput);
 const outputPaths = await writeGeneratedFiles(changes);
+
+obsLog({ stage: 'autofix', event: 'autofix.push', level: 'info', duration_ms: Date.now() - autofixStartMs, meta: { paths: outputPaths, attempt: nextAttempt, prNumber } });
+
 const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
 const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
   method: 'POST',
@@ -387,4 +455,13 @@ await writeCheckpoint(checkpointRunId, 'pr_metrics', {
 });
 log('PR metrics checkpoint updated', { prNumber, auto_fix_pushes: prMetrics.auto_fix_pushes + 1 });
 
+tracer.endSpan('autofix', { outcome: 'success', meta: { attempt: nextAttempt, paths: outputPaths } });
+await tracer.finalize('partial');
+
 log('Auto-fix complete', { prNumber, attempt: nextAttempt, paths: outputPaths.join(', ') });
+} catch (err) {
+  obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', duration_ms: Date.now() - autofixStartMs, meta: { error: err.message, attempt: nextAttempt, prNumber } });
+  tracer.endSpan('autofix', { outcome: 'failed', meta: { error: err.message } });
+  await tracer.finalize('failed');
+  throw err;
+}

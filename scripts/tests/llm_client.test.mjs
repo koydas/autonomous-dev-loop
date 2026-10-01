@@ -110,21 +110,34 @@ test('callLLM AI_PROVIDER is case-insensitive', async () => {
 test('callLLM falls back to groq when primary provider (anthropic) fails at runtime', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
   process.env.AI_PROVIDER = 'anthropic';
-  let callCount = 0;
-  globalThis.fetch = async () => {
-    callCount++;
-    if (callCount === 1) throw new Error('network error');
+  // Network errors are retryable: Anthropic is retried until exhausted, then Groq takes over.
+  let anthropicCalls = 0;
+  let groqCalls = 0;
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) {
+      anthropicCalls++;
+      throw new Error('network error');
+    }
+    groqCalls++;
     return makeResponse({ choices: [{ message: { content: 'fallback-ok' } }] });
   };
-  const result = await callLLM({
-    prompt: 'hi',
-    systemPrompt: 'sys',
-    apiKey: 'sk-ant-key',
-    model: 'claude-opus-4-7',
-    apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
-  });
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  let result;
+  try {
+    result = await callLLM({
+      prompt: 'hi',
+      systemPrompt: 'sys',
+      apiKey: 'sk-ant-key',
+      model: 'claude-opus-4-7',
+      apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
+    });
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+  }
   assert.equal(result, 'fallback-ok');
-  assert.equal(callCount, 2);
+  assert.equal(anthropicCalls, 4, 'anthropic network error must be retried before falling back');
+  assert.equal(groqCalls, 1);
 });
 
 test('callLLM throws descriptive error listing each provider failure when all fail', async () => {

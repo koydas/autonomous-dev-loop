@@ -46,6 +46,10 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == needs.load-labels.outputs.ready_for_dev
     runs-on: ubuntu-latest
+    # Job-level: any label added to the issue triggers this workflow (see auto-fix-pr.yml).
+    concurrency:
+      group: code-generation-${{ github.event.issue.number || inputs.issue_number }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout repository
@@ -97,6 +101,7 @@ jobs:
       - name: Generate AI change
         id: generate
         env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
@@ -110,6 +115,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
         run: node scripts/generate_issue_change.mjs
 
       - name: Create pull request
@@ -135,5 +141,14 @@ jobs:
         with:
           name: checkpoints-issue-${{ steps.issue.outputs.number }}
           path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
           if-no-files-found: ignore
           overwrite: true

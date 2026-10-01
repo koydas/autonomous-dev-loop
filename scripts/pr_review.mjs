@@ -1,34 +1,46 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
 import { log, error as logError } from './lib/logger.mjs';
-import { retryWithBackoff } from './lib/retry.mjs';
+import { log as obsLog, createTracer } from './lib/observability.mjs';
+import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
 import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
+import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
+const _reviewStartMs = Date.now();
 
 function extractIssueNumber(text) {
   const m = (text ?? '').match(/[Cc]loses?\s+#(\d+)/);
   return m ? Number(m[1]) : null;
 }
 
-process.on('unhandledRejection', (reason) => {
+const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
+const traceDir = path.join(process.cwd(), 'observability', 'traces');
+let tracer;
+
+process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
+  obsLog({ stage: 'review', event: 'review.error', level: 'error', duration_ms: Date.now() - _reviewStartMs, meta: { error: err.message } });
+  tracer?.endSpan('review', { outcome: 'failed', meta: { error: err.message } });
+  await tracer?.finalize('failed');
   process.exit(1);
 });
 
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens } = loadLLMConfig('review');
+const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens, reasoningEffort } = loadLLMConfig('review');
 const systemPrompt = loadPrompt('pr-review-system');
 const userPromptTemplate = loadPrompt('pr-review-user');
 
@@ -69,23 +81,42 @@ if (!prNumber) {
   prNumber = prs[0].number;
 }
 
+tracer = createTracer({ runId, issueNumber: null, traceDir });
+obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber, model } });
+tracer.startSpan('review', { prNumber, model });
 
 async function ghFetch(path, options = {}) {
-  return await retryWithBackoff(async () => {
-    let res;
-    try {
-      res = await fetch(`${githubApiBase}${path}`, {
-        ...options,
-        headers: { ...githubHeaders, ...(options.headers || {}) },
-      });
-    } catch (err) {
-      throw new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err });
-    }
-    if (res.status === 502 || res.status === 503 || res.status === 504) {
-      throw Object.assign(new Error(`GitHub API transient error (${path}): ${res.status}`), { status: res.status });
-    }
-    return res;
-  });
+  // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
+  // keep checking .ok. When retries are exhausted, the last 429/5xx Response is returned.
+  // Non-retry-safe POSTs (comments, reviews) are not replayed after a 5xx or network error.
+  const retrySafe = isRetrySafeGitHubRequest(options.method, path);
+  let lastTransientRes = null;
+  try {
+    return await retryWithBackoff(async () => {
+      lastTransientRes = null;
+      let res;
+      try {
+        res = await fetch(`${githubApiBase}${path}`, {
+          ...options,
+          headers: { ...githubHeaders, ...(options.headers || {}) },
+        });
+      } catch (err) {
+        throw Object.assign(
+          new Error(`Network error calling GitHub API (${path}): ${err.message}`, { cause: err }),
+          retrySafe ? {} : { retryable: false },
+        );
+      }
+      const transientErr = transientHttpError(res, `GitHub API (${path})`, { retrySafe });
+      if (transientErr) {
+        lastTransientRes = res;
+        throw transientErr;
+      }
+      return res;
+    });
+  } catch (err) {
+    if (lastTransientRes) return lastTransientRes;
+    throw err;
+  }
 }
 
 async function upsertLabel(label) {
@@ -126,7 +157,8 @@ async function removeLabel(labelName) {
 
 async function hasActiveAutoFixRun(branchName) {
   const encodedBranch = encodeURIComponent(branchName);
-  for (const status of ['in_progress', 'queued']) {
+  // `pending` = waiting on the per-PR concurrency group (ADR-0020).
+  for (const status of ['in_progress', 'queued', 'pending']) {
     let runsRes;
     try {
       runsRes = await ghFetch(
@@ -152,6 +184,7 @@ async function hasActiveAutoFixRun(branchName) {
   return false;
 }
 
+try {
 const [prMetaRes, diffRes] = await Promise.all([
   ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`),
   ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
@@ -167,9 +200,25 @@ const rawDiff = await diffRes.text();
 const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
+// filterDiff(rawDiff) below without a maxChars override returns the fully filtered diff with
+// no length cap, so comparing its length against the truncated `diff` above tells us whether
+// the 12,000-char cutoff actually cut anything — used to warn the reviewer it saw a partial diff.
+const diffTruncated = filterDiff(rawDiff, Infinity).length > diff.length;
 
 const baseUserPrompt = interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: prBody });
-const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff)}${buildAutomationGateContext(rawDiff)}`;
+const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
+const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
+const evidenceParse = fs.existsSync(evidencePath)
+  ? parseEvidence(fs.readFileSync(evidencePath, 'utf8'))
+  : { ok: false, reason: `no evidence file at ${evidencePath}` };
+const evidence = assessEvidence(evidenceParse, {
+  prHeadSha: prMeta?.head?.sha ?? null,
+  touchedPaths: findTouchedEvidencePaths(rawDiff),
+});
+log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
+const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff, diffTruncated)}${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${formatEvidenceContext(evidence)}`;
+
+obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
 
 const rawReview = await callLLM({
   prompt: userPrompt,
@@ -180,14 +229,25 @@ const rawReview = await callLLM({
   temperature,
   maxTokens: llmMaxTokens,
   responseFormat: null,
+  reasoningEffort,
 });
+
+obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { output_tokens_est: estimateTokens(rawReview), prNumber } });
 
 const HEADING = '## 🔍 Automated Code Review';
 const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
-const body = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-
 const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
-const isApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+const llmApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+// ADR-0024: a failing check blocks APPROVE in code, whatever the LLM concluded.
+const evidenceOverride = llmApproved && evidence.failing.length > 0;
+const isApproved = llmApproved && !evidenceOverride;
+
+const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride });
+// Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
+const body = evidence.failing.length > 0
+  ? `${HEADING}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
+  : `${reviewText}\n${evidenceSection}`;
 
 const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
 if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
@@ -309,6 +369,17 @@ const updatedPrMetrics = {
 await writeCheckpoint(checkpointRunId, 'pr_metrics', updatedPrMetrics);
 log('PR metrics checkpoint updated', { prNumber, review_cycles: updatedPrMetrics.review_cycles });
 
+const reviewDurationMs = Date.now() - _reviewStartMs;
+obsLog({
+  stage: 'review',
+  event: 'review.verdict',
+  level: 'info',
+  duration_ms: reviewDurationMs,
+  meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride },
+});
+tracer.endSpan('review', { outcome: 'success', meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles } });
+await tracer.finalize(isApproved ? 'success' : 'partial');
+
 if (isApproved) {
   await appendMetric({
     type: 'pr',
@@ -325,4 +396,10 @@ if (isApproved) {
     total_output_tokens_est: updatedPrMetrics.total_output_tokens_est,
   });
   log('PR metrics recorded', { prNumber, verdict: 'APPROVE' });
+}
+} catch (err) {
+  obsLog({ stage: 'review', event: 'review.error', level: 'error', duration_ms: Date.now() - _reviewStartMs, meta: { error: err.message } });
+  tracer.endSpan('review', { outcome: 'failed', meta: { error: err.message } });
+  await tracer.finalize('failed');
+  throw err;
 }

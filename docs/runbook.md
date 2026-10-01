@@ -2,7 +2,7 @@
 
 ## Metrics System
 
-Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step.
+Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step. Scripts write the run's records to `$RUNNER_TEMP/pipeline-metrics.jsonl` (`METRICS_FILE`), outside the checkout, and "Commit metrics" appends only those lines, so a `metrics/runs.jsonl` in the checked-out branch is never uploaded (ADR-0021).
 
 **Record types:**
 
@@ -34,6 +34,41 @@ node scripts/metrics-report.mjs
 
 ---
 
+## Run Trace Artifacts
+
+Every pipeline run uploads a `run-trace-<GITHUB_RUN_ID>` artifact (JSON) via `if: always()`. Download it from **Actions → \<Run\> → Artifacts** to inspect stage-level timing and outcomes without reading raw log lines.
+
+```bash
+# After unzipping the artifact:
+# Overall outcome and timing
+cat <run_id>.json | jq '{run_id, outcome, started_at, completed_at}'
+
+# All spans with outcome + duration
+cat <run_id>.json | jq '[.spans[] | {stage, outcome, duration_ms}]'
+
+# Only failed spans
+cat <run_id>.json | jq '[.spans[] | select(.outcome == "failed")]'
+```
+
+**Trace field quick reference:**
+
+| Field | Description |
+|-------|-------------|
+| `outcome` | `success` — all work done; `partial` — non-fatal outcome (e.g. issue rejected, review requested changes); `failed` — terminated by error; `skipped` — stage bypassed (e.g. max attempts) |
+| `duration_ms` | Wall-clock time for the span; `null` if the stage was killed before `endSpan` ran |
+| `meta` | Stage-specific fields — e.g. `score`, `verdict`, `attempt`, `paths`, `changes_count` |
+
+**Trace troubleshooting:**
+
+| Symptom | Probable Cause |
+|---------|----------------|
+| No trace artifact for a run | Job was cancelled before the `Upload run trace` step ran (known GitHub Actions limitation with `if: always()` + cancellation) |
+| Trace file exists but `completed_at` is null | Script was killed after `startSpan` but before `finalize()` — the spans present are still valid |
+| Trace `outcome: "partial"` for a review run | Expected: verdict was `REQUEST_CHANGES`; auto-fix loop continues |
+| `duration_ms: null` on a span | `endSpan` was never called for that stage — check the step log for an uncaught exception before the terminal event |
+
+---
+
 ## Symptom → Probable Cause Mapping
 
 | Symptom | Probable Cause |
@@ -44,12 +79,19 @@ node scripts/metrics-report.mjs
 | Issue stays unlabelled after validation run | LLM API key missing or invalid; `manage_labels.mjs` failed to create labels (check for 403/404 in logs) |
 | `ready-for-dev` applied but `code-generation` never triggers | Workflow trigger mismatch (label name drift vs `config/labels.yaml`); `AI_PR_TOKEN` / `GITHUB_TOKEN` lacks `contents: write` |
 | Generation run completes but no PR is created | Empty LLM output (no valid JSON patch); all generated paths failed safety check; `AI_PR_TOKEN` scope too narrow; **Allow GitHub Actions to create pull requests** disabled |
-| PR opens but files are wrong or empty | Prompt template issue (`generation-user.md` placeholders not resolved); model returned malformed JSON; `output_writer.mjs` rejected paths (absolute or `..` traversal) |
+| PR opens but files are wrong or empty | Prompt template issue (`generation-user.md` placeholders not resolved); model returned malformed JSON; `output_writer.mjs` rejected paths (absolute, `..` traversal, or a protected path — `.github/`, `scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `package.json`, lock files, `.npmrc`/`.yarnrc*`; see ADR-0021) |
 | `pr-review` never posts a comment | No open PR found for the push branch (exits silently by design); LLM API error; `pull-requests: write` permission missing |
+| Review comment shows **Verdict overridden to REQUEST_CHANGES** | A check in `config/review-evidence.yaml` exited non-zero on the PR head (ADR-0024) — expand the failing check's output tail in the `🧪 Tool Evidence` section; the fix belongs in the PR, not the review |
+| `🧪 Tool Evidence` says *missing* | The default branch has no `config/review-evidence.yaml` or no evidence runner yet (expected: evidence is opt-in and read from the default branch, the job logs `skipped: "no config"` or fails to find the script), the `evidence` job crashed (invalid config, see `review_evidence.error` in its log), or the artifact upload/download failed — review ran without evidence |
+| A check reports `ERROR (exit 127)` or `(exit 126)` | The command could not be executed: typo, binary not installed in the evidence job, or quotes/inline comment in `config/review-evidence.yaml` — fix the config; never forces `REQUEST_CHANGES` |
+| `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json` or `pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
+| `🧪 Tool Evidence` says *stale* | A push landed between the evidence run and the review's PR fetch; the review of the newer push will carry fresh evidence |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
-| Checkbox rerun (`- [x] Relancer Auto Fixer`) posted but no auto-fix triggered | Comment does not contain the exact text (case-insensitive alternatives: `rerun auto-fix`, `rerun auto fixer`); comment is on an issue that is **not** a PR; `issue_comment` trigger not present in `auto-fix-pr.yml` |
+| Checkbox rerun (`- [x] Relancer Auto Fixer`) posted but no auto-fix triggered | Comment does not contain the exact text (case-insensitive alternatives: `rerun auto-fix`, `rerun auto fixer`); comment is on an issue that is **not** a PR; comment author's `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR` (untrusted commenters are ignored by both the workflow `if:` and `auto_fix_pr.mjs`); `issue_comment` trigger not present in `auto-fix-pr.yml` |
 | Auto-fix triggered via checkbox but fails at checkout | "Resolve PR payload for issue_comment" step failed — check that `AI_PR_TOKEN` or `GITHUB_TOKEN` has `pull-requests: read` and `contents: read`; `jq` parse error indicates malformed API response |
+| A PR changing `scripts/`, `prompts/` or `config/` is reviewed/auto-fixed with the old behavior | Expected: `pr-review` and `auto-fix-pr` run the pipeline from the default branch (ADR-0023); changes take effect after merge |
+| Auto-fix, PR review or reset run shows as *Queued* / *Pending*, or an earlier pending run shows *Cancelled* | Expected: the three share one concurrency group per PR branch, `pr-pipeline-<head ref>` (ADR-0020). One of them runs per PR at a time; only the latest pending run is kept. A cancelled pending review is re-triggered by the next push |
 | Auto-fix loop stops at attempt 3 | Expected: 3-attempt hard limit reached — manual intervention required (see below) |
 | Auto-fix posts "Auto-Fix Skipped" comment and stops | PR modifies `scripts/auto_fix_pr.mjs` — self-modification guard triggered (expected) |
 | Auto-fix workflow succeeds but pushes nothing | Checkpoint resume: attempt was already completed in a previous run |
@@ -62,7 +104,9 @@ node scripts/metrics-report.mjs
 
 For every workflow run, navigate to:
 
-**Actions → \<Workflow Name\> → \<Run\> → \<Job\> → Step logs**
+**Actions → \<Workflow Name\> → \<Run\> → Artifacts** to download the `run-trace-<run_id>` JSON file for structured stage-level data.
+
+**Actions → \<Workflow Name\> → \<Run\> → \<Job\> → Step logs** for raw line-by-line output.
 
 Key steps to expand per workflow:
 
@@ -117,20 +161,25 @@ Key steps to expand per workflow:
 | Review submit 422 warning | Enable **Allow GitHub Actions to create and approve pull requests**; comment and labels still apply — auto-fix can still trigger via the `changes-requested` label |
 | Review submit 500 | Transient GitHub API issue; re-push an empty commit to re-trigger: `git commit --allow-empty -m "re-trigger review" && git push` |
 | Re-pulse skipped (auto-fix already running) | Expected guard behavior; wait for the running auto-fix job to complete |
+| `evidence` job fails with `checks.<name>.command` / `timeout_seconds` error | Fix `config/review-evidence.yaml` (each check needs a `command`; `timeout_seconds` must be a positive integer) and push |
+| A check reports `TIMEOUT` on every run | Raise `checks.<name>.timeout_seconds` or investigate the hang — timeouts never force `REQUEST_CHANGES`, so auto-fix will not address them |
+| Override persists although the check passes locally | Evidence runs with credential-like env vars and `GIT_CONFIG_*` stripped — a check that depends on one of them will fail in CI only; make it independent of those variables |
 
 ### `auto-fix-pr`
 
 | Failure | Recovery |
 |---------|----------|
 | Attempt limit reached (3/3) | Review the PR manually; apply fixes, push, then remove `changes-requested` and apply `review-approved` if satisfied, or leave for human merge decision |
-| Groq API 413 — Request too large (`Limit 12000, Requested …`) | Input prompt exceeds Groq on_demand per-request limit. Lower `autofix_max_input_tokens` in `config/models.yaml` (default `7400` already accounts for this; may have been raised). Alternatively upgrade to Groq Dev Tier (higher limit) or set `AI_PROVIDER=anthropic`. |
+| Groq API 400 — `reasoning_effort` not supported / invalid | `GROQ_MODEL` points at a non-reasoning model while `<stage>_reasoning_effort` is set. Set the `GROQ_REASONING_EFFORT` repository variable to `off` (ADR-0025) |
+| Groq API 404 `model_not_found` | The configured Groq model was retired. Check https://console.groq.com/docs/deprecations, then update `config/models.yaml` or set the `GROQ_MODEL` repository variable (ADR-0025) |
+| Groq API 413 — Request too large (`Limit 8000, Requested …`) | Request exceeds the free-tier TPM of `openai/gpt-oss-120b` (8,000). Lower `autofix_max_input_tokens` in `config/models.yaml` (default `3000` already accounts for this; may have been raised). `review` (diff capped at 12,000 chars, plus PR body, manifests and up to 2,000 chars of tool-evidence output per failing check, ADR-0024) and `generation` (no input cap) can also hit it on large PRs/issues; lowering `review_max_tokens`/`generation_max_tokens` buys headroom (ADR-0025). Alternatively upgrade to Groq Dev Tier (higher limit) or set `AI_PROVIDER=anthropic`. |
 | Anthropic API 401 — Invalid API Key | `ANTHROPIC_API_KEY` secret is expired or incorrect. Generate a new key at [console.anthropic.com](https://console.anthropic.com) and update it in **Settings → Secrets and variables → Actions → `ANTHROPIC_API_KEY`**. |
 | LLM returns invalid JSON | Check `auto-fix-system.md` for prompt integrity; re-trigger by removing and re-applying `changes-requested` label |
 | Commit push fails (branch protection) | Ensure `AI_PR_TOKEN` has `contents: write` and branch protection allows bot pushes |
 | `auto-fix-attempt-N` label missing | Labels are auto-created on first use; if creation fails (403), grant `issues: write` to the token used |
 | Auto-fix skipped on a PR that modifies `auto_fix_pr.mjs` | Expected — self-modification guard is active. Fix the script manually and push directly. |
 | Workflow re-run completes immediately with no commit | No files changed by the model output for that run; inspect logs and review feedback context. |
-| Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and checkpoint files automatically before rerun. |
+| Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and the `checkpoints/pr-<N>/autofix.json` checkpoint automatically before rerun (`review.json` is kept: it is the auto-fix prerequisite). |
 | Checkbox rerun fails at "Resolve PR payload" step | Confirm the token (`AI_PR_TOKEN` or `GITHUB_TOKEN`) has `pull-requests: read`; inspect the curl output in the step log for HTTP errors |
 | Checkbox rerun triggers but commits to wrong branch | Indicates an older workflow version without the step-ordering fix — ensure `auto-fix-pr.yml` has "Resolve PR payload for issue_comment" listed **before** "Checkout PR branch" |
 
@@ -172,7 +221,7 @@ git commit --allow-empty -m "re-trigger pr-review" && git push
 
 ### Reset the auto-fix attempt counter
 
-Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and checkpoint files, then start a fresh run from attempt 1.
+Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and the `autofix` checkpoint, then start a fresh run from attempt 1.
 
 ### Manually approve and close the loop
 

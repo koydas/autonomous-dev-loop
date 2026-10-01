@@ -136,7 +136,7 @@ async function writeIssueCommentEventFile(prNumber = PR_NUMBER) {
     JSON.stringify({
       action: 'created',
       issue: { number: prNumber, pull_request: { url: 'http://placeholder' } },
-      comment: { body: '- [x] Relancer Auto Fixer' },
+      comment: { body: '- [x] Relancer Auto Fixer', author_association: 'MEMBER' },
     }),
   );
   return tmpFile;
@@ -541,21 +541,33 @@ test('auto_fix_pr creates attempt label in repo before applying it', async () =>
 });
 
 
+// lib/checkpoint.mjs resolves ./checkpoints against cwd at import time; load a fresh
+// instance rooted at `cwd` so fixtures use the exact layout the script reads/writes.
+async function loadCheckpointModuleAt(cwd) {
+  const prev = process.cwd();
+  process.chdir(cwd);
+  try {
+    return await import(`../lib/checkpoint.mjs?cwd=${encodeURIComponent(cwd)}`);
+  } finally {
+    process.chdir(prev);
+  }
+}
+
 test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun is requested', async () => {
   const existingLabels = JSON.stringify([{ name: 'auto-fix-attempt-1' }, { name: 'auto-fix-attempt-2' }]);
   const server = await startMockServer(makeHandler({ labelsBody: existingLabels }));
   const eventFile = await writeEventFile();
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-'));
-  const checkpointDir = path.join(tmpDir, 'checkpoints');
+  const runDir = path.join(tmpDir, 'checkpoints', `pr-${PR_NUMBER}`);
   const outputFile = path.join(os.tmpdir(), `autofix-output-reset-${Date.now()}.txt`);
   try {
-    await fs.mkdir(checkpointDir, { recursive: true });
-    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-1.json'), '{"stage":"complete"}');
-    await fs.writeFile(path.join(checkpointDir, 'checkpoint-attempt-2.json'), '{"stage":"complete"}');
+    const { writeCheckpoint } = await loadCheckpointModuleAt(tmpDir);
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'review', { verdict: 'REQUEST_CHANGES' });
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'autofix', { prNumber: PR_NUMBER, attempt: 2, outputPaths: ['stale.txt'] });
 
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
     rawEvent.action = 'edited';
-    rawEvent.comment = { body: '- [x] Relancer Auto Fixer' };
+    rawEvent.comment = { body: '- [x] Relancer Auto Fixer', author_association: 'MEMBER' };
     await fs.writeFile(eventFile, JSON.stringify(rawEvent));
 
     const result = await runAutoFix(server.address().port, eventFile, {
@@ -567,8 +579,7 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
     const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
     assert.equal(deleteCalls.length, 2, 'expected removal of auto-fix attempt labels');
 
-    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-1.json')));
-    await assert.rejects(fs.access(path.join(checkpointDir, 'checkpoint-attempt-2.json')));
+    await fs.access(path.join(runDir, 'review.json'));
 
     const output = await fs.readFile(outputFile, 'utf8');
     assert.match(output, /attempt_number=1/);
@@ -578,6 +589,39 @@ test('auto_fix_pr resets attempt labels and checkpoint files when checkbox rerun
     await fs.unlink(eventFile).catch(() => {});
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     await fs.unlink(outputFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr checkbox rerun deletes the autofix checkpoint and keeps review.json', async () => {
+  // LLM output is invalid so the run stops after the reset, before writing a new autofix checkpoint.
+  const server = await startMockServer(makeHandler({
+    labelsBody: JSON.stringify([{ name: 'auto-fix-attempt-1' }]),
+    llmResponse: anthropicJson('not json at all'),
+  }));
+  const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rerun-ckpt-'));
+  const runDir = path.join(tmpDir, 'checkpoints', `pr-${PR_NUMBER}`);
+  const otherRunDir = path.join(tmpDir, 'checkpoints', 'pr-999');
+  try {
+    const { writeCheckpoint } = await loadCheckpointModuleAt(tmpDir);
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'review', { verdict: 'REQUEST_CHANGES' });
+    await writeCheckpoint(`pr-${PR_NUMBER}`, 'autofix', { prNumber: PR_NUMBER, attempt: 1, outputPaths: ['a.txt'] });
+    await writeCheckpoint('pr-999', 'autofix', { prNumber: 999, attempt: 1, outputPaths: ['b.txt'] });
+
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.comment.author_association = 'COLLABORATOR';
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.notEqual(result.code, 0, 'invalid LLM output should fail the run after the reset');
+
+    await assert.rejects(fs.access(path.join(runDir, 'autofix.json')), 'autofix checkpoint must be removed');
+    await fs.access(path.join(runDir, 'review.json'));
+    await fs.access(path.join(otherRunDir, 'autofix.json'));
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -617,7 +661,7 @@ test('auto_fix_pr resets labels when english rerun checkbox text is used', async
   try {
     const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
     rawEvent.action = 'created';
-    rawEvent.comment = { body: '- [x] rerun auto-fix' };
+    rawEvent.comment = { body: '- [x] rerun auto-fix', author_association: 'OWNER' };
     await fs.writeFile(eventFile, JSON.stringify(rawEvent));
 
     const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
@@ -625,6 +669,51 @@ test('auto_fix_pr resets labels when english rerun checkbox text is used', async
 
     const deleteCalls = server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url));
     assert.equal(deleteCalls.length, 1, 'expected removal of existing attempt label on rerun');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', undefined]) {
+  test(`auto_fix_pr ignores checkbox rerun from untrusted commenter (author_association=${association})`, async () => {
+    const existingLabels = JSON.stringify([{ name: 'auto-fix-attempt-1' }, { name: 'auto-fix-attempt-2' }]);
+    const server = await startMockServer(makeHandler({ labelsBody: existingLabels, llmResponse: validLLMJson('out.txt') }));
+    const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-untrusted-'));
+    try {
+      const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+      rawEvent.comment = { body: '- [x] Relancer Auto Fixer', author_association: association };
+      await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+      const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+
+      // Defense in depth: an issue_comment event that is not a trusted rerun must do nothing.
+      const mutations = server.requests.filter((r) => r.method !== 'GET');
+      assert.deepEqual(mutations.map((r) => `${r.method} ${r.url}`), [], 'untrusted comment must not mutate anything');
+      assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 0, 'untrusted comment must not call the LLM');
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
+test('auto_fix_pr ignores issue_comment events from trusted authors without the rerun checkbox', async () => {
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeIssueCommentEventFile(PR_NUMBER);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-no-checkbox-'));
+  try {
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.comment = { body: 'LGTM, thanks', author_association: 'OWNER' };
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(server.requests.length, 0, 'plain comment must not reach GitHub or the LLM');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -762,5 +851,166 @@ test('auto_fix_pr unhandledRejection handler logs run_summary with success false
     assert.ok(Array.isArray(summary.errors) && summary.errors.length > 0, 'expected non-empty errors');
   } finally {
     await fs.unlink(tmpScript).catch(() => {});
+  }
+});
+
+// Fails the first request matching `match` with `status` (and optional headers), then delegates.
+function failOnce(handler, match, status, headers = {}) {
+  let failed = false;
+  return (req, res) => {
+    if (!failed && match(req)) {
+      failed = true;
+      res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+      return res.end('{"message":"transient"}');
+    }
+    return handler(req, res);
+  };
+}
+
+function retryLogWaits(stdout) {
+  return stdout.split('\n').flatMap((line) => {
+    try {
+      const parsed = JSON.parse(line);
+      return parsed.msg === 'retry' ? [parsed.waitMs] : [];
+    } catch { return []; }
+  });
+}
+
+test('auto_fix_pr ghFetch retries GitHub 429 and honors Retry-After', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-429-'));
+  const server = await startMockServer(failOnce(
+    makeHandler({ llmResponse: validLLMJson('out.txt') }),
+    (req) => req.method === 'GET' && /\/issues\/\d+\/labels$/.test(req.url),
+    429,
+    { 'Retry-After': '1' },
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    assert.deepEqual(retryLogWaits(result.stdout), [1000], 'expected one retry waiting Retry-After (1s)');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr ghFetch retries GitHub 5xx responses', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-503-'));
+  const server = await startMockServer(failOnce(
+    makeHandler({ llmResponse: validLLMJson('out.txt') }),
+    (req) => req.method === 'GET' && /\/pulls\/\d+$/.test(req.url),
+    503,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const diffRequests = server.requests.filter((r) => r.method === 'GET' && /\/pulls\/\d+$/.test(r.url));
+    assert.equal(diffRequests.length, 2, 'expected the 503 diff fetch to be retried once');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr ghFetch returns non-retryable statuses (422) to the caller without retrying', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-422-'));
+  const server = await startMockServer(makeHandler({ labelCreateStatus: 422, llmResponse: validLLMJson('out.txt') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0 (422 = label exists), stderr: ${result.stderr}`);
+    const creates = server.requests.filter((r) => r.method === 'POST' && /\/repos\/[^/]+\/[^/]+\/labels$/.test(r.url));
+    assert.equal(creates.length, 1, '422 must not be retried');
+    assert.deepEqual(retryLogWaits(result.stdout), []);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr ghFetch does not wait out a Retry-After beyond the retry budget', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-429-long-'));
+  const server = await startMockServer(failOnce(
+    makeHandler({ llmResponse: validLLMJson('out.txt') }),
+    (req) => req.method === 'GET' && /\/issues\/\d+\/labels$/.test(req.url),
+    429,
+    { 'Retry-After': '3600' },
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const started = Date.now();
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.ok(Date.now() - started < 20000, 'must fail fast instead of sleeping for an hour');
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /Label list failed: 429/, 'caller still sees the Response status');
+    assert.deepEqual(retryLogWaits(result.stdout), []);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr ghFetch does not retry a 5xx comment POST (non-idempotent)', async () => {
+  const maxLabels = JSON.stringify([
+    { name: 'auto-fix-attempt-1' },
+    { name: 'auto-fix-attempt-2' },
+    { name: 'auto-fix-attempt-3' },
+  ]);
+  const server = await startMockServer(failOnce(
+    makeHandler({ labelsBody: maxLabels }),
+    (req) => req.method === 'POST' && /\/issues\/\d+\/comments$/.test(req.url),
+    500,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const posts = server.requests.filter((r) => r.method === 'POST' && /\/issues\/\d+\/comments$/.test(r.url));
+    assert.equal(posts.length, 1, 'a retried comment POST could post a duplicate comment');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr sends the configured reasoning_effort to Groq', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-reasoning-'));
+  const groqResponse = JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ summary: 'fixed', changes: [{ target_path: 'out.txt', file_content: 'x' }] }) } }],
+  });
+  const groqHandler = (req, res) => {
+    if (req.url === '/v1/chat/completions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(groqResponse);
+    }
+    makeHandler({})(req, res);
+  };
+  const server = await startMockServer(groqHandler);
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, {
+      cwd: tmpDir,
+      extraEnv: {
+        ANTHROPIC_API_KEY: '',
+        GROQ_API_KEY: 'groq-test',
+        GROQ_API_URL: `http://127.0.0.1:${server.address().port}/v1/chat/completions`,
+      },
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const call = server.requests.find((r) => r.url === '/v1/chat/completions');
+    assert.ok(call, 'expected a Groq call');
+    const body = JSON.parse(call.body);
+    assert.equal(body.model, 'openai/gpt-oss-120b');
+    assert.equal(body.reasoning_effort, 'low');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });

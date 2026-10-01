@@ -4,6 +4,13 @@ import { shouldIncludeFile } from './file_filters.mjs';
 
 const MAX_FILE_SIZE = 8000;
 const MAX_FILES = 10;
+const MAX_DEPENDENCIES = 200;
+// Bounds the allowlist's actual character footprint, independent of MAX_DEPENDENCIES: 200
+// entries of long scoped package names (e.g. "@some-long-org/some-long-package-name") can
+// still add tens of KB on top of the existing file-context budget (MAX_FILES * MAX_FILE_SIZE
+// = 80,000 chars), which the generation stage doesn't cap or truncate by token budget the way
+// the auto-fix stage does (autofix_max_input_tokens) — so this list must bound itself.
+const MAX_ALLOWLIST_CHARS = 4000;
 
 // Matches relative paths that contain at least one directory separator.
 // Negative lookbehind on `:` and `/` prevents matching URL segments.
@@ -64,8 +71,117 @@ export function formatFileContents(files) {
     .join('\n\n');
 }
 
+// Reads dependencies + devDependencies from the target repo's package.json, if present.
+// Returns null when there is no package.json or it isn't valid JSON — callers should treat
+// that as "no allowlist available" rather than an error, since not every repo is Node.js-based.
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// Returns `field` only if it's a plain object (a valid package.json dependency map);
+// otherwise an empty object, so a malformed shape (array, string, null) is silently
+// ignored rather than corrupting the merged result (e.g. spreading an array would add
+// numeric-index keys like "0" as if they were package names).
+function asDependencyMap(field) {
+  return isPlainObject(field) ? field : {};
+}
+
+export async function readPackageJsonDependencies(repoRoot) {
+  const absRepoRoot = path.resolve(repoRoot);
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(absRepoRoot, 'package.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return null;
+    throw err;
+  }
+
+  let pkg;
+  try {
+    pkg = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  // JSON.parse succeeds for any valid JSON value, not just objects (e.g. `null`, `"x"`,
+  // `[1,2]`) — package.json must be a top-level object for any of this to be meaningful.
+  if (!isPlainObject(pkg)) return null;
+
+  return {
+    ...asDependencyMap(pkg.dependencies),
+    ...asDependencyMap(pkg.devDependencies),
+    ...asDependencyMap(pkg.peerDependencies),
+    ...asDependencyMap(pkg.optionalDependencies),
+  };
+}
+
+export function formatDependencyAllowlist(deps) {
+  // `deps === null` means no manifest was readable at all (missing/malformed package.json) —
+  // stay silent, since this pipeline also runs against non-Node.js repos with nothing to say here.
+  // `deps === {}` means a real package.json exists and declares zero dependencies — that's a
+  // meaningful, exhaustive answer ("no npm packages are allowed") and must still be emitted;
+  // treating it the same as "no manifest" would silently drop the constraint precisely when a
+  // repo (like this one) declares no runtime dependencies, letting an import like the
+  // motivating abort-controller incident through unchallenged.
+  if (!deps) return '';
+  if (Object.keys(deps).length === 0) {
+    return (
+      '### Allowed npm dependencies (from the repository root package.json)\n' +
+      '(none — package.json declares zero dependencies)\n\n' +
+      'Do not introduce ANY new external npm package. Language/runtime built-ins ' +
+      '(e.g. AbortController, fetch, crypto, fs, path) do not need to be listed here ' +
+      'and are always allowed. This reflects only the repository root manifest — it ' +
+      "doesn't override the separate allowance for a package already imported " +
+      'elsewhere in the target file, and it may not cover nested workspace-package ' +
+      'manifests this scan does not read.'
+    );
+  }
+  const allNames = Object.keys(deps).sort();
+  // Bound by whichever limit is hit first: entry count (MAX_DEPENDENCIES) or cumulative
+  // character footprint (MAX_ALLOWLIST_CHARS) — a manifest with few but very long scoped
+  // package names could stay under 200 entries while still ballooning the prompt.
+  const names = [];
+  let charCount = 0;
+  for (const name of allNames) {
+    if (names.length >= MAX_DEPENDENCIES) break;
+    const lineLength = name.length + 3; // "- " prefix + trailing newline, approximated
+    if (charCount + lineLength > MAX_ALLOWLIST_CHARS) break;
+    names.push(name);
+    charCount += lineLength;
+  }
+  const truncated = names.length < allNames.length;
+  // When truncated, this list can no longer be treated as exhaustive — a real, already-declared
+  // dependency sorting after the cutoff would otherwise be wrongly rejected as unauthorized. The
+  // static prompt text (generation-system.md/generation-user.md) calls this list "exhaustive";
+  // this note overrides that framing for this specific request when it doesn't hold.
+  const truncationNote = truncated
+    ? `\n\n(List truncated to ${names.length} of ${allNames.length} declared dependencies, ` +
+      `sorted alphabetically (limit: ${MAX_DEPENDENCIES} entries or ${MAX_ALLOWLIST_CHARS} characters, ` +
+      'whichever is reached first), to bound prompt size. Because of this truncation, this list is NOT ' +
+      'exhaustive for this request — do not reject an import solely for not appearing here; only ' +
+      'flag an import as unauthorized if it also fails to match a plausible real package name pattern ' +
+      'or is otherwise clearly suspicious.)'
+    : '';
+  return (
+    '### Allowed npm dependencies (from the repository root package.json)\n' +
+    names.map((name) => `- ${name}`).join('\n') +
+    truncationNote +
+    '\n\nAvoid introducing a package outside this list. Language/runtime built-ins ' +
+    '(e.g. AbortController, fetch, crypto, fs, path) do not need to be listed here ' +
+    'and are always allowed. This list reflects only the repository root manifest — ' +
+    "it doesn't override the separate allowance for a package already imported " +
+    'elsewhere in the target file, and it may not cover nested workspace-package ' +
+    'manifests this scan does not read.'
+  );
+}
+
 export async function buildFileContentsBlock(issueTitle, issueBody, repoRoot) {
   const candidates = extractFilePaths(issueTitle, issueBody);
   const files = await readRelevantFiles(candidates, repoRoot);
-  return formatFileContents(files);
+  const filesBlock = formatFileContents(files);
+
+  const deps = await readPackageJsonDependencies(repoRoot);
+  const allowlistBlock = formatDependencyAllowlist(deps);
+
+  return allowlistBlock ? `${allowlistBlock}\n\n${filesBlock}` : filesBlock;
 }

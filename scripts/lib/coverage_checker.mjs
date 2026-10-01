@@ -10,6 +10,19 @@ export function extractChangedFiles(rawDiffText) {
   return [...new Set(files)];
 }
 
+// Unlike extractChangedFiles, this excludes files that were only deleted (whose +++ side is
+// /dev/null, not a real path) — for callers that need "does this file exist and have content
+// after the patch", e.g. deciding whether a test file was actually added/updated rather than
+// merely referenced by a deletion.
+export function extractAddedOrModifiedFiles(rawDiffText) {
+  const files = [];
+  for (const line of String(rawDiffText || '').split('\n')) {
+    const match = line.match(/^\+\+\+ b\/(.+)$/);
+    if (match) files.push(match[1]);
+  }
+  return [...new Set(files)];
+}
+
 export function isAutomationScopeFile(filePath) {
   return (
     filePath.startsWith('.github/workflows/') ||

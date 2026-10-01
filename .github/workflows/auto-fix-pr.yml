@@ -17,8 +17,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changes_requested: ${{ steps.cfg.outputs.changes_requested }}
+      head_ref: ${{ steps.head.outputs.ref }}
     steps:
+      # Default branch, not the PR merge ref: this job runs repository code (yaml.mjs).
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -31,12 +36,30 @@ jobs:
           EOF
           )
           echo "changes_requested=$LABEL" >> "$GITHUB_OUTPUT"
+      # issue_comment payloads carry no head ref; the shared concurrency group needs it.
+      # Same conditions as the auto-fix job's issue_comment branch: no lookup for other comments.
+      - id: head
+        if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '- [x] Relancer Auto Fixer') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_API_URL: ${{ github.event.issue.pull_request.url }}
+        # Fail closed: an empty ref would put the job in the global group `pr-pipeline-`.
+        run: |
+          REF=$(gh api "$PR_API_URL" --jq '.head.ref')
+          [ -n "$REF" ] || { echo "::error::Could not resolve PR head ref"; exit 1; }
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
   auto-fix:
     needs: load-labels
-    if: ${{ (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == needs.load-labels.outputs.changes_requested) || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '- [x] Relancer Auto Fixer')) }}
+    if: ${{ (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == needs.load-labels.outputs.changes_requested) || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '- [x] Relancer Auto Fixer')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Job-level: every PR comment/label triggers this workflow; a workflow-level group
+    # would let skipped runs displace the pending real one. Never cancel: this job pushes.
+    # Shared with pr-review and reset-auto-fix (ADR-0020).
+    concurrency:
+      group: pr-pipeline-${{ github.event.pull_request.head.ref || needs.load-labels.outputs.head_ref }}
+      cancel-in-progress: false
 
     steps:
       - name: Resolve PR payload for issue_comment
@@ -48,7 +71,6 @@ jobs:
         run: |
           PAYLOAD=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${PR_API_URL}")
           echo "head_ref=$(echo "${PAYLOAD}" | jq -r '.head.ref')" >> "$GITHUB_OUTPUT"
-          echo "payload=${PAYLOAD}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout PR branch
         uses: actions/checkout@v4
@@ -56,6 +78,17 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}
           token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+
+      # ADR-0023: pipeline code runs from the default branch; the branch above is data only.
+      - name: Checkout trusted pipeline (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      - name: Move trusted pipeline out of the workspace
+        run: mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
 
       - uses: actions/setup-node@v4
         with:
@@ -88,13 +121,11 @@ jobs:
             exit 1
           fi
 
-      - name: Capture metrics baseline
-        id: mbl
-        run: echo "count=$(wc -l < metrics/runs.jsonl 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
-
       - name: Apply AI fixes
         id: fix
         env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
           CHECKPOINT_RUN_ID: pr-${{ github.event.pull_request.number || github.event.issue.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -103,7 +134,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
-        run: node scripts/auto_fix_pr.mjs
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/auto_fix_pr.mjs"
 
       - name: Upload checkpoint artifact
         if: always()
@@ -127,13 +159,24 @@ jobs:
           git diff --staged --quiet || git commit -m "fix(ai): auto-fix attempt ${ATTEMPT}"
           git push origin HEAD:"${PR_BRANCH}"
 
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
       - name: Commit metrics
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BASELINE: ${{ steps.mbl.outputs.count }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
         run: |
-          NEW_LINES=$(tail -n +$((BASELINE + 1)) metrics/runs.jsonl 2>/dev/null || true)
+          # Only this run's records, written outside the checkout (ADR-0021): never the
+          # working-tree metrics/runs.jsonl, which generated code could have modified.
+          NEW_LINES=$(cat "$METRICS_FILE" 2>/dev/null || true)
           [ -z "$NEW_LINES" ] && exit 0
           UPLOADED=0
           for i in 1 2 3; do

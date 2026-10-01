@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS } from '../lib/output_writer.mjs';
 
 // parseJsonResponse tests
 
@@ -283,4 +283,166 @@ test('writeGeneratedFiles overwrites an existing file', async () => {
     process.chdir(originalCwd);
     await fs.rm(tmpDir, { recursive: true }).catch(() => {});
   }
+});
+
+// Protected write-path denylist (ADR-0021)
+
+function changeAt(targetPath) {
+  return { summary: 'ok', changes: [{ target_path: targetPath, file_content: 'x' }] };
+}
+
+test('PROTECTED_WRITE_PATHS exports every required prefix and file', () => {
+  for (const entry of ['.github/', 'scripts/', 'config/', 'prompts/', 'checkpoints/', 'metrics/', 'observability/',
+    'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', '.npmrc', '.yarnrc', '.yarnrc.yml']) {
+    assert.ok(PROTECTED_WRITE_PATHS.includes(entry), `missing ${entry}`);
+  }
+  assert.ok(Object.isFrozen(PROTECTED_WRITE_PATHS), 'denylist must be immutable');
+});
+
+for (const target of [
+  '.github/workflows/ci.yml',
+  '.github/actions/setup/action.yml',
+  '.github/CODEOWNERS',
+  'scripts/auto_fix_pr.mjs',
+  'scripts/lib/output_writer.mjs',
+  'config/models.yaml',
+  'prompts/generation-system.md',
+]) {
+  test(`validateAiOutput rejects protected prefix target_path ${target}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+for (const target of ['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'packages/app/package.json', 'web/yarn.lock']) {
+  test(`validateAiOutput rejects protected manifest/lock file ${target}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+for (const target of [
+  './.github/workflows/ci.yml',
+  '././.github/workflows/ci.yml',
+  '.\\.github\\workflows\\ci.yml',
+  '.github\\workflows\\ci.yml',
+  '.GITHUB/workflows/ci.yml',
+  '.GitHub/Workflows/ci.yml',
+  '.github//workflows/ci.yml',
+  '.github/./workflows/ci.yml',
+  '  .github/workflows/ci.yml  ',
+  '.github',
+  'Scripts/lib/x.mjs',
+  'scripts\\lib\\x.mjs',
+  './config/./labels.yaml',
+  'PROMPTS/auto-fix-system.md',
+  'PACKAGE.JSON',
+  './Package-Lock.json',
+]) {
+  test(`validateAiOutput rejects normalization bypass ${JSON.stringify(target)}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+for (const target of ['src/config.js', 'docs/scripts/readme.md', 'scriptsx/a.js', 'githubstuff/a.md', 'src/.github-notes.md', 'package.json.md', 'docs/package-json.md']) {
+  test(`validateAiOutput accepts non-protected target_path ${target}`, () => {
+    const result = validateAiOutput(changeAt(target));
+    assert.equal(result.changes[0].targetPath, target);
+  });
+}
+
+test('validateAiOutput rejects the whole batch when one change targets a protected path', () => {
+  assert.throws(
+    () => validateAiOutput({
+      summary: 'ok',
+      changes: [
+        { target_path: 'src/a.js', file_content: '1' },
+        { target_path: '.github/workflows/pwn.yml', file_content: '2' },
+      ],
+    }),
+    /changes\[1\].*protected path/,
+  );
+});
+
+// Pipeline state lives in the same working tree the model writes to: checkpoints are
+// uploaded as artifacts and metrics/runs.jsonl is PUT to the default branch by
+// "Commit metrics"; npm/yarn rc files redirect the registry used by `npx` in CI.
+for (const target of [
+  'checkpoints/pr-55/review.json',
+  './Checkpoints/issue-1/validate.json',
+  'metrics/runs.jsonl',
+  'metrics\\runs.jsonl',
+  'observability/traces/1.json',
+  '.npmrc',
+  'sub/.npmrc',
+  '.yarnrc',
+  '.yarnrc.yml',
+]) {
+  test(`validateAiOutput rejects pipeline-state / registry-config target_path ${JSON.stringify(target)}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+// Git metadata: a written .git/config (core.fsmonitor, core.hooksPath, filters) executes on
+// the next `git add`/`git commit` in the auto-fix job, which holds AI_PR_TOKEN.
+for (const target of ['.git/config', '.git/hooks/pre-commit', './.GIT/config', '.git\\info\\attributes', '.git', 'vendor/lib/.git/config']) {
+  test(`validateAiOutput rejects git metadata target_path ${JSON.stringify(target)}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path \(\.git\/\)/);
+  });
+}
+
+for (const target of ['.gitignore', '.gitattributes', 'docs/.gitkeep', 'src/git/index.js']) {
+  test(`validateAiOutput accepts git-adjacent non-metadata target_path ${target}`, () => {
+    assert.equal(validateAiOutput(changeAt(target)).changes[0].targetPath, target);
+  });
+}
+
+async function inTmpRepo(fn) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-symlink-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(tmpDir);
+    await fs.mkdir('.git', { recursive: true });
+    await fs.writeFile('.git/config', '[core]\n', 'utf8');
+    await fn(tmpDir);
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+test('writeGeneratedFiles refuses to write through a directory symlink into .git', async () => {
+  await inTmpRepo(async () => {
+    await fs.mkdir('docs', { recursive: true });
+    await fs.symlink('../.git', 'docs/x');
+    await assert.rejects(writeGeneratedFiles([{ targetPath: 'docs/x/config', fileContent: 'pwn' }]), /escapes the repository|git metadata/);
+    assert.equal(await fs.readFile('.git/config', 'utf8'), '[core]\n');
+  });
+});
+
+test('writeGeneratedFiles refuses to write through a directory symlink outside the repository', async () => {
+  await inTmpRepo(async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-outside-'));
+    try {
+      await fs.symlink(outside, 'out');
+      await assert.rejects(writeGeneratedFiles([{ targetPath: 'out/x.txt', fileContent: 'pwn' }]), /escapes the repository/);
+      await assert.rejects(fs.access(path.join(outside, 'x.txt')));
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test('writeGeneratedFiles refuses to overwrite a file that is a symlink', async () => {
+  await inTmpRepo(async () => {
+    await fs.writeFile('real.txt', 'keep', 'utf8');
+    await fs.symlink('real.txt', 'link.txt');
+    await assert.rejects(writeGeneratedFiles([{ targetPath: 'link.txt', fileContent: 'pwn' }]), /symlink/);
+    assert.equal(await fs.readFile('real.txt', 'utf8'), 'keep');
+  });
+});
+
+test('writeGeneratedFiles still writes into a regular nested directory', async () => {
+  await inTmpRepo(async () => {
+    const paths = await writeGeneratedFiles([{ targetPath: 'src/a/b.txt', fileContent: 'ok' }]);
+    assert.deepEqual(paths, ['src/a/b.txt']);
+  });
 });

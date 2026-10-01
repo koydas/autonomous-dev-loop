@@ -1,6 +1,6 @@
 # Code Generation MVP Setup
 
-This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: `validation`/`review` use `qwen/qwen3-32b`, while `generation`/`autofix` use `llama-3.3-70b-versatile`. Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
+This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: all four stages (`validation`, `generation`, `review`, `autofix`) use `openai/gpt-oss-120b` with `reasoning_effort: low` (ADR-0025). Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Quick Start (Operator)
 
@@ -12,7 +12,8 @@ For a first-time setup, complete these steps in order:
 2. (Optional) Configure provider variables:
    - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Groq is the default.
    - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
-   - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `generation`/`autofix` = `llama-3.3-70b-versatile`, `validation`/`review` = `qwen/qwen3-32b`).
+   - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `openai/gpt-oss-120b` for every stage). If you point it at a non-reasoning model, also set `GROQ_REASONING_EFFORT=off`.
+   - `GROQ_REASONING_EFFORT` — `low` | `medium` | `high` overrides `<stage>_reasoning_effort` for every stage; `off` stops sending `reasoning_effort` (required for non-reasoning `GROQ_MODEL` overrides). Unset: per-stage values from `config/models.yaml` (ADR-0025).
    - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
 
 ### Per-workflow environment variable matrix
@@ -21,10 +22,10 @@ All four workflows pass both provider key sets, so provider selection is driven 
 
 | Workflow | Required secret(s) | Optional variables | Fallback |
 |---|---|---|---|
-| `validate-issue.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
-| `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
-| `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
-| `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `validate-issue.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 
 `AI_PR_TOKEN` is used only by `code-generation.yml`, `pr-review.yml`, and `auto-fix-pr.yml` for GitHub API write operations.
 
@@ -52,6 +53,49 @@ The PR review workflow creates and manages these labels automatically:
 - `changes-requested` — applied when the automated code review verdict is REQUEST_CHANGES.
 
 All label names, colors, and descriptions are configurable in `config/labels.yaml`.
+
+## Generation Guardrails
+
+`prompts/generation-system.md` and `prompts/generation-user.md` enforce the following beyond the base JSON contract:
+
+- **Dependency allowlist:** the prompt consumes an "Allowed npm dependencies" context block as the exhaustive list of external packages the model may import from — any import outside it must be a relative project import or a language/runtime built-in (e.g. `AbortController`, `fetch` need no import at all; `fs`, `path`, `node:*` modules need an import but never an npm install). `scripts/lib/file_injector.mjs`'s `buildFileContentsBlock()` (used by `generate_issue_change.mjs`) implements the injection: it reads the target repository **root**'s `package.json`, when present, merging `dependencies`, `devDependencies`, `peerDependencies`, and `optionalDependencies`, and prepends the formatted block ahead of the existing file-context block. Absent or malformed `package.json` resolves to no allowlist block (not an error), since this pipeline is also used against non-Node.js repositories — but a *readable* `package.json` that declares zero dependencies still emits an explicit "no dependencies declared" block rather than staying silent, since the model needs to be told an empty allowlist is exhaustive too (this repository, with no runtime npm dependencies, is exactly that case). The list is capped at 200 entries AND 4000 characters — whichever limit is reached first (truncated alphabetically with a note for larger manifests), since a manifest with fewer but long scoped package names could otherwise stay under the entry cap while still ballooning the prompt. This is a self-contained bound; the generation stage doesn't otherwise cap/truncate its input by token budget the way the auto-fix stage does (`autofix_max_input_tokens`). The list reflects the root manifest only — it doesn't supersede the separate rule allowing a package already imported elsewhere in the target file, and it may not cover nested workspace-package manifests in a monorepo.
+- **Test-writing is issue-driven, not path-driven:** a test file is required whenever the issue explicitly requests one, or whenever the change introduces new non-trivial logic (a function, class, hook, component, or endpoint) — regardless of the target file's path. This is broader than the pre-existing `scripts/`/`prompts/`/`.github/workflows/` coverage-policy scoping described above, which still applies additionally to those paths.
+- **Self-check before returning:** the generation prompt requires the model to trace through the primary success scenario from the issue and verify (a) no assignment targets a known read-only/getter-only built-in property (e.g. `AbortController.prototype.signal`), and (b) any value meant to persist across calls/renders is stored via `useRef`/module state/a class field rather than a re-initialized local variable.
+
+These were added after a benchmark session found a local coding model violating the dependency guardrail and producing a guaranteed-crash read-only-property bug that the paired PR-review prompt did not catch — see the proposed static-verification-backstop ADR in [PR #158](https://github.com/koydas/autonomous-dev-loop/pull/158) for the fuller writeup and a proposed additional static-verification layer (not yet merged as of this change).
+
+## Review and Auto-Fix Guardrails
+
+`prompts/pr-review-system.md` and `prompts/auto-fix-system.md` enforce the following beyond the base rubric:
+
+- **Test-coverage gate is not limited to automation paths:** whenever the diff's classification context reports `tests_expected: true` (any feature/bugfix/refactor change, regardless of path — not just `.github/workflows/`, `scripts/`, `prompts/`), the reviewer checks the `has_test_file_changes` field (computed from the full PR diff, independent of the truncation below — and only counting test files actually added/modified, not ones only deleted) rather than only what's visible in the diff text, reporting at least MEDIUM severity when it's false. This closes a gap where a diff could self-classify "Tests expected: yes" and still be `APPROVED` with no tests present. `has_test_file_changes: true` is a coarse signal, not proof of relevant coverage — when the test file's content is visible in the diff, the reviewer still judges whether it plausibly covers the new/changed logic rather than treating the boolean as conclusive, except when `diff_truncated` makes that judgment impossible.
+- **Named defect checklist:** the reviewer explicitly checks every new/changed file for three specific patterns rather than relying on open-ended "look for bugs" judgment: read-only/getter-only property assignment (e.g. `AbortController.prototype.signal`), unauthorized dependency imports, and non-persistent "ref" patterns (state meant to survive across calls/renders stored in a re-initialized local variable instead of `useRef`/module state).
+- **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`); when this actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
+- **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file regardless of path when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
+
+Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See the proposed static-verification-backstop ADR in [PR #158](https://github.com/koydas/autonomous-dev-loop/pull/158) for the fuller writeup (not yet merged as of this change).
+
+The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
+
+## Tool Evidence for Review (ADR-0024)
+
+`pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer. Per ADR-0023, the runner and its config come from the default branch (`$RUNNER_TEMP/pipeline`); the PR tree is only the working directory the checks run in.
+
+- **Isolation:** the `evidence` job has `permissions: contents: read`, checks out with `persist-credentials: false`, and receives no secrets. `run_review_evidence.mjs` also strips credential-like env vars (name segment `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD`, `CREDENTIAL(S)`) and env-injected git config (`GIT_CONFIG_*`) from each check's environment.
+- **Config (opt-in per repo):** `checks.<name>.command` (run via `bash -c`; one pair of surrounding quotes is stripped, inline comments are rejected) and optional `checks.<name>.timeout_seconds` (default 300). Defaults for this repo: `npm test`, `npm run lint`. Without the file, the job exits 0 and the review reports the evidence as *missing*.
+- **No install step:** the job only checks out and sets up Node. A target repo with dependencies must install them in the command itself, e.g. `command: npm ci && npm test` — otherwise every check fails on missing modules and forces `REQUEST_CHANGES`.
+- **Results:** `pass` / `fail` (non-zero exit) / `timeout` / `error` (spawn failure, or exit 126/127: command not executable / not found), with exit code, duration and the last 2 000 output characters. Written to `$RUNNER_TEMP/evidence/review-evidence.json` (outside the checkout), uploaded as artifact `review-evidence-<run_id>`.
+- **Review behavior:**
+  - A `## Tool evidence` block is appended to the review prompt.
+  - **Any `fail` forces `REQUEST_CHANGES`** in code, whatever the LLM verdict.
+  - A `### 🧪 Tool Evidence` section (status table + failing output tails) is added to the review comment, which auto-fix reads as feedback — right after the heading when a check failed (auto-fix truncates from the end), appended otherwise.
+- **Degraded modes (never block the review, never override):**
+  - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`).
+  - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run).
+  - `timeout` / `error` results — shown as unverified.
+- **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
+
+To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.
 
 ## End-to-End Test
 
@@ -94,8 +138,56 @@ sequenceDiagram
     participant auto-fix-pr.yml
     participant PR
 
-
+    User->>Issue: open / edit
+    Issue->>validate-issue.yml: issues event
+    validate-issue.yml->>Issue: ready-for-dev or needs-refinement
+    Issue->>code-generation.yml: labeled ready-for-dev
+    code-generation.yml->>PR: open PR (branch ai/issue-N)
+    PR->>pr-review.yml: push / opened
+    Note over pr-review.yml: evidence job (no secrets) runs declared checks on the PR head
+    pr-review.yml->>PR: review comment + Tool Evidence, APPROVE or REQUEST_CHANGES (forced on any failing check)
+    alt changes-requested and attempt ≤ 3
+        PR->>auto-fix-pr.yml: labeled changes-requested
+        auto-fix-pr.yml->>PR: push fix(ai): auto-fix attempt N
+    else review-approved
+        PR->>User: human merge gate
+    end
 ```
+
+## Observability
+
+Every workflow run produces two observable outputs on top of GitHub Actions step logs.
+
+### Structured JSON events (stderr)
+
+Each instrumented pipeline script writes one JSON line to stderr per meaningful event. Schema:
+
+```json
+{ "ts": "<ISO8601>", "run_id": "<GITHUB_RUN_ID>", "stage": "<stage>", "event": "<event>", "level": "info|warn|error", "duration_ms": <number|null>, "meta": {} }
+```
+
+`duration_ms` is populated on all terminal events (`*.complete`, `*.pass`, `*.fail`, `*.verdict`). Error-level events also emit `::error::` GitHub Actions annotations, which surface in the PR checks UI.
+
+Stages and minimum events:
+
+| Stage | Script | Events |
+|---|---|---|
+| `issue_validation` | `validate_issue.mjs` | `start`, `pass`/`fail` |
+| `code_gen` | `generate_issue_change.mjs` | `start`, `llm_request`, `llm_response`, `complete`, `error` |
+| `pr_prepare` | `generate_issue_change.mjs` | `start`, `complete`, `error` |
+| `review` | `pr_review.mjs` | `start`, `llm_request`, `llm_response`, `verdict`, `error` |
+| `autofix` | `auto_fix_pr.mjs` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `error` |
+
+### Run trace file
+
+Each workflow writes `observability/traces/<GITHUB_RUN_ID>.json` and uploads it as the artifact `run-trace-<GITHUB_RUN_ID>` (`if: always()`). The file is written incrementally so it contains partial data even if the job is killed.
+
+```bash
+# Read a trace after downloading the artifact:
+cat observability/traces/<run_id>.json | jq '[.spans[] | {stage, outcome, duration_ms}]'
+```
+
+Full schema and event tables: `docs/observability.md`. Design rationale: [ADR-0018](adr/0018-structured-observability.md).
 
 ## Structured Logging API (`scripts/lib/logger.mjs`)
 
@@ -157,16 +249,28 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 - **Config** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
+- **Review evidence** (`scripts/lib/review_evidence.mjs`)
+
+## Per-Stage Model Keys
+
+`config/models.yaml` holds one block per stage (`validation`, `generation`, `review`, `autofix`). Keys apply to Groq only; `<key>` without a stage prefix is a global fallback.
+
+| Key | Default | Description |
+|---|---|---|
+| `<stage>` | `openai/gpt-oss-120b` | Groq model. `GROQ_MODEL` overrides every stage. |
+| `<stage>_temperature` | per stage | `0`–`2`. |
+| `<stage>_max_tokens` | `1024` (validation, review), `4096` (generation, autofix) | Output cap, reasoning tokens included. Prompt + this value must stay under the Groq TPM per request (8K on the free tier), or Groq returns 413. |
+| `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0025). |
 
 ## Auto-Fix Token Budget
 
-The auto-fix stage constructs an LLM prompt from three sources — PR diff, review feedback, and current file contents. The total request size is capped to respect provider per-request limits (notably Groq on_demand's 12,000 TPM hard limit).
+The auto-fix stage constructs an LLM prompt from three sources — PR diff, review feedback, and current file contents. The total request size is capped to respect provider per-request limits (notably the 8,000 TPM free-tier limit of `openai/gpt-oss-120b` on Groq).
 
 Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `7400` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `12000 − system_tokens − max_output_tokens`. The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_max_input_tokens` | `3000` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025). The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
 | `autofix_diff_ratio` | `0.45` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. |
 | `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents. |
 
@@ -174,8 +278,8 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Provider / Tier | Recommended `autofix_max_input_tokens` |
 |---|---|
-| Groq on_demand (`llama-3.3-70b-versatile`) | `7400` (default) |
-| Groq Dev Tier | Remove the key (no cap needed — 12k TPM limit applies per-minute, not per-request) |
+| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `3000` (default) |
+| Groq Developer plan | Raise or remove the key (TPM is far above a single request) |
 | Anthropic (`claude-opus-4-7`) | Remove the key (200k context window; no per-request TPM limit) |
 
 The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual token counts for each section:
@@ -246,3 +350,4 @@ The repository enforces a minimum test coverage policy through CI using `c8 --ch
 - **Configuration** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
+- **Review evidence** (`scripts/lib/review_evidence.mjs`)

@@ -54,7 +54,9 @@ function makeHandler({
   removeLabelStatus = 200,
   autoFixRunsInProgress = [],
   autoFixRunsQueued = [],
+  autoFixRunsPending = [],
   prHeadRef = 'feature/test',
+  prHeadSha = 'a'.repeat(40),
   autoFixRunsStatus = 200,
 } = {}) {
   return (req, res) => {
@@ -71,7 +73,7 @@ function makeHandler({
         return res.end(diffStatus < 300 ? SAMPLE_DIFF : 'Forbidden');
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ title: 'Test PR', body: 'Test PR body', head: { ref: prHeadRef } }));
+      return res.end(JSON.stringify({ title: 'Test PR', body: 'Test PR body', head: { ref: prHeadRef, sha: prHeadSha } }));
     }
 
     if (method === 'GET' && url.includes('/issues/') && url.includes('/comments')) {
@@ -97,7 +99,9 @@ function makeHandler({
         res.writeHead(autoFixRunsStatus, { 'Content-Type': 'application/json' });
         return res.end('error');
       }
-      const target = url.includes('status=queued') ? autoFixRunsQueued : autoFixRunsInProgress;
+      const target = url.includes('status=queued') ? autoFixRunsQueued
+        : url.includes('status=pending') ? autoFixRunsPending
+        : autoFixRunsInProgress;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ total_count: target.length, workflow_runs: target }));
     }
@@ -137,6 +141,8 @@ async function runPrReview(port, eventFile, extraEnv = {}) {
     GITHUB_API_URL: `http://127.0.0.1:${port}`,
     ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
     METRICS_FILE: '/dev/null',
+    // Isolate from any evidence/ directory left in the repo by a local run.
+    REVIEW_EVIDENCE_PATH: path.join(os.tmpdir(), 'pr-review-no-evidence.json'),
     ...extraEnv,
   };
   return new Promise((resolve) => {
@@ -737,4 +743,237 @@ test('pr_review re-pulses changes-requested label to reset auto-fix workflow cyc
     server.close();
     await fs.unlink(eventFile).catch(() => {});
   }
+});
+
+function failOnce(handler, match, status, headers = {}) {
+  let failed = false;
+  return (req, res) => {
+    if (!failed && match(req)) {
+      failed = true;
+      res.writeHead(status, { 'Content-Type': 'application/json', ...headers });
+      return res.end('{"message":"transient"}');
+    }
+    return handler(req, res);
+  };
+}
+
+test('pr_review ghFetch retries GitHub 429 honoring Retry-After', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'GET' && req.url.includes('/issues/') && req.url.includes('/comments'),
+    429,
+    { 'Retry-After': '0' },
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const retryLine = result.stdout.split('\n').find((l) => l.includes('"msg":"retry"'));
+    assert.ok(retryLine, 'expected a retry log line');
+    assert.equal(JSON.parse(retryLine).waitMs, 0, 'expected Retry-After (0s) to be honored');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review ghFetch retries GitHub 500 responses', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'GET' && req.url.includes('/issues/') && req.url.includes('/comments'),
+    500,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
+    const lists = server.requests.filter((r) => r.method === 'GET' && r.url.includes('/issues/') && r.url.includes('/comments'));
+    assert.equal(lists.length, 2);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review ghFetch does not retry a 5xx review submission (non-idempotent POST)', async () => {
+  const server = await startMockServer(failOnce(
+    makeHandler(),
+    (req) => req.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(req.url),
+    502,
+  ));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /Review submit failed: 502/);
+    const submits = server.requests.filter((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(submits.length, 1, 'a retried review POST could post a duplicate review');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review does not re-pulse changes-requested while an auto-fix run is pending on its concurrency group', async () => {
+  // ADR-0020: a run waiting on the per-PR concurrency group has status "pending", not "queued".
+  const server = await startMockServer(
+    makeHandler({
+      groqContent: 'Found issues.\n\nVerdict: REQUEST_CHANGES',
+      autoFixRunsPending: [{ id: 2, head_branch: 'feature/test' }],
+    }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stdout, /Skipping changes-requested re-pulse/);
+    assert.ok(server.requests.some((r) => r.url.includes('status=pending')), 'expected a status=pending lookup');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review sends the configured reasoning_effort to Groq', async () => {
+  const handler = makeHandler();
+  const server = await startMockServer((req, res) => {
+    if (req.url === '/v1/chat/completions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ choices: [{ message: { content: 'Looks good.\n\nVerdict: APPROVED' } }] }));
+    }
+    return handler(req, res);
+  });
+  const eventFile = await writeEventFile();
+  try {
+    const port = server.address().port;
+    const result = await runPrReview(port, eventFile, {
+      ANTHROPIC_API_KEY: '',
+      GROQ_API_KEY: 'groq-test',
+      GROQ_API_URL: `http://127.0.0.1:${port}/v1/chat/completions`,
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const call = server.requests.find((r) => r.url === '/v1/chat/completions');
+    assert.ok(call, 'expected a Groq call');
+    const body = JSON.parse(call.body);
+    assert.equal(body.model, 'openai/gpt-oss-120b');
+    assert.equal(body.reasoning_effort, 'low');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+// --- Tool evidence (ADR-0024) ---
+
+async function writeEvidenceFile(checks, headSha = 'a'.repeat(40)) {
+  const file = path.join(os.tmpdir(), `pr-review-evidence-${Date.now()}-${Math.random()}.json`);
+  await fs.writeFile(file, JSON.stringify({ version: 1, head_sha: headSha, generated_at: 't', checks }));
+  return file;
+}
+
+const EVIDENCE_PASS = { name: 'tests', command: 'npm test', status: 'pass', exit_code: 0, duration_ms: 1, output_tail: 'ok' };
+const EVIDENCE_FAIL = { name: 'tests', command: 'npm test', status: 'fail', exit_code: 1, duration_ms: 1, output_tail: 'AssertionError: expected 2' };
+
+async function runWithEvidence({ groqContent, checks, evidenceSha }) {
+  const server = await startMockServer(makeHandler({ groqContent }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile(checks, evidenceSha);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: evidenceFile });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
+    );
+    return { result, event: JSON.parse(review.body).event, body: JSON.parse(comment.body).body };
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
+  }
+}
+
+test('pr_review overrides APPROVED to REQUEST_CHANGES when a check failed', async () => {
+  const { event, body, result } = await runWithEvidence({
+    groqContent: 'Looks fine.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_FAIL],
+  });
+  assert.equal(event, 'REQUEST_CHANGES');
+  assert.match(body, /Verdict overridden to REQUEST_CHANGES\*\* — failing checks: tests/);
+  assert.match(body, /AssertionError: expected 2/);
+  assert.match(result.stderr, /"evidence_override":true/);
+});
+
+test('pr_review keeps APPROVE and renders the evidence table when all checks pass', async () => {
+  const { event, body } = await runWithEvidence({
+    groqContent: 'Looks fine.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_PASS],
+  });
+  assert.equal(event, 'APPROVE');
+  assert.match(body, /### 🧪 Tool Evidence/);
+  assert.match(body, /\| tests \| `npm test` \| PASS \(exit 0\) \|/);
+  assert.doesNotMatch(body, /Verdict overridden/);
+});
+
+test('pr_review does not override when evidence is stale (head SHA mismatch)', async () => {
+  const { event, body } = await runWithEvidence({
+    groqContent: 'Looks fine.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_FAIL],
+    evidenceSha: 'b'.repeat(40),
+  });
+  assert.equal(event, 'APPROVE');
+  assert.match(body, /No usable tool evidence — stale/);
+});
+
+test('pr_review renders a missing-evidence notice when no evidence file exists', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Fine.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
+    );
+    assert.match(JSON.parse(comment.body).body, /No usable tool evidence — missing: no evidence file at/);
+    assert.match(result.stderr, /"evidence_state":"missing"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review sends the tool evidence block to the LLM', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Verdict: REQUEST_CHANGES' }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile([EVIDENCE_FAIL]);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: evidenceFile });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const llmCall = server.requests.find((r) => r.url === '/v1/messages');
+    const prompt = JSON.stringify(JSON.parse(llmCall.body).messages);
+    assert.match(prompt, /## Tool evidence/);
+    assert.match(prompt, /tests \(`npm test`\): FAIL \(exit 1\)/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
+  }
+});
+
+test('pr_review puts the evidence section before the LLM review when a check failed', async () => {
+  const { body } = await runWithEvidence({
+    groqContent: `${HEADING}\n\nLLM findings here.\n\nVerdict: REQUEST_CHANGES`,
+    checks: [EVIDENCE_FAIL],
+  });
+  assert.ok(body.startsWith(HEADING), 'heading stays first');
+  assert.equal(body.split(HEADING).length - 1, 1, 'heading appears once');
+  assert.ok(body.indexOf('### 🧪 Tool Evidence') < body.indexOf('LLM findings here.'), 'evidence must precede the LLM text');
+});
+
+test('pr_review keeps the evidence section after the LLM review when nothing failed', async () => {
+  const { body } = await runWithEvidence({
+    groqContent: 'LLM findings here.\n\nVerdict: APPROVED',
+    checks: [EVIDENCE_PASS],
+  });
+  assert.ok(body.indexOf('LLM findings here.') < body.indexOf('### 🧪 Tool Evidence'));
 });
