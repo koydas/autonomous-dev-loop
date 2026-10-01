@@ -380,3 +380,69 @@ for (const target of [
     assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
   });
 }
+
+// Git metadata: a written .git/config (core.fsmonitor, core.hooksPath, filters) executes on
+// the next `git add`/`git commit` in the auto-fix job, which holds AI_PR_TOKEN.
+for (const target of ['.git/config', '.git/hooks/pre-commit', './.GIT/config', '.git\\info\\attributes', '.git', 'vendor/lib/.git/config']) {
+  test(`validateAiOutput rejects git metadata target_path ${JSON.stringify(target)}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path \(\.git\/\)/);
+  });
+}
+
+for (const target of ['.gitignore', '.gitattributes', 'docs/.gitkeep', 'src/git/index.js']) {
+  test(`validateAiOutput accepts git-adjacent non-metadata target_path ${target}`, () => {
+    assert.equal(validateAiOutput(changeAt(target)).changes[0].targetPath, target);
+  });
+}
+
+async function inTmpRepo(fn) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-symlink-'));
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(tmpDir);
+    await fs.mkdir('.git', { recursive: true });
+    await fs.writeFile('.git/config', '[core]\n', 'utf8');
+    await fn(tmpDir);
+  } finally {
+    process.chdir(originalCwd);
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+test('writeGeneratedFiles refuses to write through a directory symlink into .git', async () => {
+  await inTmpRepo(async () => {
+    await fs.mkdir('docs', { recursive: true });
+    await fs.symlink('../.git', 'docs/x');
+    await assert.rejects(writeGeneratedFiles([{ targetPath: 'docs/x/config', fileContent: 'pwn' }]), /escapes the repository|git metadata/);
+    assert.equal(await fs.readFile('.git/config', 'utf8'), '[core]\n');
+  });
+});
+
+test('writeGeneratedFiles refuses to write through a directory symlink outside the repository', async () => {
+  await inTmpRepo(async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'ow-outside-'));
+    try {
+      await fs.symlink(outside, 'out');
+      await assert.rejects(writeGeneratedFiles([{ targetPath: 'out/x.txt', fileContent: 'pwn' }]), /escapes the repository/);
+      await assert.rejects(fs.access(path.join(outside, 'x.txt')));
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test('writeGeneratedFiles refuses to overwrite a file that is a symlink', async () => {
+  await inTmpRepo(async () => {
+    await fs.writeFile('real.txt', 'keep', 'utf8');
+    await fs.symlink('real.txt', 'link.txt');
+    await assert.rejects(writeGeneratedFiles([{ targetPath: 'link.txt', fileContent: 'pwn' }]), /symlink/);
+    assert.equal(await fs.readFile('real.txt', 'utf8'), 'keep');
+  });
+});
+
+test('writeGeneratedFiles still writes into a regular nested directory', async () => {
+  await inTmpRepo(async () => {
+    const paths = await writeGeneratedFiles([{ targetPath: 'src/a/b.txt', fileContent: 'ok' }]);
+    assert.deepEqual(paths, ['src/a/b.txt']);
+  });
+});
