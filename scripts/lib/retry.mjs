@@ -22,6 +22,10 @@ export function parseRetryAfterMs(value, nowMs = Date.now()) {
 // inside the shortest job timeout (pr-review: 2 min). Longer waits fail fast instead.
 export const MAX_RETRY_AFTER_MS = 10000;
 
+// LLM rate-limit waits (Groq TPM) are per-minute: one window is worth waiting out in stages
+// with long timeouts. Short-timeout jobs lower it via LLM_MAX_RETRY_WAIT_MS (ADR-0022).
+export const MAX_LLM_RETRY_AFTER_MS = 60000;
+
 // fetch does not throw on HTTP errors. Returns a retryable error for 429/5xx (carrying
 // Retry-After as waitMs), or null for any other status, which callers handle via .ok (ADR-0022).
 // A 5xx does not prove the request was not processed, so for a request that is not

@@ -202,3 +202,9 @@ test('auto-fix-pr.yml resolves the head ref only for trusted rerun comments', ()
   assert.match(headIf, /github\.event\.comment\.author_association/);
   assert.match(headIf, /- \[x\] Relancer Auto Fixer/);
 });
+
+test('pr-review.yml caps LLM rate-limit waits to fit its 2-minute timeout', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+  assert.match(text, /timeout-minutes: 2/);
+  assert.match(text, /LLM_MAX_RETRY_WAIT_MS: '10000'/);
+});

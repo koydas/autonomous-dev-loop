@@ -220,11 +220,11 @@ test('callGroq gives up instead of waiting out a rate-limit hint beyond the retr
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
-    return makeResponse('Rate limit reached. Please try again in 45.5s', 429);
+    return makeResponse('Rate limit reached. Please try again in 75.5s', 429);
   };
   try {
     await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 429/);
-    assert.equal(calls, 1, 'a 45 s wait exceeds the budget: fail fast so callLLM can fall back');
+    assert.equal(calls, 1, 'a 75 s wait exceeds the budget: fail fast so callLLM can fall back');
     assert.deepEqual(waits, []);
   } finally {
     globalThis.setTimeout = origSetTimeout;
@@ -239,7 +239,7 @@ test('callGroq gives up when the Retry-After header exceeds the retry budget', a
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
-    return makeResponse('rate limited', 429, { 'Retry-After': '60' });
+    return makeResponse('rate limited', 429, { 'Retry-After': '90' });
   };
   try {
     await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 429/);
@@ -247,5 +247,41 @@ test('callGroq gives up when the Retry-After header exceeds the retry budget', a
   } finally {
     globalThis.setTimeout = origSetTimeout;
     delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callGroq waits out a normal TPM rate-limit hint (12.5 s) by default', async () => {
+  const waits = [];
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms) => { waits.push(ms); fn(); return {}; };
+  process.env.GROQ_MAX_RETRIES = '1';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    if (++calls === 1) return makeResponse('Rate limit reached. Please try again in 12.5s', 429);
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  try {
+    assert.equal(await callGroq(BASE_ARGS), 'ok');
+    assert.deepEqual(waits, [12500]);
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callGroq honors LLM_MAX_RETRY_WAIT_MS for short-timeout jobs', async () => {
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  process.env.GROQ_MAX_RETRIES = '1';
+  process.env.LLM_MAX_RETRY_WAIT_MS = '10000';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('Please try again in 12.5s', 429); };
+  try {
+    await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 429/);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    delete process.env.GROQ_MAX_RETRIES;
+    delete process.env.LLM_MAX_RETRY_WAIT_MS;
   }
 });

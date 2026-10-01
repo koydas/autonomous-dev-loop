@@ -1,6 +1,6 @@
 import { log } from './logger.mjs';
 import { classifyError } from './error_taxonomy.mjs';
-import { retryWithBackoff, MAX_RETRY_AFTER_MS } from './retry.mjs';
+import { retryWithBackoff, MAX_LLM_RETRY_AFTER_MS } from './retry.mjs';
 
 function parseWaitMs(rawText, headers) {
   const match = rawText.match(/Please try again in (\d+(?:\.\d+)?)s/i);
@@ -27,6 +27,8 @@ export async function callGroq({
 }) {
   const parsed = parseInt(process.env.GROQ_MAX_RETRIES, 10);
   const maxAttempts = (Number.isFinite(parsed) && parsed >= 0 ? parsed : 3) + 1;
+  const waitBudget = Number(process.env.LLM_MAX_RETRY_WAIT_MS);
+  const maxWaitMs = Number.isFinite(waitBudget) && waitBudget > 0 ? waitBudget : MAX_LLM_RETRY_AFTER_MS;
 
   const payload = {
     model,
@@ -65,7 +67,7 @@ export async function callGroq({
       err.retryable = RETRYABLE_STATUS_CODES.has(response.status);
       err.waitMs = parseWaitMs(text, response.headers);
       // A wait beyond the budget would outlast the job timeout: fail fast so callLLM can fall back.
-      if (err.waitMs != null && err.waitMs > MAX_RETRY_AFTER_MS) err.retryable = false;
+      if (err.waitMs != null && err.waitMs > maxWaitMs) err.retryable = false;
       throw err;
     }
     return text;
