@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff } from './lib/file_filters.mjs';
@@ -14,7 +15,7 @@ import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection } from './lib/review_evidence.mjs';
+import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
 const _reviewStartMs = Date.now();
@@ -239,11 +240,17 @@ const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim()
 const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
 const llmApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
 // ADR-0024: a failing check blocks APPROVE in code, whatever the LLM concluded.
-const evidenceOverride = llmApproved && evidence.failing.length > 0;
-const isApproved = llmApproved && !evidenceOverride;
+// ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.
+// Same resolution as run_review_evidence.mjs: without a config the repo has not opted in to evidence.
+const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
+const { verdict, reason: verdictReason } = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
+const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES';
+const isApproved = verdict === 'APPROVE';
+const isWithheld = verdict === 'WITHHELD';
+const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_CHANGES';
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride });
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + (isWithheld ? formatWithheldNote(verdictReason) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const body = evidence.failing.length > 0
   ? `${HEADING}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
@@ -270,7 +277,9 @@ log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
 
 const shortReviewBody = isApproved
   ? 'Automated review passed. See the review comment for details.'
-  : 'Changes required. See the automated review comment above for details.';
+  : isWithheld
+    ? 'Approval withheld: the tool evidence is unverified. See the review comment for details.'
+    : 'Changes required. See the automated review comment above for details.';
 
 function isOwnPullRequestApprovalFailure(status, detail) {
   if (status !== 422) return false;
@@ -289,7 +298,7 @@ const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/revie
   method: 'POST',
   body: JSON.stringify({
     body: shortReviewBody,
-    event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES',
+    event: reviewEvent,
   }),
 });
 if (!reviewRes.ok) {
@@ -312,7 +321,7 @@ if (!reviewRes.ok) {
     throw new Error(`Review submit failed: ${reviewRes.status} ${detail}`);
   }
 } else {
-  log('PR review submitted', { prNumber, event: isApproved ? 'APPROVE' : 'REQUEST_CHANGES' });
+  log('PR review submitted', { prNumber, event: reviewEvent });
 }
 
 for (const label of PR_REVIEW_LABELS) {
@@ -320,27 +329,34 @@ for (const label of PR_REVIEW_LABELS) {
   log('Label upserted', { label: label.name });
 }
 
-const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
-const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
+if (isWithheld) {
+  // Neither label: review-approved would be wrong, changes-requested would start auto-fix (ADR-0026).
+  await removeLabel(reviewLabels.approved.name);
+  await removeLabel(reviewLabels.changes.name);
+  log('PR review labels cleared: approval withheld', { prNumber, reason: verdictReason });
+} else {
+  const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
+  const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
 
-if (!isApproved) {
-  const branchName = prMeta?.head?.ref;
-  const autoFixAlreadyRunning = branchName ? await hasActiveAutoFixRun(branchName) : false;
-  if (autoFixAlreadyRunning) {
-    log('Skipping changes-requested re-pulse because auto-fix is already running', {
-      prNumber,
-      branchName,
-    });
-  } else {
-    // Re-pulse the changes-requested label on every iteration so auto-fix
-    // reliably receives a new `pull_request:labeled` trigger.
-    await removeLabel(apply);
+  if (!isApproved) {
+    const branchName = prMeta?.head?.ref;
+    const autoFixAlreadyRunning = branchName ? await hasActiveAutoFixRun(branchName) : false;
+    if (autoFixAlreadyRunning) {
+      log('Skipping changes-requested re-pulse because auto-fix is already running', {
+        prNumber,
+        branchName,
+      });
+    } else {
+      // Re-pulse the changes-requested label on every iteration so auto-fix
+      // reliably receives a new `pull_request:labeled` trigger.
+      await removeLabel(apply);
+    }
   }
-}
 
-await addLabel(apply);
-await removeLabel(remove);
-log('PR review labels applied', { prNumber, added: apply, removed: remove });
+  await addLabel(apply);
+  await removeLabel(remove);
+  log('PR review labels applied', { prNumber, added: apply, removed: remove });
+}
 
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
 await writeCheckpoint(checkpointRunId, 'review', { isApproved, prNumber });
@@ -361,7 +377,7 @@ const prMetrics = prMetricsCheckpoint?.data ?? {
 const updatedPrMetrics = {
   ...prMetrics,
   review_cycles: prMetrics.review_cycles + 1,
-  request_changes_count: prMetrics.request_changes_count + (isApproved ? 0 : 1),
+  request_changes_count: prMetrics.request_changes_count + (verdict === 'REQUEST_CHANGES' ? 1 : 0),
   total_input_tokens_est: prMetrics.total_input_tokens_est + estimateTokens(systemPrompt + userPrompt),
   total_output_tokens_est: prMetrics.total_output_tokens_est + estimateTokens(cleanReview),
 };
@@ -375,9 +391,9 @@ obsLog({
   event: 'review.verdict',
   level: 'info',
   duration_ms: reviewDurationMs,
-  meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride },
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride },
 });
-tracer.endSpan('review', { outcome: 'success', meta: { verdict: isApproved ? 'APPROVE' : 'REQUEST_CHANGES', attempt: updatedPrMetrics.review_cycles } });
+tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');
 
 if (isApproved) {

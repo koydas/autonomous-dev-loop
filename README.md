@@ -20,7 +20,7 @@ Prompts are advice; an LLM can ignore them. So the loop separates what it *asks*
 
 | Enforced in code / CI | Where |
 |---|---|
-| The review verdict is forced to `REQUEST_CHANGES` when any declared check (here: the test suite and a `node --check` syntax pass) fails on the PR head. A check that times out or crashes, or evidence that is missing or stale, is reported as unverified and does **not** block approval | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
+| The review verdict is forced to `REQUEST_CHANGES` when any declared check (here: the test suite and a `node --check` syntax pass) fails on the PR head. A check that times out or crashes, or evidence that is missing or stale, **withholds** approval without triggering auto-fix ([ADR-0026](docs/adr/0026-withhold-approval-on-unverified-evidence.md)) | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
 | PR code runs in a job holding **no secrets** (`contents: read`, no persisted credentials, credential-like env vars stripped) | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
 | Pipeline scripts, prompts and config always run from the **default branch** — a PR cannot rewrite the code that reviews it | [ADR-0023](docs/adr/0023-trusted-pipeline-execution.md) |
 | Write denylist: the model cannot touch `.github/`, `scripts/`, `prompts/`, `config/`, lockfiles, `.npmrc`, or escape via symlinks | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) |
