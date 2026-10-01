@@ -183,3 +183,22 @@ test('workflows that run PR code without secrets use a read-only token', () => {
     assert.ok(!/secrets\./.test(text), `${name} must not use secrets`);
   }
 });
+
+// `echo "ref=$(gh api ...)"` does not fail under `bash -e`: an API failure would yield an
+// empty ref and the global group `pr-pipeline-`. The lookup must fail the job instead.
+test('head-ref lookups fail closed instead of producing an empty concurrency key', () => {
+  for (const name of ['auto-fix-pr.yml', 'reset-auto-fix.yml']) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    assert.ok(!/echo "ref=\$\(gh api/.test(text), `${name} must not swallow gh api errors inside echo`);
+    assert.match(text, /REF=\$\(gh api [^\n]+\)\n\s+\[ -n "\$REF" \] \|\| \{ echo "::error::[^"]+"; exit 1; \}\n\s+echo "ref=\$REF" >> "\$GITHUB_OUTPUT"/,
+      `${name} must assign, check non-empty, then write the ref`);
+  }
+});
+
+test('auto-fix-pr.yml resolves the head ref only for trusted rerun comments', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+  const loadLabels = text.slice(text.indexOf('  load-labels:'), text.indexOf('\n  auto-fix:'));
+  const headIf = loadLabels.match(/- id: head\n\s+if: (.+)/)?.[1] ?? '';
+  assert.match(headIf, /github\.event\.comment\.author_association/);
+  assert.match(headIf, /- \[x\] Relancer Auto Fixer/);
+});
