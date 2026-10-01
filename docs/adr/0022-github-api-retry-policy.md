@@ -36,5 +36,5 @@ Separately, `retryWithBackoff()` lets `error.waitMs` override the capped backoff
 - ⚠️ A single 5xx on a comment or review POST still fails the stage (as before this ADR); re-run the workflow.
 - ⚠️ Retry safety is decided by path pattern (`/labels$`); a new non-idempotent POST endpoint ending in `/labels` would be misclassified. The classifier has dedicated tests.
 - ⚠️ Persistent 5xx now costs ~1.4 s of backoff before the caller sees the failure (test suite runtime roughly doubled for the existing 500-status tests).
-- ✅ `groq_client.mjs` applies the same budget to its wait hint (body `try again in Xs` or `Retry-After`): a longer wait fails fast and `callLLM` falls back to the next provider instead of sleeping through the job timeout.
-- ⚠️ On Groq's on_demand tier, TPM waits above 10 s now go to the fallback provider (or fail if none is configured) instead of being waited out.
+- ✅ `groq_client.mjs` bounds its wait hint (body `try again in Xs` or `Retry-After`) by `MAX_LLM_RETRY_AFTER_MS` (60 s, one TPM window), overridable per job with `LLM_MAX_RETRY_WAIT_MS`. `pr-review.yml` (`timeout-minutes: 2`) sets 10 s; the 10-minute stages keep 60 s, so ordinary TPM throttling is still waited out there (a single 10 s budget for every stage would have turned a 12 s Groq wait into a hard failure in Groq-only setups).
+- ⚠️ In pr-review, Groq waits above 10 s go to the fallback provider (or fail if none is configured).
