@@ -27,7 +27,7 @@ Prompts are advice; an LLM can ignore them. So the loop separates what it *asks*
 | Max 6 files per run, no absolute paths, no `..`, 16 000 chars per file | [ADR-0003](docs/adr/0003-safe-output-scope.md) |
 | Max 3 auto-fix attempts, then escalation to a human; per-PR concurrency | [ADR-0006](docs/adr/0006-label-driven-auto-fix-trigger.md), [ADR-0020](docs/adr/0020-per-pr-workflow-concurrency.md) |
 | Under-specified issues never reach generation (validation gate, `ready-for-dev` label) | [ADR-0001](docs/adr/0001-trigger-policy-and-label-gate.md) |
-| Human merge — the loop never merges | — |
+| Human merge — the loop never merges: no merge call exists in `scripts/` or the workflows | [ADR-0001](docs/adr/0001-trigger-policy-and-label-gate.md), [`.github/workflows/`](.github/workflows/) |
 
 | Asked of the model (prompt guardrails) | Where |
 |---|---|
