@@ -237,7 +237,8 @@ obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { o
 
 const HEADING = '## 🔍 Automated Code Review';
 const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
-const verdictMatch = cleanReview.match(/verdict(?::\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
+// The heading may come back bold (`**🚀 Verdict**`) instead of `### 🚀 Verdict`: allow closing `**` after the word.
+const verdictMatch = cleanReview.match(/verdict\**(?::\**\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
 const llmApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
 // ADR-0024: a failing check blocks APPROVE in code, whatever the LLM concluded.
 // ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.

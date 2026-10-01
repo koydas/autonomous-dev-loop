@@ -439,6 +439,30 @@ test('pr_review detects APPROVE when verdict is bold markdown (**APPROVED**)', a
   }
 });
 
+for (const [label, groqContent, expected] of [
+  ['bold heading, plain verdict', '**🚀 Verdict**  \nAPPROVED', 'APPROVE'],
+  ['bold heading, bold verdict', '**🚀 Verdict**\n**APPROVED**', 'APPROVE'],
+  ['bold heading with colon', '**Verdict:** APPROVED', 'APPROVE'],
+  ['bold heading, REQUEST_CHANGES', '**🚀 Verdict**  \nREQUEST_CHANGES', 'REQUEST_CHANGES'],
+]) {
+  test(`pr_review parses the verdict under a bold heading (${label})`, async () => {
+    const server = await startMockServer(makeHandler({ groqContent }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile);
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      const review = server.requests.find(
+        (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
+      );
+      assert.ok(review, 'expected POST to reviews endpoint');
+      assert.equal(JSON.parse(review.body).event, expected);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+    }
+  });
+}
+
 test('pr_review detects REQUEST_CHANGES when verdict is bold markdown (**REQUEST_CHANGES**)', async () => {
   const groqContent = '### 🚀 Verdict\n**REQUEST_CHANGES**';
   const server = await startMockServer(makeHandler({ groqContent }));
