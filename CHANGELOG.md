@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
+- Offline eval harness: `scripts/run_evals.mjs --suite validation` runs the issue validator against a labelled dataset (`evals/datasets/validation.jsonl`) and reports verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency and estimated tokens; exits 1 below thresholds, `--replay` re-scores a recorded run without LLM calls; manual `evals.yml` workflow (ADR-0027)
 
 ### Fixed
 - `scripts/tests/test_layout.test.mjs`: the placement check now requires the exact `npm test` glob (`scripts/tests/*.test.mjs`). It accepted any `*.test.*` under `scripts/tests/`, so `scripts/tests/foo.test.js` or `scripts/tests/sub/foo.test.mjs` passed the guard and never ran (review on #167).

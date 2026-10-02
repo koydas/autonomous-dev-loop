@@ -73,7 +73,7 @@ const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'code-generation.yml'];
 
 test('every workflow declares a concurrency group keyed per PR/issue', () => {
   const workflows = readWorkflows();
-  assert.equal(workflows.length, 7, `expected 7 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  assert.equal(workflows.length, 8, `expected 8 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
   for (const { name, text } of workflows) {
     const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1]);
     assert.equal(groups.length, 1, `${name} must declare exactly one concurrency group`);
