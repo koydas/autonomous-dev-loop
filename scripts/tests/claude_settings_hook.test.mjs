@@ -16,7 +16,7 @@ const hasJq = spawnSync('jq', ['--version']).status === 0;
 // Runs the hook command against a throwaway project whose only test writes a
 // marker file, so we can observe whether the suite ran without recursing into
 // the real one.
-function runHook(filePath, { failing = false } = {}) {
+function runHook(filePath, { failing = false, projectDir } = {}) {
   const project = mkdtempSync(join(tmpdir(), 'hook-project-'));
   const marker = join(project, 'ran.marker');
   mkdirSync(join(project, 'scripts', 'tests'), { recursive: true });
@@ -39,10 +39,10 @@ test('stub', () => {
     const res = spawnSync('bash', ['-c', hook.command], {
       cwd,
       input: JSON.stringify(payload),
-      env: { ...env, CLAUDE_PROJECT_DIR: project },
+      env: { ...env, CLAUDE_PROJECT_DIR: projectDir ?? project },
       encoding: 'utf8',
     });
-    return { status: res.status, ran: existsSync(marker) };
+    return { status: res.status, ran: existsSync(marker), stdout: res.stdout, stderr: res.stderr };
   } finally {
     rmSync(project, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
@@ -83,8 +83,18 @@ test('hook skips the suite when the payload has no file_path', { skip: !hasJq &&
   assert.equal(ran, false);
 });
 
-test('hook exits non-zero when the suite fails', { skip: !hasJq && 'jq not installed' }, () => {
-  const { status, ran } = runHook('/repo/scripts/foo.mjs', { failing: true });
+test('hook exits 2 with the failure on stderr when the suite fails', { skip: !hasJq && 'jq not installed' }, () => {
+  // Exit 2 is what makes Claude Code feed a PostToolUse hook's stderr back to the model.
+  const { status, ran, stdout, stderr } = runHook('/repo/scripts/foo.mjs', { failing: true });
   assert.equal(ran, true);
-  assert.notEqual(status, 0);
+  assert.equal(status, 2);
+  assert.match(stderr, /stub failure/);
+  assert.equal(stdout, '');
+});
+
+test('hook exits 2 when CLAUDE_PROJECT_DIR is unusable', { skip: !hasJq && 'jq not installed' }, () => {
+  const { status, ran, stderr } = runHook('/repo/scripts/foo.mjs', { projectDir: join(tmpdir(), 'no-such-project-dir') });
+  assert.equal(ran, false);
+  assert.equal(status, 2);
+  assert.notEqual(stderr, '');
 });

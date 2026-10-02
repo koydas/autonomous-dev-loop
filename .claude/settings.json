@@ -12,7 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // \"\"'); if echo \"$f\" | grep -qE '(scripts/|\\.github/workflows/)'; then cd \"$CLAUDE_PROJECT_DIR\" && node --test scripts/tests/*.test.mjs; fi",
+            "command": "f=$(jq -r '.tool_input.file_path // \"\"'); if echo \"$f\" | grep -qE '(scripts/|\\.github/workflows/)'; then { cd \"$CLAUDE_PROJECT_DIR\" && node --test scripts/tests/*.test.mjs; } 1>&2 || exit 2; fi",
             "timeout": 300,
             "statusMessage": "Running test suite..."
           }
