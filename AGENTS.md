@@ -68,6 +68,7 @@ Minimum required path coverage for automation modules (enforced by code review):
 | `scripts/lib/prompts.mjs` — `interpolatePrompt` | 100% of branches | single placeholder, multiple distinct placeholders, repeated placeholder, unknown placeholder left unchanged, non-placeholder content unchanged |
 | Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields produce explicit path-oriented errors (e.g. `pull_request.number`, `pull_request.head.ref`) |
 | `pr_review.mjs` — verdict parsing | 100% of accepted verdict forms | `### 🚀 Verdict` heading, `Verdict:` inline, bold verdict (`**APPROVED**`), bold heading (`**🚀 Verdict**`), bold heading with colon (`**Verdict:**`), each for APPROVED and REQUEST_CHANGES where it applies; template placeholder or missing verdict → REQUEST_CHANGES |
+| `.claude/settings.json` post-edit test hook | 100% of branches | path under `scripts/` or `.github/workflows/` runs the suite from `$CLAUDE_PROJECT_DIR`, other paths and missing `file_path` skip it, failing suite exits 2 with output on stderr, unusable `$CLAUDE_PROJECT_DIR` exits 2 (`scripts/tests/claude_settings_hook.test.mjs`) |
 
 Any PR that adds a new exported function to `scripts/lib/` must include tests for every failure branch, not only the happy path. PRs that lack these tests are considered incomplete regardless of whether existing tests pass.
 

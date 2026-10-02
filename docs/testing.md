@@ -52,6 +52,7 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 | `scripts/manage_labels.mjs` | 8 | Label upsert (create + PATCH fallback), apply/remove swap for `IS_VALID=true/false`, error cases (create 500, PATCH 500, add 422, remove 500), 404 on remove treated as success |
 | `scripts/pr_review.mjs` | 24+ | Diff fetch errors, comment list/upsert errors, review submit errors (500 fatal, 422 warning), APPROVE/REQUEST_CHANGES event, heading-style and bold-markdown verdict detection, template-echo placeholder defaults to REQUEST_CHANGES, label swap, re-pulse of `changes-requested` (remove then re-apply), guard to skip re-pulse when auto-fix run is already queued/in-progress, fail-closed guard when run-status API is forbidden, PATCH fallback on label 422, short review body distinct from comment body |
 | `scripts/auto_fix_pr.mjs` | 10+ | Label list fetch error, max-attempts guard (exits 0, posts exhausted comment), diff fetch error, invalid LLM JSON, empty changes array, success path (file written + attempt-1 label applied), attempt counter increment, inline comment inclusion in prompt, graceful inline comment fetch failure, paginated fallback to latest automated review comment when review payload lacks feedback, attempt label repo creation |
+| `.claude/settings.json` (post-edit hook) | 8 | Matcher `Write\|Edit`, timeout ≥ 120 s, suite runs from `$CLAUDE_PROJECT_DIR` for `scripts/` and `.github/workflows/` edits, skipped for other paths and payloads without `file_path`, exit 2 + failure on stderr when the suite fails, exit 2 when `$CLAUDE_PROJECT_DIR` is unusable (`claude_settings_hook.test.mjs`) |
 
 ## Prompt Files
 
@@ -85,6 +86,17 @@ test('describes expected behavior', () => {
 ```
 
 Per `AGENTS.md`: run `node --test scripts/tests/*.test.mjs` and ensure all tests pass before committing any change to `scripts/` or `prompts/`.
+
+## Post-Edit Test Hook (interactive Claude Code sessions)
+
+`.claude/settings.json` declares a `PostToolUse` hook for interactive Claude Code sessions. It does not run in the GitHub Actions pipeline.
+
+- **Trigger:** any `Write` or `Edit` whose `tool_input.file_path` contains `scripts/` or `.github/workflows/`. Other edits are no-ops.
+- **Action:** `cd "$CLAUDE_PROJECT_DIR" && node --test scripts/tests/*.test.mjs`, all output on stderr. Requires `jq` on `PATH`.
+- **Failure:** exits 2, so Claude Code feeds the failing test output back to the model and the regression is fixed in-session instead of by the auto-fix loop.
+- **Timeout:** 300 s. The suite takes ~15–60 s depending on the machine; the test file asserts ≥ 120 s.
+
+**Coverage policy:** every branch of the hook command (path match, path miss, missing `file_path`, suite failure, unusable project dir) must keep a dedicated test in `scripts/tests/claude_settings_hook.test.mjs`. Any change to the hook command must update those tests in the same PR. The tests run the real command from `settings.json` against a throwaway project; they are skipped when `jq` is missing.
 
 ## CI
 
