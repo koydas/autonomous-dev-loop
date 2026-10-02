@@ -54,6 +54,7 @@ Before committing any change to `scripts/` or `prompts/`:
 
 - Run `node --test scripts/tests/*.test.mjs` and ensure all tests pass.
 - Never commit code that breaks an existing test without updating or replacing the test intentionally.
+- Test files live only in `scripts/tests/` and use `node:test`; `scripts/tests/test_layout.test.mjs` fails the suite for a test file anywhere else or one using the Jest API, because `npm test` would never run it.
 - The suite includes **unit tests** (modules in isolation) and **smoke tests** (`smoke.test.mjs`, cross-module pipelines with real config/prompt files). Both must pass.
 
 ### Test Coverage Policy
