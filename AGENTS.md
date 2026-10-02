@@ -63,6 +63,7 @@ Minimum required path coverage for automation modules (enforced by code review):
 
 | Module | Minimum coverage | Required test paths |
 |---|---|---|
+| `pr_review.mjs` — verdict → review event and labels (ADR-0026) | 100% of verdicts | `APPROVE` → `review-approved`; `REQUEST_CHANGES` → `changes-requested` (re-pulse); `WITHHELD` → `COMMENT` + `review-withheld`, neither other label; `review-withheld` cleared by the next `APPROVE` or `REQUEST_CHANGES`; missing evidence without an evidence config → `APPROVE`. `decideVerdict()` itself is in `scripts/lib/review_evidence.mjs`, under the c8 80% gate in `test.yml` |
 | `scripts/lib/prompts.mjs` — `loadPrompt` | 100% of branches | happy path (file exists, non-empty), file-not-found (explicit `Prompt file not found` error with path), empty-file (explicit `Prompt file is empty` error with path) |
 | `scripts/lib/prompts.mjs` — `interpolatePrompt` | 100% of branches | single placeholder, multiple distinct placeholders, repeated placeholder, unknown placeholder left unchanged, non-placeholder content unchanged |
 | Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields produce explicit path-oriented errors (e.g. `pull_request.number`, `pull_request.head.ref`) |

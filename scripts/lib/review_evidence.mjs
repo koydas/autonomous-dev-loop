@@ -292,3 +292,37 @@ export function formatEvidenceSection(assessment, { overridden = false } = {}) {
   }
   return lines.join('\n');
 }
+
+/**
+ * Final review verdict from the model's verdict and the tool evidence (ADR-0024, ADR-0026).
+ * APPROVE requires available evidence with no failing and no unverified check. When the model
+ * approves but the evidence cannot vouch for it (missing, stale, timeout, error), the verdict
+ * is WITHHELD: no approval, and no REQUEST_CHANGES either, so auto-fix is not asked to "fix"
+ * a runner outage.
+ * `evidenceRequired` is false when the repo has no evidence config (opt-in, ADR-0024): evidence
+ * is then always missing and must not hold back every approval.
+ * @returns {{ verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'WITHHELD', reason: string | null }}
+ */
+export function decideVerdict(llmApproved, assessment, { evidenceRequired = true } = {}) {
+  if (!llmApproved) return { verdict: 'REQUEST_CHANGES', reason: null };
+  if (assessment.failing.length > 0) {
+    return { verdict: 'REQUEST_CHANGES', reason: `failing checks: ${assessment.failing.join(', ')}` };
+  }
+  if (assessment.state !== 'available') {
+    if (!evidenceRequired) return { verdict: 'APPROVE', reason: null };
+    return { verdict: 'WITHHELD', reason: `evidence ${assessment.state}: ${assessment.reason}` };
+  }
+  if (assessment.unverified.length > 0) {
+    return { verdict: 'WITHHELD', reason: `unverified checks (timeout or error): ${assessment.unverified.join(', ')}` };
+  }
+  return { verdict: 'APPROVE', reason: null };
+}
+
+/** Markdown note appended to the review comment when approval is withheld (ADR-0026). */
+export function formatWithheldNote(reason) {
+  return [
+    '',
+    `> **Approval withheld** — ${reason}. The model approved, but the tool evidence cannot confirm it.`,
+    '> No check failed, so auto-fix is not triggered. Push a new commit or re-run the review once the checks can complete.',
+  ].join('\n');
+}

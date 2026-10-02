@@ -10,6 +10,9 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 ### Added
 - `scripts/tests/test_layout.test.mjs`: `npm test` (and therefore the review evidence job) now fails when a tracked test file sits outside `scripts/tests/`, or when a test file there does not import `node:test` or uses the Jest API (`jest.*`, `expect()`). `npm test` only globs `scripts/tests/*.test.mjs`, so such files passed CI without running: auto-fix wrote one on koydas/autonomous-dev-loop#165 (`ecb6382`), and `test/output_writer.test.mjs` from #119 sat dead on `main`.
 
+### Changed
+- `scripts/pr_review.mjs`: when the model approves but the tool evidence cannot confirm it — a check ended in `timeout` or `error`, or the evidence is missing or stale — the review is now **withheld** instead of approved. The GitHub review is submitted as `COMMENT`, `review-approved` and `changes-requested` are removed and the new `review-withheld` label (`config/labels.yaml`) is applied — auto-fix is not triggered, and the next approve or request-changes verdict clears it — and the comment explains why. A failing check still forces `REQUEST_CHANGES`. Repos without `config/review-evidence.yaml` keep the previous behavior. New exports `decideVerdict()` and `formatWithheldNote()` in `scripts/lib/review_evidence.mjs`; `review.verdict` events can now carry `verdict: "WITHHELD"` (ADR-0026).
+
 ### Removed
 - `test/output_writer.test.mjs`: a Jest-syntax test (`jest.mock`) that never ran under `node --test`; `scripts/tests/output_writer.test.mjs` covers the module.
 
