@@ -131,6 +131,17 @@ function makeHandler({
   };
 }
 
+// Default to passing evidence for the mocked PR head (prHeadSha): with no evidence at all, every
+// APPROVED review would be WITHHELD (ADR-0026). Tests about missing evidence pass their own path.
+const DEFAULT_EVIDENCE_PATH = path.join(os.tmpdir(), `pr-review-default-evidence-${process.pid}.json`);
+await fs.writeFile(DEFAULT_EVIDENCE_PATH, JSON.stringify({
+  version: 1,
+  head_sha: 'a'.repeat(40),
+  generated_at: 't',
+  checks: [{ name: 'tests', command: 'npm test', status: 'pass', exit_code: 0, duration_ms: 1, output_tail: 'ok' }],
+}));
+const NO_EVIDENCE_PATH = path.join(os.tmpdir(), 'pr-review-no-evidence.json');
+
 async function runPrReview(port, eventFile, extraEnv = {}) {
   const env = {
     PATH: process.env.PATH,
@@ -142,7 +153,7 @@ async function runPrReview(port, eventFile, extraEnv = {}) {
     ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
     METRICS_FILE: '/dev/null',
     // Isolate from any evidence/ directory left in the repo by a local run.
-    REVIEW_EVIDENCE_PATH: path.join(os.tmpdir(), 'pr-review-no-evidence.json'),
+    REVIEW_EVIDENCE_PATH: DEFAULT_EVIDENCE_PATH,
     ...extraEnv,
   };
   return new Promise((resolve) => {
@@ -684,7 +695,7 @@ test('pr_review falls back to PATCH when label POST returns 422', async () => {
     const patches = server.requests.filter(
       (r) => r.method === 'PATCH' && /\/repos\/[^/]+\/[^/]+\/labels\//.test(r.url),
     );
-    assert.equal(patches.length, 2, 'expected PATCH for both PR review labels');
+    assert.equal(patches.length, Object.keys(LABELS.review).length, 'expected PATCH for every PR review label');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -939,21 +950,24 @@ test('pr_review keeps APPROVE and renders the evidence table when all checks pas
   assert.doesNotMatch(body, /Verdict overridden/);
 });
 
-test('pr_review does not override when evidence is stale (head SHA mismatch)', async () => {
+test('pr_review withholds approval without requesting changes when evidence is stale (head SHA mismatch)', async () => {
   const { event, body } = await runWithEvidence({
     groqContent: 'Looks fine.\n\nVerdict: APPROVED',
     checks: [EVIDENCE_FAIL],
     evidenceSha: 'b'.repeat(40),
   });
-  assert.equal(event, 'APPROVE');
+  // ADR-0026: stale evidence can neither confirm the approval nor prove a failure.
+  assert.equal(event, 'COMMENT');
   assert.match(body, /No usable tool evidence — stale/);
+  assert.match(body, /Approval withheld\*\* — evidence stale/);
+  assert.doesNotMatch(body, /Verdict overridden/);
 });
 
 test('pr_review renders a missing-evidence notice when no evidence file exists', async () => {
   const server = await startMockServer(makeHandler({ groqContent: 'Fine.\n\nVerdict: APPROVED' }));
   const eventFile = await writeEventFile();
   try {
-    const result = await runPrReview(server.address().port, eventFile);
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: NO_EVIDENCE_PATH });
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
     const comment = server.requests.find(
       (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
@@ -1000,4 +1014,106 @@ test('pr_review keeps the evidence section after the LLM review when nothing fai
     checks: [EVIDENCE_PASS],
   });
   assert.ok(body.indexOf('LLM findings here.') < body.indexOf('### 🧪 Tool Evidence'));
+});
+
+// --- Withheld approval (ADR-0026) ---
+
+const reviewLabelCalls = (server) => ({
+  added: server.requests.filter((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url)).map((r) => JSON.parse(r.body).labels).flat(),
+  removed: server.requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url)).map((r) => decodeURIComponent(r.url.split('/labels/')[1])),
+});
+
+test('pr_review withholds approval when a check timed out, and applies neither review label', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Looks fine.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile([{ ...EVIDENCE_PASS, status: 'timeout', exit_code: null }]);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: evidenceFile });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.match(JSON.parse(review.body).body, /Approval withheld/);
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
+    );
+    assert.match(JSON.parse(comment.body).body, /Approval withheld\*\* — unverified checks \(timeout or error\): tests/);
+    const labels = reviewLabelCalls(server);
+    assert.deepEqual(labels.added, ['review-withheld']);
+    assert.deepEqual(labels.removed.sort(), ['changes-requested', 'review-approved']);
+    assert.match(result.stderr, /"verdict":"WITHHELD"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
+  }
+});
+
+test('pr_review withholds approval when no evidence file exists', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Fine.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: NO_EVIDENCE_PATH });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review keeps REQUEST_CHANGES and the changes-requested label when the model rejects with no evidence', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Broken.\n\nVerdict: REQUEST_CHANGES' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: NO_EVIDENCE_PATH });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.deepEqual(reviewLabelCalls(server).added, ['changes-requested']);
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
+    );
+    assert.doesNotMatch(JSON.parse(comment.body).body, /Approval withheld/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review keeps APPROVE with missing evidence when the repo has no evidence config', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Fine.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {
+      REVIEW_EVIDENCE_PATH: NO_EVIDENCE_PATH,
+      REVIEW_EVIDENCE_CONFIG: path.join(os.tmpdir(), 'pr-review-no-evidence-config.yaml'),
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-approved']);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review clears review-withheld when a later review approves or requests changes', async () => {
+  for (const [groqContent, applied] of [['Fine.\n\nVerdict: APPROVED', 'review-approved'], ['Broken.\n\nVerdict: REQUEST_CHANGES', 'changes-requested']]) {
+    const server = await startMockServer(makeHandler({ groqContent }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile);
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      const labels = reviewLabelCalls(server);
+      assert.ok(labels.added.includes(applied), `expected ${applied} to be applied`);
+      assert.ok(labels.removed.includes('review-withheld'), 'expected review-withheld to be removed');
+      assert.ok(!labels.added.includes('review-withheld'));
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+    }
+  }
 });

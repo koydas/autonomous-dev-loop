@@ -51,6 +51,7 @@ The PR review workflow creates and manages these labels automatically:
 
 - `review-approved` — applied when the automated code review verdict is APPROVED.
 - `changes-requested` — applied when the automated code review verdict is REQUEST_CHANGES.
+- `review-withheld` — applied when the model approved but the tool evidence is unverified (ADR-0026); does not trigger auto-fix and is cleared by the next verdict.
 
 All label names, colors, and descriptions are configurable in `config/labels.yaml`.
 
@@ -90,10 +91,12 @@ The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_m
   - A `## Tool evidence` block is appended to the review prompt.
   - **Any `fail` forces `REQUEST_CHANGES`** in code, whatever the LLM verdict.
   - A `### 🧪 Tool Evidence` section (status table + failing output tails) is added to the review comment, which auto-fix reads as feedback — right after the heading when a check failed (auto-fix truncates from the end), appended otherwise.
-- **Degraded modes (never block the review, never override):**
-  - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`).
-  - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run).
-  - `timeout` / `error` results — shown as unverified.
+- **Unverified evidence withholds approval (ADR-0026):** the review still runs, but an LLM `APPROVED` is not submitted as an approval when the evidence is:
+  - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`);
+  - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run);
+  - *unverified* — a check ended in `timeout` or `error`.
+
+  The review is posted as `COMMENT`, `review-withheld` is applied instead of `review-approved` or `changes-requested` (auto-fix is not triggered; the next verdict clears it), and the comment says **Approval withheld** with the reason. Push again or re-run `pr-review` once the cause is fixed. Without `config/review-evidence.yaml` (evidence not opted in), missing evidence does not withhold approval. Unit-test coverage: 100% of verdicts (`decideVerdict()` branches and the `pr_review.mjs` verdict → review event and labels mapping; AGENTS.md, Test Coverage Policy).
 - **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
 
 To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.

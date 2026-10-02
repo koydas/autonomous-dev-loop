@@ -20,6 +20,8 @@ import {
   assessEvidence,
   formatEvidenceContext,
   formatEvidenceSection,
+  decideVerdict,
+  formatWithheldNote,
   DEFAULT_TIMEOUT_SECONDS,
   EVIDENCE_SCHEMA_VERSION,
 } from '../lib/review_evidence.mjs';
@@ -511,4 +513,68 @@ test('formatEvidenceSection: lists every touched path in the warning', () => {
     assessEvidence(parseEvidence(evidenceJson([PASS])), { touchedPaths: ['package.json', 'scripts/run_review_evidence.mjs'] }),
   );
   assert.match(s, /modifies `package\.json`, `scripts\/run_review_evidence\.mjs`, which control how the checks run/);
+});
+
+// --- decideVerdict / formatWithheldNote (ADR-0026) ---
+
+const availableEvidence = (checks) => assessEvidence({ ok: true, evidence: { version: 1, head_sha: SHA, generated_at: 't', checks } }, { prHeadSha: SHA });
+const VERDICT_PASS = { name: 'tests', command: 'npm test', status: 'pass', exit_code: 0, duration_ms: 1, output_tail: '' };
+
+test('decideVerdict: model REQUEST_CHANGES stays REQUEST_CHANGES whatever the evidence', () => {
+  assert.deepEqual(decideVerdict(false, availableEvidence([VERDICT_PASS])), { verdict: 'REQUEST_CHANGES', reason: null });
+  assert.equal(decideVerdict(false, assessEvidence({ ok: false, reason: 'none' })).verdict, 'REQUEST_CHANGES');
+});
+
+test('decideVerdict: a failing check overrides an approval to REQUEST_CHANGES', () => {
+  const result = decideVerdict(true, availableEvidence([VERDICT_PASS, { ...VERDICT_PASS, name: 'lint', status: 'fail', exit_code: 1 }]));
+  assert.deepEqual(result, { verdict: 'REQUEST_CHANGES', reason: 'failing checks: lint' });
+});
+
+test('decideVerdict: a failing check wins over an unverified one', () => {
+  const result = decideVerdict(true, availableEvidence([{ ...VERDICT_PASS, status: 'timeout', exit_code: null }, { ...VERDICT_PASS, name: 'lint', status: 'fail', exit_code: 1 }]));
+  assert.equal(result.verdict, 'REQUEST_CHANGES');
+});
+
+test('decideVerdict: missing evidence withholds an approval', () => {
+  const result = decideVerdict(true, assessEvidence({ ok: false, reason: 'no evidence file at x' }));
+  assert.deepEqual(result, { verdict: 'WITHHELD', reason: 'evidence missing: no evidence file at x' });
+});
+
+test('decideVerdict: stale evidence withholds an approval even if its checks failed', () => {
+  const stale = assessEvidence(
+    { ok: true, evidence: { version: 1, head_sha: OTHER_SHA, generated_at: 't', checks: [{ ...VERDICT_PASS, status: 'fail', exit_code: 1 }] } },
+    { prHeadSha: SHA },
+  );
+  const result = decideVerdict(true, stale);
+  assert.equal(result.verdict, 'WITHHELD');
+  assert.match(result.reason, /^evidence stale: /);
+});
+
+test('decideVerdict: a timed-out or errored check withholds an approval', () => {
+  const result = decideVerdict(true, availableEvidence([VERDICT_PASS, { ...VERDICT_PASS, name: 'e2e', status: 'timeout', exit_code: null }, { ...VERDICT_PASS, name: 'lint', status: 'error', exit_code: null }]));
+  assert.deepEqual(result, { verdict: 'WITHHELD', reason: 'unverified checks (timeout or error): e2e, lint' });
+});
+
+test('decideVerdict: missing evidence keeps the approval when the repo has no evidence config', () => {
+  const missing = assessEvidence({ ok: false, reason: 'no evidence file at x' });
+  assert.deepEqual(decideVerdict(true, missing, { evidenceRequired: false }), { verdict: 'APPROVE', reason: null });
+});
+
+test('decideVerdict: a failing check still overrides when evidence is not required', () => {
+  const result = decideVerdict(true, availableEvidence([{ ...VERDICT_PASS, status: 'fail', exit_code: 1 }]), { evidenceRequired: false });
+  assert.equal(result.verdict, 'REQUEST_CHANGES');
+});
+
+test('decideVerdict: all checks passing keeps the approval', () => {
+  assert.deepEqual(decideVerdict(true, availableEvidence([VERDICT_PASS])), { verdict: 'APPROVE', reason: null });
+});
+
+test('decideVerdict: available evidence with no declared checks keeps the approval', () => {
+  assert.deepEqual(decideVerdict(true, availableEvidence([])), { verdict: 'APPROVE', reason: null });
+});
+
+test('formatWithheldNote: states the reason and that auto-fix is not triggered', () => {
+  const note = formatWithheldNote('evidence missing: no evidence file at x');
+  assert.match(note, /\*\*Approval withheld\*\* — evidence missing: no evidence file at x\./);
+  assert.match(note, /auto-fix is not triggered/);
 });

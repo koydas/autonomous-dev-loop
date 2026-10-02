@@ -20,6 +20,10 @@ review:
     name: changes-requested
     color: d93f0b
     description: Automated code review found issues requiring changes
+  withheld:
+    name: review-withheld
+    color: c5def5
+    description: Model approved but tool evidence is unverified; approval withheld (ADR-0026)
 
 autofix:
   attempt1:
