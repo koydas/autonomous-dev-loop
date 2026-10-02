@@ -103,6 +103,14 @@ test('labels.yaml: review group has approved and changes labels', () => {
   assert.ok(reviewLabels.changes?.name);
 });
 
+test('labels.yaml: review group has a withheld label distinct from approved and changes (ADR-0026)', () => {
+  const reviewLabels = loadLabelsConfig('review');
+  assert.ok(reviewLabels.withheld?.name, 'review.withheld.name is required');
+  assert.ok(reviewLabels.withheld.color && reviewLabels.withheld.description);
+  assert.notEqual(reviewLabels.withheld.name, reviewLabels.approved.name);
+  assert.notEqual(reviewLabels.withheld.name, reviewLabels.changes.name);
+});
+
 test('labels.yaml: autofix group has attempt1, attempt2, attempt3 labels', () => {
   const autofixLabels = loadLabelsConfig('autofix');
   for (const key of ['attempt1', 'attempt2', 'attempt3']) {

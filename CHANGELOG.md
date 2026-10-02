@@ -8,6 +8,19 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 ## [Unreleased]
 
 ### Fixed
+- `scripts/tests/test_layout.test.mjs`: the placement check now requires the exact `npm test` glob (`scripts/tests/*.test.mjs`). It accepted any `*.test.*` under `scripts/tests/`, so `scripts/tests/foo.test.js` or `scripts/tests/sub/foo.test.mjs` passed the guard and never ran (review on #167).
+
+### Added
+- `scripts/tests/test_layout.test.mjs`: `npm test` (and therefore the review evidence job) now fails when a tracked test file sits outside `scripts/tests/`, or when a test file there does not import `node:test` or uses the Jest API (`jest.*`, `expect()`). `npm test` only globs `scripts/tests/*.test.mjs`, so such files passed CI without running: auto-fix wrote one on koydas/autonomous-dev-loop#165 (`ecb6382`), and `test/output_writer.test.mjs` from #119 sat dead on `main`.
+
+### Changed
+- `scripts/pr_review.mjs`: when the model approves but the tool evidence cannot confirm it — a check ended in `timeout` or `error`, or the evidence is missing or stale — the review is now **withheld** instead of approved. The GitHub review is submitted as `COMMENT`, `review-approved` and `changes-requested` are removed and the new `review-withheld` label (`config/labels.yaml`) is applied — auto-fix is not triggered, and the next approve or request-changes verdict clears it — and the comment explains why. A failing check still forces `REQUEST_CHANGES`. Repos without `config/review-evidence.yaml` keep the previous behavior. New exports `decideVerdict()` and `formatWithheldNote()` in `scripts/lib/review_evidence.mjs`; `review.verdict` events can now carry `verdict: "WITHHELD"` (ADR-0026).
+
+### Removed
+- `test/output_writer.test.mjs`: a Jest-syntax test (`jest.mock`) that never ran under `node --test`; `scripts/tests/output_writer.test.mjs` covers the module.
+
+### Fixed
+- `scripts/pr_review.mjs` verdict parsing: a review whose heading came back bold (`**🚀 Verdict**` followed by `APPROVED`, or `**Verdict:** APPROVED`) instead of `### 🚀 Verdict` matched nothing and defaulted to `REQUEST_CHANGES`. The PR got `changes-requested` while its comment said `APPROVED`, and auto-fix ran against an approved change: on koydas/autonomous-dev-loop#165 it pushed a Jest-style test file on attempt 1, then failed with `AI response missing non-empty changes array` on attempt 2. The parser now accepts a closing `**` after the word and after the colon.
 - Groq defaults in `config/models.yaml` moved to `openai/gpt-oss-120b` for all stages: `qwen/qwen3-32b` (validation, review) and `llama-3.3-70b-versatile` (generation, autofix) were retired by Groq on 2026-07-17 and 2026-08-16, so every Groq call failed with `404 model_not_found`. New optional `<stage>_reasoning_effort` key (`low` | `medium` | `high`, set to `low` for every stage) is validated by `loadLLMConfig()` and sent by `groq_client.mjs` only when set. `autofix_max_input_tokens` lowered from 7,400 to 3,000 to fit gpt-oss-120b's 8K free-tier TPM with the measured ~890-token auto-fix system prompt. Every stage now sets an explicit `<stage>_max_tokens` (validation 1,024, generation 4,096, review 1,024) so each request stays bounded under the TPM. New `GROQ_REASONING_EFFORT` repository variable overrides every stage; `off` stops sending `reasoning_effort` for non-reasoning `GROQ_MODEL` overrides. ADR-0005 marked superseded and ADR-0017 amended (ADR-0025).
 
 ### Security

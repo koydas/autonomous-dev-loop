@@ -51,6 +51,7 @@ The PR review workflow creates and manages these labels automatically:
 
 - `review-approved` — applied when the automated code review verdict is APPROVED.
 - `changes-requested` — applied when the automated code review verdict is REQUEST_CHANGES.
+- `review-withheld` — applied when the model approved but the tool evidence is unverified (ADR-0026); does not trigger auto-fix and is cleared by the next verdict.
 
 All label names, colors, and descriptions are configurable in `config/labels.yaml`.
 
@@ -70,6 +71,7 @@ These were added after a benchmark session found a local coding model violating 
 
 - **Test-coverage gate is not limited to automation paths:** whenever the diff's classification context reports `tests_expected: true` (any feature/bugfix/refactor change, regardless of path — not just `.github/workflows/`, `scripts/`, `prompts/`), the reviewer checks the `has_test_file_changes` field (computed from the full PR diff, independent of the truncation below — and only counting test files actually added/modified, not ones only deleted) rather than only what's visible in the diff text, reporting at least MEDIUM severity when it's false. This closes a gap where a diff could self-classify "Tests expected: yes" and still be `APPROVED` with no tests present. `has_test_file_changes: true` is a coarse signal, not proof of relevant coverage — when the test file's content is visible in the diff, the reviewer still judges whether it plausibly covers the new/changed logic rather than treating the boolean as conclusive, except when `diff_truncated` makes that judgment impossible.
 - **Named defect checklist:** the reviewer explicitly checks every new/changed file for three specific patterns rather than relying on open-ended "look for bugs" judgment: read-only/getter-only property assignment (e.g. `AbortController.prototype.signal`), unauthorized dependency imports, and non-persistent "ref" patterns (state meant to survive across calls/renders stored in a re-initialized local variable instead of `useRef`/module state).
+- **Verdict parsing:** `pr_review.mjs` reads the verdict after the word `Verdict` in any of these forms: `### 🚀 Verdict` on its own line, `Verdict: APPROVED`, a bold verdict (`**APPROVED**`), a bold heading (`**🚀 Verdict**`) or a bold heading with colon (`**Verdict:** APPROVED`). Anything else — the template placeholder, prose, or no verdict — is treated as `REQUEST_CHANGES`. Unit-test coverage: 100% of these forms, both verdicts where they apply (AGENTS.md, Test Coverage Policy).
 - **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`); when this actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
 - **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file regardless of path when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
 
@@ -89,10 +91,12 @@ The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_m
   - A `## Tool evidence` block is appended to the review prompt.
   - **Any `fail` forces `REQUEST_CHANGES`** in code, whatever the LLM verdict.
   - A `### 🧪 Tool Evidence` section (status table + failing output tails) is added to the review comment, which auto-fix reads as feedback — right after the heading when a check failed (auto-fix truncates from the end), appended otherwise.
-- **Degraded modes (never block the review, never override):**
-  - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`).
-  - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run).
-  - `timeout` / `error` results — shown as unverified.
+- **Unverified evidence withholds approval (ADR-0026):** the review still runs, but an LLM `APPROVED` is not submitted as an approval when the evidence is:
+  - *missing* — no file, malformed file, or crashed evidence job (`review` runs with `if: !cancelled()`);
+  - *stale* — the evidence `head_sha` differs from the PR head (a push raced the run);
+  - *unverified* — a check ended in `timeout` or `error`.
+
+  The review is posted as `COMMENT`, `review-withheld` is applied instead of `review-approved` or `changes-requested` (auto-fix is not triggered; the next verdict clears it), and the comment says **Approval withheld** with the reason. Push again or re-run `pr-review` once the cause is fixed. Without `config/review-evidence.yaml` (evidence not opted in), missing evidence does not withhold approval. Unit-test coverage: 100% of verdicts (`decideVerdict()` branches and the `pr_review.mjs` verdict → review event and labels mapping; AGENTS.md, Test Coverage Policy).
 - **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
 
 To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.

@@ -1,7 +1,7 @@
 # ADR-0024: Tool evidence for PR review
 
 - **Date:** 2026-10-01
-- **Status:** Accepted
+- **Status:** Accepted — amended by [ADR-0026](./0026-withhold-approval-on-unverified-evidence.md) (unverified, missing or stale evidence now withholds an approval instead of leaving it untouched)
 
 ## Context
 

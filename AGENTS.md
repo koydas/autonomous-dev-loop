@@ -54,6 +54,7 @@ Before committing any change to `scripts/` or `prompts/`:
 
 - Run `node --test scripts/tests/*.test.mjs` and ensure all tests pass.
 - Never commit code that breaks an existing test without updating or replacing the test intentionally.
+- Test files live only in `scripts/tests/` and use `node:test`; `scripts/tests/test_layout.test.mjs` fails the suite for a test file that `npm test` would not run (anywhere else, in a subdirectory, or not `.test.mjs`) or one using the Jest API, because `npm test` would never run it.
 - The suite includes **unit tests** (modules in isolation) and **smoke tests** (`smoke.test.mjs`, cross-module pipelines with real config/prompt files). Both must pass.
 
 ### Test Coverage Policy
@@ -62,9 +63,11 @@ Minimum required path coverage for automation modules (enforced by code review):
 
 | Module | Minimum coverage | Required test paths |
 |---|---|---|
+| `pr_review.mjs` — verdict → review event and labels (ADR-0026) | 100% of verdicts | `APPROVE` → `review-approved`; `REQUEST_CHANGES` → `changes-requested` (re-pulse); `WITHHELD` → `COMMENT` + `review-withheld`, neither other label; `review-withheld` cleared by the next `APPROVE` or `REQUEST_CHANGES`; missing evidence without an evidence config → `APPROVE`. `decideVerdict()` itself is in `scripts/lib/review_evidence.mjs`, under the c8 80% gate in `test.yml` |
 | `scripts/lib/prompts.mjs` — `loadPrompt` | 100% of branches | happy path (file exists, non-empty), file-not-found (explicit `Prompt file not found` error with path), empty-file (explicit `Prompt file is empty` error with path) |
 | `scripts/lib/prompts.mjs` — `interpolatePrompt` | 100% of branches | single placeholder, multiple distinct placeholders, repeated placeholder, unknown placeholder left unchanged, non-placeholder content unchanged |
 | Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields produce explicit path-oriented errors (e.g. `pull_request.number`, `pull_request.head.ref`) |
+| `pr_review.mjs` — verdict parsing | 100% of accepted verdict forms | `### 🚀 Verdict` heading, `Verdict:` inline, bold verdict (`**APPROVED**`), bold heading (`**🚀 Verdict**`), bold heading with colon (`**Verdict:**`), each for APPROVED and REQUEST_CHANGES where it applies; template placeholder or missing verdict → REQUEST_CHANGES |
 | `.claude/settings.json` post-edit test hook | 100% of branches | path under `scripts/` or `.github/workflows/` runs the suite from `$CLAUDE_PROJECT_DIR`, other paths and missing `file_path` skip it, failing suite exits 2 with output on stderr, unusable `$CLAUDE_PROJECT_DIR` exits 2 (`scripts/tests/claude_settings_hook.test.mjs`) |
 
 Any PR that adds a new exported function to `scripts/lib/` must include tests for every failure branch, not only the happy path. PRs that lack these tests are considered incomplete regardless of whether existing tests pass.
