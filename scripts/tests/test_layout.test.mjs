@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TEST_DIR = 'scripts/tests/';
 const TEST_FILE = /\.test\.(?:m|c)?[jt]sx?$/;
+// Exactly the files `npm test` runs: scripts/tests/*.test.mjs, no subdirectories.
+const RUNNABLE_TEST = /^scripts\/tests\/[^/]+\.test\.mjs$/;
 const JEST_API = /\bjest\.\w+\s*\(|\bexpect\s*\(/;
 const SELF = path.basename(fileURLToPath(import.meta.url));
 const NODE_TEST_IMPORT = /from\s+['"]node:test['"]/;
@@ -26,7 +28,7 @@ function listTrackedFiles() {
 }
 
 function findMisplacedTestFiles(files) {
-  return files.filter((file) => TEST_FILE.test(path.posix.basename(file)) && !file.startsWith(TEST_DIR));
+  return files.filter((file) => TEST_FILE.test(path.posix.basename(file)) && !RUNNABLE_TEST.test(file));
 }
 
 function findTestFileViolations(file, content) {
@@ -40,6 +42,13 @@ test('findMisplacedTestFiles flags test files outside scripts/tests/', () => {
   assert.deepEqual(
     findMisplacedTestFiles(['test/output_writer.test.mjs', 'scripts/lib/a.test.js', 'src/b.test.ts']),
     ['test/output_writer.test.mjs', 'scripts/lib/a.test.js', 'src/b.test.ts'],
+  );
+});
+
+test('findMisplacedTestFiles flags test files under scripts/tests/ that npm test does not glob', () => {
+  assert.deepEqual(
+    findMisplacedTestFiles(['scripts/tests/foo.test.js', 'scripts/tests/sub/bar.test.mjs', 'scripts/tests/baz.test.ts']),
+    ['scripts/tests/foo.test.js', 'scripts/tests/sub/bar.test.mjs', 'scripts/tests/baz.test.ts'],
   );
 });
 
@@ -65,10 +74,10 @@ test('findTestFileViolations accepts node:test describe/it', () => {
   assert.deepEqual(findTestFileViolations('ok.test.mjs', content), []);
 });
 
-test('repository: every tracked test file lives in scripts/tests/', (t) => {
+test('repository: every tracked test file matches the npm test glob (scripts/tests/*.test.mjs)', (t) => {
   const files = listTrackedFiles();
   if (!files) return t.skip('not a git checkout');
-  assert.deepEqual(findMisplacedTestFiles(files), [], 'npm test only runs scripts/tests/*.test.mjs; move these files there');
+  assert.deepEqual(findMisplacedTestFiles(files), [], 'npm test only runs scripts/tests/*.test.mjs; move or rename these files');
 });
 
 test('repository: every test file in scripts/tests/ uses node:test, not Jest', () => {

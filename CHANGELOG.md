@@ -7,6 +7,9 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+### Fixed
+- `scripts/tests/test_layout.test.mjs`: the placement check now requires the exact `npm test` glob (`scripts/tests/*.test.mjs`). It accepted any `*.test.*` under `scripts/tests/`, so `scripts/tests/foo.test.js` or `scripts/tests/sub/foo.test.mjs` passed the guard and never ran (review on #167).
+
 ### Added
 - `scripts/tests/test_layout.test.mjs`: `npm test` (and therefore the review evidence job) now fails when a tracked test file sits outside `scripts/tests/`, or when a test file there does not import `node:test` or uses the Jest API (`jest.*`, `expect()`). `npm test` only globs `scripts/tests/*.test.mjs`, so such files passed CI without running: auto-fix wrote one on koydas/autonomous-dev-loop#165 (`ecb6382`), and `test/output_writer.test.mjs` from #119 sat dead on `main`.
 
