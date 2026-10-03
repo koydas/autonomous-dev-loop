@@ -13,6 +13,7 @@
  */
 
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +24,7 @@ import {
 import { callLLM } from './lib/llm_client.mjs';
 import { loadLLMConfig } from './lib/config.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { recordRuns } from './lib/eval_scorecard.mjs';
+import { recordRuns, partitionPublishable } from './lib/eval_scorecard.mjs';
 import { SCORECARD_PATHS } from './update_scorecard.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -101,7 +102,9 @@ async function main() {
   tracer.startSpan('eval', { suite: suite.name });
 
   try {
-    const cases = filterCases(await loadDataset(path.resolve(REPO_ROOT, suite.dataset)), opts);
+    const datasetPath = path.resolve(REPO_ROOT, suite.dataset);
+    const datasetSha256 = createHash('sha256').update(await fs.readFile(datasetPath)).digest('hex');
+    const cases = filterCases(await loadDataset(datasetPath), opts);
     const { llmFor, model, recorded: replayed } = await buildLLM(suite, opts.replay);
     if (replayed) opts.repeats = resolveReplayRepeats(replayed.meta, opts);
 
@@ -123,14 +126,18 @@ async function main() {
     for (const f of thresholdResults.filter((x) => !failures.includes(x))) {
       process.stderr.write(`Warning: threshold ${f.metric} skipped on a filtered run (${f.reason})\n`);
     }
-    const meta = { run_id: runId, ts: new Date().toISOString(), model, repeats: opts.repeats, dataset: suite.dataset };
+    const meta = { run_id: runId, ts: new Date().toISOString(), model, repeats: opts.repeats, dataset: suite.dataset, dataset_sha256: datasetSha256 };
     const report = formatReport({ suite: suite.name, summary, failures, results, meta });
 
     await fs.mkdir(opts.outDir, { recursive: true });
     const resultsFile = path.join(opts.outDir, `${suite.name}-${runId}.json`);
     const recorded = { meta: { ...meta, suite: suite.name }, summary, failures, results };
     await fs.writeFile(resultsFile, JSON.stringify(recorded, null, 2));
-    if (opts.scorecard) await recordRuns([recorded], SCORECARD_PATHS);
+    if (opts.scorecard) {
+      const { publishable, skipped } = partitionPublishable([recorded]);
+      for (const s of skipped) process.stderr.write(`Warning: run ${s.run_id} not recorded on the scorecard (${s.reason})\n`);
+      if (publishable.length) await recordRuns(publishable, SCORECARD_PATHS);
+    }
 
     const historyFile = process.env.EVAL_HISTORY_FILE ?? 'evals/history.jsonl';
     await fs.mkdir(path.dirname(historyFile), { recursive: true });

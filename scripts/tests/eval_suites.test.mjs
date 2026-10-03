@@ -261,3 +261,13 @@ test('run_evals on a filtered replay skips unavailable thresholds and warns abou
   assert.match(stderr, /threshold per_class\.invalid\.recall skipped on a filtered run/);
   assert.match(stderr, /recorded run\(s\) not replayed/);
 });
+
+test('run_evals records the dataset content hash in the results meta', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const recorded = await writeRecording(dir, (c) => c.expected.valid);
+  await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir], dir);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  const { createHash } = await import('node:crypto');
+  const expected = createHash('sha256').update(await fs.readFile(path.join(REPO_ROOT, validationSuite.dataset))).digest('hex');
+  assert.equal(saved.meta.dataset_sha256, expected);
+});

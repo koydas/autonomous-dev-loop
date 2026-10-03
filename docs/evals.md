@@ -15,7 +15,9 @@ npm run eval -- --suite validation --tags b3,b4 --limit 5
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json
 ```
 
-CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). Results and trace are uploaded as artifacts; the report is in the job summary.
+CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, the [scorecard](#scorecard) is committed (`publish` input, on by default).
+
+Δ in `SCORECARD.md` only compares runs on the same dataset content: each run records the dataset's `sha256`, and when it changes the scorecard shows "dataset changed" instead of a Δ, so a label fix never reads as a model improvement.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -34,13 +36,24 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). Results a
 
 Live results are published in [`evals/SCORECARD.md`](../evals/SCORECARD.md) (latest metrics with Δ vs previous run, last 10 runs per suite) and in the README's **Latest results** block. Both are generated from `evals/scorecard.json`, which is committed.
 
+**In CI (default):** a run on the **default branch** is recorded, and the workflow commits the three generated files (`evals/scorecard.json`, `evals/SCORECARD.md`, `README.md`) as `github-actions[bot]`, with the message `chore(evals): record <suite> run <runId> on the scorecard`. Untick the `publish` input for a throwaway run.
+
+- **Other branches:** runs stay artifact-only, so unmerged prompt or dataset changes never enter the published history and the generated files never conflict at merge.
+- **Separate `publish` job:** it holds `contents: write` and gets the results through the artifact. The `eval` job, which holds the API keys and handles LLM output, runs read-only, with no push credential on disk.
+- **Failing runs:** a run that misses a metric threshold is published with a ❌ gate. A run that misses the `error_rate` threshold is skipped with a warning, because a provider outage (429, 401) is not a model result and would evict real history.
+- **Concurrent commits:** the views are rebuilt on the latest default-branch head before each push (3 attempts, never forced), so a concurrent commit is never overwritten. Only those three files are staged.
+- **Branch protection:** if it rejects pushes from `github-actions[bot]`, the job fails with an `::error::` annotation and the results stay in the artifact.
+- **Drift test:** a push made with `GITHUB_TOKEN` does not trigger `test.yml`, so the drift test does not run on these commits. The views are deterministic output of `update_scorecard.mjs`, and the next regular CI run covers them.
+
+**Locally:**
+
 ```bash
 npm run eval -- --suite validation --repeats 3 --scorecard        # live run, then record it
-npm run eval:scorecard -- evals/results/validation-<runId>.json  # record a CI run (download the eval-results artifact first)
+npm run eval:scorecard -- evals/results/validation-<runId>.json  # record a downloaded CI artifact
 npm run eval:scorecard                                           # regenerate the views only
 ```
 
-Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`. Recording is a manual, reviewed step: nothing pushes to the default branch on its own. Replay runs are rejected (`--scorecard` with `--replay` fails, and so does a replay results file) — they re-score old responses and say nothing about the current model. A failing run is still recorded, with its gate shown as ❌. `scripts/tests/eval_scorecard.test.mjs` fails when the committed views drift from `scorecard.json`.
+Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`. Replay runs are rejected (`--scorecard` with `--replay` fails, and so does a replay results file) — they re-score old responses and say nothing about the current model. A failing run is still recorded, with its gate shown as ❌. `scripts/tests/eval_scorecard.test.mjs` fails when the committed views drift from `scorecard.json`.
 
 ## Metrics
 

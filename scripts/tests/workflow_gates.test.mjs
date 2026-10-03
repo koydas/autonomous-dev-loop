@@ -68,7 +68,7 @@ test('every issue_comment-triggered workflow gates on trusted comment author_ass
 
 // Workflows whose jobs push commits or mutate labels/comments: a run must never be
 // cancelled halfway, so they queue (cancel-in-progress: false) instead.
-const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'code-generation.yml', 'validate-issue.yml', 'reset-auto-fix.yml'];
+const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'code-generation.yml', 'validate-issue.yml', 'reset-auto-fix.yml', 'evals.yml'];
 // Triggers fire for unrelated labels/comments too; a workflow-level group would let a
 // skipped run replace the pending real one, so the group must sit on the gated job.
 const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'code-generation.yml'];
@@ -225,4 +225,28 @@ test('pr-review.yml caps LLM rate-limit waits to fit its 2-minute timeout', () =
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
   assert.match(text, /timeout-minutes: 2/);
   assert.match(text, /LLM_MAX_RETRY_WAIT_MS: '10000'/);
+});
+
+// ADR-0027: the eval workflow commits to the branch it ran on, so it may only stage
+// the deterministic scorecard views, rebuilt from the latest head before each push.
+test('evals.yml publishes only the generated scorecard files', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
+  const adds = [...text.matchAll(/^\s*git add (.+)$/gm)].map((m) => m[1].trim());
+  assert.deepEqual(adds, ['evals/scorecard.json evals/SCORECARD.md README.md']);
+  assert.match(text, /node scripts\/update_scorecard\.mjs/);
+  assert.match(text, /git reset --hard "origin\/\$BRANCH"/);
+  assert.doesNotMatch(text, /git push[^\n]*--force/);
+});
+
+test('evals.yml keeps write access out of the eval job and publishes from the default branch only', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
+  const evalJob = text.slice(text.indexOf('\n  eval:'), text.indexOf('\n  publish:'));
+  const publishJob = text.slice(text.indexOf('\n  publish:'));
+  assert.match(text, /^permissions:\n  contents: read$/m);
+  assert.match(evalJob, /persist-credentials: false/);
+  assert.doesNotMatch(evalJob, /contents: write|git push/);
+  assert.match(publishJob, /needs: eval/);
+  assert.match(publishJob, /contents: write/);
+  assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && inputs\.publish && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
+  assert.doesNotMatch(publishJob, /secrets\./, 'the publish job must not receive LLM API keys');
 });
