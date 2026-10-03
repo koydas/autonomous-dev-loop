@@ -91,6 +91,12 @@ export const reviewSuite = {
 
 `run` must go through the stage's production code (prompt builder + parser), not a copy, so parser regressions are caught. Add a test in `scripts/tests/eval_suites.test.mjs`.
 
+## Tests and coverage
+
+- `scripts/lib/eval_harness.mjs` and `scripts/lib/eval_scorecard.mjs` are under the CI-enforced **80% minimum coverage** gate (`c8 --check-coverage --lines 80 --branches 80 --functions 80 --statements 80` in `.github/workflows/test.yml`), each measured with its own test file (`eval_harness.test.mjs`, `eval_scorecard.test.mjs`).
+- `scripts/run_evals.mjs` and `scripts/update_scorecard.mjs` are exercised end to end in replay mode by `eval_suites.test.mjs` (thresholds, repeats, filtered runs, dataset hash).
+- The workflow's publish step is shell, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the staged files, and the only `git push` target (`evals/scorecard`).
+
 ## Results file
 
 `evals/results/<suite>-<runId>.json` = `{ meta, summary, failures, results[] }`. Each result keeps `case_id`, `repeat`, `output`, `label`, `scores`, `error` and `calls[]` (`raw`, `latency_ms`, token estimates) — the `raw` responses are what `--replay` serves.
