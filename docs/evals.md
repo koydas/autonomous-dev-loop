@@ -15,7 +15,7 @@ npm run eval -- --suite validation --tags b3,b4 --limit 5
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json
 ```
 
-CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). Results and trace are uploaded as artifacts; the report is in the job summary.
+CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The report is on the run's summary page, results and trace are uploaded as artifacts, and the [scorecard](#scorecard) is committed to the branch (`publish` input, on by default).
 
 | Option | Default | Effect |
 |---|---|---|
@@ -34,13 +34,17 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). Results a
 
 Live results are published in [`evals/SCORECARD.md`](../evals/SCORECARD.md) (latest metrics with Δ vs previous run, last 10 runs per suite) and in the README's **Latest results** block. Both are generated from `evals/scorecard.json`, which is committed.
 
+**In CI (default):** the Evals workflow records the run and commits the three generated files (`evals/scorecard.json`, `evals/SCORECARD.md`, `README.md`) to the branch it ran on, as `github-actions[bot]`, with the message `chore(evals): record <suite> run <runId> on the scorecard`. Untick the `publish` input for a throwaway run. The step runs even when a threshold fails (the run is recorded with a ❌ gate). It rebuilds the views on the latest branch head before each push (3 attempts), so a concurrent commit is never overwritten. It stages nothing but those three files. If the branch protection rejects pushes from `github-actions[bot]`, the step fails with an `::error::` annotation and the results stay in the artifact.
+
+**Locally:**
+
 ```bash
 npm run eval -- --suite validation --repeats 3 --scorecard        # live run, then record it
-npm run eval:scorecard -- evals/results/validation-<runId>.json  # record a CI run (download the eval-results artifact first)
+npm run eval:scorecard -- evals/results/validation-<runId>.json  # record a downloaded CI artifact
 npm run eval:scorecard                                           # regenerate the views only
 ```
 
-Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`. Recording is a manual, reviewed step: nothing pushes to the default branch on its own. Replay runs are rejected (`--scorecard` with `--replay` fails, and so does a replay results file) — they re-score old responses and say nothing about the current model. A failing run is still recorded, with its gate shown as ❌. `scripts/tests/eval_scorecard.test.mjs` fails when the committed views drift from `scorecard.json`.
+Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`. Replay runs are rejected (`--scorecard` with `--replay` fails, and so does a replay results file) — they re-score old responses and say nothing about the current model. A failing run is still recorded, with its gate shown as ❌. `scripts/tests/eval_scorecard.test.mjs` fails when the committed views drift from `scorecard.json`.
 
 ## Metrics
 

@@ -7,9 +7,13 @@ _No live eval run recorded yet._
 
 ## Record a run
 
+**Actions → Evals → Run workflow** records the run and commits this file, `evals/scorecard.json` and the README block (`publish` input, on by default).
+
+Locally:
+
 ```bash
 npm run eval -- --suite validation --repeats 3 --scorecard        # live run + record
-node scripts/update_scorecard.mjs evals/results/<suite>-<runId>.json  # record a CI artifact
+node scripts/update_scorecard.mjs evals/results/<suite>-<runId>.json  # record a downloaded CI artifact
 ```
 
 Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`.

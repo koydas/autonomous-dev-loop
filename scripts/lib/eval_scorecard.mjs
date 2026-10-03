@@ -133,9 +133,11 @@ export function formatScorecard(scorecard) {
   }
 
   lines.push('## Record a run', '');
+  lines.push('**Actions → Evals → Run workflow** records the run and commits this file, `evals/scorecard.json` and the README block (`publish` input, on by default).', '');
+  lines.push('Locally:', '');
   lines.push('```bash');
   lines.push('npm run eval -- --suite validation --repeats 3 --scorecard        # live run + record');
-  lines.push('node scripts/update_scorecard.mjs evals/results/<suite>-<runId>.json  # record a CI artifact');
+  lines.push('node scripts/update_scorecard.mjs evals/results/<suite>-<runId>.json  # record a downloaded CI artifact');
   lines.push('```', '');
   lines.push('Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`.', '');
   return lines.join('\n');

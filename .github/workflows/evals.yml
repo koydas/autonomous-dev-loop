@@ -1,6 +1,9 @@
 name: Evals
 
 # Manual only: each run spends real LLM tokens (Groq free tier: 8K TPM).
+# With `publish`, the run is recorded on the scorecard and the generated files
+# (evals/scorecard.json, evals/SCORECARD.md, README.md block) are committed to the
+# branch the workflow ran on (ADR-0027).
 on:
   workflow_dispatch:
     inputs:
@@ -12,12 +15,17 @@ on:
         description: Runs per case (>1 measures consistency)
         required: true
         default: '1'
+      publish:
+        description: Record the run on the scorecard and commit it to this branch
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  contents: write
 
+# One run per branch at a time: publishing commits to the branch.
 concurrency:
-  group: evals-${{ github.ref }}-${{ inputs.suite }}
+  group: evals-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -52,6 +60,35 @@ jobs:
             evals/results/
             evals/history.jsonl
           if-no-files-found: ignore
+
+      # Runs even when a threshold failed (the run is recorded with a ❌ gate).
+      # Only deterministic generated files are committed; the scorecard is rebuilt
+      # on the latest branch head so a concurrent push never gets overwritten.
+      - name: Publish scorecard
+        if: always() && inputs.publish
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SUITE: ${{ inputs.suite }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          results=(evals/results/*.json)
+          if [ ${#results[@]} -eq 0 ]; then echo "No eval results to publish"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            node scripts/update_scorecard.mjs "${results[@]}"
+            git add evals/scorecard.json evals/SCORECARD.md README.md
+            if git diff --cached --quiet; then echo "Scorecard unchanged"; exit 0; fi
+            git commit -m "chore(evals): record ${SUITE} run ${RUN_ID} on the scorecard"
+            if git push origin "HEAD:${BRANCH}"; then exit 0; fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::Could not push the scorecard to ${BRANCH} (branch protection or concurrent pushes)"
+          exit 1
 
       - name: Upload run trace
         if: always()

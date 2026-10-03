@@ -124,7 +124,7 @@ npm run eval -- --suite validation --replay evals/results/validation-<runId>.jso
 _No live eval run recorded yet — see [evals/SCORECARD.md](evals/SCORECARD.md) for how to record one._
 <!-- eval-scorecard:end -->
 
-Each run prints a Markdown report (metrics, threshold failures, failing cases), writes the full replayable results to `evals/results/`, and appends a summary to `evals/history.jsonl`. In CI: **Actions → [Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml) → Run workflow** — the report lands in the job summary, results in the artifacts.
+Each run prints a Markdown report (metrics, threshold failures, failing cases), writes the full replayable results to `evals/results/`, and appends a summary to `evals/history.jsonl`. In CI: **Actions → [Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml) → Run workflow** — the report lands on the run's summary page, results in the artifacts, and the run is committed to the scorecard below and to [evals/SCORECARD.md](evals/SCORECARD.md).
 
 Adding a case, a scorer or a suite for another stage: [docs/evals.md](docs/evals.md). Design rationale: [ADR-0027](docs/adr/0027-offline-eval-harness.md).
 
