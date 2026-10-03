@@ -1,9 +1,10 @@
 name: Evals
 
 # Manual only: each run spends real LLM tokens (Groq free tier: 8K TPM).
-# With `publish`, the run is recorded on the scorecard and the generated files
-# (evals/scorecard.json, evals/SCORECARD.md, README.md block) are committed to the
-# branch the workflow ran on (ADR-0027).
+# With `publish`, a run on the default branch is recorded on the scorecard: the
+# `publish` job commits the generated files (evals/scorecard.json, evals/SCORECARD.md,
+# README.md block) to the default branch (ADR-0027 amendment). Runs on other refs
+# stay artifact-only.
 on:
   workflow_dispatch:
     inputs:
@@ -16,14 +17,14 @@ on:
         required: true
         default: '1'
       publish:
-        description: Record the run on the scorecard and commit it to this branch
+        description: Record the run on the scorecard (default branch only)
         type: boolean
         default: true
 
 permissions:
-  contents: write
+  contents: read
 
-# One run per branch at a time: publishing commits to the branch.
+# One run per branch at a time: publishing commits to the default branch.
 concurrency:
   group: evals-${{ github.ref }}
   cancel-in-progress: false
@@ -32,7 +33,10 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     steps:
+      # The eval step handles LLM output and API keys: no push credential on disk.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -61,19 +65,49 @@ jobs:
             evals/history.jsonl
           if-no-files-found: ignore
 
-      # Runs even when a threshold failed (the run is recorded with a ❌ gate).
-      # Only deterministic generated files are committed; the scorecard is rebuilt
-      # on the latest branch head so a concurrent push never gets overwritten.
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+  # Separate job: write access and the push credential never share a runner with the
+  # eval step's API keys or LLM output. Runs even when a threshold failed (the run is
+  # recorded with a ❌ gate); update_scorecard.mjs skips runs that failed on error_rate
+  # (provider outage). Only deterministic generated files are committed, rebuilt on the
+  # latest default-branch head before each push so a concurrent commit is never lost.
+  publish:
+    needs: eval
+    if: ${{ !cancelled() && inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download eval results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: ${{ runner.temp }}/eval-results
+
       - name: Publish scorecard
-        if: always() && inputs.publish
         env:
-          BRANCH: ${{ github.ref_name }}
+          BRANCH: ${{ github.event.repository.default_branch }}
           SUITE: ${{ inputs.suite }}
           RUN_ID: ${{ github.run_id }}
+          RESULTS_DIR: ${{ runner.temp }}/eval-results
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          results=(evals/results/*.json)
+          shopt -s nullglob globstar
+          results=("$RESULTS_DIR"/**/*.json)
           if [ ${#results[@]} -eq 0 ]; then echo "No eval results to publish"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -89,12 +123,3 @@ jobs:
           done
           echo "::error::Could not push the scorecard to ${BRANCH} (branch protection or concurrent pushes)"
           exit 1
-
-      - name: Upload run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}
-          path: ./observability/traces/${{ github.run_id }}.json
-          if-no-files-found: ignore
-          overwrite: true

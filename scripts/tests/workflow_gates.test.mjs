@@ -235,6 +235,18 @@ test('evals.yml publishes only the generated scorecard files', () => {
   assert.deepEqual(adds, ['evals/scorecard.json evals/SCORECARD.md README.md']);
   assert.match(text, /node scripts\/update_scorecard\.mjs/);
   assert.match(text, /git reset --hard "origin\/\$BRANCH"/);
-  assert.match(text, /if: always\(\) && inputs\.publish/);
   assert.doesNotMatch(text, /git push[^\n]*--force/);
+});
+
+test('evals.yml keeps write access out of the eval job and publishes from the default branch only', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
+  const evalJob = text.slice(text.indexOf('\n  eval:'), text.indexOf('\n  publish:'));
+  const publishJob = text.slice(text.indexOf('\n  publish:'));
+  assert.match(text, /^permissions:\n  contents: read$/m);
+  assert.match(evalJob, /persist-credentials: false/);
+  assert.doesNotMatch(evalJob, /contents: write|git push/);
+  assert.match(publishJob, /needs: eval/);
+  assert.match(publishJob, /contents: write/);
+  assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && inputs\.publish && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
+  assert.doesNotMatch(publishJob, /secrets\./, 'the publish job must not receive LLM API keys');
 });

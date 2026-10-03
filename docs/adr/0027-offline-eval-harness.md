@@ -42,10 +42,15 @@ The first suite is `validation` (15 cases, B1–B4 blockers + valid issues; dete
 
 ## Amendment (2026-10-03): the Evals workflow publishes the scorecard
 
-A run whose results stay in an artifact is not visible, and a manual download-and-commit step was skipped in practice. `.github/workflows/evals.yml` now has a `publish` input (on by default). The job gets `contents: write`, and a final step runs `scripts/update_scorecard.mjs` on the run's results and commits `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md` to the branch it ran on.
+A run whose results stay in an artifact is not visible, and a manual download-and-commit step was skipped in practice. `.github/workflows/evals.yml` now has a `publish` input (on by default) and two jobs:
 
-- Only those three generated files are staged. They are produced by deterministic code from metrics; no LLM-written text is committed. `workflow_gates.test.mjs` asserts the `git add` line.
-- The step runs `if: always()`, so a run that misses a threshold is still published with a ❌ gate.
-- Before each push (3 attempts), the views are rebuilt on the latest branch head (`git reset --hard origin/<branch>`, then `update_scorecard.mjs`), so a concurrent commit is never overwritten. The concurrency group is per branch.
-- ⚠️ This is the one workflow that pushes to the default branch without a PR. That is acceptable because the change is generated data, not code. If the branch is protected against `github-actions[bot]`, the step fails visibly and the artifact remains the fallback.
+- **`eval`** (`contents: read`, checkout with `persist-credentials: false`) runs the suite and uploads the results. It holds the API keys and handles LLM output, so no push credential is on disk (the ADR-0023 posture).
+- **`publish`** (`contents: write`, no secrets) needs `eval`. It runs only when `!cancelled() && inputs.publish` and the ref is the **default branch**: runs on other refs stay artifact-only, so unmerged prompt or dataset changes never enter the history and the generated files never conflict at merge. It downloads the results artifact, runs `scripts/update_scorecard.mjs` and commits `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`.
 
+Rules:
+- Only those three generated files are staged. They are produced by deterministic code from metrics; no LLM-written text is committed. `workflow_gates.test.mjs` asserts the `git add` line and the job split.
+- A run that misses a metric threshold is published with a ❌ gate. A run that misses the `error_rate` threshold is **skipped** with a warning (`partitionPublishable`): a provider outage (429, 401) measures the provider, not the model, and would evict real history from the 10-run window.
+- Before each push (3 attempts, never forced), the views are rebuilt on the latest default-branch head (`git reset --hard origin/<branch>`, then `update_scorecard.mjs`), so a concurrent commit is never overwritten. The concurrency group is per ref.
+- Each run records the dataset's `sha256`. `SCORECARD.md` shows Δ only against a previous run on the same dataset content and says "dataset changed" otherwise, so a label fix never reads as a model change.
+- ⚠️ This is the one workflow that pushes to the default branch without a PR. That is acceptable because the change is generated data, not code. If the branch is protected against `github-actions[bot]`, the job fails visibly and the artifact remains the fallback.
+- ⚠️ A push made with `GITHUB_TOKEN` does not trigger `test.yml`, so the drift test does not run on these commits. The views are deterministic output, and the next regular CI run checks them.

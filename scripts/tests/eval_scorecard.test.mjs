@@ -17,6 +17,7 @@ import {
   formatScorecard,
   replaceReadmeBlock,
   recordRuns,
+  partitionPublishable,
 } from '../lib/eval_scorecard.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -217,4 +218,44 @@ test('evals/SCORECARD.md and the README block match evals/scorecard.json', async
   assert.equal(md, formatScorecard(sc), 'run `node scripts/update_scorecard.mjs` and commit the result');
   const readme = await fs.readFile(path.join(REPO_ROOT, 'README.md'), 'utf8');
   assert.equal(readme, replaceReadmeBlock(readme, formatReadmeBlock(sc)), 'README scorecard block is stale: run `node scripts/update_scorecard.mjs`');
+});
+
+test('partitionPublishable skips runs that failed on error_rate and keeps metric failures', () => {
+  const outage = results({ runId: 'outage', failures: [{ metric: 'error_rate' }, { metric: 'scores.verdict_match.mean' }] });
+  outage.summary.error_rate = 1;
+  const regression = results({ runId: 'regression', failures: [{ metric: 'scores.verdict_match.mean' }] });
+  const { publishable, skipped } = partitionPublishable([outage, regression, results({ runId: 'ok' })]);
+  assert.deepEqual(publishable.map((r) => r.meta.run_id), ['regression', 'ok']);
+  assert.deepEqual(skipped, [{ run_id: 'outage', reason: 'error_rate 1 above threshold' }]);
+});
+
+test('partitionPublishable tolerates results without failures or meta', () => {
+  const { publishable, skipped } = partitionPublishable([{ summary: {} }, { failures: [{ metric: 'error_rate' }] }]);
+  assert.equal(publishable.length, 1);
+  assert.deepEqual(skipped, [{ run_id: null, reason: 'error_rate undefined above threshold' }]);
+});
+
+test('formatScorecard hides Δ when the dataset changed and shows the dataset hash', () => {
+  const old = results({ runId: 'old', ts: '2026-09-01T00:00:00Z', verdict: 0.8 });
+  old.meta.dataset_sha256 = 'a'.repeat(64);
+  const cur = results({ runId: 'new', verdict: 0.9 });
+  cur.meta.dataset_sha256 = 'b'.repeat(64);
+  let sc = addRun(emptyScorecard(), 'validation', toScorecardRun(old));
+  sc = addRun(sc, 'validation', toScorecardRun(cur));
+  const md = formatScorecard(sc);
+  assert.match(md, /dataset `bbbbbbbbbbbb`/);
+  assert.match(md, /Δ not shown: the dataset changed since the previous run/);
+  assert.match(md, /\| verdict_match \| 0\.9 \|/);
+  assert.doesNotMatch(md, /▲/);
+});
+
+test('formatScorecard keeps Δ when the dataset hash is unchanged', () => {
+  const old = results({ runId: 'old', ts: '2026-09-01T00:00:00Z', verdict: 0.8 });
+  const cur = results({ runId: 'new', verdict: 0.9 });
+  old.meta.dataset_sha256 = cur.meta.dataset_sha256 = 'c'.repeat(64);
+  let sc = addRun(emptyScorecard(), 'validation', toScorecardRun(old));
+  sc = addRun(sc, 'validation', toScorecardRun(cur));
+  const md = formatScorecard(sc);
+  assert.match(md, /\| verdict_match \| 0\.9 \(▲ 0\.1\) \|/);
+  assert.doesNotMatch(md, /dataset changed/);
 });
