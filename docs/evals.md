@@ -15,7 +15,7 @@ npm run eval -- --suite validation --tags b3,b4 --limit 5
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json
 ```
 
-CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, the [scorecard](#scorecard) is committed (`publish` input, on by default).
+CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, a [scorecard](#scorecard) PR is opened or updated (`publish` input, on by default).
 
 Δ in `SCORECARD.md` only compares runs on the same dataset content: each run records the dataset's `sha256`, and when it changes the scorecard shows "dataset changed" instead of a Δ, so a label fix never reads as a model improvement.
 
@@ -36,14 +36,14 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 
 Live results are published in [`evals/SCORECARD.md`](../evals/SCORECARD.md) (latest metrics with Δ vs previous run, last 10 runs per suite) and in the README's **Latest results** block. Both are generated from `evals/scorecard.json`, which is committed.
 
-**In CI (default):** a run on the **default branch** is recorded, and the workflow commits the three generated files (`evals/scorecard.json`, `evals/SCORECARD.md`, `README.md`) as `github-actions[bot]`, with the message `chore(evals): record <suite> run <runId> on the scorecard`. Untick the `publish` input for a throwaway run.
+**In CI (default):** a run on the **default branch** is recorded. The default branch only accepts changes through a PR, so the workflow commits the three generated files (`evals/scorecard.json`, `evals/SCORECARD.md`, `README.md`) as `github-actions[bot]` to the `evals/scorecard` branch, with the message `chore(evals): record <suite> run <runId> on the scorecard`. It then opens a PR titled **chore(evals): scorecard update**, or updates the one already open. **Merge that PR to publish.** Untick the `publish` input for a throwaway run.
 
 - **Other branches:** runs stay artifact-only, so unmerged prompt or dataset changes never enter the published history and the generated files never conflict at merge.
 - **Separate `publish` job:** it holds `contents: write` and gets the results through the artifact. The `eval` job, which holds the API keys and handles LLM output, runs read-only, with no push credential on disk.
 - **Failing runs:** a run that misses a metric threshold is published with a ❌ gate. A run that misses the `error_rate` threshold is skipped with a warning, because a provider outage (429, 401) is not a model result and would evict real history.
-- **Concurrent commits:** the views are rebuilt on the latest default-branch head before each push (3 attempts, never forced), so a concurrent commit is never overwritten. Only those three files are staged.
-- **Branch protection:** if it rejects pushes from `github-actions[bot]`, the job fails with an `::error::` annotation and the results stay in the artifact.
-- **Drift test:** a push made with `GITHUB_TOKEN` does not trigger `test.yml`, so the drift test does not run on these commits. The views are deterministic output of `update_scorecard.mjs`, and the next regular CI run covers them.
+- **One PR accumulates runs:** the bot owns `evals/scorecard`. Each run rebuilds it from the default-branch head, carries over `evals/scorecard.json` from the pending PR (runs not merged yet), records the new run and force-pushes that branch only; it never pushes to the default branch. Only those three files are staged. To discard pending runs, close the PR and delete the branch.
+- **Prerequisite:** **Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests"** must be on; otherwise `gh pr create` fails and the branch is pushed without a PR.
+- **No CI on the scorecard PR:** a PR opened with `GITHUB_TOKEN` does not trigger other workflows (`test.yml`, `pr-review.yml`), so no LLM tokens are spent on it and the drift test does not run on it. The views are deterministic output of `update_scorecard.mjs`, and the next regular CI run on the default branch covers them. If the ruleset requires status checks, merge it as an admin.
 
 **Locally:**
 

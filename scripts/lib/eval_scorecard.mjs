@@ -153,7 +153,7 @@ export function formatScorecard(scorecard) {
   }
 
   lines.push('## Record a run', '');
-  lines.push('**Actions → Evals → Run workflow** on the default branch records the run and commits this file, `evals/scorecard.json` and the README block (`publish` input, on by default; runs that failed on error_rate are skipped).', '');
+  lines.push('**Actions → Evals → Run workflow** on the default branch records the run and opens (or updates) a `chore(evals): scorecard update` PR with this file, `evals/scorecard.json` and the README block; merge it to publish (`publish` input, on by default; runs that failed on error_rate are skipped).', '');
   lines.push('Locally:', '');
   lines.push('```bash');
   lines.push('npm run eval -- --suite validation --repeats 3 --scorecard        # live run + record');

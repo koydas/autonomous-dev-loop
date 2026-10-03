@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
+- Evals workflow publishes the scorecard through a PR: the default branch rejects direct pushes (ruleset GH013), so the `publish` job now commits to the bot-owned `evals/scorecard` branch and opens or updates a `chore(evals): scorecard update` PR; pending runs accumulate in that PR until merged. Requires "Allow GitHub Actions to create and approve pull requests" (ADR-0027 amendment)
 - Evals workflow publishes the scorecard: with the `publish` input (on by default), a run on the default branch is recorded and a separate `publish` job (`contents: write`, no secrets) commits `evals/scorecard.json`, `evals/SCORECARD.md` and the README results block. A metric threshold failure is published with ❌; a run that failed on `error_rate` (provider outage) is skipped. The eval job runs read-only without persisted credentials. Each run records the dataset `sha256`, and Δ is hidden when the dataset changed (ADR-0027 amendment)
 - Eval dataset: `invalid-undocumented-dependency` now states that the notifier service is not deployed and has no API contract, so the B4 blocker is unambiguous
 - Eval scorecard: `scripts/update_scorecard.mjs` (and `run_evals.mjs --scorecard`) records live eval runs in the committed `evals/scorecard.json` and regenerates `evals/SCORECARD.md` and the README "Latest results" block, with deltas against the previous run; replay runs are rejected (ADR-0027)
