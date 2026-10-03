@@ -1,6 +1,7 @@
 # autonomous-dev-loop
 
 [![Tests](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml/badge.svg)](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml)
+[![Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml/badge.svg)](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml)
 
 **An AI dev loop that isn't allowed to wreck your repo.**
 
@@ -12,7 +13,8 @@ Label an issue → an LLM writes the PR → a second LLM reviews it against real
 |---|---|
 | **Dogfooded** | The loop wrote [13 merged PRs of its own](https://github.com/koydas/autonomous-dev-loop/pulls?q=is%3Apr+is%3Amerged+head%3Aai%2Fissue-) (11 features, 2 bug fixes — error taxonomy, bounded retry, checkpoint resume, provider fallback), each merged after human review. Then it was locked out of its own code: `scripts/`, `prompts/` and `config/` are now on the write denylist ([ADR-0021](docs/adr/0021-protected-write-path-denylist.md)). |
 | **Tested** | 800+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
-| **Decided in writing** | [25 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
+| **Measured** | [Offline evals](#evals) run each LLM stage against a labelled dataset: verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency, tokens — gated by thresholds, latest results on the [scorecard](evals/SCORECARD.md) ([ADR-0027](docs/adr/0027-offline-eval-harness.md)) |
+| **Decided in writing** | [27 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
 
 ## Bounded autonomy, not "fully autonomous"
 
@@ -67,6 +69,7 @@ Full setup, permissions, per-stage model keys and the end-to-end test: [docs/cod
 - Workflows: `.github/workflows/` (orchestration only)
 - Entrypoints: `scripts/*.mjs`, modules: `scripts/lib/*.mjs`
 - Prompts: `prompts/*.md` (one file per prompt, loaded at runtime)
+- Evals: `scripts/run_evals.mjs`, suites in `scripts/lib/eval_suites.mjs`, datasets in `evals/datasets/`
 - MVP definition: `docs/mvp.md`
 
 ## Iterative Review Loop
@@ -100,6 +103,30 @@ cat observability/traces/<run_id>.json | jq '[.spans[] | {stage, outcome, durati
 ```
 
 All instrumentation goes through `scripts/lib/observability.mjs`. Schema reference and full event tables: `docs/observability.md`. Design rationale: [ADR-0018](docs/adr/0018-structured-observability.md).
+
+## Evals
+
+Tests mock the LLM to prove the wiring; evals call the real model on a fixed, labelled dataset to measure the quality of its decisions — so a prompt or model change can be compared on the same inputs before merge.
+
+| Suite | Stage | Dataset | Gate (exit 1 below) |
+|---|---|---|---|
+| `validation` | Issue validation | [15 issues](evals/datasets/validation.jsonl) — valid, and each blocker B1–B4 | verdict accuracy ≥ 0.8 · `invalid` recall ≥ 0.8 · error rate ≤ 0.05 |
+
+```bash
+npm run eval -- --suite validation --repeats 3     # live, needs GROQ_API_KEY or ANTHROPIC_API_KEY
+npm run eval -- --suite validation --repeats 3 --scorecard   # + record on the scorecard below
+npm run eval -- --suite validation --replay evals/results/validation-<runId>.json   # re-score, no LLM call
+```
+
+### Latest results
+
+<!-- eval-scorecard:start -->
+_No live eval run recorded yet — see [evals/SCORECARD.md](evals/SCORECARD.md) for how to record one._
+<!-- eval-scorecard:end -->
+
+Each run prints a Markdown report (metrics, threshold failures, failing cases), writes the full replayable results to `evals/results/`, and appends a summary to `evals/history.jsonl`. In CI: **Actions → [Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml) → Run workflow** — the report lands in the job summary, results in the artifacts.
+
+Adding a case, a scorer or a suite for another stage: [docs/evals.md](docs/evals.md). Design rationale: [ADR-0027](docs/adr/0027-offline-eval-harness.md).
 
 ## Tests
 

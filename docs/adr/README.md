@@ -30,3 +30,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0024: Tool evidence for PR review](./0024-tool-evidence-for-pr-review.md)
 - [ADR-0025: Switch Groq defaults to `openai/gpt-oss-120b` with per-stage reasoning effort](./0025-groq-gpt-oss-120b.md)
 - [ADR-0026: Withhold approval when tool evidence is unverified](./0026-withhold-approval-on-unverified-evidence.md)
+- [ADR-0027: Offline eval harness for LLM pipeline stages](./0027-offline-eval-harness.md)

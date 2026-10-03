@@ -76,3 +76,25 @@ jobs:
             --functions 80 \
             --statements 80 \
             node --test scripts/tests/output_writer.test.mjs
+
+      - name: Check eval_harness coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/eval_harness.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/eval_harness.test.mjs
+
+      - name: Check eval_scorecard coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/eval_scorecard.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/eval_scorecard.test.mjs

@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test scripts/tests/*.test.mjs",
-    "lint": "bash -lc 'for f in scripts/*.mjs scripts/lib/*.mjs; do node --check \"$f\"; done'"
+    "lint": "bash -lc 'for f in scripts/*.mjs scripts/lib/*.mjs; do node --check \"$f\"; done'",
+    "eval": "node scripts/run_evals.mjs",
+    "eval:scorecard": "node scripts/update_scorecard.mjs"
   }
 }

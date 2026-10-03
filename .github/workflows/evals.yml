@@ -1,0 +1,63 @@
+name: Evals
+
+# Manual only: each run spends real LLM tokens (Groq free tier: 8K TPM).
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Eval suite (see scripts/lib/eval_suites.mjs)
+        required: true
+        default: validation
+      repeats:
+        description: Runs per case (>1 measures consistency)
+        required: true
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-${{ github.ref }}-${{ inputs.suite }}
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run eval suite
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          SUITE: ${{ inputs.suite }}
+          REPEATS: ${{ inputs.repeats }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
+        run: node scripts/run_evals.mjs --suite "$SUITE" --repeats "$REPEATS"
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: |
+            evals/results/
+            evals/history.jsonl
+          if-no-files-found: ignore
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
