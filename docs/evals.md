@@ -26,8 +26,21 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). Results a
 | `--limit` | all | First N cases after tag filtering |
 | `--replay` | — | Serve LLM responses from a previous results file |
 | `--out-dir` | `evals/results` | Where `<suite>-<runId>.json` is written |
+| `--scorecard` | off | Record the run on the scorecard (live runs only) |
 
 `EVAL_HISTORY_FILE` (default `evals/history.jsonl`) receives one summary line per run. Exit code is `1` when a suite threshold fails.
+
+## Scorecard
+
+Live results are published in [`evals/SCORECARD.md`](../evals/SCORECARD.md) (latest metrics with Δ vs previous run, last 10 runs per suite) and in the README's **Latest results** block. Both are generated from `evals/scorecard.json`, which is committed.
+
+```bash
+npm run eval -- --suite validation --repeats 3 --scorecard        # live run, then record it
+npm run eval:scorecard -- evals/results/validation-<runId>.json  # record a CI run (download the eval-results artifact first)
+npm run eval:scorecard                                           # regenerate the views only
+```
+
+Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`. Recording is a manual, reviewed step: nothing pushes to the default branch on its own. Replay runs are rejected (`--scorecard` with `--replay` fails, and so does a replay results file) — they re-score old responses and say nothing about the current model. A failing run is still recorded, with its gate shown as ❌. `scripts/tests/eval_scorecard.test.mjs` fails when the committed views drift from `scorecard.json`.
 
 ## Metrics
 

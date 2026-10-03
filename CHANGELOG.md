@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
+- Eval scorecard: `scripts/update_scorecard.mjs` (and `run_evals.mjs --scorecard`) records live eval runs in the committed `evals/scorecard.json` and regenerates `evals/SCORECARD.md` and the README "Latest results" block, with deltas against the previous run; replay runs are rejected (ADR-0027)
 - Offline eval harness: `scripts/run_evals.mjs --suite validation` runs the issue validator against a labelled dataset (`evals/datasets/validation.jsonl`) and reports verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency and estimated tokens; exits 1 below thresholds, `--replay` re-scores a recorded run without LLM calls; manual `evals.yml` workflow (ADR-0027)
 
 ### Fixed

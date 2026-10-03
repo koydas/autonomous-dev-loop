@@ -4,11 +4,12 @@
  * Run an eval suite and report metrics.
  *
  *   node scripts/run_evals.mjs --suite validation [--repeats 3] [--concurrency 1]
- *                              [--tags edge,docs] [--limit 5] [--replay evals/results/<file>.json]
+ *                              [--tags edge,docs] [--limit 5] [--replay evals/results/<file>.json] [--scorecard]
  *
  * Writes evals/results/<suite>-<runId>.json (full results, replayable), appends one summary line to
  * EVAL_HISTORY_FILE (default evals/history.jsonl), prints a Markdown report (also to
- * GITHUB_STEP_SUMMARY when set). Exit 1 when a suite threshold fails.
+ * GITHUB_STEP_SUMMARY when set). --scorecard also records the run on evals/scorecard.json, SCORECARD.md
+ * and the README (live runs only). Exit 1 when a suite threshold fails.
  */
 
 import fs from 'node:fs/promises';
@@ -22,6 +23,8 @@ import {
 import { callLLM } from './lib/llm_client.mjs';
 import { loadLLMConfig } from './lib/config.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
+import { recordRuns } from './lib/eval_scorecard.mjs';
+import { SCORECARD_PATHS } from './update_scorecard.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -36,11 +39,13 @@ export function parseCliArgs(argv) {
       limit: { type: 'string', default: '0' },
       replay: { type: 'string' },
       'out-dir': { type: 'string', default: 'evals/results' },
+      scorecard: { type: 'boolean', default: false },
     },
   });
   if (!values.suite || !SUITES[values.suite]) {
     throw new Error(`--suite is required, one of: ${Object.keys(SUITES).join(', ')}`);
   }
+  if (values.scorecard && values.replay) throw new Error('--scorecard records live runs only; it cannot be combined with --replay');
   const toInt = (name, min) => {
     const n = Number(values[name]);
     if (!Number.isInteger(n) || n < min) throw new Error(`--${name} must be an integer >= ${min}`);
@@ -54,6 +59,7 @@ export function parseCliArgs(argv) {
     tags: values.tags.split(',').map((t) => t.trim()).filter(Boolean),
     replay: values.replay,
     outDir: values['out-dir'],
+    scorecard: values.scorecard,
   };
 }
 
@@ -89,17 +95,19 @@ async function main() {
 
     const summary = summarize(results);
     const failures = checkThresholds(summary, suite.thresholds);
-    const meta = { run_id: runId, model, repeats: opts.repeats, dataset: suite.dataset };
+    const meta = { run_id: runId, ts: new Date().toISOString(), model, repeats: opts.repeats, dataset: suite.dataset };
     const report = formatReport({ suite: suite.name, summary, failures, results, meta });
 
     await fs.mkdir(opts.outDir, { recursive: true });
     const resultsFile = path.join(opts.outDir, `${suite.name}-${runId}.json`);
-    await fs.writeFile(resultsFile, JSON.stringify({ meta: { ...meta, suite: suite.name }, summary, failures, results }, null, 2));
+    const recorded = { meta: { ...meta, suite: suite.name }, summary, failures, results };
+    await fs.writeFile(resultsFile, JSON.stringify(recorded, null, 2));
+    if (opts.scorecard) await recordRuns([recorded], SCORECARD_PATHS);
 
     const historyFile = process.env.EVAL_HISTORY_FILE ?? 'evals/history.jsonl';
     await fs.mkdir(path.dirname(historyFile), { recursive: true });
     await fs.appendFile(historyFile, JSON.stringify({
-      ts: new Date().toISOString(), suite: suite.name, ...meta, passed: failures.length === 0, summary,
+      suite: suite.name, ...meta, passed: failures.length === 0, summary,
     }) + '\n');
 
     console.log(report);

@@ -195,3 +195,21 @@ test('run_evals exits 1 on an unknown suite', async () => {
   assert.equal(code, 1);
   assert.match(stderr, /--suite is required/);
 });
+
+test('parseCliArgs parses --scorecard and rejects it with --replay', () => {
+  assert.equal(parseCliArgs(['--suite', 'validation']).scorecard, false);
+  assert.equal(parseCliArgs(['--suite', 'validation', '--scorecard']).scorecard, true);
+  assert.throws(
+    () => parseCliArgs(['--suite', 'validation', '--scorecard', '--replay', 'f.json']),
+    /--scorecard records live runs only/,
+  );
+});
+
+test('run_evals results file carries the run timestamp', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const recorded = await writeRecording(dir, (c) => c.expected.valid);
+  await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir], dir);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.match(saved.meta.ts, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(saved.meta.suite, 'validation');
+});
