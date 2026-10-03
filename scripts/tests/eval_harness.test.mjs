@@ -259,3 +259,14 @@ test('formatReport says all thresholds met when there are no failures', () => {
   assert.match(report, /## ✅ All thresholds met/);
   assert.doesNotMatch(report, /Failing cases/);
 });
+
+test('createReplayLLM rethrows the recorded error once the recorded calls are exhausted', async () => {
+  const llmFor = createReplayLLM([
+    { case_id: 'a', repeat: 0, calls: [], error: 'Groq API error 429' },
+    { case_id: 'b', repeat: 0, calls: [{ raw: 'x' }], error: 'Response missing "valid" boolean' },
+  ]);
+  await assert.rejects(llmFor('a#0')(), /^Error: Groq API error 429$/);
+  const b = llmFor('b#0');
+  assert.equal(await b(), 'x');
+  await assert.rejects(b(), /Response missing "valid" boolean/);
+});

@@ -33,7 +33,7 @@ export function parseCliArgs(argv) {
     args: argv,
     options: {
       suite: { type: 'string' },
-      repeats: { type: 'string', default: '1' },
+      repeats: { type: 'string' },
       concurrency: { type: 'string', default: '1' },
       tags: { type: 'string', default: '' },
       limit: { type: 'string', default: '0' },
@@ -46,27 +46,44 @@ export function parseCliArgs(argv) {
     throw new Error(`--suite is required, one of: ${Object.keys(SUITES).join(', ')}`);
   }
   if (values.scorecard && values.replay) throw new Error('--scorecard records live runs only; it cannot be combined with --replay');
+  if (values.scorecard && (values.tags || values.limit !== '0')) {
+    throw new Error('--scorecard records full-dataset runs only; it cannot be combined with --tags or --limit');
+  }
   const toInt = (name, min) => {
     const n = Number(values[name]);
     if (!Number.isInteger(n) || n < min) throw new Error(`--${name} must be an integer >= ${min}`);
     return n;
   };
+  const tags = values.tags.split(',').map((t) => t.trim()).filter(Boolean);
+  const limit = toInt('limit', 0);
   return {
     suite: SUITES[values.suite],
-    repeats: toInt('repeats', 1),
+    repeats: values.repeats === undefined ? 1 : toInt('repeats', 1),
+    repeatsExplicit: values.repeats !== undefined,
     concurrency: toInt('concurrency', 1),
-    limit: toInt('limit', 0),
-    tags: values.tags.split(',').map((t) => t.trim()).filter(Boolean),
+    limit,
+    tags,
+    // A filtered run is exploratory: a class it leaves out cannot fail the gate.
+    filtered: tags.length > 0 || limit > 0,
     replay: values.replay,
     outDir: values['out-dir'],
     scorecard: values.scorecard,
   };
 }
 
+// A replay re-scores the recording as it was run: its repeat count wins unless an explicit one disagrees.
+export function resolveReplayRepeats(recordedMeta, { repeats, repeatsExplicit }) {
+  const recordedRepeats = recordedMeta?.repeats ?? 1;
+  if (repeatsExplicit && repeats !== recordedRepeats) {
+    throw new Error(`--repeats ${repeats} does not match the recording (${recordedRepeats} repeats); omit --repeats to replay it as recorded`);
+  }
+  return recordedRepeats;
+}
+
 async function buildLLM(suite, replayFile) {
   if (replayFile) {
     const recorded = JSON.parse(await fs.readFile(replayFile, 'utf8'));
-    return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}` };
+    return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, recorded };
   }
   const config = loadLLMConfig(suite.stage);
   const live = ({ prompt, systemPrompt }) => callLLM({ ...config, prompt, systemPrompt });
@@ -85,7 +102,8 @@ async function main() {
 
   try {
     const cases = filterCases(await loadDataset(path.resolve(REPO_ROOT, suite.dataset)), opts);
-    const { llmFor, model } = await buildLLM(suite, opts.replay);
+    const { llmFor, model, recorded: replayed } = await buildLLM(suite, opts.replay);
+    if (replayed) opts.repeats = resolveReplayRepeats(replayed.meta, opts);
 
     const results = await runSuite({
       suite, cases, llmFor, repeats: opts.repeats, concurrency: opts.concurrency,
@@ -93,8 +111,18 @@ async function main() {
     });
     process.stderr.write('\n');
 
+    if (replayed) {
+      const ran = new Set(results.map((r) => `${r.case_id}#${r.repeat}`));
+      const unused = replayed.results.filter((r) => !ran.has(`${r.case_id}#${r.repeat}`));
+      if (unused.length) process.stderr.write(`Warning: ${unused.length} recorded run(s) not replayed (filtered out or no longer in the dataset)\n`);
+    }
+
     const summary = summarize(results);
-    const failures = checkThresholds(summary, suite.thresholds);
+    const thresholdResults = checkThresholds(summary, suite.thresholds);
+    const failures = opts.filtered ? thresholdResults.filter((f) => f.value != null) : thresholdResults;
+    for (const f of thresholdResults.filter((x) => !failures.includes(x))) {
+      process.stderr.write(`Warning: threshold ${f.metric} skipped on a filtered run (${f.reason})\n`);
+    }
     const meta = { run_id: runId, ts: new Date().toISOString(), model, repeats: opts.repeats, dataset: suite.dataset };
     const report = formatReport({ suite: suite.name, summary, failures, results, meta });
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { SUITES, validationSuite } from '../lib/eval_suites.mjs';
 import { loadDataset, runSuite, summarize } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
-import { parseCliArgs } from '../run_evals.mjs';
+import { parseCliArgs, resolveReplayRepeats } from '../run_evals.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RUN_EVALS = path.join(REPO_ROOT, 'scripts', 'run_evals.mjs');
@@ -147,8 +147,8 @@ async function runEvals(args, cwd) {
   const env = { ...process.env, GITHUB_RUN_ID: 'test-run', EVAL_HISTORY_FILE: path.join(cwd, 'history.jsonl') };
   delete env.GITHUB_STEP_SUMMARY;
   try {
-    const { stdout } = await promisify(execFile)(process.execPath, [RUN_EVALS, ...args], { cwd, env });
-    return { code: 0, stdout };
+    const { stdout, stderr } = await promisify(execFile)(process.execPath, [RUN_EVALS, ...args], { cwd, env });
+    return { code: 0, stdout, stderr };
   } catch (err) {
     return { code: err.code, stdout: err.stdout, stderr: err.stderr };
   }
@@ -212,4 +212,52 @@ test('run_evals results file carries the run timestamp', async () => {
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
   assert.match(saved.meta.ts, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(saved.meta.suite, 'validation');
+});
+
+test('validation dataset only holds cases the LLM judges (no title-guard short-circuit)', async () => {
+  const { isMeaningfulTitle } = await import('../lib/issue_validator.mjs');
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  for (const c of cases) assert.ok(isMeaningfulTitle(c.input.title), `${c.id} never reaches the LLM`);
+});
+
+test('parseCliArgs marks filtered runs and rejects --scorecard on them', () => {
+  assert.equal(parseCliArgs(['--suite', 'validation']).filtered, false);
+  assert.equal(parseCliArgs(['--suite', 'validation', '--tags', 'b1']).filtered, true);
+  assert.equal(parseCliArgs(['--suite', 'validation', '--limit', '3']).filtered, true);
+  assert.equal(parseCliArgs(['--suite', 'validation', '--repeats', '2']).repeatsExplicit, true);
+  assert.equal(parseCliArgs(['--suite', 'validation']).repeatsExplicit, false);
+  assert.throws(() => parseCliArgs(['--suite', 'validation', '--scorecard', '--tags', 'b1']), /full-dataset runs only/);
+  assert.throws(() => parseCliArgs(['--suite', 'validation', '--scorecard', '--limit', '2']), /full-dataset runs only/);
+});
+
+test('resolveReplayRepeats uses the recorded count and rejects an explicit mismatch', () => {
+  assert.equal(resolveReplayRepeats({ repeats: 3 }, { repeats: 1, repeatsExplicit: false }), 3);
+  assert.equal(resolveReplayRepeats({ repeats: 3 }, { repeats: 3, repeatsExplicit: true }), 3);
+  assert.equal(resolveReplayRepeats(undefined, { repeats: 1, repeatsExplicit: false }), 1);
+  assert.throws(() => resolveReplayRepeats({ repeats: 3 }, { repeats: 1, repeatsExplicit: true }), /does not match the recording \(3 repeats\)/);
+});
+
+test('run_evals --replay re-scores every recorded repeat without --repeats', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const { cases } = await oracleLlmFor();
+  const results = cases.flatMap((c) => [0, 1].map((repeat) => ({
+    case_id: c.id, repeat, calls: [{ raw: llmResponse({ valid: c.expected.valid, score: c.expected.valid ? 90 : 40 }) }],
+  })));
+  const recorded = path.join(dir, 'recorded.json');
+  await fs.writeFile(recorded, JSON.stringify({ meta: { model: 'groq:test', repeats: 2 }, results }));
+  const { code } = await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir], dir);
+  assert.equal(code, 0);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.equal(saved.summary.n_runs, cases.length * 2);
+  assert.equal(saved.summary.consistency, 1);
+});
+
+test('run_evals on a filtered replay skips unavailable thresholds and warns about unused recordings', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const recorded = await writeRecording(dir, (c) => c.expected.valid);
+  const { code, stdout, stderr } = await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir, '--tags', 'valid'], dir);
+  assert.equal(code, 0, stdout);
+  assert.match(stdout, /## ✅ All thresholds met/);
+  assert.match(stderr, /threshold per_class\.invalid\.recall skipped on a filtered run/);
+  assert.match(stderr, /recorded run\(s\) not replayed/);
 });

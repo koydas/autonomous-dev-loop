@@ -28,7 +28,7 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). Results a
 | `--out-dir` | `evals/results` | Where `<suite>-<runId>.json` is written |
 | `--scorecard` | off | Record the run on the scorecard (live runs only) |
 
-`EVAL_HISTORY_FILE` (default `evals/history.jsonl`) receives one summary line per run. Exit code is `1` when a suite threshold fails.
+`EVAL_HISTORY_FILE` (default `evals/history.jsonl`) receives one summary line per run. It is a history only locally: a CI runner is ephemeral, so the uploaded `history.jsonl` always holds exactly one line — across CI runs, the [scorecard](#scorecard) is the history. Exit code is `1` when a suite threshold fails.
 
 ## Scorecard
 

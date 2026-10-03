@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs'];
 
 test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
@@ -36,6 +36,8 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['llm_client.mjs', 'llm_client.test.mjs'],
     ['output_writer.mjs', 'output_writer.test.mjs'],
     ['review_evidence.mjs', 'review_evidence.test.mjs'],
+    ['eval_harness.mjs', 'eval_harness.test.mjs'],
+    ['eval_scorecard.mjs', 'eval_scorecard.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);

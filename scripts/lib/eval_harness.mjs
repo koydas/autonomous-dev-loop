@@ -62,13 +62,16 @@ export function createRecordingLLM(llm, { now = Date.now } = {}) {
 }
 
 // recorded: results[] of a previous run. Calls are served per (case_id, repeat) in order.
+// Once a run's calls are exhausted, its recorded error (e.g. a provider 429) is rethrown.
 export function createReplayLLM(recorded) {
   const queues = new Map();
-  for (const r of recorded) queues.set(`${r.case_id}#${r.repeat}`, (r.calls ?? []).map((c) => c.raw));
+  for (const r of recorded) {
+    queues.set(`${r.case_id}#${r.repeat}`, { raws: (r.calls ?? []).map((c) => c.raw), error: r.error ?? null });
+  }
   return (key) => async () => {
-    const queue = queues.get(key);
-    if (!queue || queue.length === 0) throw new Error(`Replay: no recorded call left for ${key}`);
-    return queue.shift();
+    const entry = queues.get(key);
+    if (!entry || entry.raws.length === 0) throw new Error(entry?.error ?? `Replay: no recorded call left for ${key}`);
+    return entry.raws.shift();
   };
 }
 

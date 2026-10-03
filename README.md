@@ -110,7 +110,7 @@ Tests mock the LLM to prove the wiring; evals call the real model on a fixed, la
 
 | Suite | Stage | Dataset | Gate (exit 1 below) |
 |---|---|---|---|
-| `validation` | Issue validation | [16 issues](evals/datasets/validation.jsonl) — valid, and each blocker B1–B4 | verdict accuracy ≥ 0.8 · `invalid` recall ≥ 0.8 · error rate ≤ 0.05 |
+| `validation` | Issue validation | [15 issues](evals/datasets/validation.jsonl) — valid, and each blocker B1–B4 | verdict accuracy ≥ 0.8 · `invalid` recall ≥ 0.8 · error rate ≤ 0.05 |
 
 ```bash
 npm run eval -- --suite validation --repeats 3     # live, needs GROQ_API_KEY or ANTHROPIC_API_KEY
