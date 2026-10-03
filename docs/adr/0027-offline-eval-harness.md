@@ -54,3 +54,14 @@ Rules:
 - Each run records the dataset's `sha256`. `SCORECARD.md` shows Δ only against a previous run on the same dataset content and says "dataset changed" otherwise, so a label fix never reads as a model change.
 - ⚠️ This is the one workflow that pushes to the default branch without a PR. That is acceptable because the change is generated data, not code. If the branch is protected against `github-actions[bot]`, the job fails visibly and the artifact remains the fallback.
 - ⚠️ A push made with `GITHUB_TOKEN` does not trigger `test.yml`, so the drift test does not run on these commits. The views are deterministic output, and the next regular CI run checks them.
+
+### Amendment (2026-10-03, later): publish through a PR
+
+The first live run with publishing ([37088738181](https://github.com/koydas/autonomous-dev-loop/actions/runs/37088738181)) was rejected by the repository ruleset on `main`: "Changes must be made through a pull request" (GH013). Rulesets cannot exempt `GITHUB_TOKEN`, and pushing with an admin PAT that bypasses the ruleset would put a branch-protection bypass credential in a workflow. The `publish` job therefore no longer pushes to the default branch:
+
+- It owns the `evals/scorecard` branch. Each run rebuilds the branch from the default-branch head and carries over `evals/scorecard.json` from the pending branch (runs not merged yet). It records the new run and force-pushes **that branch only**. `workflow_gates.test.mjs` asserts that this is the only `git push`.
+- It opens a PR (`chore(evals): scorecard update`) or updates the open one (`gh pr edit`), with `pull-requests: write`. A human merges it, which restores the human-merge rule this amendment had relaxed.
+- ⚠️ Prerequisite: the repository setting "Allow GitHub Actions to create and approve pull requests".
+- ⚠️ A PR opened with `GITHUB_TOKEN` triggers no workflow, so no tests, no LLM review and no tokens spent. If the ruleset requires status checks, the PR needs an admin merge. The README and `SCORECARD.md` change only on merge.
+- This supersedes the "pushes to the default branch without a PR" caveat above.
+

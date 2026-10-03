@@ -234,8 +234,12 @@ test('evals.yml publishes only the generated scorecard files', () => {
   const adds = [...text.matchAll(/^\s*git add (.+)$/gm)].map((m) => m[1].trim());
   assert.deepEqual(adds, ['evals/scorecard.json evals/SCORECARD.md README.md']);
   assert.match(text, /node scripts\/update_scorecard\.mjs/);
-  assert.match(text, /git reset --hard "origin\/\$BRANCH"/);
-  assert.doesNotMatch(text, /git push[^\n]*--force/);
+  // The default branch only accepts PRs: the bot pushes to its own branch, never to the base.
+  assert.match(text, /PUBLISH_BRANCH: evals\/scorecard/);
+  const pushes = [...text.matchAll(/^\s*git push (.+)$/gm)].map((m) => m[1].trim());
+  assert.deepEqual(pushes, ['--force origin "HEAD:refs/heads/${PUBLISH_BRANCH}"']);
+  assert.match(text, /git checkout -B "\$PUBLISH_BRANCH" "origin\/\$BASE"/);
+  assert.match(text, /gh pr create --base "\$BASE" --head "\$PUBLISH_BRANCH"/);
 });
 
 test('evals.yml keeps write access out of the eval job and publishes from the default branch only', () => {
@@ -247,6 +251,7 @@ test('evals.yml keeps write access out of the eval job and publishes from the de
   assert.doesNotMatch(evalJob, /contents: write|git push/);
   assert.match(publishJob, /needs: eval/);
   assert.match(publishJob, /contents: write/);
+  assert.match(publishJob, /pull-requests: write/);
   assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && inputs\.publish && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
   assert.doesNotMatch(publishJob, /secrets\./, 'the publish job must not receive LLM API keys');
 });

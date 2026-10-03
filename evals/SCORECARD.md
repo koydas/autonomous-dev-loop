@@ -7,7 +7,7 @@ _No live eval run recorded yet._
 
 ## Record a run
 
-**Actions → Evals → Run workflow** on the default branch records the run and commits this file, `evals/scorecard.json` and the README block (`publish` input, on by default; runs that failed on error_rate are skipped).
+**Actions → Evals → Run workflow** on the default branch records the run and opens (or updates) a `chore(evals): scorecard update` PR with this file, `evals/scorecard.json` and the README block; merge it to publish (`publish` input, on by default; runs that failed on error_rate are skipped).
 
 Locally:
 
