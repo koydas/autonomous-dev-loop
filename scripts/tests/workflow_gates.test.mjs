@@ -222,10 +222,24 @@ test('auto-fix-pr.yml resolves the head ref only for trusted rerun comments', ()
   assert.match(headIf, /- \[x\] Relancer Auto Fixer/);
 });
 
-test('pr-review.yml caps LLM rate-limit waits to fit its 2-minute timeout', () => {
+// ADR-0022 / ADR-0028: the review step must be able to wait out one Groq free-tier 429
+// (~36-40 s) yet never let its retry waits consume the job timeout.
+test('pr-review.yml sizes LLM rate-limit waits to a Groq TPM window within its job timeout', () => {
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
-  assert.match(text, /timeout-minutes: 2/);
-  assert.match(text, /LLM_MAX_RETRY_WAIT_MS: '10000'/);
+  const review = text.slice(text.indexOf('\n  review:\n'));
+  const timeoutMs = Number(review.match(/timeout-minutes: (\d+)/)?.[1]) * 60_000;
+  const waitMs = Number(review.match(/LLM_MAX_RETRY_WAIT_MS: '(\d+)'/)?.[1]);
+  const retries = Number(review.match(/GROQ_MAX_RETRIES: '(\d+)'/)?.[1]);
+  assert.ok(waitMs >= 40_000, `LLM_MAX_RETRY_WAIT_MS (${waitMs}) must cover a ~40 s Groq Retry-After`);
+  assert.ok(retries >= 1, 'GROQ_MAX_RETRIES must allow at least one retry');
+  assert.ok(retries * waitMs <= timeoutMs / 2, `${retries} x ${waitMs} ms of waits must leave half of the ${timeoutMs} ms timeout for the job itself`);
+});
+
+// ADR-0028: a run that reviewed nothing must not replace the newest checkpoints-pr-<N> artifact.
+test('pr-review.yml uploads checkpoints only when the review step did not skip', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+  assert.match(text, /- name: Run automated review\n\s+id: review\n/);
+  assert.match(text, /- name: Upload checkpoint artifact\n\s+if: \$\{\{ always\(\) && steps\.review\.outputs\.skipped != 'true' \}\}/);
 });
 
 // ADR-0027: the eval workflow publishes the dashboard to GitHub Pages; it never commits.

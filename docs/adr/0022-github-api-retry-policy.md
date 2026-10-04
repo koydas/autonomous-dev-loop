@@ -1,7 +1,7 @@
 # ADR-0022: HTTP-aware retry policy for GitHub and LLM calls
 
 - **Date:** 2026-09-29
-- **Status:** Accepted
+- **Status:** Accepted — amended by [ADR-0028](./0028-one-review-per-head-sha.md) (pr-review: 5-minute timeout, `LLM_MAX_RETRY_WAIT_MS=45000`, `GROQ_MAX_RETRIES=2`)
 
 ## Context
 

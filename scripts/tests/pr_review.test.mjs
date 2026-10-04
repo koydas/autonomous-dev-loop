@@ -1117,3 +1117,105 @@ test('pr_review clears review-withheld when a later review approves or requests 
     }
   }
 });
+
+// --- One LLM review per head SHA (ADR-0028) ---
+
+const HEAD_SHA = 'a'.repeat(40);
+
+async function writeShaEventFile(payload) {
+  const tmpFile = path.join(os.tmpdir(), `pr-review-sha-${Date.now()}-${Math.random()}.json`);
+  await fs.writeFile(tmpFile, JSON.stringify(payload));
+  return tmpFile;
+}
+
+async function runDedup({ handlerOptions = {}, event = { pull_request: { number: PR_NUMBER } }, extraEnv = {}, handler = null } = {}) {
+  const server = await startMockServer(handler ?? makeHandler(handlerOptions));
+  const eventFile = await writeShaEventFile(event);
+  const outputFile = path.join(os.tmpdir(), `pr-review-out-${Date.now()}-${Math.random()}.txt`);
+  await fs.writeFile(outputFile, '');
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { GITHUB_OUTPUT: outputFile, ...extraEnv });
+    const output = await fs.readFile(outputFile, 'utf8');
+    return { result, output, requests: server.requests };
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(outputFile).catch(() => {});
+  }
+}
+
+const llmCalls = (requests) => requests.filter((r) => r.url === '/v1/messages').length;
+
+test('pr_review ends its comment with a marker naming the reviewed head SHA and verdict', async () => {
+  const { result, output, requests } = await runDedup({ handlerOptions: { groqContent: 'Looks fine.\n\nVerdict: APPROVED' } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  const comment = requests.find((r) => r.method === 'POST' && /\/issues\/\d+\/comments$/.test(r.url));
+  assert.match(JSON.parse(comment.body).body, new RegExp(`<!-- adl-review sha=${HEAD_SHA} verdict=APPROVE -->$`));
+  assert.doesNotMatch(output, /skipped=true/);
+});
+
+test('pr_review skips the LLM call when the review comment already judged the current head', async () => {
+  const existing = [{ id: COMMENT_ID, body: `${HEADING}\n\nold\n\n<!-- adl-review sha=${HEAD_SHA} verdict=REQUEST_CHANGES -->` }];
+  const { result, output, requests } = await runDedup({ handlerOptions: { commentsBody: JSON.stringify(existing) } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(llmCalls(requests), 0, 'no LLM call for an already reviewed head');
+  assert.ok(!requests.some((r) => r.method === 'PATCH' || r.method === 'DELETE' || (r.method === 'POST' && !r.url.includes('/v1/'))), 'no GitHub mutation');
+  assert.match(result.stderr, /"event":"review\.skipped"/);
+  assert.match(result.stderr, /"reason":"already_reviewed"/);
+  assert.match(output, /skipped=true/);
+});
+
+test('pr_review reviews again when the marker names an older head', async () => {
+  const existing = [{ id: COMMENT_ID, body: `${HEADING}\n\nold\n\n<!-- adl-review sha=${'b'.repeat(40)} verdict=REQUEST_CHANGES -->` }];
+  const { result, requests } = await runDedup({ handlerOptions: { commentsBody: JSON.stringify(existing) } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(llmCalls(requests), 1);
+  const patch = requests.find((r) => r.method === 'PATCH' && r.url.endsWith(`/issues/comments/${COMMENT_ID}`));
+  assert.match(JSON.parse(patch.body).body, new RegExp(`sha=${HEAD_SHA} verdict=REQUEST_CHANGES -->$`));
+});
+
+test('pr_review re-reviews an already reviewed head on a manual workflow re-run', async () => {
+  const existing = [{ id: COMMENT_ID, body: `${HEADING}\n\nold\n\n<!-- adl-review sha=${HEAD_SHA} verdict=WITHHELD -->` }];
+  const { result, requests } = await runDedup({
+    handlerOptions: { commentsBody: JSON.stringify(existing) },
+    extraEnv: { GITHUB_RUN_ATTEMPT: '2' },
+  });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(llmCalls(requests), 1);
+});
+
+test('pr_review skips a run whose commit is no longer the PR head (superseded push)', async () => {
+  const { result, output, requests } = await runDedup({
+    event: { pull_request: { number: PR_NUMBER, head: { sha: 'c'.repeat(40) } } },
+    extraEnv: { GITHUB_RUN_ATTEMPT: '2' },
+  });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(llmCalls(requests), 0, 'a superseded run must not produce a stale/WITHHELD review');
+  assert.match(result.stderr, /"reason":"superseded"/);
+  assert.match(output, /skipped=true/);
+});
+
+test('pr_review reviews a push whose `after` SHA is the PR head', async () => {
+  const base = makeHandler();
+  const handler = (req, res) => {
+    if (req.method === 'GET' && req.url.includes('/pulls?head=')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify([{ number: PR_NUMBER }]));
+    }
+    return base(req, res);
+  };
+  const { result, requests } = await runDedup({ handler, event: { ref: 'refs/heads/feature/test', after: HEAD_SHA } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(llmCalls(requests), 1);
+});
+
+test('pr_review reports skipped=true when a push has no open PR', async () => {
+  const handler = (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('[]');
+  };
+  const { result, output, requests } = await runDedup({ handler, event: { ref: 'refs/heads/feature/test', after: HEAD_SHA } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(llmCalls(requests), 0);
+  assert.match(output, /skipped=true/);
+});

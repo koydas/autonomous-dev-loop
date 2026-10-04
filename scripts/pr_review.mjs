@@ -15,6 +15,7 @@ import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha } from './lib/review_marker.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -65,6 +66,7 @@ const githubHeaders = {
 
 const reviewLabels = loadLabelsConfig('review');
 const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes, reviewLabels.withheld];
+const HEADING = '## 🔍 Automated Code Review';
 
 let prNumber = event.pull_request?.number;
 if (!prNumber) {
@@ -77,6 +79,7 @@ if (!prNumber) {
   const prs = await prsRes.json();
   if (!prs.length) {
     log('No open PR found for branch, skipping review');
+    writeSkippedOutput();
     process.exit(0);
   }
   prNumber = prs[0].number;
@@ -85,6 +88,12 @@ if (!prNumber) {
 tracer = createTracer({ runId, issueNumber: null, traceDir });
 obsLog({ stage: 'review', event: 'review.start', level: 'info', meta: { prNumber, model } });
 tracer.startSpan('review', { prNumber, model });
+
+// pr-review.yml skips the checkpoint upload for a run that reviewed nothing, so it cannot
+// replace the newest checkpoints-pr-<N> artifact with an older copy.
+function writeSkippedOutput() {
+  if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, 'skipped=true\n', 'utf8');
+}
 
 async function ghFetch(path, options = {}) {
   // 429/5xx are retried (ADR-0022); every other status is returned unchanged so callers
@@ -198,6 +207,28 @@ if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
 const prMeta = await prMetaRes.json();
 const rawDiff = await diffRes.text();
 
+// ADR-0028: one LLM review per head SHA. Read before the LLM call; the upsert below reuses it.
+const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
+if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
+
+const comments = await commentsRes.json();
+const existing = comments.find((c) => c.body?.includes(HEADING));
+const headSha = isCommitSha(prMeta?.head?.sha) ? prMeta.head.sha : null;
+const runDecision = decideReviewRun({
+  eventSha: eventHeadSha(event),
+  headSha,
+  previous: parseReviewMarker(existing?.body),
+  runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? 1,
+});
+if (!runDecision.run) {
+  log('Skipping review: no LLM call for this run', { prNumber, reason: runDecision.reason, eventSha: eventHeadSha(event), headSha });
+  obsLog({ stage: 'review', event: 'review.skipped', level: 'info', duration_ms: Date.now() - _reviewStartMs, meta: { reason: runDecision.reason, prNumber, headSha } });
+  tracer.endSpan('review', { outcome: 'skipped', meta: { reason: runDecision.reason } });
+  await tracer.finalize('partial');
+  writeSkippedOutput();
+  process.exit(0);
+}
+
 const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
 const diff = filterDiff(rawDiff);
@@ -235,7 +266,6 @@ const rawReview = await callLLM({
 
 obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { output_tokens_est: estimateTokens(rawReview), prNumber } });
 
-const HEADING = '## 🔍 Automated Code Review';
 const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
 // The heading may come back bold (`**🚀 Verdict**`) instead of `### 🚀 Verdict`: allow closing `**` after the word.
 const verdictMatch = cleanReview.match(/verdict\**(?::\**\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
@@ -253,15 +283,10 @@ const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_C
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + (isWithheld ? formatWithheldNote(verdictReason) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
-const body = evidence.failing.length > 0
+const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
+const body = (evidence.failing.length > 0
   ? `${HEADING}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
-  : `${reviewText}\n${evidenceSection}`;
-
-const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
-if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
-
-const comments = await commentsRes.json();
-const existing = comments.find((c) => c.body?.includes(HEADING));
+  : `${reviewText}\n${evidenceSection}`) + reviewMarker;
 
 const commentUrl = existing
   ? `/repos/${owner}/${repo}/issues/comments/${existing.id}`

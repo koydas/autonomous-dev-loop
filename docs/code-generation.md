@@ -123,7 +123,7 @@ The project now runs as a continuous loop rather than a one-shot generation:
 
 1. **Issue validation** (`validate-issue.yml`) reviews issue quality and applies `ready-for-dev` or `needs-refinement`.
 2. **Code generation** (`code-generation.yml`) starts only when `ready-for-dev` is applied and opens/updates a PR for that issue.
-3. **PR review** (`pr-review.yml`) runs on branch pushes, posts structured feedback, submits review status, and applies `review-approved` or `changes-requested`.
+3. **PR review** (`pr-review.yml`) runs on branch pushes, posts structured feedback, submits review status, and applies `review-approved` or `changes-requested`. Each head SHA is reviewed by the LLM once: a run whose head the review comment's marker already names, or whose commit is no longer the PR head, exits without an LLM call (ADR-0028).
 4. **Auto-fix** (`auto-fix-pr.yml`) runs when `changes-requested` is applied, generates a targeted fix commit, and pushes it.
 5. The push from auto-fix re-triggers **PR review**, creating the iterative review loop.
 6. The loop ends when either:

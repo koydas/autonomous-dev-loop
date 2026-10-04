@@ -12,6 +12,7 @@ import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 
 let tracer;
@@ -179,7 +180,26 @@ tracer.startSpan('autofix', { prNumber });
 let nextAttempt = null;
 let autofixStartMs = Date.now();
 
+// Clean no-op exit (ADR-0028): no label, no push, no failed check.
+async function skipAutofix(reason, meta = {}) {
+  log('Auto-fix skipped', { prNumber, reason, ...meta });
+  obsLog({ stage: 'autofix', event: 'autofix.skipped', level: 'info', duration_ms: Date.now() - autofixStartMs, meta: { reason, attempt: nextAttempt, prNumber, ...meta } });
+  tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason } });
+  await tracer.finalize('partial');
+  process.exit(0);
+}
+
 try {
+// A changes-requested label can outlive its review: when the latest automated review
+// approved the current head, there is nothing to fix and no LLM call is made.
+const prMetaRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+if (!prMetaRes.ok) throw new Error(`PR metadata fetch failed: ${prMetaRes.status}`);
+const prMeta = await prMetaRes.json();
+const headSha = isCommitSha(prMeta?.head?.sha) ? prMeta.head.sha : null;
+const latestReviewCommentBody = await loadLatestAutomatedReviewComment();
+const autofixDecision = decideAutofixRun({ headSha, previous: parseReviewMarker(latestReviewCommentBody) });
+if (!autofixDecision.run) await skipAutofix(autofixDecision.reason, { headSha });
+
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
 const prLabels = await labelsRes.json();
@@ -273,9 +293,8 @@ if (reviewId) {
 }
 
 if (!feedbackParts.length) {
-  const automatedReviewCommentBody = await loadLatestAutomatedReviewComment();
-  if (automatedReviewCommentBody) {
-    feedbackParts.push(automatedReviewCommentBody);
+  if (latestReviewCommentBody) {
+    feedbackParts.push(latestReviewCommentBody);
     log('Using latest automated review comment as feedback fallback', { prNumber });
   }
 }
@@ -397,6 +416,8 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   await tracer.finalize('failed');
   throw new Error('AI response JSON must be an object');
 }
+
+if (hasNoProposedChanges(aiOutput)) await skipAutofix('no_changes');
 
 const { summary, changes } = validateAiOutput(aiOutput);
 const outputPaths = await writeGeneratedFiles(changes);

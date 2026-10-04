@@ -17,7 +17,7 @@ function startMockServer(handler) {
     let rawBody = '';
     req.on('data', (d) => (rawBody += d));
     req.on('end', () => {
-      requests.push({ method: req.method, url: req.url, body: rawBody });
+      requests.push({ method: req.method, url: req.url, body: rawBody, accept: req.headers.accept });
       handler(req, res);
     });
   });
@@ -56,6 +56,8 @@ function makeHandler({
   commentsStatus = 200,
   commentsBody = '[]',
   commentsByPage = null,
+  prMetaStatus = 200,
+  prHeadSha = 'a'.repeat(40),
 } = {}) {
   return (req, res) => {
     const { method, url } = req;
@@ -73,6 +75,11 @@ function makeHandler({
     if (method === 'GET' && /\/reviews\/\d+\/comments$/.test(url)) {
       res.writeHead(inlineCommentsStatus, { 'Content-Type': 'application/json' });
       return res.end(inlineCommentsStatus < 300 ? inlineCommentsBody : 'error');
+    }
+
+    if (method === 'GET' && /\/pulls\/\d+$/.test(url) && !req.headers['accept']?.includes('diff')) {
+      res.writeHead(prMetaStatus, { 'Content-Type': 'application/json' });
+      return res.end(prMetaStatus < 300 ? JSON.stringify({ head: { ref: 'feature/test', sha: prHeadSha } }) : 'error');
     }
 
     if (method === 'GET' && /\/pulls\/\d+$/.test(url)) {
@@ -236,15 +243,23 @@ test('auto_fix_pr exits 1 when LLM returns invalid JSON', async () => {
   }
 });
 
-test('auto_fix_pr exits 1 when LLM returns JSON with no changes array', async () => {
+// ADR-0028: an empty `changes` array is the model finding nothing to fix — a clean no-op.
+test('auto_fix_pr exits 0 without pushing when LLM returns an empty changes array', async () => {
   const server = await startMockServer(
     makeHandler({ llmResponse: anthropicJson(JSON.stringify({ summary: 'ok', changes: [] })) }),
   );
   const eventFile = await writeEventFile();
+  const outputFile = path.join(os.tmpdir(), `autofix-output-empty-${Date.now()}.txt`);
   try {
-    const result = await runAutoFix(server.address().port, eventFile);
-    assert.notEqual(result.code, 0);
+    const result = await runAutoFix(server.address().port, eventFile, { extraEnv: { GITHUB_OUTPUT: outputFile } });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr, /"event":"autofix\.skipped"/);
+    assert.match(result.stderr, /"reason":"no_changes"/);
+    assert.ok(!server.requests.some((r) => r.method === 'POST' && /\/labels$/.test(r.url)), 'no attempt label for a no-op');
+    const output = await fs.readFile(outputFile, 'utf8').catch(() => '');
+    assert.doesNotMatch(output, /fixed_paths/);
   } finally {
+    await fs.unlink(outputFile).catch(() => {});
     server.close();
     await fs.unlink(eventFile).catch(() => {});
   }
@@ -900,14 +915,14 @@ test('auto_fix_pr ghFetch retries GitHub 5xx responses', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-503-'));
   const server = await startMockServer(failOnce(
     makeHandler({ llmResponse: validLLMJson('out.txt') }),
-    (req) => req.method === 'GET' && /\/pulls\/\d+$/.test(req.url),
+    (req) => req.method === 'GET' && /\/pulls\/\d+$/.test(req.url) && req.headers.accept?.includes('diff'),
     503,
   ));
   const eventFile = await writeEventFile();
   try {
     const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
     assert.equal(result.code, 0, `expected exit 0 after retry, stderr: ${result.stderr}`);
-    const diffRequests = server.requests.filter((r) => r.method === 'GET' && /\/pulls\/\d+$/.test(r.url));
+    const diffRequests = server.requests.filter((r) => r.method === 'GET' && /\/pulls\/\d+$/.test(r.url) && r.accept?.includes('diff'));
     assert.equal(diffRequests.length, 2, 'expected the 503 diff fetch to be retried once');
   } finally {
     server.close();
@@ -1012,5 +1027,112 @@ test('auto_fix_pr sends the configured reasoning_effort to Groq', async () => {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// --- Stale changes-requested label / no-op model answer (ADR-0028) ---
+
+const AF_HEAD_SHA = 'a'.repeat(40);
+
+function reviewCommentWithMarker(sha, verdict) {
+  return JSON.stringify([{ body: `## 🔍 Automated Code Review\n\nAll good.\n\n<!-- adl-review sha=${sha} verdict=${verdict} -->` }]);
+}
+
+test('auto_fix_pr exits 1 when LLM returns JSON without a changes array', async () => {
+  const server = await startMockServer(
+    makeHandler({ llmResponse: anthropicJson(JSON.stringify({ summary: 'ok' })) }),
+  );
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /missing non-empty changes array/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr exits 0 without an LLM call when the latest review approved the current head', async () => {
+  const server = await startMockServer(makeHandler({ commentsBody: reviewCommentWithMarker(AF_HEAD_SHA, 'APPROVE') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 0, 'no LLM call on an approved head');
+    assert.ok(!server.requests.some((r) => r.method !== 'GET'), 'no GitHub mutation on an approved head');
+    assert.match(result.stderr, /"event":"autofix\.skipped"/);
+    assert.match(result.stderr, /"reason":"approved"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr skips an approved head on a checkbox rerun without resetting attempt labels', async () => {
+  const server = await startMockServer(makeHandler({
+    labelsBody: JSON.stringify([{ name: 'auto-fix-attempt-1' }]),
+    commentsBody: reviewCommentWithMarker(AF_HEAD_SHA, 'APPROVE'),
+  }));
+  const eventFile = await writeIssueCommentEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.ok(!server.requests.some((r) => r.method === 'DELETE'), 'labels untouched');
+    assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 0);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr still runs when the approval marker names an older head', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-old-approve-'));
+  const server = await startMockServer(makeHandler({
+    commentsBody: reviewCommentWithMarker('b'.repeat(40), 'APPROVE'),
+    llmResponse: validLLMJson('fixed.txt'),
+  }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 1);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr still runs when the latest review on the head requested changes', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-rc-head-'));
+  const server = await startMockServer(makeHandler({
+    commentsBody: reviewCommentWithMarker(AF_HEAD_SHA, 'REQUEST_CHANGES'),
+    llmResponse: validLLMJson('fixed.txt'),
+  }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 1);
+    assert.doesNotMatch(result.stderr, /autofix\.skipped/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr exits 1 when the PR metadata fetch fails', async () => {
+  const server = await startMockServer(makeHandler({ prMetaStatus: 404 }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr + result.stdout, /PR metadata fetch failed: 404/);
+    assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 0);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
   }
 });
