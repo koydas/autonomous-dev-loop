@@ -65,3 +65,21 @@ The first live run with publishing ([37088738181](https://github.com/koydas/auto
 - ⚠️ A PR opened with `GITHUB_TOKEN` triggers no workflow, so no tests, no LLM review and no tokens spent. If the ruleset requires status checks, the PR needs an admin merge. The README and `SCORECARD.md` change only on merge.
 - This supersedes the "pushes to the default branch without a PR" caveat above.
 
+### Amendment (2026-10-04): the eval dashboard on GitHub Pages replaces the in-repo scorecard
+
+Publishing through a PR still needs a human merge for each run, and auto-merging that PR was rejected as merging without review. Committed Markdown also limits what can be shown. The publication target is now a static site on GitHub Pages: <https://koydas.github.io/autonomous-dev-loop/>.
+
+- **`scripts/lib/eval_site.mjs`** (pure, c8-gated) renders the site from the scorecard and the full results of the retained runs:
+  - an index per suite with the gate and its thresholds, metric tiles with Δ (same dataset only), a trend chart (inline SVG with a crosshair tooltip) and the history;
+  - a page per run with the confusion matrix, per-class metrics, and every case with its parsed and raw model output;
+  - `scorecard.json`, `scorecard.md`, `runs/<id>.json`, and a shields.io endpoint badge per suite (`badges/<suite>.json`).
+- **`scripts/build_eval_site.mjs`** reads the history back **from the deployed site itself** (`scorecard.json`, `runs/<id>.json`, bypassing the CDN cache), adds the new run (same history window, outage filter and replay rejection as before) and writes the site. A 404 on the scorecard aborts unless the first deploy opts in with `--allow-empty` (workflow input `init_site`). Every other error aborts too, so neither a failed read nor a wrong URL can deploy a site without its history. A missing detail page logs a warning.
+- **Backup and restore:** each deployed tree is uploaded as the artifact `eval-site-<runId>` with 90-day retention. The workflow input `restore_run_id` rebuilds from such a backup (`--previous-dir`) instead of the live site. A run without results deploys nothing.
+- **The `publish` job** (`contents: read`, `pages: write`, `id-token: write`, no secrets, default branch only) runs `configure-pages`, then the builder, `upload-pages-artifact` and `deploy-pages`. It never commits, pushes or opens a PR. `workflow_gates.test.mjs` asserts it.
+- **Removed:** `evals/scorecard.json`, `evals/SCORECARD.md`, the README block between markers, `scripts/update_scorecard.mjs` and the `evals/scorecard` PR flow. The README shows the live badge and links to the dashboard. `run_evals.mjs --scorecard` now builds a local preview in `evals/site/`.
+- ⚠️ Prerequisite: **Settings → Pages → Source: GitHub Actions**.
+- ⚠️ The live history lives only on the deployed site. The `eval-site-*` backups (90 days) are the restore path, through `restore_run_id`.
+- ⚠️ The site is public, like the repository. It shows model outputs for the dataset's synthetic issues, and contains no secrets.
+- The in-repo Markdown helpers in `eval_scorecard.mjs` (`formatReadmeBlock`, `replaceReadmeBlock`, `recordRuns`) are kept with their tests. `formatScorecard` still produces the site's `scorecard.md`.
+- This supersedes the PR-based publication above.
+

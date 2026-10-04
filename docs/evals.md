@@ -15,9 +15,9 @@ npm run eval -- --suite validation --tags b3,b4 --limit 5
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json
 ```
 
-CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, a [scorecard](#scorecard) PR is opened or updated (`publish` input, on by default).
+CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, the run is added to the [eval dashboard](#dashboard) on GitHub Pages (`publish` input, on by default).
 
-Δ in `SCORECARD.md` only compares runs on the same dataset content: each run records the dataset's `sha256`, and when it changes the scorecard shows "dataset changed" instead of a Δ, so a label fix never reads as a model improvement.
+Δ on the dashboard only compares runs on the same dataset content: each run records the dataset's `sha256`, and when it changes the dashboard shows "dataset changed" instead of a Δ, so a label fix never reads as a model improvement.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -28,32 +28,34 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 | `--limit` | all | First N cases after tag filtering |
 | `--replay` | — | Serve LLM responses from a previous results file |
 | `--out-dir` | `evals/results` | Where `<suite>-<runId>.json` is written |
-| `--scorecard` | off | Record the run on the scorecard (live runs only) |
+| `--scorecard` | off | Add the run to a local dashboard preview in `EVAL_SITE_DIR` (default `evals/site/`, git-ignored; live full-dataset runs only) |
 
-`EVAL_HISTORY_FILE` (default `evals/history.jsonl`) receives one summary line per run. It is a history only locally: a CI runner is ephemeral, so the uploaded `history.jsonl` always holds exactly one line — across CI runs, the [scorecard](#scorecard) is the history. Exit code is `1` when a suite threshold fails.
+`EVAL_HISTORY_FILE` (default `evals/history.jsonl`) receives one summary line per run. It is a history only locally: a CI runner is ephemeral, so the uploaded `history.jsonl` always holds exactly one line — across CI runs, the [dashboard](#dashboard) is the history. Exit code is `1` when a suite threshold fails.
 
-## Scorecard
+## Dashboard
 
-Live results are published in [`evals/SCORECARD.md`](../evals/SCORECARD.md) (latest metrics with Δ vs previous run, last 10 runs per suite) and in the README's **Latest results** block. Both are generated from `evals/scorecard.json`, which is committed.
+**[koydas.github.io/autonomous-dev-loop](https://koydas.github.io/autonomous-dev-loop/)** is the published record of live runs, a static site on GitHub Pages.
 
-**In CI (default):** a run on the **default branch** is recorded. The default branch only accepts changes through a PR, so the workflow commits the three generated files (`evals/scorecard.json`, `evals/SCORECARD.md`, `README.md`) as `github-actions[bot]` to the `evals/scorecard` branch, with the message `chore(evals): record <suite> run <runId> on the scorecard`. It then opens a PR titled **chore(evals): scorecard update**, or updates the one already open. **Merge that PR to publish.** Untick the `publish` input for a throwaway run.
+- **Index, per suite:** the gate with each threshold (rule, value, pass/fail), metric tiles with Δ against the previous run on the same dataset, a trend chart of every scorer (hover for values), and the last 10 runs.
+- **Run page:** metrics, per-class precision/recall/F1, the confusion matrix, and every case × repeat with expected and predicted verdict, scores, latency, errors, the parsed output and the raw model responses.
+- **Machine-readable files:** `scorecard.json`, `scorecard.md`, `runs/<id>.json` (full results) and `badges/<suite>.json`, a [shields.io endpoint](https://shields.io/badges/endpoint-badge) that the README badge reads live.
 
-- **Other branches:** runs stay artifact-only, so unmerged prompt or dataset changes never enter the published history and the generated files never conflict at merge.
-- **Separate `publish` job:** it holds `contents: write` and gets the results through the artifact. The `eval` job, which holds the API keys and handles LLM output, runs read-only, with no push credential on disk.
-- **Failing runs:** a run that misses a metric threshold is published with a ❌ gate. A run that misses the `error_rate` threshold is skipped with a warning, because a provider outage (429, 401) is not a model result and would evict real history.
-- **One PR accumulates runs:** the bot owns `evals/scorecard`. Each run rebuilds it from the default-branch head, carries over `evals/scorecard.json` from the pending PR (runs not merged yet), records the new run and force-pushes that branch only; it never pushes to the default branch. Only those three files are staged. To discard pending runs, close the PR and delete the branch.
-- **Prerequisite:** **Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests"** must be on; otherwise `gh pr create` fails and the branch is pushed without a PR.
-- **No CI on the scorecard PR:** a PR opened with `GITHUB_TOKEN` does not trigger other workflows (`test.yml`, `pr-review.yml`), so no LLM tokens are spent on it and the drift test does not run on it. The views are deterministic output of `update_scorecard.mjs`, and the next regular CI run on the default branch covers them. If the ruleset requires status checks, merge it as an admin.
+**In CI (default):** the `publish` job runs after `eval` on the **default branch** only; runs on other refs stay artifact-only. Untick the `publish` input for a throwaway run.
 
-**Locally:**
+1. It reads the history back from the deployed site: `scorecard.json`, then `runs/<id>.json` for each retained run. The requests bypass the CDN cache (`cache: 'no-store'` plus a `?v=<timestamp>` query). **The site is the history store; nothing is committed.**
+2. It adds the run (`scripts/build_eval_site.mjs`, reusing `eval_scorecard.mjs` for the history window and `eval_site.mjs` for rendering).
+3. It backs up the built tree as the artifact `eval-site-<runId>` (90 days).
+4. It deploys with `actions/upload-pages-artifact` and `actions/deploy-pages`. When the eval job produced no results, the job builds and deploys nothing.
 
-```bash
-npm run eval -- --suite validation --repeats 3 --scorecard        # live run, then record it
-npm run eval:scorecard -- evals/results/validation-<runId>.json  # record a downloaded CI artifact
-npm run eval:scorecard                                           # regenerate the views only
-```
+Rules:
+- **Failing runs:** a run that misses a metric threshold is published with a ❌ gate. A run that misses `error_rate` is skipped with a warning: a provider outage (429, 401) is not a model result, and it would evict real history.
+- **Safety:** a 404 on `scorecard.json` aborts the job unless the `init_site` input is ticked. Tick it **for the first deploy only**: a 404 can also come from a wrong URL or an edge glitch, and must never silently start a new history. Any other read error aborts too. A missing `runs/<id>.json` logs a warning and keeps the history row without its detail page. Replays are rejected.
+- **Restore:** every deployed tree is kept as `eval-site-<runId>` for 90 days. To roll back after a bad build, run the workflow with `restore_run_id` set to the last good run's ID. The history then comes from that backup instead of the live site, and the eval run that comes with the restore is added on top. Locally: `npm run eval:site -- --out <dir> --previous-dir <unzipped eval-site artifact>`.
+- **Least privilege:** the `publish` job has `pages: write` and `id-token: write`, no `contents: write` and no secrets. The `eval` job, which holds the API keys and handles LLM output, is read-only.
+- **Prerequisite:** **Settings → Pages → Build and deployment → Source: GitHub Actions**, set before the first run. Without it, `actions/configure-pages` fails with an explicit error. The first run also needs `init_site` ticked.
+- ⚠️ The live history exists only on the deployed site. The `eval-site-*` backups cover 90 days.
 
-Then commit `evals/scorecard.json`, `evals/SCORECARD.md` and `README.md`. Replay runs are rejected (`--scorecard` with `--replay` fails, and so does a replay results file) — they re-score old responses and say nothing about the current model. A failing run is still recorded, with its gate shown as ❌. `scripts/tests/eval_scorecard.test.mjs` fails when the committed views drift from `scorecard.json`.
+**Locally:** `npm run eval -- --suite validation --repeats 3 --scorecard` adds the run to a preview in `evals/site/`; open `evals/site/index.html`. To rebuild from downloaded artifacts, run `npm run eval:site -- --out evals/site --previous-dir evals/site <results.json…>`, or `--site-url https://koydas.github.io/autonomous-dev-loop` to start from the live history.
 
 ## Metrics
 
@@ -93,9 +95,9 @@ export const reviewSuite = {
 
 ## Tests and coverage
 
-- `scripts/lib/eval_harness.mjs` and `scripts/lib/eval_scorecard.mjs` are under the CI-enforced **80% minimum coverage** gate (`c8 --check-coverage --lines 80 --branches 80 --functions 80 --statements 80` in `.github/workflows/test.yml`), each measured with its own test file (`eval_harness.test.mjs`, `eval_scorecard.test.mjs`).
-- `scripts/run_evals.mjs` and `scripts/update_scorecard.mjs` are exercised end to end in replay mode by `eval_suites.test.mjs` (thresholds, repeats, filtered runs, dataset hash).
-- The workflow's publish step is shell, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the staged files, and the only `git push` target (`evals/scorecard`).
+- `scripts/lib/eval_harness.mjs`, `scripts/lib/eval_scorecard.mjs` and `scripts/lib/eval_site.mjs` are under the CI-enforced **80% minimum coverage** gate (`c8 --check-coverage --lines 80 --branches 80 --functions 80 --statements 80` in `.github/workflows/test.yml`), each measured with its own test file.
+- `scripts/run_evals.mjs` is exercised end to end in replay mode by `eval_suites.test.mjs` (thresholds, repeats, filtered runs, dataset hash). `scripts/build_eval_site.mjs` is covered by `build_eval_site.test.mjs`: history read from a stubbed site (404, errors, invalid format), history window pruning, outage skipping, and the CLI.
+- The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR.
 
 ## Results file
 

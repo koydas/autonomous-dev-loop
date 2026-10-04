@@ -209,15 +209,16 @@ test('recordRuns rejects a replay and leaves the files untouched', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Committed views stay in sync with evals/scorecard.json
+// The eval dashboard on GitHub Pages is the only published scorecard
 // ---------------------------------------------------------------------------
 
-test('evals/SCORECARD.md and the README block match evals/scorecard.json', async () => {
-  const sc = await readScorecard(path.join(REPO_ROOT, 'evals', 'scorecard.json'));
-  const md = await fs.readFile(path.join(REPO_ROOT, 'evals', 'SCORECARD.md'), 'utf8');
-  assert.equal(md, formatScorecard(sc), 'run `node scripts/update_scorecard.mjs` and commit the result');
+test('README links the eval dashboard and badge, and no committed scorecard view remains', async () => {
   const readme = await fs.readFile(path.join(REPO_ROOT, 'README.md'), 'utf8');
-  assert.equal(readme, replaceReadmeBlock(readme, formatReadmeBlock(sc)), 'README scorecard block is stale: run `node scripts/update_scorecard.mjs`');
+  assert.match(readme, /https:\/\/koydas\.github\.io\/autonomous-dev-loop\//, 'README must link the eval dashboard');
+  assert.match(readme, /img\.shields\.io\/endpoint\?url=https:\/\/koydas\.github\.io\/autonomous-dev-loop\/badges\/validation\.json/);
+  assert.ok(!readme.includes(SCORECARD_START), 'the README scorecard block is replaced by the dashboard');
+  await assert.rejects(fs.access(path.join(REPO_ROOT, 'evals', 'SCORECARD.md')));
+  assert.deepEqual(await readScorecard(path.join(REPO_ROOT, 'evals', 'scorecard.json')), emptyScorecard());
 });
 
 test('partitionPublishable skips runs that failed on error_rate and keeps metric failures', () => {
