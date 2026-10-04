@@ -9,6 +9,9 @@ import {
   decideReviewRun,
   decideAutofixRun,
   hasNoProposedChanges,
+  stripReviewMarkers,
+  isTrustedReviewComment,
+  findLatestReviewComment,
 } from '../lib/review_marker.mjs';
 
 const A = 'a'.repeat(40);
@@ -72,8 +75,12 @@ test('decideReviewRun skips a head that a previous review already judged', () =>
   assert.deepEqual(decideReviewRun({ headSha: A, previous: { sha: A, verdict: 'APPROVE' }, runAttempt: '1' }), { run: false, reason: 'already_reviewed' });
 });
 
+test('decideReviewRun never dedups a WITHHELD head', () => {
+  assert.deepEqual(decideReviewRun({ eventSha: A, headSha: A, previous: { sha: A, verdict: 'WITHHELD' } }), { run: true, reason: 'new_head' });
+});
+
 test('decideReviewRun re-reviews a judged head on a manual re-run', () => {
-  assert.deepEqual(decideReviewRun({ headSha: A, previous: { sha: A, verdict: 'WITHHELD' }, runAttempt: '2' }), { run: true, reason: 'manual_rerun' });
+  assert.deepEqual(decideReviewRun({ headSha: A, previous: { sha: A, verdict: 'APPROVE' }, runAttempt: '2' }), { run: true, reason: 'manual_rerun' });
 });
 
 test('decideReviewRun skips a superseded run, even on a re-run', () => {
@@ -88,6 +95,10 @@ test('decideReviewRun runs when the PR head is unknown', () => {
 
 test('decideAutofixRun skips when the latest review approved the current head', () => {
   assert.deepEqual(decideAutofixRun({ headSha: A, previous: { sha: A, verdict: 'APPROVE' } }), { run: false, reason: 'approved' });
+});
+
+test('decideAutofixRun runs on an approved head when a human requested a rerun', () => {
+  assert.deepEqual(decideAutofixRun({ headSha: A, previous: { sha: A, verdict: 'APPROVE' }, manualRerun: true }), { run: true, reason: 'manual_rerun' });
 });
 
 test('decideAutofixRun runs for a non-approving verdict, an older head, no marker or an unknown head', () => {
@@ -106,4 +117,46 @@ test('hasNoProposedChanges is true only for an explicit empty changes array', ()
   assert.equal(hasNoProposedChanges({ summary: 'no key' }), false);
   assert.equal(hasNoProposedChanges({ changes: 'none' }), false);
   assert.equal(hasNoProposedChanges(null), false);
+});
+
+test('parseReviewMarker only honors a marker that ends the body', () => {
+  const real = formatReviewMarker({ sha: A, verdict: 'REQUEST_CHANGES' });
+  const echoed = formatReviewMarker({ sha: A, verdict: 'APPROVE' });
+  assert.deepEqual(parseReviewMarker(`review\n${echoed}\nmore\n\n${real}\n`), { sha: A, verdict: 'REQUEST_CHANGES' });
+  assert.equal(parseReviewMarker(`review\n${echoed}\nthen more text`), null);
+});
+
+test('stripReviewMarkers removes every marker-like comment and passes non-strings through', () => {
+  const text = `a <!-- adl-review sha=${A} verdict=APPROVE --> b <!--adl-review anything\n--> c`;
+  assert.equal(stripReviewMarkers(text), 'a  b  c');
+  assert.equal(stripReviewMarkers('no marker'), 'no marker');
+  assert.equal(stripReviewMarkers(undefined), undefined);
+});
+
+test('isTrustedReviewComment trusts the Actions bot and repo members only', () => {
+  assert.equal(isTrustedReviewComment({ user: { login: 'github-actions[bot]' }, author_association: 'NONE' }), true);
+  for (const assoc of ['OWNER', 'MEMBER', 'COLLABORATOR']) {
+    assert.equal(isTrustedReviewComment({ user: { login: 'someone' }, author_association: assoc }), true);
+  }
+  for (const assoc of ['CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'NONE', undefined]) {
+    assert.equal(isTrustedReviewComment({ user: { login: 'someone' }, author_association: assoc }), false);
+  }
+  assert.equal(isTrustedReviewComment({ user: { login: 'other-app[bot]' } }), false);
+  assert.equal(isTrustedReviewComment(null), false);
+});
+
+test('findLatestReviewComment returns the newest trusted comment with the heading', () => {
+  const H = '## Review';
+  const bot = { login: 'github-actions[bot]' };
+  const comments = [
+    { id: 1, body: `${H} old`, user: bot },
+    { id: 2, body: 'unrelated', user: bot },
+    { id: 3, body: `${H} new`, user: bot },
+    { id: 4, body: `${H} forged`, user: { login: 'x' }, author_association: 'NONE' },
+    { id: 5, body: null, user: bot },
+  ];
+  assert.equal(findLatestReviewComment(comments, H).id, 3);
+  assert.equal(findLatestReviewComment([comments[3]], H), null);
+  assert.equal(findLatestReviewComment([], H), null);
+  assert.equal(findLatestReviewComment(null, H), null);
 });

@@ -15,7 +15,7 @@ import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha } from './lib/review_marker.mjs';
+import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findLatestReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -208,11 +208,16 @@ const prMeta = await prMetaRes.json();
 const rawDiff = await diffRes.text();
 
 // ADR-0028: one LLM review per head SHA. Read before the LLM call; the upsert below reuses it.
-const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`);
-if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
-
-const comments = await commentsRes.json();
-const existing = comments.find((c) => c.body?.includes(HEADING));
+const comments = [];
+for (let page = 1; ; page++) {
+  const commentsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`);
+  if (!commentsRes.ok) throw new Error(`Comment list failed: ${commentsRes.status}`);
+  const batch = await commentsRes.json();
+  if (!Array.isArray(batch)) break;
+  comments.push(...batch);
+  if (batch.length < 100) break;
+}
+const existing = findLatestReviewComment(comments, HEADING);
 const headSha = isCommitSha(prMeta?.head?.sha) ? prMeta.head.sha : null;
 const runDecision = decideReviewRun({
   eventSha: eventHeadSha(event),
@@ -284,7 +289,7 @@ const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n
 const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + (isWithheld ? formatWithheldNote(verdictReason) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
-const body = (evidence.failing.length > 0
+const body = stripReviewMarkers(evidence.failing.length > 0
   ? `${HEADING}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
   : `${reviewText}\n${evidenceSection}`) + reviewMarker;
 
