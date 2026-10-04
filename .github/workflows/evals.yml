@@ -1,11 +1,10 @@
 name: Evals
 
 # Manual only: each run spends real LLM tokens (Groq free tier: 8K TPM).
-# With `publish`, a run on the default branch is recorded on the scorecard: the
-# `publish` job commits the generated files (evals/scorecard.json, evals/SCORECARD.md,
-# README.md block) to the `evals/scorecard` branch and opens or updates a PR against
-# the default branch, which only accepts changes through a PR (ADR-0027 amendment).
-# Runs on other refs stay artifact-only.
+# With `publish`, a run on the default branch is added to the eval dashboard on
+# GitHub Pages (ADR-0027 amendment): the `publish` job reads the history back from the
+# deployed site, adds the run and redeploys. Nothing is committed. Runs on other refs
+# stay artifact-only.
 on:
   workflow_dispatch:
     inputs:
@@ -25,7 +24,7 @@ on:
 permissions:
   contents: read
 
-# One run per branch at a time: publishing rewrites the evals/scorecard branch.
+# One run per branch at a time: each publish reads the deployed site, then redeploys it.
 concurrency:
   group: evals-${{ github.ref }}
   cancel-in-progress: false
@@ -75,24 +74,27 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-  # Separate job: write access and the push credential never share a runner with the
-  # eval step's API keys or LLM output. Runs even when a threshold failed (the run is
-  # recorded with a ❌ gate); update_scorecard.mjs skips runs that failed on error_rate
-  # (provider outage). Only deterministic generated files are committed.
-  #
-  # The default branch only accepts PRs, so the bot owns `evals/scorecard`: each run
-  # rebuilds it from the default branch head, carries over evals/scorecard.json from the
-  # pending PR (runs not merged yet), records the new run and force-pushes that branch
-  # only. One PR stays open and accumulates runs until it is merged.
+  # Separate job: the Pages deploy credential never shares a runner with the eval step's
+  # API keys or LLM output. Runs even when a threshold failed (the run is shown with a ❌
+  # gate); runs that failed on error_rate (provider outage) are left out. The deployed site
+  # is the history store: build_eval_site.mjs reads scorecard.json and runs/<id>.json back
+  # from it and aborts on any error other than a first-deploy 404, so a transient failure
+  # never deploys a site without history.
   publish:
     needs: eval
     if: ${{ !cancelled() && inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -104,38 +106,26 @@ jobs:
           name: eval-results-${{ github.run_id }}
           path: ${{ runner.temp }}/eval-results
 
-      - name: Publish scorecard PR
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build eval dashboard
         env:
-          GH_TOKEN: ${{ github.token }}
-          BASE: ${{ github.event.repository.default_branch }}
-          PUBLISH_BRANCH: evals/scorecard
-          SUITE: ${{ inputs.suite }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
           RESULTS_DIR: ${{ runner.temp }}/eval-results
+          SITE_DIR: ${{ runner.temp }}/eval-site
         run: |
           set -euo pipefail
           shopt -s nullglob globstar
           results=("$RESULTS_DIR"/**/*.json)
-          if [ ${#results[@]} -eq 0 ]; then echo "No eval results to publish"; exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$BASE"
-          git checkout -B "$PUBLISH_BRANCH" "origin/$BASE"
-          if git ls-remote --exit-code --heads origin "$PUBLISH_BRANCH" >/dev/null; then
-            git fetch origin "$PUBLISH_BRANCH"
-            git checkout "origin/$PUBLISH_BRANCH" -- evals/scorecard.json
-          fi
-          node scripts/update_scorecard.mjs "${results[@]}"
-          git add evals/scorecard.json evals/SCORECARD.md README.md
-          if git diff --cached --quiet; then echo "Scorecard unchanged"; exit 0; fi
-          git commit -m "chore(evals): record ${SUITE} run ${RUN_ID} on the scorecard"
-          git push --force origin "HEAD:refs/heads/${PUBLISH_BRANCH}"
-          body="Records Evals run [${RUN_ID}](${RUN_URL}) (\`${SUITE}\`) on the scorecard: \`evals/scorecard.json\`, \`evals/SCORECARD.md\` and the README results block. Generated by the Evals workflow. Merge to publish; later runs update this PR until then."
-          pr=$(gh pr list --head "$PUBLISH_BRANCH" --base "$BASE" --state open --json number --jq '.[0].number // ""')
-          if [ -n "$pr" ]; then
-            gh pr edit "$pr" --body "$body"
-            echo "Updated scorecard PR #${pr}"
-          else
-            gh pr create --base "$BASE" --head "$PUBLISH_BRANCH" --title "chore(evals): scorecard update" --body "$body"
-          fi
+          node scripts/build_eval_site.mjs --out "$SITE_DIR" --site-url "$SITE_URL" "${results[@]}"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/eval-site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

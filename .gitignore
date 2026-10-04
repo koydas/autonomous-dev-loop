@@ -10,3 +10,4 @@ evidence/
 # Eval run outputs (uploaded as CI artifacts, not committed)
 evals/results/
 evals/history.jsonl
+evals/site/

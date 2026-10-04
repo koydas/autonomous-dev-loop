@@ -8,8 +8,8 @@
  *
  * Writes evals/results/<suite>-<runId>.json (full results, replayable), appends one summary line to
  * EVAL_HISTORY_FILE (default evals/history.jsonl), prints a Markdown report (also to
- * GITHUB_STEP_SUMMARY when set). --scorecard also records the run on evals/scorecard.json, SCORECARD.md
- * and the README (live runs only). Exit 1 when a suite threshold fails.
+ * GITHUB_STEP_SUMMARY when set). --scorecard also adds the run to a local preview of the eval dashboard
+ * (EVAL_SITE_DIR, default evals/site; live full-dataset runs only). Exit 1 when a suite threshold fails.
  */
 
 import fs from 'node:fs/promises';
@@ -24,8 +24,7 @@ import {
 import { callLLM } from './lib/llm_client.mjs';
 import { loadLLMConfig } from './lib/config.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { recordRuns, partitionPublishable } from './lib/eval_scorecard.mjs';
-import { SCORECARD_PATHS } from './update_scorecard.mjs';
+import { buildEvalSite } from './build_eval_site.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -134,9 +133,8 @@ async function main() {
     const recorded = { meta: { ...meta, suite: suite.name }, summary, failures, results };
     await fs.writeFile(resultsFile, JSON.stringify(recorded, null, 2));
     if (opts.scorecard) {
-      const { publishable, skipped } = partitionPublishable([recorded]);
-      for (const s of skipped) process.stderr.write(`Warning: run ${s.run_id} not recorded on the scorecard (${s.reason})\n`);
-      if (publishable.length) await recordRuns(publishable, SCORECARD_PATHS);
+      const siteDir = process.env.EVAL_SITE_DIR ?? 'evals/site';
+      await buildEvalSite({ outDir: siteDir, previousDir: siteDir, resultFiles: [resultsFile], log: (m) => process.stderr.write(`${m}\n`) });
     }
 
     const historyFile = process.env.EVAL_HISTORY_FILE ?? 'evals/history.jsonl';

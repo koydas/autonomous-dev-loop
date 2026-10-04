@@ -2,6 +2,7 @@
 
 [![Tests](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml/badge.svg)](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml)
 [![Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml/badge.svg)](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml)
+[![validation eval](https://img.shields.io/endpoint?url=https://koydas.github.io/autonomous-dev-loop/badges/validation.json)](https://koydas.github.io/autonomous-dev-loop/)
 
 **An AI dev loop that isn't allowed to wreck your repo.**
 
@@ -13,7 +14,7 @@ Label an issue → an LLM writes the PR → a second LLM reviews it against real
 |---|---|
 | **Dogfooded** | The loop wrote [13 merged PRs of its own](https://github.com/koydas/autonomous-dev-loop/pulls?q=is%3Apr+is%3Amerged+head%3Aai%2Fissue-) (11 features, 2 bug fixes — error taxonomy, bounded retry, checkpoint resume, provider fallback), each merged after human review. Then it was locked out of its own code: `scripts/`, `prompts/` and `config/` are now on the write denylist ([ADR-0021](docs/adr/0021-protected-write-path-denylist.md)). |
 | **Tested** | 800+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
-| **Measured** | [Offline evals](#evals) run each LLM stage against a labelled dataset: verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency, tokens — gated by thresholds, latest results on the [scorecard](evals/SCORECARD.md) ([ADR-0027](docs/adr/0027-offline-eval-harness.md)) |
+| **Measured** | [Offline evals](#evals) run each LLM stage against a labelled dataset: verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency, tokens — gated by thresholds, latest results on the [eval dashboard](https://koydas.github.io/autonomous-dev-loop/) ([ADR-0027](docs/adr/0027-offline-eval-harness.md)) |
 | **Decided in writing** | [27 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
 
 ## Bounded autonomy, not "fully autonomous"
@@ -114,17 +115,17 @@ Tests mock the LLM to prove the wiring; evals call the real model on a fixed, la
 
 ```bash
 npm run eval -- --suite validation --repeats 3     # live, needs GROQ_API_KEY or ANTHROPIC_API_KEY
-npm run eval -- --suite validation --repeats 3 --scorecard   # + record on the scorecard below
+npm run eval -- --suite validation --repeats 3 --scorecard   # + local dashboard preview in evals/site/
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json   # re-score, no LLM call
 ```
 
 ### Latest results
 
-<!-- eval-scorecard:start -->
-_No live eval run recorded yet — see [evals/SCORECARD.md](evals/SCORECARD.md) for how to record one._
-<!-- eval-scorecard:end -->
+[![validation eval](https://img.shields.io/endpoint?url=https://koydas.github.io/autonomous-dev-loop/badges/validation.json)](https://koydas.github.io/autonomous-dev-loop/)
 
-Each run prints a Markdown report (metrics, threshold failures, failing cases), writes the full replayable results to `evals/results/`, and appends a summary to `evals/history.jsonl`. In CI: **Actions → [Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml) → Run workflow** — the report lands on the run's summary page, results in the artifacts, and a run on `main` opens a **chore(evals): scorecard update** PR that updates the scorecard below and [evals/SCORECARD.md](evals/SCORECARD.md) once merged.
+**[Eval dashboard →](https://koydas.github.io/autonomous-dev-loop/)** Per suite: the gate and its thresholds, the latest metrics with Δ against the previous run on the same dataset, a trend chart and the last 10 runs. Per run: the confusion matrix, per-class precision/recall/F1, and every case with its expected and predicted verdict, scores, latency and the raw model output. The badge above reads the dashboard live.
+
+Each run prints a Markdown report (metrics, threshold failures, failing cases), writes the full replayable results to `evals/results/`, and appends a summary to `evals/history.jsonl`. In CI: **Actions → [Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml) → Run workflow** — the report lands on the run's summary page, results in the artifacts, and a run on `main` is added to the [eval dashboard](https://koydas.github.io/autonomous-dev-loop/) (GitHub Pages), with nothing committed.
 
 Adding a case, a scorer or a suite for another stage: [docs/evals.md](docs/evals.md). Design rationale: [ADR-0027](docs/adr/0027-offline-eval-harness.md).
 

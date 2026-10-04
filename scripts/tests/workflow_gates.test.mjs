@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs'];
 
 test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
@@ -38,6 +38,7 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['review_evidence.mjs', 'review_evidence.test.mjs'],
     ['eval_harness.mjs', 'eval_harness.test.mjs'],
     ['eval_scorecard.mjs', 'eval_scorecard.test.mjs'],
+    ['eval_site.mjs', 'eval_site.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -227,19 +228,16 @@ test('pr-review.yml caps LLM rate-limit waits to fit its 2-minute timeout', () =
   assert.match(text, /LLM_MAX_RETRY_WAIT_MS: '10000'/);
 });
 
-// ADR-0027: the eval workflow commits to the branch it ran on, so it may only stage
-// the deterministic scorecard views, rebuilt from the latest head before each push.
-test('evals.yml publishes only the generated scorecard files', () => {
+// ADR-0027: the eval workflow publishes the dashboard to GitHub Pages; it never commits.
+test('evals.yml deploys the eval dashboard to Pages and never pushes', () => {
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
-  const adds = [...text.matchAll(/^\s*git add (.+)$/gm)].map((m) => m[1].trim());
-  assert.deepEqual(adds, ['evals/scorecard.json evals/SCORECARD.md README.md']);
-  assert.match(text, /node scripts\/update_scorecard\.mjs/);
-  // The default branch only accepts PRs: the bot pushes to its own branch, never to the base.
-  assert.match(text, /PUBLISH_BRANCH: evals\/scorecard/);
-  const pushes = [...text.matchAll(/^\s*git push (.+)$/gm)].map((m) => m[1].trim());
-  assert.deepEqual(pushes, ['--force origin "HEAD:refs/heads/${PUBLISH_BRANCH}"']);
-  assert.match(text, /git checkout -B "\$PUBLISH_BRANCH" "origin\/\$BASE"/);
-  assert.match(text, /gh pr create --base "\$BASE" --head "\$PUBLISH_BRANCH"/);
+  assert.doesNotMatch(text, /git (push|add|commit)\b/);
+  assert.doesNotMatch(text, /gh pr (create|merge|edit)/);
+  assert.match(text, /node scripts\/build_eval_site\.mjs --out "\$SITE_DIR" --site-url "\$SITE_URL"/);
+  assert.match(text, /uses: actions\/configure-pages@v\d+/);
+  assert.match(text, /uses: actions\/upload-pages-artifact@v\d+/);
+  assert.match(text, /uses: actions\/deploy-pages@v\d+/);
+  assert.match(text, /name: github-pages/);
 });
 
 test('evals.yml keeps write access out of the eval job and publishes from the default branch only', () => {
@@ -250,8 +248,9 @@ test('evals.yml keeps write access out of the eval job and publishes from the de
   assert.match(evalJob, /persist-credentials: false/);
   assert.doesNotMatch(evalJob, /contents: write|git push/);
   assert.match(publishJob, /needs: eval/);
-  assert.match(publishJob, /contents: write/);
-  assert.match(publishJob, /pull-requests: write/);
+  assert.match(publishJob, /pages: write/);
+  assert.match(publishJob, /id-token: write/);
+  assert.doesNotMatch(publishJob, /contents: write|pull-requests: write/);
   assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && inputs\.publish && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
   assert.doesNotMatch(publishJob, /secrets\./, 'the publish job must not receive LLM API keys');
 });
