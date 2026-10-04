@@ -156,7 +156,8 @@ test('buildEvalSite warns about skipped runs and works from a local previous dir
   await fs.writeFile(outage, JSON.stringify(results({ runId: 'o', errorRate: 1, failures: [{ metric: 'error_rate' }] })));
   const logs = [];
   await buildEvalSite({ outDir: path.join(dir, 'a'), resultFiles: [outage], log: (m) => logs.push(m) });
-  assert.match(logs[0], /Warning: run o not recorded \(error_rate 1 above threshold\)/);
+  // GitHub Actions gets a ::warning:: annotation, a terminal a plain prefix.
+  assert.match(logs[0], /^(::warning::|Warning: )run o not recorded \(error_rate 1 above threshold\)/);
   await buildEvalSite({ outDir: path.join(dir, 'b'), previousDir: path.join(dir, 'a'), resultFiles: [], log: () => {} });
   await fs.access(path.join(dir, 'b', 'index.html'));
 });
