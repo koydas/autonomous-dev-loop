@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SUITES, validationSuite } from '../lib/eval_suites.mjs';
-import { loadDataset, runSuite, summarize } from '../lib/eval_harness.mjs';
+import { filterCases, loadDataset, runSuite, summarize } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
 import { parseCliArgs, resolveReplayRepeats } from '../run_evals.mjs';
 
@@ -60,6 +60,30 @@ test('validation dataset parses and covers both verdicts', async () => {
     assert.equal(typeof c.input.body, 'string', `${c.id}: input.body`);
     assert.equal(typeof c.expected.valid, 'boolean', `${c.id}: expected.valid`);
   }
+});
+
+test('validation dataset labels agree with their tags and the score >= 70 rule', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  for (const c of cases) {
+    const label = c.expected.valid ? 'valid' : 'invalid';
+    assert.ok(c.tags.includes(label), `${c.id}: missing "${label}" tag`);
+    assert.ok(!c.tags.includes(c.expected.valid ? 'invalid' : 'valid'), `${c.id}: tagged with the opposite verdict`);
+    if (c.expected.valid) assert.ok(c.expected.score_min == null || c.expected.score_min >= 70, `${c.id}: score_min < 70 on a valid case`);
+    else assert.ok(c.expected.score_max == null || c.expected.score_max <= 69, `${c.id}: score_max >= 70 on an invalid case`);
+  }
+});
+
+test('validation dataset keeps ~40% valid and every edge-case tag selectable with --tags', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  assert.ok(cases.length >= 30, `only ${cases.length} cases`);
+  const validShare = cases.filter((c) => c.expected.valid).length / cases.length;
+  assert.ok(validShare >= 0.35 && validShare <= 0.45, `valid share ${validShare}`);
+  for (const tag of ['partial-ac', 'role-scope', 'stub', 'short', 'fr', 'warnings-only']) {
+    assert.ok(filterCases(cases, { tags: [tag] }).length >= 2, `--tags ${tag} selects fewer than 2 cases`);
+  }
+  // Stub/ticket boundary: both sides of B4 are present.
+  const stub = filterCases(cases, { tags: ['stub'] });
+  assert.ok(stub.some((c) => c.expected.valid) && stub.some((c) => !c.expected.valid), 'stub cases cover only one verdict');
 });
 
 // ---------------------------------------------------------------------------
