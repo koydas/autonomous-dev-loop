@@ -7,7 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import http from 'node:http';
-import { parseNestedYaml } from '../lib/yaml.mjs';
+import { parseNestedYaml, parseFlatYaml } from '../lib/yaml.mjs';
 import { buildAutomationGateContext } from '../lib/coverage_checker.mjs';
 
 const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -58,6 +58,9 @@ function makeHandler({
   prHeadRef = 'feature/test',
   prHeadSha = 'a'.repeat(40),
   autoFixRunsStatus = 200,
+  diffText = SAMPLE_DIFF,
+  prTitle = 'Test PR',
+  prBody = 'Test PR body',
 } = {}) {
   return (req, res) => {
     const { method, url } = req;
@@ -67,13 +70,18 @@ function makeHandler({
       return res.end(anthropicJson(groqContent));
     }
 
+    if (url === '/openai/v1/chat/completions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ choices: [{ message: { content: groqContent } }] }));
+    }
+
     if (method === 'GET' && /\/pulls\/\d+$/.test(url)) {
       if (req.headers['accept']?.includes('vnd.github.v3.diff')) {
         res.writeHead(diffStatus);
-        return res.end(diffStatus < 300 ? SAMPLE_DIFF : 'Forbidden');
+        return res.end(diffStatus < 300 ? diffText : 'Forbidden');
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ title: 'Test PR', body: 'Test PR body', head: { ref: prHeadRef, sha: prHeadSha } }));
+      return res.end(JSON.stringify({ title: prTitle, body: prBody, head: { ref: prHeadRef, sha: prHeadSha } }));
     }
 
     if (method === 'GET' && url.includes('/issues/') && url.includes('/comments')) {
@@ -1244,4 +1252,84 @@ test('pr_review strips markers echoed by the LLM so only its own trailing marker
   const body = JSON.parse(comment.body).body;
   assert.equal((body.match(/adl-review/g) ?? []).length, 1, 'only the pipeline marker remains');
   assert.match(body, new RegExp(`<!-- adl-review sha=${HEAD_SHA} verdict=APPROVE -->$`));
+});
+
+// ADR-0028: on Groq the review prompt must fit review_max_input_tokens (input × 1.10 + max_tokens ≤ 8K TPM).
+const MODELS = parseFlatYaml(readFileSync(path.join(ROOT_DIR, 'config/models.yaml'), 'utf8'));
+const REVIEW_MAX_INPUT_TOKENS = Number(MODELS.review_max_input_tokens);
+const SYSTEM_PROMPT_CHARS = readFileSync(path.join(ROOT_DIR, 'prompts/pr-review-system.md'), 'utf8').trim().length;
+
+function runPrReviewOnGroq(port, eventFile) {
+  return runPrReview(port, eventFile, {
+    AI_PROVIDER: 'groq',
+    GROQ_API_KEY: 'groq-key',
+    GROQ_API_URL: `http://127.0.0.1:${port}/openai/v1/chat/completions`,
+    GROQ_MAX_RETRIES: '0',
+  });
+}
+
+function groqRequests(server) {
+  return server.requests.filter((r) => r.url === '/openai/v1/chat/completions').map((r) => JSON.parse(r.body));
+}
+
+function bigDiff(chars) {
+  const line = '+const x = 1; // padding line for the token budget\n';
+  return `diff --git a/src/big.js b/src/big.js\n--- a/src/big.js\n+++ b/src/big.js\n@@ -0,0 +1 @@\n${line.repeat(Math.ceil(chars / line.length))}`;
+}
+
+test('pr_review (Groq) truncates a diff beyond the budget, keeps the prompt under it and flags diff_truncated', async () => {
+  // ~2K-token body + the old 12,000-char diff cap ≈ the 7,283-token prompt of run 37174238930.
+  const server = await startMockServer(makeHandler({ diffText: bigDiff(60000), prBody: `Test PR body ${'context '.repeat(1000)}`, groqContent: 'Fine.\n\n### Verdict\nAPPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReviewOnGroq(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const [payload] = groqRequests(server);
+    assert.ok(payload, 'expected one Groq request');
+    const [system, user] = payload.messages.map((m) => m.content);
+    const estimate = Math.ceil((system.length + user.length) / 4);
+    assert.ok(estimate <= REVIEW_MAX_INPUT_TOKENS, `prompt ~${estimate} tokens must fit review_max_input_tokens (${REVIEW_MAX_INPUT_TOKENS})`);
+    assert.ok(estimate * 1.1 + payload.max_tokens <= 8000, 'input × 1.10 + max_tokens must fit the 8K TPM window');
+    assert.match(user, /diff_truncated: true/);
+    assert.ok(user.includes('padding line'), 'the diff is shortened, not dropped');
+    assert.ok(user.includes('Test PR body'), 'the body is kept while the diff absorbs the overflow');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review (Groq) truncates a huge PR body once the diff is gone', async () => {
+  const server = await startMockServer(makeHandler({ prBody: `${'Long description. '.repeat(3000)}TAIL-MARKER`, groqContent: 'Fine.\n\n### Verdict\nAPPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReviewOnGroq(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const [payload] = groqRequests(server);
+    const [system, user] = payload.messages.map((m) => m.content);
+    assert.ok(Math.ceil((system.length + user.length) / 4) <= REVIEW_MAX_INPUT_TOKENS);
+    assert.match(user, /PR description truncated to fit the token budget/);
+    assert.ok(!user.includes('TAIL-MARKER'));
+    assert.match(user, /diff_truncated: true/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review (Groq) exits 1 with an explicit error and no LLM call when the prompt cannot fit the budget', async () => {
+  // The title is part of the fixed prompt: it is never truncated.
+  const server = await startMockServer(makeHandler({ prTitle: 'T'.repeat((REVIEW_MAX_INPUT_TOKENS * 4) - SYSTEM_PROMPT_CHARS + 400) }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReviewOnGroq(server.address().port, eventFile);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr + result.stdout, /with no diff and no PR description left, over review_max_input_tokens \(\d+\)/);
+    assert.equal(groqRequests(server).length, 0, 'no request Groq would reject with 413');
+    assert.ok(!server.requests.some((r) => r.url === '/v1/messages'), 'no fallback LLM call either');
+    assert.ok(!server.requests.some((r) => r.method === 'POST' && r.url.includes('/comments')), 'no review comment posted');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
 });

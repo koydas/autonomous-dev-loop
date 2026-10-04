@@ -15,6 +15,7 @@ import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { fitReviewPrompt } from './lib/token_budget.mjs';
 import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findLatestReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
@@ -42,7 +43,7 @@ process.on('unhandledRejection', async (reason) => {
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens, reasoningEffort } = loadLLMConfig('review');
+const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens, maxInputTokens, reasoningEffort } = loadLLMConfig('review');
 const systemPrompt = loadPrompt('pr-review-system');
 const userPromptTemplate = loadPrompt('pr-review-user');
 
@@ -236,13 +237,12 @@ if (!runDecision.run) {
 
 const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
-const diff = filterDiff(rawDiff);
-// filterDiff(rawDiff) below without a maxChars override returns the fully filtered diff with
-// no length cap, so comparing its length against the truncated `diff` above tells us whether
-// the 12,000-char cutoff actually cut anything — used to warn the reviewer it saw a partial diff.
-const diffTruncated = filterDiff(rawDiff, Infinity).length > diff.length;
+// Groq (review_max_input_tokens set): the diff is bounded by the token budget below. Anthropic
+// keeps the 12,000-char cap. Comparing against the uncapped filtered diff tells whether
+// anything was cut — used to warn the reviewer it saw a partial diff.
+const fullDiff = filterDiff(rawDiff, Infinity);
+const cappedDiff = maxInputTokens == null ? filterDiff(rawDiff) : fullDiff;
 
-const baseUserPrompt = interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: prBody });
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
 const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
 const evidenceParse = fs.existsSync(evidencePath)
@@ -253,7 +253,19 @@ const evidence = assessEvidence(evidenceParse, {
   touchedPaths: findTouchedEvidencePaths(rawDiff),
 });
 log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
-const userPrompt = `${baseUserPrompt}${buildChangeClassificationContext(rawDiff, diffTruncated)}${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${formatEvidenceContext(evidence)}`;
+const reviewContexts = `${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${formatEvidenceContext(evidence)}`;
+// ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
+// Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
+const { userPrompt, diffTruncated, bodyTruncated } = fitReviewPrompt({
+  systemPrompt,
+  diff: cappedDiff,
+  prBody,
+  maxInputTokens,
+  diffTruncated: cappedDiff.length < fullDiff.length,
+  buildUserPrompt: ({ diff, prBody: body, diffTruncated: truncated }) =>
+    `${interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: body })}${buildChangeClassificationContext(rawDiff, truncated)}${reviewContexts}`,
+});
+if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens });
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
 

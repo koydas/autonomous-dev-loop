@@ -1,7 +1,7 @@
 # ADR-0022: HTTP-aware retry policy for GitHub and LLM calls
 
 - **Date:** 2026-09-29
-- **Status:** Accepted — amended by [ADR-0028](./0028-one-review-per-head-sha.md) (pr-review: 5-minute timeout, `LLM_MAX_RETRY_WAIT_MS=45000`, `GROQ_MAX_RETRIES=2`)
+- **Status:** Accepted — amended by [ADR-0028](./0028-one-review-per-head-sha.md). LLM calls: a Groq 413 `rate_limit_exceeded` is retried like a 429, a hint-less rate limit waits one 60 s TPM window instead of the backoff, and every LLM workflow sets `LLM_MAX_RETRY_WAIT_MS=60000` and `GROQ_MAX_RETRIES` inside a long explicit timeout (pr-review: 15 min, 12 retries). The 10 s / 45 s pr-review figures below are superseded; the GitHub API policy is unchanged.
 
 ## Context
 

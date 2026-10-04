@@ -46,6 +46,8 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.event.label.name == needs.load-labels.outputs.ready_for_dev
     runs-on: ubuntu-latest
+    # 15 Groq retries x 60 s + 5 min for checkout, PR creation and artifacts (ADR-0028).
+    timeout-minutes: 20
     # Job-level: any label added to the issue triggers this workflow (see auto-fix-pr.yml).
     concurrency:
       group: code-generation-${{ github.event.issue.number || inputs.issue_number }}
@@ -105,6 +107,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '15'
           CHECKPOINT_RUN_ID: issue-${{ steps.issue.outputs.number }}
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}

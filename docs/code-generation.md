@@ -264,6 +264,7 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 | `<stage>` | `openai/gpt-oss-120b` | Groq model. `GROQ_MODEL` overrides every stage. |
 | `<stage>_temperature` | per stage | `0`–`2`. |
 | `<stage>_max_tokens` | `1024` (validation, review), `4096` (generation, autofix) | Output cap, reasoning tokens included. Prompt + this value must stay under the Groq TPM per request (8K on the free tier), or Groq returns 413. |
+| `<stage>_max_input_tokens` | `6300` (validation, review), `3500` (generation), `2600` (autofix, user prompt only) | Estimated input budget (chars/4). Rule: input × 1.10 + `<stage>_max_tokens` ≤ 8000 (the estimate runs ~3% low; `workflow_gates.test.mjs` enforces it). Review shrinks the diff, then the PR body, to fit; every stage fails before the LLM call when the prompt still does not fit, since Groq would reject it (ADR-0028 amendment). |
 | `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0025). |
 
 ## Auto-Fix Token Budget
@@ -274,7 +275,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `3000` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025). The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_max_input_tokens` | `2600` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set so that `(system_tokens + autofix_max_input_tokens) × 1.10 + max_output_tokens ≤ 8000` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025, ADR-0028 amendment): (890 + 2600) × 1.10 + 4096 = 7935. The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
 | `autofix_diff_ratio` | `0.45` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. |
 | `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents. |
 
@@ -282,7 +283,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Provider / Tier | Recommended `autofix_max_input_tokens` |
 |---|---|
-| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `3000` (default) |
+| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `2600` (default) |
 | Groq Developer plan | Raise or remove the key (TPM is far above a single request) |
 | Anthropic (`claude-opus-4-7`) | Remove the key (200k context window; no per-request TPM limit) |
 

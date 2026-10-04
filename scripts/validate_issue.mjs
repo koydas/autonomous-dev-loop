@@ -3,6 +3,7 @@
 import { validateIssue, VALIDATION_SYSTEM_PROMPT, formatGitHubComment } from './lib/issue_validator.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { requireEnv, loadLLMConfig } from './lib/config.mjs';
+import { assertInputBudget } from './lib/token_budget.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
@@ -29,15 +30,18 @@ async function main() {
   const issueNumber = requireEnv('ISSUE_NUMBER');
   const issueTitle = requireEnv('ISSUE_TITLE');
   const issueBody = (process.env.ISSUE_BODY || '').trim() || '(no body provided)';
-  const { apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort } = loadLLMConfig('validation');
+  const { apiKey, model, apiUrl, temperature, maxTokens, maxInputTokens, reasoningEffort } = loadLLMConfig('validation');
 
   obsLog({ stage: 'issue_validation', event: 'issue_validation.start', level: 'info', meta: { issueNumber, issueTitle, model } });
   tracer.startSpan('issue_validation', { issueNumber, issueTitle, model });
 
   log('Validating issue', { issueNumber, issueTitle, model });
 
-  const boundCallGroq = ({ prompt }) =>
-    callLLM({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort });
+  // ADR-0028: an over-budget request can only end in 413, which would be retried until the job timeout.
+  const boundCallGroq = async ({ prompt }) => {
+    assertInputBudget('validation', estimateTokens(VALIDATION_SYSTEM_PROMPT + prompt), maxInputTokens);
+    return callLLM({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort });
+  };
 
   let result;
   try {

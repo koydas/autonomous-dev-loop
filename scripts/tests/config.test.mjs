@@ -159,10 +159,11 @@ test('loadLLMConfig returns maxInputTokens, diffRatio, feedbackRatio for autofix
   assert.ok(cfg.feedbackRatio > 0 && cfg.feedbackRatio < 1, 'feedbackRatio must be in (0,1)');
 });
 
-test('loadLLMConfig returns undefined budget fields for stages without them', () => {
+test('loadLLMConfig returns undefined ratio fields for stages without them', () => {
   setEnv({ GROQ_API_KEY: 'groq-key' });
   const cfg = loadLLMConfig('generation');
-  assert.equal(cfg.maxInputTokens, undefined);
+  // Every stage has an input budget since ADR-0028 (8K TPM margin); ratios stay autofix-only.
+  assert.equal(cfg.maxInputTokens, 3500);
   assert.equal(cfg.diffRatio, undefined);
   assert.equal(cfg.feedbackRatio, undefined);
 });

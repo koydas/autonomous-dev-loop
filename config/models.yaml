@@ -11,33 +11,46 @@
 #
 # Every stage sets <stage>_max_tokens explicitly: Groq returns 413 when one request
 # (prompt + max output) exceeds the 8K free-tier TPM, and reasoning tokens count as output.
+#
+# Input budget (ADR-0028): estimated input × 1.10 + <stage>_max_tokens ≤ 8000.
+# The estimate is chars/4 (estimateTokens), ~3% under the billed count: the 10% covers it.
+# Max estimated input = floor((8000 - max_tokens) / 1.10), rounded down to the hundred:
+#   max_tokens 1024 → 6341 → 6300 ; max_tokens 4096 → 3549 → 3500.
+# <stage>_max_input_tokens bounds system + user prompt (autofix: user prompt only, see below).
+# A prompt over budget fails the job before any LLM call: it could only end in 413.
+# Raise these values on a higher Groq tier (more TPM) or when using Anthropic.
 
 validation:             openai/gpt-oss-120b
 validation_temperature: 0
 validation_reasoning_effort: low
 validation_max_tokens:  1024
+# (6300 × 1.10) + 1024 = 7954 ≤ 8000. System prompt ≈ 1.8K: leaves ~4.4K for the issue.
+validation_max_input_tokens: 6300
 
 generation:             openai/gpt-oss-120b
 generation_temperature: 0
 generation_reasoning_effort: low
 generation_max_tokens:  4096
+# (3500 × 1.10) + 4096 = 7946 ≤ 8000. System + user template ≈ 1.7K: leaves ~1.8K for the
+# issue and the injected files. An issue citing large files fails explicitly instead of 413.
+generation_max_input_tokens: 3500
 
 review:                 openai/gpt-oss-120b
 review_temperature:     0.6
 review_reasoning_effort: low
-# Review prompt ≈ 6.5K tokens (diff capped at 12,000 chars): 1024 output keeps it under 8K.
 # A truncated review has no verdict line and fails closed to REQUEST_CHANGES.
 review_max_tokens:      1024
+# (6300 × 1.10) + 1024 = 7954 ≤ 8000. pr_review.mjs shrinks the diff, then the PR body, to fit;
+# the old 12,000-char diff cap produced 7,283 estimated tokens: 8,521 requested → 413.
+review_max_input_tokens: 6300
 
 autofix:                openai/gpt-oss-120b
 autofix_temperature:    0.2
 autofix_reasoning_effort: low
 autofix_max_tokens:     4096
-# Cap input tokens to stay within Groq free-tier TPM for openai/gpt-oss-120b (8k).
-# Total sent = system (~890, auto-fix-system.md) + autofix_max_input_tokens + autofix_max_tokens ≈ 7,986.
+# Bounds the user prompt only; the system prompt (auto-fix-system.md, ~890) comes on top.
+# (890 + 2600) × 1.10 + 4096 = 7935 ≤ 8000. The former 3000 gave 8375: no margin at all.
 # Raise this value on the Groq Developer plan (higher TPM) or when using Anthropic.
-autofix_max_input_tokens: 3000
+autofix_max_input_tokens: 2600
 autofix_diff_ratio:     0.45
 autofix_feedback_ratio: 0.25
-
-groq_max_retries:       3
