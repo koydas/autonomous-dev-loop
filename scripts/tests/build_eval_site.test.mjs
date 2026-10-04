@@ -23,22 +23,33 @@ function results({ runId = 'r1', ts = '2026-10-03T10:00:00.000Z', failures = [],
 const empty = () => ({ scorecard: emptyScorecard(), details: {} });
 const json = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => body });
 
+// Routes are keyed without the cache-busting query; calls record the bare URL, options too.
 function stubFetch(routes) {
   const calls = [];
-  const impl = async (url) => {
-    calls.push(url);
-    return routes[url] ?? json(404, null);
+  const options = [];
+  const impl = async (url, opts) => {
+    const bare = url.replace(/\?v=\d+$/, '');
+    calls.push(bare);
+    options.push({ url, opts });
+    return routes[bare] ?? json(404, null);
   };
-  return { impl, calls };
+  return { impl, calls, options };
 }
 
 // ---------------------------------------------------------------------------
 // fetchPreviousSite
 // ---------------------------------------------------------------------------
 
-test('fetchPreviousSite starts empty when the site has no scorecard yet (404)', async () => {
+test('fetchPreviousSite starts empty on a 404 only when allowEmpty is set (first deploy)', async () => {
   const { impl } = stubFetch({});
-  assert.deepEqual(await fetchPreviousSite('https://x.io/site/', impl), empty());
+  assert.deepEqual(await fetchPreviousSite('https://x.io/site/', impl, { allowEmpty: true }), empty());
+  await assert.rejects(fetchPreviousSite('https://x.io/site/', impl), /No scorecard at https:\/\/x\.io\/site\/scorecard\.json \(HTTP 404\)\. Pass --allow-empty/);
+});
+
+test('fetchPreviousSite bypasses the CDN and fetch caches', async () => {
+  const { impl, options } = stubFetch({});
+  await fetchPreviousSite('https://x.io', impl, { allowEmpty: true, cacheBust: 42 });
+  assert.deepEqual(options, [{ url: 'https://x.io/scorecard.json?v=42', opts: { cache: 'no-store' } }]);
 });
 
 test('fetchPreviousSite reads the scorecard and each retained run, skipping missing details', async () => {
@@ -47,7 +58,9 @@ test('fetchPreviousSite reads the scorecard and each retained run, skipping miss
     'https://x.io/site/scorecard.json': json(200, sc),
     'https://x.io/site/runs/b.json': json(200, results({ runId: 'b' })),
   });
-  const prev = await fetchPreviousSite('https://x.io/site/', impl);
+  const logs = [];
+  const prev = await fetchPreviousSite('https://x.io/site/', impl, { log: (m) => logs.push(m) });
+  assert.deepEqual(logs, ['Warning: run a has no detail page on the previous site; its history row is kept without one']);
   assert.deepEqual(prev.scorecard, sc);
   assert.deepEqual(Object.keys(prev.details), ['b']);
   assert.deepEqual(calls, ['https://x.io/site/scorecard.json', 'https://x.io/site/runs/b.json', 'https://x.io/site/runs/a.json']);
@@ -173,4 +186,25 @@ test('build_eval_site CLI builds a site from a results file', async () => {
   const { stdout } = await promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(dir, 'out'), file], { env: { ...process.env, GITHUB_ACTIONS: '' } });
   assert.match(stdout, /latest cli \(pass\)/);
   await fs.access(path.join(dir, 'out', 'runs', 'cli.html'));
+});
+
+test('build_eval_site CLI restores from --previous-dir even when --site-url is given', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const backup = path.join(dir, 'backup');
+  const { files } = assembleSite({ previous: empty(), resultsList: [results({ runId: 'kept', ts: '2026-10-01T00:00:00Z' })] });
+  await writeSite(files, backup);
+  const file = path.join(dir, 'r.json');
+  await fs.writeFile(file, JSON.stringify(results({ runId: 'new' })));
+  // An unreachable --site-url proves the backup, not the network, is the history source.
+  await promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(dir, 'out'), '--site-url', 'http://127.0.0.1:9', '--previous-dir', backup, file]);
+  const sc = JSON.parse(await fs.readFile(path.join(dir, 'out', 'scorecard.json'), 'utf8'));
+  assert.deepEqual(sc.suites.validation.runs.map((r) => r.run_id), ['new', 'kept']);
+});
+
+test('buildEvalSite passes allowEmpty through to the site read-back', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const { impl } = stubFetch({});
+  await assert.rejects(buildEvalSite({ outDir: dir, siteUrl: 'https://x.io', resultFiles: [], fetchImpl: impl, log: () => {} }), /HTTP 404/);
+  await buildEvalSite({ outDir: dir, siteUrl: 'https://x.io', resultFiles: [], fetchImpl: impl, allowEmpty: true, log: () => {} });
+  await fs.access(path.join(dir, 'index.html'));
 });

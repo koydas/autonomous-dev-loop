@@ -3,11 +3,12 @@
 /**
  * Build the eval dashboard (GitHub Pages) from live eval results.
  *
- *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site>] [--previous-dir <dir>] [results.json ...]
+ *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [results.json ...]
  *
  * History is read back from the deployed site (--site-url: scorecard.json + runs/<id>.json) or
- * from a local build (--previous-dir). A missing previous site (404 / no file) starts empty;
- * any other read error aborts, so a transient failure never deploys a site without history.
+ * from a local build or a backup artifact (--previous-dir). A 404 on the deployed scorecard aborts
+ * unless --allow-empty is passed (first deploy only), and so does any other read error: a
+ * transient failure or a wrong URL never deploys a site without its history.
  * Runs that failed on error_rate (provider outage) and replays are left out.
  */
 
@@ -30,16 +31,24 @@ function validateScorecard(scorecard, source) {
   return scorecard;
 }
 
-export async function fetchPreviousSite(siteUrl, fetchImpl = fetch) {
+// Pages sits behind a CDN (max-age=600): bypass both the fetch cache and the edge cache.
+export async function fetchPreviousSite(siteUrl, fetchImpl = fetch, { allowEmpty = false, log = () => {}, cacheBust = Date.now() } = {}) {
   const base = siteUrl.replace(/\/+$/, '');
-  const res = await fetchImpl(`${base}/scorecard.json`);
-  if (res.status === 404) return { scorecard: emptyScorecard(), details: {} };
+  const get = (rel) => fetchImpl(`${base}/${rel}?v=${cacheBust}`, { cache: 'no-store' });
+  const res = await get('scorecard.json');
+  if (res.status === 404) {
+    if (allowEmpty) return { scorecard: emptyScorecard(), details: {} };
+    throw new Error(`No scorecard at ${base}/scorecard.json (HTTP 404). Pass --allow-empty (workflow input init_site) only for the first deploy; otherwise check the site URL, or restore a backup with --previous-dir (workflow input restore_run_id)`);
+  }
   if (!res.ok) throw new Error(`Cannot read the previous scorecard (${base}/scorecard.json): HTTP ${res.status}`);
   const scorecard = validateScorecard(await res.json(), `${base}/scorecard.json`);
   const details = {};
   for (const runId of retainedRunIds(scorecard)) {
-    const r = await fetchImpl(`${base}/runs/${encodeURIComponent(runId)}.json`);
-    if (r.status === 404) continue;
+    const r = await get(`runs/${encodeURIComponent(runId)}.json`);
+    if (r.status === 404) {
+      log(`Warning: run ${runId} has no detail page on the previous site; its history row is kept without one`);
+      continue;
+    }
     if (!r.ok) throw new Error(`Cannot read run ${runId} from the previous site: HTTP ${r.status}`);
     details[runId] = await r.json();
   }
@@ -89,9 +98,9 @@ export async function writeSite(files, outDir) {
   }
 }
 
-export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles, fetchImpl, log = console.log }) {
+export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles, fetchImpl, allowEmpty = false, log = console.log }) {
   const previous = siteUrl
-    ? await fetchPreviousSite(siteUrl, fetchImpl)
+    ? await fetchPreviousSite(siteUrl, fetchImpl, { allowEmpty, log })
     : previousDir ? await readPreviousSiteDir(previousDir) : { scorecard: emptyScorecard(), details: {} };
   const resultsList = await Promise.all(resultFiles.map(async (f) => JSON.parse(await fs.readFile(f, 'utf8'))));
   const { files, scorecard, skipped } = assembleSite({ previous, resultsList });
@@ -111,10 +120,21 @@ async function main() {
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
     allowPositionals: true,
-    options: { out: { type: 'string' }, 'site-url': { type: 'string' }, 'previous-dir': { type: 'string' } },
+    options: {
+      out: { type: 'string' },
+      'site-url': { type: 'string' },
+      'previous-dir': { type: 'string' },
+      'allow-empty': { type: 'boolean', default: false },
+    },
   });
   if (!values.out) throw new Error('--out <dir> is required');
-  await buildEvalSite({ outDir: values.out, siteUrl: values['site-url'], previousDir: values['previous-dir'], resultFiles: positionals });
+  await buildEvalSite({
+    outDir: values.out,
+    siteUrl: values['previous-dir'] ? undefined : values['site-url'],
+    previousDir: values['previous-dir'],
+    allowEmpty: values['allow-empty'],
+    resultFiles: positionals,
+  });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

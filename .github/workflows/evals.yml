@@ -17,9 +17,17 @@ on:
         required: true
         default: '1'
       publish:
-        description: Record the run on the scorecard (default branch only)
+        description: Add the run to the eval dashboard on GitHub Pages (default branch only)
         type: boolean
         default: true
+      init_site:
+        description: First deploy only — start an empty history if the site has no scorecard yet
+        type: boolean
+        default: false
+      restore_run_id:
+        description: Restore the dashboard history from the eval-site backup of this run ID instead of the live site
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -86,6 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pages: write
       id-token: write
     environment:
@@ -106,26 +115,67 @@ jobs:
           name: eval-results-${{ github.run_id }}
           path: ${{ runner.temp }}/eval-results
 
+      - name: Download history backup to restore
+        if: inputs.restore_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: eval-site-${{ inputs.restore_run_id }}
+          run-id: ${{ inputs.restore_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/eval-site-restore
+
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
 
+      # History comes from the live site, or from a backup when restore_run_id is set. An empty
+      # start (404 on scorecard.json) is accepted only with init_site; otherwise the build aborts.
       - name: Build eval dashboard
+        id: build
         env:
           SITE_URL: ${{ steps.pages.outputs.base_url }}
+          INIT_SITE: ${{ inputs.init_site }}
+          RESTORE_RUN_ID: ${{ inputs.restore_run_id }}
+          RESTORE_DIR: ${{ runner.temp }}/eval-site-restore
           RESULTS_DIR: ${{ runner.temp }}/eval-results
           SITE_DIR: ${{ runner.temp }}/eval-site
         run: |
           set -euo pipefail
           shopt -s nullglob globstar
           results=("$RESULTS_DIR"/**/*.json)
-          node scripts/build_eval_site.mjs --out "$SITE_DIR" --site-url "$SITE_URL" "${results[@]}"
+          if [ ${#results[@]} -eq 0 ] && [ -z "$RESTORE_RUN_ID" ]; then
+            echo "No eval results to publish"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          args=(--out "$SITE_DIR")
+          if [ -n "$RESTORE_RUN_ID" ]; then
+            args+=(--previous-dir "$RESTORE_DIR")
+          else
+            args+=(--site-url "$SITE_URL")
+            if [ "$INIT_SITE" = "true" ]; then args+=(--allow-empty); fi
+          fi
+          node scripts/build_eval_site.mjs "${args[@]}" "${results[@]}"
+          echo "built=true" >> "$GITHUB_OUTPUT"
+
+      # The deployed site is the only live copy of the history: keep every deployed tree for
+      # 90 days so any previous state can be restored (workflow input restore_run_id).
+      - name: Back up the dashboard
+        if: steps.build.outputs.built == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-site-${{ github.run_id }}
+          path: ${{ runner.temp }}/eval-site
+          include-hidden-files: true
+          retention-days: 90
 
       - name: Upload Pages artifact
+        if: steps.build.outputs.built == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ${{ runner.temp }}/eval-site
 
       - name: Deploy to GitHub Pages
+        if: steps.build.outputs.built == 'true'
         id: deploy
         uses: actions/deploy-pages@v4

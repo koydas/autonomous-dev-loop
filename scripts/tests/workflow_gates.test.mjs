@@ -233,7 +233,13 @@ test('evals.yml deploys the eval dashboard to Pages and never pushes', () => {
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
   assert.doesNotMatch(text, /git (push|add|commit)\b/);
   assert.doesNotMatch(text, /gh pr (create|merge|edit)/);
-  assert.match(text, /node scripts\/build_eval_site\.mjs --out "\$SITE_DIR" --site-url "\$SITE_URL"/);
+  assert.match(text, /args=\(--out "\$SITE_DIR"\)/);
+  assert.match(text, /args\+=\(--site-url "\$SITE_URL"\)/);
+  assert.match(text, /node scripts\/build_eval_site\.mjs "\$\{args\[@\]\}" "\$\{results\[@\]\}"/);
+  // An empty history is opt-in (init_site), never a fallback; every deployed tree is backed up.
+  assert.match(text, /if \[ "\$INIT_SITE" = "true" \]; then args\+=\(--allow-empty\); fi/);
+  assert.match(text, /name: eval-site-\$\{\{ github\.run_id \}\}[\s\S]*?retention-days: 90/);
+  assert.match(text, /args\+=\(--previous-dir "\$RESTORE_DIR"\)/);
   assert.match(text, /uses: actions\/configure-pages@v\d+/);
   assert.match(text, /uses: actions\/upload-pages-artifact@v\d+/);
   assert.match(text, /uses: actions\/deploy-pages@v\d+/);

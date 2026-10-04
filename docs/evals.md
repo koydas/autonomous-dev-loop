@@ -42,16 +42,18 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 
 **In CI (default):** the `publish` job runs after `eval` on the **default branch** only; runs on other refs stay artifact-only. Untick the `publish` input for a throwaway run.
 
-1. It reads the history back from the deployed site: `scorecard.json`, then `runs/<id>.json` for each retained run. **The site is the history store; nothing is committed.**
+1. It reads the history back from the deployed site: `scorecard.json`, then `runs/<id>.json` for each retained run. The requests bypass the CDN cache (`cache: 'no-store'` plus a `?v=<timestamp>` query). **The site is the history store; nothing is committed.**
 2. It adds the run (`scripts/build_eval_site.mjs`, reusing `eval_scorecard.mjs` for the history window and `eval_site.mjs` for rendering).
-3. It deploys with `actions/upload-pages-artifact` and `actions/deploy-pages`.
+3. It backs up the built tree as the artifact `eval-site-<runId>` (90 days).
+4. It deploys with `actions/upload-pages-artifact` and `actions/deploy-pages`. When the eval job produced no results, the job builds and deploys nothing.
 
 Rules:
 - **Failing runs:** a run that misses a metric threshold is published with a ❌ gate. A run that misses `error_rate` is skipped with a warning: a provider outage (429, 401) is not a model result, and it would evict real history.
-- **Safety:** a first deploy (404 on `scorecard.json`) starts empty. Any other read error aborts the job, so a transient failure never deploys a site without its history. Replays are rejected.
+- **Safety:** a 404 on `scorecard.json` aborts the job unless the `init_site` input is ticked. Tick it **for the first deploy only**: a 404 can also come from a wrong URL or an edge glitch, and must never silently start a new history. Any other read error aborts too. A missing `runs/<id>.json` logs a warning and keeps the history row without its detail page. Replays are rejected.
+- **Restore:** every deployed tree is kept as `eval-site-<runId>` for 90 days. To roll back after a bad build, run the workflow with `restore_run_id` set to the last good run's ID. The history then comes from that backup instead of the live site, and the eval run that comes with the restore is added on top. Locally: `npm run eval:site -- --out <dir> --previous-dir <unzipped eval-site artifact>`.
 - **Least privilege:** the `publish` job has `pages: write` and `id-token: write`, no `contents: write` and no secrets. The `eval` job, which holds the API keys and handles LLM output, is read-only.
-- **Prerequisite:** **Settings → Pages → Build and deployment → Source: GitHub Actions**. Without it, `actions/configure-pages` fails with an explicit error.
-- ⚠️ Disabling Pages loses the history. Each run's results artifact stays available for 90 days.
+- **Prerequisite:** **Settings → Pages → Build and deployment → Source: GitHub Actions**, set before the first run. Without it, `actions/configure-pages` fails with an explicit error. The first run also needs `init_site` ticked.
+- ⚠️ The live history exists only on the deployed site. The `eval-site-*` backups cover 90 days.
 
 **Locally:** `npm run eval -- --suite validation --repeats 3 --scorecard` adds the run to a preview in `evals/site/`; open `evals/site/index.html`. To rebuild from downloaded artifacts, run `npm run eval:site -- --out evals/site --previous-dir evals/site <results.json…>`, or `--site-url https://koydas.github.io/autonomous-dev-loop` to start from the live history.
 
