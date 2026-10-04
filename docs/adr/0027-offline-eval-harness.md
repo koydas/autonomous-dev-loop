@@ -23,7 +23,7 @@ Add an offline eval harness that runs a stage against a fixed, labelled dataset 
 
 Metrics produced for every suite: per-scorer mean, `error_rate` (run threw — parse failure, provider failure), per-class precision/recall/F1 from the confusion matrix, `consistency` (share of cases whose repeats agree, when `--repeats > 1`), latency p50/p95, LLM call count and estimated tokens.
 
-The first suite is `validation` (15 cases, B1–B4 blockers + valid issues; deterministic guards such as the tag-only title check are left to unit tests so they do not inflate LLM metrics), gated on `verdict_match ≥ 0.8`, `invalid` recall ≥ 0.8 (the gate's job is to stop bad issues) and `error_rate ≤ 0.05`.
+The first suite is `validation` (30 cases, 12 valid / 18 invalid: B1–B4 blockers, valid issues, and discriminating edge cases — partially testable AC, ambiguous role scope, ticketed dependencies with and without a stub, short or French issues, warning-only issues; deterministic guards such as the tag-only title check are left to unit tests so they do not inflate LLM metrics), gated on `verdict_match ≥ 0.8`, `invalid` recall ≥ 0.8 (the gate's job is to stop bad issues) and `error_rate ≤ 0.05`.
 
 ## Alternatives Considered
 
@@ -36,7 +36,7 @@ The first suite is `validation` (15 cases, B1–B4 blockers + valid issues; dete
 - ✅ A prompt or model change can be compared on the same inputs before merge (`evals/history.jsonl` keeps the trend).
 - ✅ Adding a stage = one suite object + one dataset file; adding a metric = one scorer.
 - ✅ Replay makes scorer/parser changes free and reproducible.
-- ⚠️ A 15-case dataset gives coarse metrics (one case ≈ 7 points). Thresholds are a starting point, to be tightened once a baseline over several runs is known.
+- ⚠️ A 30-case dataset gives coarse metrics (one case ≈ 3 points). It was doubled from 15 cases on 2026-10-04 after the first suite saturated (1.0 on every metric over 45 runs); the dataset `sha256` changed, so the dashboard shows "dataset changed" instead of a Δ for the first run on the new set. Thresholds are a starting point, to be tightened once a baseline over several runs is known.
 - ⚠️ Labels are hand-written against `prompts/validation-system.md`; when the prompt's rules change, the dataset must be reviewed in the same PR.
 - ⚠️ Token counts are estimates (`estimateTokens`, chars/4), not provider usage.
 
