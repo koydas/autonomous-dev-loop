@@ -23,7 +23,7 @@ Add an offline eval harness that runs a stage against a fixed, labelled dataset 
 
 Metrics produced for every suite: per-scorer mean, `error_rate` (run threw — parse failure, provider failure), per-class precision/recall/F1 from the confusion matrix, `consistency` (share of cases whose repeats agree, when `--repeats > 1`), latency p50/p95, LLM call count and estimated tokens.
 
-The first suite is `validation` (30 cases, 12 valid / 18 invalid: B1–B4 blockers, valid issues, and discriminating edge cases — partially testable AC, ambiguous role scope, ticketed dependencies with and without a stub, short or French issues, warning-only issues; deterministic guards such as the tag-only title check are left to unit tests so they do not inflate LLM metrics), gated on `verdict_match ≥ 0.8`, `invalid` recall ≥ 0.8 (the gate's job is to stop bad issues) and `error_rate ≤ 0.05`.
+The first suite is `validation` (15 cases, B1–B4 blockers + valid issues; deterministic guards such as the tag-only title check are left to unit tests so they do not inflate LLM metrics), gated on `verdict_match ≥ 0.8`, `invalid` recall ≥ 0.8 (the gate's job is to stop bad issues) and `error_rate ≤ 0.05`.
 
 ## Alternatives Considered
 
@@ -36,7 +36,7 @@ The first suite is `validation` (30 cases, 12 valid / 18 invalid: B1–B4 blocke
 - ✅ A prompt or model change can be compared on the same inputs before merge (`evals/history.jsonl` keeps the trend).
 - ✅ Adding a stage = one suite object + one dataset file; adding a metric = one scorer.
 - ✅ Replay makes scorer/parser changes free and reproducible.
-- ⚠️ A 30-case dataset gives coarse metrics (one case ≈ 3 points). It was doubled from 15 cases on 2026-10-04 after the first suite saturated (1.0 on every metric over 45 runs); the dataset `sha256` changed, so the dashboard shows "dataset changed" instead of a Δ for the first run on the new set. Thresholds are a starting point, to be tightened once a baseline over several runs is known.
+- ⚠️ A 15-case dataset gives coarse metrics (one case ≈ 7 points). Thresholds are a starting point, to be tightened once a baseline over several runs is known.
 - ⚠️ Labels are hand-written against `prompts/validation-system.md`; when the prompt's rules change, the dataset must be reviewed in the same PR.
 - ⚠️ Token counts are estimates (`estimateTokens`, chars/4), not provider usage.
 
@@ -82,4 +82,24 @@ Publishing through a PR still needs a human merge for each run, and auto-merging
 - ⚠️ The site is public, like the repository. It shows model outputs for the dataset's synthetic issues, and contains no secrets.
 - The in-repo Markdown helpers in `eval_scorecard.mjs` (`formatReadmeBlock`, `replaceReadmeBlock`, `recordRuns`) are kept with their tests. `formatScorecard` still produces the site's `scorecard.md`.
 - This supersedes the PR-based publication above.
+
+## Amendment (2026-10-04): harder dataset, blocker codes, over-strictness gate
+
+The `validation` suite saturated: `openai/gpt-oss-120b` scored 1.0 on every metric over 45 runs, so the dashboard no longer separated good runs from bad ones. Adding cases alone does not fix that. The verdict-only scoring hid a rejection for the wrong rule, and the gate did not see over-strictness.
+
+- **Dataset (15 → 35 cases, 13 valid / 22 invalid).** The original 15 are tagged `core`: `--tags core` keeps a series comparable with earlier runs across the `sha256` change. The new cases are:
+  - `partial-ac`: one AC item that looks testable but is not ("most relevant", "existing error style", no size or time limit);
+  - `scope-pair`: two issues that differ by one file name, one with a closed scope (valid) and one with an open scope (B3);
+  - `stub`: a B4 minimal pair, the same issue with nothing (invalid), a ticket plus a cited contract (valid) or a stub (valid);
+  - `role-scope`, `short`, `fr` and `warnings-only` cases;
+  - `injection`: forged verdicts, a fake validator note and a hidden HTML comment in the issue body, which is untrusted input to a gate. All must stay invalid.
+- **Right rule, not only the right verdict.** `prompts/validation-system.md` now asks for each blocker to be prefixed with its rule code (`"B2: …"`). Targeted cases carry `expected.blockers`. The `blocker_match` scorer is the Jaccard overlap between the expected codes and the codes the model returns. It is reported, but not gated until a baseline is known.
+- **Gate.** The gate adds `per_class.valid.recall ≥ 0.8`: the prompt says "be strict", and a false `invalid` stalls the pipeline. With support 13, one case ≈ 8 points. It also adds `consistency ≥ 0.9`, declared `optional`: `checkThresholds` skips an `optional` metric the run did not measure (`--repeats 1`), and the dashboard shows it as "not measured".
+
+Consequences:
+- ✅ A validator that rejects a third of the valid issues now fails the gate (`valid` recall ≈ 0.69), where it used to pass (`verdict_match` 0.867, `invalid` recall 1.0).
+- ✅ A rejection for the wrong rule is visible in `blocker_match`.
+- ⚠️ Issue validation comments now show the rule code in front of each blocker.
+- ⚠️ `consistency` is gated only on runs with `--repeats > 1`. The workflow default stays `1`.
+- ⚠️ `blocker_match` depends on the model following the prefix instruction. A blocker without a code counts as a miss.
 

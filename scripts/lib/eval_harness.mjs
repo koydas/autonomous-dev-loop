@@ -228,11 +228,13 @@ export function summarize(results) {
   };
 }
 
-// thresholds: { "<dot.path into summary>": { min?, max? } }, e.g. { "scores.verdict_match.mean": { min: 0.8 } }
+// thresholds: { "<dot.path into summary>": { min?, max?, optional? } }, e.g. { "scores.verdict_match.mean": { min: 0.8 } }
+// optional: a metric the run did not measure (e.g. consistency with --repeats 1) is skipped instead of failing.
 export function checkThresholds(summary, thresholds = {}) {
   const failures = [];
-  for (const [metricPath, { min, max }] of Object.entries(thresholds)) {
+  for (const [metricPath, { min, max, optional = false }] of Object.entries(thresholds)) {
     const value = metricPath.split('.').reduce((o, k) => (o == null ? undefined : o[k]), summary);
+    if (value == null && optional) continue;
     if (value == null) {
       failures.push({ metric: metricPath, value: null, reason: 'metric not available' });
     } else if (min != null && value < min) {

@@ -136,6 +136,15 @@ test('renderIndex hides Δ when the dataset changed and marks failed thresholds'
   assert.match(html, /<span class="ko">✕ fail<\/span>/);
 });
 
+test('renderIndex marks an optional threshold the run did not measure as not measured, not passed', () => {
+  const r = results();
+  r.summary.consistency = null;
+  const html = renderIndex(scorecardOf(r), { thresholds: { validation: { consistency: { min: 0.9, optional: true } } } });
+  assert.match(html, /<code>consistency<\/code><\/td><td>≥ 0\.9<\/td><td class="num">[^<]*<\/td><td><span class="muted">– not measured/);
+  const measured = renderIndex(scorecardOf(results()), { thresholds: { validation: { consistency: { min: 0.9, optional: true } } } });
+  assert.match(measured, /<code>consistency<\/code><\/td><td>≥ 0\.9<\/td><td class="num">1<\/td><td><span class="ok">✓ pass/);
+});
+
 test('renderRun shows metrics, confusion matrix, cases and escaped model output', () => {
   const html = renderRun(results({ failures: [{ metric: 'error_rate', reason: '0.1 > max 0.05' }] }));
   assert.match(html, /<title>Eval run r1<\/title>/);

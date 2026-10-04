@@ -16,6 +16,12 @@ import { validateIssue, VALIDATION_SYSTEM_PROMPT } from './issue_validator.mjs';
 
 const verdict = (valid) => (valid ? 'valid' : 'invalid');
 
+// Blocker codes the prompt asks the model to prefix each blocker with ("B2: …").
+export function blockerCodes(blockers = []) {
+  const codes = blockers.map((b) => String(b).match(/^\W*(B[1-4])\b/i)?.[1].toUpperCase()).filter(Boolean);
+  return [...new Set(codes)];
+}
+
 export const validationSuite = {
   name: 'validation',
   stage: 'validation',
@@ -36,6 +42,16 @@ export const validationSuite = {
       const s = output?.score;
       return s != null && s >= (expected.score_min ?? 0) && s <= (expected.score_max ?? 100);
     },
+    // Right rule, not just the right verdict: Jaccard between expected and returned blocker codes.
+    // Applies to cases labelled with expected.blockers. Not gated yet.
+    blocker_match: (expected, output) => {
+      if (!Array.isArray(expected.blockers) || output == null) return null;
+      const want = new Set(expected.blockers);
+      const got = new Set(blockerCodes(output.blockers));
+      const union = new Set([...want, ...got]);
+      if (union.size === 0) return 1;
+      return [...want].filter((c) => got.has(c)).length / union.size;
+    },
     // Prompt contract: 3–5 suggested AC whenever the LLM was consulted.
     suggested_ac_count: (expected, output, { calls }) => {
       if (calls.length === 0) return null;
@@ -51,6 +67,10 @@ export const validationSuite = {
   thresholds: {
     'scores.verdict_match.mean': { min: 0.8 },
     'per_class.invalid.recall': { min: 0.8 },
+    // Over-strictness blocks good issues and stalls the pipeline: gate it too (support 13 → one case ≈ 8 pts).
+    'per_class.valid.recall': { min: 0.8 },
+    // A case whose verdict flips between repeats is a coin toss. Only measured with --repeats > 1.
+    consistency: { min: 0.9, optional: true },
     error_rate: { max: 0.05 },
   },
 };

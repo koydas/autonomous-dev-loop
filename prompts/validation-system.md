@@ -128,6 +128,6 @@ Return ONLY a valid JSON object. No preamble. No explanation. No markdown fences
 
 Rules:
 - "valid" is true ONLY when score >= 70 AND blockers is empty
-- "blockers" contains one specific, actionable string per blocking issue found
+- "blockers" contains one specific, actionable string per blocking issue found, prefixed with the code of the rule it breaks: "B1: …", "B2: …", "B3: …" or "B4: …"
 - "warnings" contains one specific string per non-blocking quality issue
 - "suggested_ac" contains 3–5 concrete, testable AC items — always provided
