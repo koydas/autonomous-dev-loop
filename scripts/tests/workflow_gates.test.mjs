@@ -342,3 +342,12 @@ test('evals.yml keeps write access out of the eval job and publishes from the de
   assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && inputs\.publish && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
   assert.doesNotMatch(publishJob, /secrets\./, 'the publish job must not receive LLM API keys');
 });
+
+test('evals.yml offers exactly the registered eval suites as a choice', async () => {
+  const { SUITES } = await import('../lib/eval_suites.mjs');
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
+  const suite = text.slice(text.indexOf('      suite:'), text.indexOf('      repeats:'));
+  assert.match(suite, /type: choice/);
+  const options = [...suite.slice(suite.indexOf('options:')).matchAll(/^\s+- (\S+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(options, Object.keys(SUITES));
+});
