@@ -129,6 +129,9 @@ Key steps to expand per workflow:
 ### `changelog-check` (`changelog-check.yml`)
 - **Verify CHANGELOG.md updated for entrypoint or ADR changes** — exits 0 (skipped) when no entrypoints or ADRs changed; exits 1 with a plain-text error message describing which trigger files were found and what is missing
 
+### `eval-replay` (`eval-replay.yml`)
+- **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 only when a threshold met by the published run breaks; an unreachable dashboard, an unpublished suite or a changed dataset only warns
+
 ### `auto-fix-pr` (`auto-fix-pr.yml`)
 - **Resolve PR payload for issue_comment** _(only for checkbox-rerun triggers)_ — GitHub PR API call; extracts `head.ref` branch name needed for the checkout step. Failure here means the checkout will not have the correct branch ref.
 - **Checkout PR branch** — verifies the correct PR branch is checked out (uses `head_ref` from the resolve step for `issue_comment` events, `pull_request.head.ref` for label events)
@@ -169,6 +172,15 @@ Key steps to expand per workflow:
 | `evidence` job fails with `checks.<name>.command` / `timeout_seconds` error | Fix `config/review-evidence.yaml` (each check needs a `command`; `timeout_seconds` must be a positive integer) and push |
 | A check reports `TIMEOUT` on every run | Raise `checks.<name>.timeout_seconds` or investigate the hang — timeouts never force `REQUEST_CHANGES`, so auto-fix will not address them |
 | Override persists although the check passes locally | Evidence runs with credential-like env vars and `GIT_CONFIG_*` stripped — a check that depends on one of them will fail in CI only; make it independent of those variables |
+
+### `eval-replay`
+
+| Failure | Recovery |
+|---------|----------|
+| ❌ `Thresholds broken by this PR`, verdict flips to `error` | The PR changed how recorded responses are parsed or scored (`parseReviewVerdict`, `validateIssue` parsing, `decideVerdict`, a scorer). Fix the regression; the "change verdict" table lists the cases to reproduce with `npm run eval -- --suite <s> --replay <runs/<id>.json from the dashboard>` |
+| The threshold change is intended (stricter gate, scorer redefinition) | The replay compares against the published run: the gate stays red until a live run meets the new rule. Run **Actions → Evals** on the PR branch to check it live, then merge with the reviewer's agreement and publish a live run from `main` |
+| ⚪ "dashboard unreachable" or "not replayed" | Neutral (green job). Check the Pages site and the `EVAL_SITE_URL` repository variable; a suite with no live run yet needs one **Actions → Evals** run on `main` |
+| ⚠️ "Dataset changed since the run" | Expected after a dataset edit: thresholds are advisory until the next live run on `main` records the new hash |
 
 ### `auto-fix-pr`
 

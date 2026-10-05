@@ -33,6 +33,29 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 
 `EVAL_HISTORY_FILE` (default `evals/history.jsonl`) receives one summary line per run. It is a history only locally: a CI runner is ephemeral, so the uploaded `history.jsonl` always holds exactly one line — across CI runs, the [dashboard](#dashboard) is the history. Exit code is `1` when a suite threshold fails.
 
+## PR replay gate
+
+> **A prompt change is not measured.** The replay serves the responses the model gave to the *recorded* prompt, so changing `prompts/*.md` cannot move the scores here. The replay validates what runs on those responses: the parsers (`issue_validator.mjs`, `review_prompt.mjs`), `decideVerdict` (`review_evidence.mjs`), the scorers and the thresholds, plus the prompt wiring (a template that no longer loads or interpolates makes every case error). To measure a prompt or model change, run the [Evals workflow](#run) live.
+
+`.github/workflows/eval-replay.yml` runs on `pull_request` when the PR touches `prompts/**`, `scripts/lib/issue_validator.mjs`, `scripts/lib/review_prompt.mjs`, `scripts/lib/review_evidence.mjs`, `scripts/lib/output_writer.mjs`, `scripts/lib/eval_*.mjs`, `scripts/replay_evals_ci.mjs`, `evals/datasets/**` or the workflow itself. A PR that only changes docs does not trigger it. For each suite in the registry, `scripts/replay_evals_ci.mjs` (logic in `scripts/lib/eval_replay_ci.mjs`):
+
+1. reads `scorecard.json` from the [dashboard](#dashboard), then `runs/<id>.json` of the newest run of the suite (a run without a detail page is skipped, with a warning, for the previous one);
+2. replays it against the PR's code with the recorded repeat count, as `--replay` does;
+3. writes the job summary: published vs replay value and Δ for `error_rate`, every `scores.*.mean`, `consistency` and per-class precision/recall/F1 (latency and tokens are left out because a replay does not measure them), then every case × repeat whose outcome (label, or error) changed.
+
+| Situation | Outcome |
+|---|---|
+| A threshold met by the published run fails in the replay | ❌ job fails (`::error::`) |
+| A threshold already failing in the published run still fails | ⚠️ warning, not blocking |
+| Dataset changed since the run (`meta.dataset_sha256` ≠ current file), or the run recorded no hash | ⚠️ only the common cases are replayed; added, removed and relabelled cases are listed; thresholds are advisory (warnings) |
+| Dashboard unreachable (network, 404, unsupported format), suite never published, or no case in common | ⚪ neutral: warning, exit 0 |
+
+- **Baseline:** with an unchanged dataset, the published `summary` and `failures` as they are on the site. With a changed dataset, the published results restricted to the common cases, summarized by the PR's code.
+- ⚠️ The published run was scored by the code of its day. A change merged to the default branch after the last live run therefore shows up as a Δ on every PR until the next live run.
+- **Security:** the PR's code runs, so the workflow uses `pull_request` (never `pull_request_target`), `permissions: contents: read`, no secret, `persist-credentials: false` (ADR-0023/0024). The site URL defaults to `https://<owner>.github.io/<repo>`; the repository variable `EVAL_SITE_URL` overrides it.
+- GitHub Actions has no "neutral" job conclusion: a neutral outcome is a green job with a warning annotation and a ⚪ summary.
+- **Locally:** `node scripts/replay_evals_ci.mjs --site-url https://koydas.github.io/autonomous-dev-loop [--suite review]`, or `--site-dir <unzipped eval-site-<runId> artifact>` offline.
+
 ## Dashboard
 
 **[koydas.github.io/autonomous-dev-loop](https://koydas.github.io/autonomous-dev-loop/)** is the published record of live runs, a static site on GitHub Pages.
@@ -125,7 +148,8 @@ export const autofixSuite = {
 - `scripts/lib/eval_harness.mjs`, `scripts/lib/eval_scorecard.mjs`, `scripts/lib/eval_site.mjs` and `scripts/lib/eval_suites.mjs` are under the CI-enforced **80% minimum coverage** gate (`c8 --check-coverage --lines 80 --branches 80 --functions 80 --statements 80` in `.github/workflows/test.yml`), each measured with its own test file.
 - `scripts/run_evals.mjs` is exercised end to end in replay mode by `eval_suites.test.mjs` (thresholds, repeats, filtered runs, dataset hash). `scripts/build_eval_site.mjs` is covered by `build_eval_site.test.mjs`: history read from a stubbed site (404, errors, invalid format), history window pruning, outage skipping, and the CLI.
 - `scripts/lib/review_prompt.mjs` (review prompt builder and verdict parser, shared with `pr_review.mjs`) is under the same c8 gate, measured with `review_prompt.test.mjs`; `pr_review.test.mjs` and `entrypoints.test.mjs` still exercise it end to end through the script.
-- The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR.
+- `scripts/lib/eval_replay_ci.mjs` (PR replay gate) is under the same c8 gate, measured with `eval_replay_ci.test.mjs`, which also runs `scripts/replay_evals_ci.mjs` end to end against a local copy of the site.
+- The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR. For `eval-replay.yml`, it pins `pull_request` only, the read-only token, no secret, the paths filter (docs-only changes do not trigger it), the per-PR concurrency group and the trace upload.
 
 ## Results file
 
