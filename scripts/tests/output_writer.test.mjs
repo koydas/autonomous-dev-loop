@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS, isDestructiveShrink, SHRINK_GUARD_MIN_LINES, GuardrailError } from '../lib/output_writer.mjs';
 
 // parseJsonResponse tests
 
@@ -87,11 +87,11 @@ test('parseJsonResponse records direct parse error first, then fenced parse erro
 test('validateAiOutput returns trimmed fields for valid input', () => {
   const result = validateAiOutput({
     summary: '  Add docs update  ',
-    changes: [{ target_path: 'docs/readme.md', file_content: '# Hello' }],
+    changes: [{ target_path: 'notes/guide.md', file_content: '# Hello' }],
   });
   assert.equal(result.summary, 'Add docs update');
   assert.equal(result.changes.length, 1);
-  assert.equal(result.changes[0].targetPath, 'docs/readme.md');
+  assert.equal(result.changes[0].targetPath, 'notes/guide.md');
   assert.equal(result.changes[0].fileContent, '# Hello');
 });
 
@@ -293,7 +293,7 @@ function changeAt(targetPath) {
 
 test('PROTECTED_WRITE_PATHS exports every required prefix and file', () => {
   for (const entry of ['.github/', 'scripts/', 'config/', 'prompts/', 'checkpoints/', 'metrics/', 'observability/',
-    'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', '.npmrc', '.yarnrc', '.yarnrc.yml']) {
+    'docs/', 'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', '.npmrc', '.yarnrc', '.yarnrc.yml', 'README.md']) {
     assert.ok(PROTECTED_WRITE_PATHS.includes(entry), `missing ${entry}`);
   }
   assert.ok(Object.isFrozen(PROTECTED_WRITE_PATHS), 'denylist must be immutable');
@@ -342,7 +342,7 @@ for (const target of [
   });
 }
 
-for (const target of ['src/config.js', 'docs/scripts/readme.md', 'scriptsx/a.js', 'githubstuff/a.md', 'src/.github-notes.md', 'package.json.md', 'docs/package-json.md']) {
+for (const target of ['src/config.js', 'notes/scripts/guide.md', 'scriptsx/a.js', 'githubstuff/a.md', 'src/.github-notes.md', 'package.json.md', 'notes/package-json.md']) {
   test(`validateAiOutput accepts non-protected target_path ${target}`, () => {
     const result = validateAiOutput(changeAt(target));
     assert.equal(result.changes[0].targetPath, target);
@@ -389,7 +389,7 @@ for (const target of ['.git/config', '.git/hooks/pre-commit', './.GIT/config', '
   });
 }
 
-for (const target of ['.gitignore', '.gitattributes', 'docs/.gitkeep', 'src/git/index.js']) {
+for (const target of ['.gitignore', '.gitattributes', 'notes/.gitkeep', 'src/git/index.js']) {
   test(`validateAiOutput accepts git-adjacent non-metadata target_path ${target}`, () => {
     assert.equal(validateAiOutput(changeAt(target)).changes[0].targetPath, target);
   });
@@ -444,5 +444,80 @@ test('writeGeneratedFiles still writes into a regular nested directory', async (
   await inTmpRepo(async () => {
     const paths = await writeGeneratedFiles([{ targetPath: 'src/a/b.txt', fileContent: 'ok' }]);
     assert.deepEqual(paths, ['src/a/b.txt']);
+  });
+});
+
+// Documentation is human-owned (ADR-0021 amendment)
+
+for (const target of ['README.md', 'readme.MD', './README.md', 'packages/app/README.md', 'docs/runbook.md', 'Docs/adr/0021-x.md', 'docs\\evals.md', 'docs']) {
+  test(`validateAiOutput rejects documentation target_path ${JSON.stringify(target)}`, () => {
+    assert.throws(() => validateAiOutput(changeAt(target)), /protected path/);
+  });
+}
+
+for (const target of ['src/docs/helper.mjs', 'README.txt', 'notes/readme-draft.md']) {
+  test(`validateAiOutput still accepts non-protected target_path ${JSON.stringify(target)}`, () => {
+    assert.equal(validateAiOutput(changeAt(target)).changes[0].targetPath, target);
+  });
+}
+
+// Shrink guard (ADR-0009, enforced in code)
+
+// Fixed-width lines, so half the lines is also half the content.
+const lines = (n) => Array.from({ length: n }, (_, i) => `line ${String(i).padStart(4, '0')}`).join('\n');
+
+test('isDestructiveShrink flags a large file cut by more than half, and only that', () => {
+  assert.equal(isDestructiveShrink(lines(145), lines(9)), true, 'README incident: 145 → 9');
+  assert.equal(isDestructiveShrink(lines(40), lines(19)), true);
+  assert.equal(isDestructiveShrink(lines(40), lines(20)), false, 'exactly half is allowed');
+  assert.equal(isDestructiveShrink(lines(40), lines(60)), false, 'growth is allowed');
+  assert.equal(isDestructiveShrink(lines(SHRINK_GUARD_MIN_LINES - 1), lines(1)), false, 'small files are exempt');
+  assert.equal(isDestructiveShrink(lines(SHRINK_GUARD_MIN_LINES), lines(1)), true);
+});
+
+test('isDestructiveShrink also flags a rewrite that keeps the lines but drops the content', () => {
+  const paddedStub = `# Title\n${'\n'.repeat(140)}(existing content above unchanged)`;
+  assert.equal(isDestructiveShrink(lines(145), paddedStub), true, 'stub padded with blank lines');
+  const longLines = [...lines(23).split('\n'), 'x'.repeat(5000), 'y'.repeat(5000)].join('\n');
+  assert.equal(isDestructiveShrink(longLines, lines(25)), true, 'content held on a few long lines');
+  assert.equal(isDestructiveShrink(lines(40), ''), true, 'emptied file');
+  assert.equal(isDestructiveShrink(lines(40), lines(40).replace(/line/g, 'LINE')), false, 'same-size edit is allowed');
+});
+
+test('guardrail rejections are GuardrailError, malformed responses are not', async () => {
+  assert.throws(() => validateAiOutput(changeAt('README.md')), GuardrailError);
+  assert.throws(() => validateAiOutput(changeAt('../outside.mjs')), GuardrailError);
+  assert.throws(() => validateAiOutput({ summary: 's', changes: [] }), (err) => !(err instanceof GuardrailError));
+  await inTmpRepo(async (dir) => {
+    await fs.writeFile(path.join(dir, 'big.mjs'), lines(100));
+    await assert.rejects(writeGeneratedFiles([{ targetPath: 'big.mjs', fileContent: lines(10) }]), GuardrailError);
+  });
+});
+
+test('writeGeneratedFiles rejects a destructive rewrite and writes nothing from the batch', async () => {
+  await inTmpRepo(async (dir) => {
+    await fs.writeFile(path.join(dir, 'big.mjs'), lines(100));
+    await assert.rejects(
+      writeGeneratedFiles([
+        { targetPath: 'new.mjs', fileContent: 'export {}' },
+        { targetPath: 'big.mjs', fileContent: lines(10) },
+      ]),
+      /"big\.mjs" would shrink from 100 to 10 lines .*rewrite rejected \(ADR-0009\)/,
+    );
+    assert.equal(await fs.readFile(path.join(dir, 'big.mjs'), 'utf8'), lines(100), 'existing file untouched');
+    await assert.rejects(fs.access(path.join(dir, 'new.mjs')), 'no partial patch: the first change is not written either');
+  });
+});
+
+test('writeGeneratedFiles accepts a moderate edit of a large file and a rewrite of a small one', async () => {
+  await inTmpRepo(async (dir) => {
+    await fs.writeFile(path.join(dir, 'big.mjs'), lines(100));
+    await fs.writeFile(path.join(dir, 'small.mjs'), lines(5));
+    const paths = await writeGeneratedFiles([
+      { targetPath: 'big.mjs', fileContent: lines(80) },
+      { targetPath: 'small.mjs', fileContent: 'x' },
+    ]);
+    assert.deepEqual(paths, ['big.mjs', 'small.mjs']);
+    assert.equal(await fs.readFile(path.join(dir, 'small.mjs'), 'utf8'), 'x');
   });
 });

@@ -6,7 +6,7 @@ import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, GuardrailError } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
@@ -168,29 +168,6 @@ async function loadLatestAutomatedReviewComment() {
     if (batch.length < 100) break;
   }
   return findReviewComment(comments, '## \u{1F50D} Automated Code Review')?.body ?? null;
-}
-
-// Nothing is written: the attempt still counts, so a blocked fix cannot loop (ADR-0029).
-async function reportBlocked(reasons) {
-  const body = `## \u{1F6D1} Auto-Fix Blocked\n\nAttempt ${nextAttempt} wrote no files:\n\n${reasons.map((r) => `- ${r}`).join('\n')}\n\nFix the remaining review findings manually, or rerun auto-fix once the cause is addressed.`;
-  const commentRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
-    method: 'POST',
-    body: JSON.stringify({ body }),
-  });
-  if (!commentRes.ok) logError('Auto-fix blocked comment failed', { prNumber, statusCode: commentRes.status });
-  await applyAttemptLabel(nextAttempt);
-  if (process.env.GITHUB_OUTPUT) {
-    await fsPromises.appendFile(
-      process.env.GITHUB_OUTPUT,
-      `attempt_number=${nextAttempt}\nsummary<<EOF\nAuto-fix blocked: ${reasons.join('; ').replace(/\s+/g, ' ')}\nEOF\n`,
-      'utf8',
-    );
-  }
-  log('Auto-fix blocked', { prNumber, attempt: nextAttempt, reasons });
-  obsLog({ stage: 'autofix', event: 'autofix.blocked', level: 'warn', duration_ms: Date.now() - autofixStartMs, meta: { reasons, attempt: nextAttempt, prNumber } });
-  tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason: 'blocked', reasons } });
-  await tracer.finalize('partial');
-  process.exit(0);
 }
 
 const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
@@ -475,8 +452,8 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   throw new Error('AI response JSON must be an object');
 }
 
-// Reviewer and fixer disagree: surface it to a human, and count the attempt so re-triggers stay capped.
-if (hasNoProposedChanges(aiOutput)) {
+// Surface the run to a human and count the attempt so re-triggers stay capped. Exits 0 without a push.
+async function escalateToHuman(reason, heading, explanation, details) {
   await applyAttemptLabel(nextAttempt);
   const needsHuman = loadLabelsConfig('autofix').needs_human;
   const createNeedsHumanRes = await ghFetch(`/repos/${owner}/${repo}/labels`, { method: 'POST', body: JSON.stringify(needsHuman) });
@@ -485,44 +462,65 @@ if (hasNoProposedChanges(aiOutput)) {
   }
   const applyNeedsHumanRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, { method: 'POST', body: JSON.stringify({ labels: [needsHuman.name] }) });
   if (!applyNeedsHumanRes.ok) throw new Error(`Add label "${needsHuman.name}" failed: ${applyNeedsHumanRes.status}`);
-  // Model text lands in a PR comment: one line, bounded.
-  const modelSummary = String(aiOutput.blocked_reason || aiOutput.summary || '(no summary)').replace(/\s+/g, ' ').trim().slice(0, 500);
-  const noChangeRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+  const escalationRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({
-      body: `## \u{1F914} Auto-Fix: No Changes Proposed\n\nAttempt ${nextAttempt}/${MAX_ATTEMPTS}: the model proposed no change for the review feedback, so the reviewer and the fixer disagree. A human needs to decide (\`${needsHuman.name}\`).\n\n**Model summary:** ${modelSummary}`,
+      body: `## ${heading}\n\nAttempt ${nextAttempt}/${MAX_ATTEMPTS}: ${explanation} A human needs to decide (\`${needsHuman.name}\`).\n\n${details}`,
     }),
   });
-  if (!noChangeRes.ok) throw new Error(`No-change comment failed: ${noChangeRes.status}`);
+  if (!escalationRes.ok) throw new Error(`Escalation comment failed (${reason}): ${escalationRes.status}`);
   await appendMetric({
     type: 'autofix_skip',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-autofix-skip` : `local-${Date.now()}`,
     pr_number: prNumber,
     attempt: nextAttempt,
-    reason: 'no_changes',
+    reason,
     ts: new Date().toISOString(),
   });
-  await skipAutofix('no_changes', {}, 'warn');
+  await skipAutofix(reason, {}, 'warn');
 }
 
-const { summary, changes } = validateAiOutput(aiOutput);
+// Reviewer and fixer disagree, or the model declined with a blocked_reason.
+if (hasNoProposedChanges(aiOutput)) {
+  // Model text lands in a PR comment: one line, bounded.
+  const modelSummary = String(aiOutput.blocked_reason || aiOutput.summary || '(no summary)').replace(/\s+/g, ' ').trim().slice(0, 500);
+  await escalateToHuman(
+    'no_changes',
+    '\u{1F914} Auto-Fix: No Changes Proposed',
+    'the model proposed no change for the review feedback, so the reviewer and the fixer disagree.',
+    `**Model summary:** ${modelSummary}`,
+  );
+}
 
-const existing = new Map();
-for (const { targetPath } of changes) {
-  const key = normalizeRepoPath(targetPath);
-  try {
-    existing.set(key, await fsPromises.readFile(path.resolve(repoRoot, key), 'utf8'));
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-    existing.set(key, null);
+// The write guard (ADR-0029), the write denylist and the shrink guard (ADR-0021, ADR-0009)
+// reject the patch before any write.
+let summary;
+let outputPaths;
+try {
+  const validated = validateAiOutput(aiOutput);
+  summary = validated.summary;
+  const existing = new Map();
+  for (const { targetPath } of validated.changes) {
+    const key = normalizeRepoPath(targetPath);
+    try {
+      existing.set(key, await fsPromises.readFile(path.resolve(repoRoot, key), 'utf8'));
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      existing.set(key, null);
+    }
   }
+  const violations = findUnsafeChanges(validated.changes, { existing, shownPaths, hiddenPaths });
+  if (violations.length) throw new GuardrailError(violations.map((v) => `\`${v.targetPath}\`: ${v.reason}`).join('; '));
+  outputPaths = await writeGeneratedFiles(validated.changes);
+} catch (rejection) {
+  if (!(rejection instanceof GuardrailError)) throw rejection;
+  await escalateToHuman(
+    'guardrail_rejected',
+    '\u{1F6E1}\u{FE0F} Auto-Fix: Patch Rejected',
+    'the proposed patch was rejected by the output guardrails, so nothing was written or pushed.',
+    `**Reason:** ${String(rejection.message).slice(0, 2000)}`,
+  );
 }
-const violations = findUnsafeChanges(changes, { existing, shownPaths, hiddenPaths });
-if (violations.length) {
-  await reportBlocked(violations.map((v) => `\`${v.targetPath}\`: ${v.reason}`));
-}
-
-const outputPaths = await writeGeneratedFiles(changes);
 
 obsLog({ stage: 'autofix', event: 'autofix.push', level: 'info', duration_ms: Date.now() - autofixStartMs, meta: { paths: outputPaths, attempt: nextAttempt, prNumber } });
 

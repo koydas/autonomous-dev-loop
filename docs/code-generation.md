@@ -75,7 +75,7 @@ These were added after a benchmark session found a local coding model violating 
 - **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`); when this actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
 - **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file (unless its path is protected) when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
 
-- **Auto-fix write guard (ADR-0029):** the model returns whole files, so it only gets to edit files it saw in full. `auto_fix_pr.mjs` sends each changed file (up to 5) in full, or replaces it with a `File withheld … do NOT target this file` marker when it exceeds 8,000 chars or the remaining file budget. Nothing is cut silently. Before writing, `scripts/lib/autofix_guard.mjs` rejects a change to an existing file that was withheld or not shown, that removes more than `max(20, 30%)` of its non-blank lines, or that lowers a test file's `test(`/`it(` count. On a violation the PR gets an `Auto-Fix Blocked` comment, no file is written, `fixed_paths` is empty (nothing is pushed), the attempt label is still applied, and `autofix.blocked` is logged. The model may also decline with `"changes": []` and `blocked_reason`: that follows the `no_changes` path (ADR-0028), whose comment shows `blocked_reason`.
+- **Auto-fix write guard (ADR-0029):** the model returns whole files, so it only gets to edit files it saw in full. `auto_fix_pr.mjs` sends each changed file (up to 5) in full, or replaces it with a `File withheld … do NOT target this file` marker when it exceeds 8,000 chars or the remaining file budget. Nothing is cut silently. Before writing, `scripts/lib/autofix_guard.mjs` rejects a change to an existing file that was withheld or not shown, that removes more than `max(20, 30%)` of its non-blank lines, or that lowers a test file's `test(`/`it(` count. A violation goes through the same escalation as the write denylist and the shrink guard (`autofix.skipped`, `reason: "guardrail_rejected"`): an `Auto-Fix: Patch Rejected` comment lists the reason per file, no file is written, `fixed_paths` is empty (nothing is pushed), the attempt label and `needs-human` are applied. The model may also decline with `"changes": []` and `blocked_reason`: that follows the `no_changes` path (ADR-0028), whose comment shows `blocked_reason`.
 
 Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See the proposed static-verification-backstop ADR in [PR #158](https://github.com/koydas/autonomous-dev-loop/pull/158) for the fuller writeup (not yet merged as of this change).
 
@@ -182,7 +182,7 @@ Stages and minimum events:
 | `code_gen` | `generate_issue_change.mjs` | `start`, `llm_request`, `llm_response`, `complete`, `error` |
 | `pr_prepare` | `generate_issue_change.mjs` | `start`, `complete`, `error` |
 | `review` | `pr_review.mjs` | `start`, `llm_request`, `llm_response`, `verdict`, `error` |
-| `autofix` | `auto_fix_pr.mjs` | `start`, `llm_request`, `llm_response`, `push`, `blocked`, `max_attempts_reached`, `error` |
+| `autofix` | `auto_fix_pr.mjs` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `error` |
 
 ### Run trace file
 
@@ -295,7 +295,7 @@ The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual toke
 {"level":"info","msg":"token_estimate","system":459,"wrapper":218,"diff":3231,"feedback":1795,"files":2156,"max_tokens":4096,"total":11955}
 ```
 
-Monitor this to detect systematic truncation of the diff or feedback. Files are never truncated: look for `File withheld` markers in the prompt, or for `Auto-Fix Blocked` comments citing "file was withheld".
+Monitor this to detect systematic truncation of the diff or feedback. Files are never truncated: look for `File withheld` markers in the prompt, or for `Auto-Fix: Patch Rejected` comments citing "file was withheld".
 
 ## Checkpoint Resume
 

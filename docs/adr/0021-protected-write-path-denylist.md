@@ -49,3 +49,22 @@ The check sits in `validateAiOutput()`, which is shared by code generation (`gen
 - ✅ Structural fix for the metrics path: the scripts append to `METRICS_FILE=$RUNNER_TEMP/pipeline-metrics.jsonl` (outside the checkout) and "Commit metrics" uploads only that file's lines, so no working-tree `metrics/runs.jsonl` is ever read back. `workflow_gates.test.mjs` enforces it; the `metrics/` denylist entry stays as defense in depth.
 - ✅ `generation-system.md` and `auto-fix-system.md` list every protected path as a hard guardrail; `smoke.test.mjs` fails if either prompt misses an entry of `PROTECTED_WRITE_PATHS`, so the prompt cannot drift from the enforced list.
 - ⚠️ Case-insensitive matching also blocks e.g. `Scripts/` on case-sensitive filesystems (intentional: avoids collisions on case-insensitive checkouts).
+
+## Amendment (2026-10-05): documentation is human-owned, and destructive rewrites are rejected in code
+
+On #173, auto-fix attempt 2 answered a review finding about missing coverage by replacing `README.md` (145 lines) with a 9-line stub (`# Project Title … (existing content above unchanged)`). This is the ADR-0009 failure mode again: the "never rewrite more than 30% of a file" rule was a prompt guardrail only, and `README.md` was writable.
+
+- **Denylist.** `docs/` (root-level prefix) and `README.md` (file name at any depth) are added to `PROTECTED_WRITE_PATHS`. They apply to both code generation and auto-fix. Matching now lower-cases each entry as well as the path, so `README.md`, `readme.MD` and `packages/app/README.md` are all rejected.
+- **Shrink guard.** `writeGeneratedFiles()` checks every change before writing any. It rejects the whole patch when a change would cut an existing file of `SHRINK_GUARD_MIN_LINES` (20) lines or more to fewer than `SHRINK_GUARD_MAX_RATIO` (50%) of its lines, or of its non-whitespace characters (`isDestructiveShrink()`). The content criterion catches a stub padded with blank lines and a file whose content sits on a few long lines. Smaller files are exempt. No file of the batch is written, so a rejected rewrite never leaves a partial patch.
+- **Escalation.** Every guardrail rejection is a `GuardrailError`. `auto_fix_pr.mjs` catches it and escalates like an empty `changes` array (attempt consumed, `needs-human`, reason commented, `autofix_skip` metric with `reason: "guardrail_rejected"`) instead of crashing without a label. Malformed model output is not a `GuardrailError` and still fails the run.
+- Both system prompts list the new entries (enforced by `smoke.test.mjs`) and state the shrink rule.
+
+Alternatives considered:
+- **Deny docs to auto-fix only** (a stage-specific list): keeps documentation issues automatable, but leaves code generation free to damage `README.md` from an injected issue body. The maintainer chose the global rule.
+- **Shrink guard alone**: covers the incident's shape, but still lets the model rewrite documentation within the 50% bound.
+
+Consequences:
+- ✅ Neither stage can rewrite the project's documentation, and no stage can replace a large file with a stub.
+- ⚠️ **Documentation issues can no longer be automated.** An issue that only targets `README.md` or `docs/` (for example the `valid-docs-diagram` eval case) passes validation, then fails at generation with a `protected path` error. The issue validator does not know the denylist.
+- ⚠️ A legitimate refactor that deletes more than half of a large file is rejected. It must be done by a human or split.
+
