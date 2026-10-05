@@ -67,7 +67,7 @@ export const validationSuite = {
   thresholds: {
     'scores.verdict_match.mean': { min: 0.8 },
     'per_class.invalid.recall': { min: 0.8 },
-    // Over-strictness blocks good issues and stalls the pipeline: gate it too (support 13 → one case ≈ 8 pts).
+    // Over-strictness blocks good issues and stalls the pipeline: gate it too (support 12 → one case ≈ 8 pts).
     'per_class.valid.recall': { min: 0.8 },
     // A case whose verdict flips between repeats is a coin toss. Only measured with --repeats > 1.
     consistency: { min: 0.9, optional: true },

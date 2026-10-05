@@ -61,12 +61,12 @@ B4. UNRESOLVED UNDOCUMENTED DEPENDENCIES
 All hard external dependencies must be resolved or explicitly documented.
 BLOCKED when:
 - The implementation requires a service, API, feature, or schema that does not yet exist
-- AND there is no documented workaround, stub, mock, or resolution plan
+- AND there is no stub, mock, or documented workaround for this implementation. A ticket, roadmap item or ETA alone does not resolve it: the coder agent cannot call a service that does not exist yet
 - External API contracts or third-party behaviours are assumed without citation
 
 NOT BLOCKED when:
 - The dependency is a standard, stable platform capability (e.g. GitHub's native Mermaid rendering in Markdown, built-in language standard library features) — these require no configuration or resolution plan
-- Dependencies are listed with status: available, in-progress (with ticket), or explicitly mocked/stubbed for this implementation
+- Dependencies already exist and are listed as available, or are explicitly mocked/stubbed for this implementation (an in-progress dependency with a ticket but no stub or mock is still BLOCKED)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WARNING CRITERIA — non-blocking, reduce score, noted for quality

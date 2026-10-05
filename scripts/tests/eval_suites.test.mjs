@@ -173,6 +173,16 @@ test('validation system prompt asks for the blocker code prefix that blocker_mat
   assert.match(VALIDATION_SYSTEM_PROMPT, /prefixed with the code of the rule it breaks: "B1: …", "B2: …", "B3: …" or "B4: …"/);
 });
 
+test('validation prompt blocks a ticketed dependency without a stub, as invalid-b4-pair-ticket expects', async () => {
+  assert.match(VALIDATION_SYSTEM_PROMPT, /A ticket, roadmap item or ETA alone does not resolve it/);
+  assert.match(VALIDATION_SYSTEM_PROMPT, /an in-progress dependency with a ticket but no stub or mock is still BLOCKED/);
+  assert.doesNotMatch(VALIDATION_SYSTEM_PROMPT, /in-progress \(with ticket\), or/);
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  const ticket = cases.find((c) => c.id === 'invalid-b4-pair-ticket');
+  assert.equal(ticket?.expected.valid, false);
+  assert.deepEqual(ticket.expected.blockers, ['B4']);
+});
+
 test('validationSuite gates over-strictness (valid recall) and consistency only when measured', () => {
   assert.deepEqual(validationSuite.thresholds['per_class.valid.recall'], { min: 0.8 });
   assert.deepEqual(validationSuite.thresholds.consistency, { min: 0.9, optional: true });
