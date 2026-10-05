@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
+- AI write guardrails (ADR-0021 amendment): `docs/` and `README.md` (at any depth) join `PROTECTED_WRITE_PATHS`, for code generation and auto-fix; denylist matching is now case-insensitive on both sides. `writeGeneratedFiles()` rejects the whole patch, before writing anything, when a change would cut an existing file of 20+ lines to under half of its lines (`isDestructiveShrink()`, ADR-0009 enforced in code). Both system prompts list the new rules. Triggered by auto-fix attempt 2 on #173 replacing `README.md` with a 9-line stub. Documentation-only issues now fail at generation.
+- Removed the stray `fix-output.txt` that #174 added at the repository root.
 - Eval suite `validation` reworked after saturation (`openai/gpt-oss-120b` scored 1.0 on every metric over 45 runs), per review on #173:
   - **Dataset:** 15 → 35 cases (12 valid / 23 invalid). The original 15 are tagged `core`, so `--tags core` stays comparable with earlier runs. New cases: AC items that look testable but are not (`partial-ac`), a scope minimal pair (`scope-pair`), a B4 minimal pair with nothing, a ticket plus a cited contract, or a stub (`stub`), `role-scope`, `short`, `fr`, `warnings-only`, and prompt injection in the issue body (`injection`, all invalid).
   - **B4 requires a stub:** in `prompts/validation-system.md`, a dependency that does not exist yet is no longer resolved by a ticket, roadmap item or ETA alone; it needs a stub, a mock or a documented workaround. Issues that only cite a ticket are now `invalid` (`invalid-b4-pair-ticket`).

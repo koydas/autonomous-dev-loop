@@ -62,6 +62,8 @@ const MAX_FILE_CONTENT_LENGTH = 16000;
 // metrics and traces are pipeline state read back from the same working tree; manifests,
 // lock files and npm/yarn rc files control what gets installed. `.git/` is matched as a path
 // segment at any depth: git metadata (config, hooks) executes on the next git command.
+// `docs/` and `README.md` are human-owned documentation (ADR-0021 amendment): auto-fix attempt 2
+// on #173 replaced README.md with a 9-line stub to "address" a coverage finding.
 export const PROTECTED_WRITE_PATHS = Object.freeze([
   '.git/',
   '.github/',
@@ -71,6 +73,7 @@ export const PROTECTED_WRITE_PATHS = Object.freeze([
   'checkpoints/',
   'metrics/',
   'observability/',
+  'docs/',
   'package.json',
   'package-lock.json',
   'npm-shrinkwrap.json',
@@ -79,7 +82,22 @@ export const PROTECTED_WRITE_PATHS = Object.freeze([
   '.npmrc',
   '.yarnrc',
   '.yarnrc.yml',
+  'README.md',
 ]);
+
+// A rewrite that drops most of an existing file is the ADR-0009 failure mode (a 690-line suite
+// replaced by an 18-line stub, README.md 145 → 9 lines). Small files are exempt.
+export const SHRINK_GUARD_MIN_LINES = 20;
+export const SHRINK_GUARD_MAX_RATIO = 0.5;
+
+function lineCount(text) {
+  return text.split('\n').length;
+}
+
+export function isDestructiveShrink(existingContent, nextContent) {
+  const before = lineCount(existingContent);
+  return before >= SHRINK_GUARD_MIN_LINES && lineCount(nextContent) < before * SHRINK_GUARD_MAX_RATIO;
+}
 
 function findProtectedPathEntry(targetPath) {
   // Normalize before matching: backslashes, "./" and "." segments, repeated slashes, case.
@@ -89,9 +107,10 @@ function findProtectedPathEntry(targetPath) {
     .toLowerCase();
   const baseName = path.posix.basename(normalized);
   if (normalized.split('/').includes('.git')) return '.git/';
-  return PROTECTED_WRITE_PATHS.find((entry) => (entry.endsWith('/')
-    ? normalized.startsWith(entry) || normalized === entry.slice(0, -1)
-    : baseName === entry));
+  return PROTECTED_WRITE_PATHS.find((entry) => {
+    const key = entry.toLowerCase();
+    return key.endsWith('/') ? normalized.startsWith(key) || normalized === key.slice(0, -1) : baseName === key;
+  });
 }
 
 function validateSingleChange(change, index) {
@@ -181,6 +200,21 @@ async function assertRealWriteTarget(targetPath, outputPath, repoRoot) {
 export async function writeGeneratedFiles(changes) {
   const writtenPaths = [];
   const repoRoot = await fs.realpath(process.cwd());
+
+  // Check every change before writing any, so a rejected rewrite never leaves a partial patch.
+  for (const { targetPath, fileContent } of changes) {
+    const outputPath = path.normalize(targetPath).replaceAll('\\', '/');
+    await assertRealWriteTarget(targetPath, outputPath, repoRoot);
+    let existingContent = null;
+    try {
+      existingContent = await fs.readFile(outputPath, 'utf8');
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    if (existingContent !== null && isDestructiveShrink(existingContent, fileContent)) {
+      throw new Error(`target_path "${targetPath}" would shrink from ${lineCount(existingContent)} to ${lineCount(fileContent)} lines (more than ${SHRINK_GUARD_MAX_RATIO * 100}% removed); rewrite rejected (ADR-0009)`);
+    }
+  }
 
   for (const { targetPath, fileContent } of changes) {
     const outputPath = path.normalize(targetPath).replaceAll('\\', '/');
