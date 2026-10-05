@@ -1,9 +1,5 @@
 Apply fixes to the pull request based on the following review feedback.
 
-## Review Feedback
-
-{{reviewFeedback}}
-
 ## Current PR Diff
 
 {{diff}}
@@ -12,10 +8,10 @@ Apply fixes to the pull request based on the following review feedback.
 
 {{fileContents}}
 
-Fix only the issues explicitly mentioned in the review feedback. Use the current file contents as the authoritative base — preserve all content not targeted by the review.
+## Review Feedback
 
-Output JSON only: { "summary": "One sentence summary of the fixes applied", "changes": [ { "target_path": "relative/path/to/file.ext", "file_content": "Complete corrected file content" } ] }
+{{reviewFeedback}}
 
-Additional constraints for repository automation changes:
-- If the fix touches scripts/, prompts/, or .github/workflows/, include necessary unit test updates for the touched behavior and preserve minimum unit test coverage expectations.
-- If behavior/config/setup expectations change, include matching updates to docs/code-generation.md.
+Fix only the issues explicitly mentioned in the review feedback. Use the current file contents as the authoritative base — preserve all content not targeted by the review. Files marked "File withheld" were not shown: do not target them. If the feedback can only be fixed in a withheld or protected file, return no changes and say so in blocked_reason.
+
+Output JSON only: { "summary": "One sentence summary of the fixes applied", "changes": [ { "target_path": "relative/path/to/file.ext", "file_content": "Complete corrected file content" } ], "blocked_reason": "Only when changes is empty: why no safe fix was possible" }

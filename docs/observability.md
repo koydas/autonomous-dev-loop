@@ -109,6 +109,7 @@ The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trac
 | `autofix.llm_response`         | info   | —             | `output_tokens_est`, `attempt`, `prNumber`|
 | `autofix.push`                 | info   | ✓             | `paths`, `attempt`, `prNumber`            |
 | `autofix.max_attempts_reached` | warn   | —             | `attempt`, `prNumber`                     |
+| `autofix.blocked`              | warn   | ✓             | `reasons`, `attempt`, `prNumber`          |
 | `autofix.error`                | error  | ✓             | `error`, `attempt`, `prNumber`            |
 
 ---

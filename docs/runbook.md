@@ -94,6 +94,7 @@ cat <run_id>.json | jq '[.spans[] | select(.outcome == "failed")]'
 | Auto-fix, PR review or reset run shows as *Queued* / *Pending*, or an earlier pending run shows *Cancelled* | Expected: the three share one concurrency group per PR branch, `pr-pipeline-<head ref>` (ADR-0020). One of them runs per PR at a time; only the latest pending run is kept. A cancelled pending review is re-triggered by the next push |
 | Auto-fix loop stops at attempt 3 | Expected: 3-attempt hard limit reached — manual intervention required (see below) |
 | Auto-fix posts "Auto-Fix Skipped" comment and stops | PR modifies `scripts/auto_fix_pr.mjs` — self-modification guard triggered (expected) |
+| Auto-fix posts "Auto-Fix Blocked" and pushes nothing | The write guard (ADR-0028) rejected the fix, or the model returned no changes. The comment lists the reason per file. `file was withheld` / `not shown`: the file is above 8,000 chars or the budget (raise `autofix_max_input_tokens` or switch to Anthropic), or it was not in the PR diff. `removes N of M lines` / `test count drops`: the fix was destructive, so apply the review findings manually. The attempt counted; rerun with the checkbox once the cause is addressed |
 | Auto-fix workflow succeeds but pushes nothing | Checkpoint resume: attempt was already completed in a previous run |
 | Provider outage (Anthropic or Groq) | All LLM-calling workflows fail with HTTP 5xx or timeout; switch provider via `AI_PROVIDER` variable |
 | Token permission drift | Workflows fail with 403; audit PAT/App token scopes and repository secret values |

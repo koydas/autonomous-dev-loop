@@ -37,7 +37,9 @@ autofix_max_tokens:     4096
 # Total sent = system (~890, auto-fix-system.md) + autofix_max_input_tokens + autofix_max_tokens ≈ 7,986.
 # Raise this value on the Groq Developer plan (higher TPM) or when using Anthropic.
 autofix_max_input_tokens: 3000
-autofix_diff_ratio:     0.45
+# Files get the remainder (0.60). A file that does not fit is withheld with an explicit marker
+# and cannot be targeted (ADR-0028); the diff already repeats most of the shown files.
+autofix_diff_ratio:     0.15
 autofix_feedback_ratio: 0.25
 
 groq_max_retries:       3

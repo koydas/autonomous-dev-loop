@@ -73,7 +73,9 @@ These were added after a benchmark session found a local coding model violating 
 - **Named defect checklist:** the reviewer explicitly checks every new/changed file for three specific patterns rather than relying on open-ended "look for bugs" judgment: read-only/getter-only property assignment (e.g. `AbortController.prototype.signal`), unauthorized dependency imports, and non-persistent "ref" patterns (state meant to survive across calls/renders stored in a re-initialized local variable instead of `useRef`/module state).
 - **Verdict parsing:** `pr_review.mjs` reads the verdict after the word `Verdict` in any of these forms: `### 🚀 Verdict` on its own line, `Verdict: APPROVED`, a bold verdict (`**APPROVED**`), a bold heading (`**🚀 Verdict**`) or a bold heading with colon (`**Verdict:** APPROVED`). Anything else — the template placeholder, prose, or no verdict — is treated as `REQUEST_CHANGES`. Unit-test coverage: 100% of these forms, both verdicts where they apply (AGENTS.md, Test Coverage Policy).
 - **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`); when this actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
-- **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file regardless of path when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
+- **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file (unless its path is protected) when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
+
+- **Auto-fix write guard (ADR-0028):** the model returns whole files, so it only gets to edit files it saw in full. `auto_fix_pr.mjs` sends each changed file (up to 5) in full, or replaces it with a `File withheld … do NOT target this file` marker when it exceeds 8,000 chars or the remaining file budget. Nothing is cut silently. Before writing, `scripts/lib/autofix_guard.mjs` rejects a change to an existing file that was withheld or not shown, that removes more than `max(20, 30%)` of its non-blank lines, or that lowers a test file's `test(`/`it(` count. The model may also return `"changes": []` with `blocked_reason`. In both cases the PR gets an `Auto-Fix Blocked` comment, no file is written, `fixed_paths` is empty (nothing is pushed), the attempt label is still applied, and `autofix.blocked` is logged.
 
 Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See the proposed static-verification-backstop ADR in [PR #158](https://github.com/koydas/autonomous-dev-loop/pull/158) for the fuller writeup (not yet merged as of this change).
 
@@ -180,7 +182,7 @@ Stages and minimum events:
 | `code_gen` | `generate_issue_change.mjs` | `start`, `llm_request`, `llm_response`, `complete`, `error` |
 | `pr_prepare` | `generate_issue_change.mjs` | `start`, `complete`, `error` |
 | `review` | `pr_review.mjs` | `start`, `llm_request`, `llm_response`, `verdict`, `error` |
-| `autofix` | `auto_fix_pr.mjs` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `error` |
+| `autofix` | `auto_fix_pr.mjs` | `start`, `llm_request`, `llm_response`, `push`, `blocked`, `max_attempts_reached`, `error` |
 
 ### Run trace file
 
@@ -274,9 +276,9 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `3000` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025). The static wrapper text of `auto-fix-user.md` (~218 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
-| `autofix_diff_ratio` | `0.45` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. |
-| `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents. |
+| `autofix_max_input_tokens` | `3000` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025). The static wrapper text of `auto-fix-user.md` (~192 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_diff_ratio` | `0.15` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. Kept low because the diff mostly repeats the shown files, and only files shown in full can be edited (ADR-0028). |
+| `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents; a file that does not fit whole is withheld, never truncated. |
 
 **Tuning for your provider tier:**
 
@@ -292,7 +294,7 @@ The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual toke
 {"level":"info","msg":"token_estimate","system":459,"wrapper":218,"diff":3231,"feedback":1795,"files":2156,"max_tokens":4096,"total":11955}
 ```
 
-Monitor this to detect systematic truncation of diff or file contents.
+Monitor this to detect systematic truncation of the diff or feedback. Files are never truncated: look for `File withheld` markers in the prompt, or for `Auto-Fix Blocked` comments citing "file was withheld".
 
 ## Checkpoint Resume
 

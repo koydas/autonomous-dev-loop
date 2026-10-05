@@ -12,6 +12,7 @@ import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { findUnsafeChanges, normalizeRepoPath } from './lib/autofix_guard.mjs';
 import { randomUUID } from 'node:crypto';
 
 let tracer;
@@ -171,6 +172,52 @@ async function loadLatestAutomatedReviewComment() {
   }
 }
 
+async function applyAttemptLabel(attempt) {
+  const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${attempt}`;
+  const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
+    method: 'POST',
+    body: JSON.stringify({
+      name: attemptLabelName,
+      color: 'fbca04',
+      description: `Auto-fix iteration ${attempt}`,
+    }),
+  });
+  if (!createLabelRes.ok && createLabelRes.status !== 422) {
+    throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
+  }
+
+  const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
+    method: 'POST',
+    body: JSON.stringify({ labels: [attemptLabelName] }),
+  });
+  if (!applyLabelRes.ok) {
+    throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
+  }
+}
+
+// Nothing is written: the attempt still counts, so a blocked fix cannot loop (ADR-0028).
+async function reportBlocked(reasons) {
+  const body = `## \u{1F6D1} Auto-Fix Blocked\n\nAttempt ${nextAttempt} wrote no files:\n\n${reasons.map((r) => `- ${r}`).join('\n')}\n\nFix the remaining review findings manually, or rerun auto-fix once the cause is addressed.`;
+  const commentRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  });
+  if (!commentRes.ok) logError('Auto-fix blocked comment failed', { prNumber, statusCode: commentRes.status });
+  await applyAttemptLabel(nextAttempt);
+  if (process.env.GITHUB_OUTPUT) {
+    await fsPromises.appendFile(
+      process.env.GITHUB_OUTPUT,
+      `attempt_number=${nextAttempt}\nsummary<<EOF\nAuto-fix blocked: ${reasons.join('; ').replace(/\s+/g, ' ')}\nEOF\n`,
+      'utf8',
+    );
+  }
+  log('Auto-fix blocked', { prNumber, attempt: nextAttempt, reasons });
+  obsLog({ stage: 'autofix', event: 'autofix.blocked', level: 'warn', duration_ms: Date.now() - autofixStartMs, meta: { reasons, attempt: nextAttempt, prNumber } });
+  tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason: 'blocked', reasons } });
+  await tracer.finalize('partial');
+  process.exit(0);
+}
+
 const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
 const traceDir = path.join(process.cwd(), 'observability', 'traces');
 tracer = createTracer({ runId, issueNumber: null, traceDir });
@@ -280,7 +327,7 @@ if (!feedbackParts.length) {
   }
 }
 
-const effectiveDiffRatio = cfgDiffRatio ?? 0.45;
+const effectiveDiffRatio = cfgDiffRatio ?? 0.15;
 const effectiveFeedbackRatio = cfgFeedbackRatio ?? 0.25;
 if (effectiveDiffRatio + effectiveFeedbackRatio >= 1) {
   throw new Error(`Token budget config error: autofix_diff_ratio (${effectiveDiffRatio}) + autofix_feedback_ratio (${effectiveFeedbackRatio}) must sum to less than 1.0; adjust config/models.yaml`);
@@ -328,24 +375,37 @@ if (allChangedFiles.includes(SELF_PATH)) {
 const changedFiles = allChangedFiles.filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
+// A file is either shown in full or withheld with an explicit marker — never cut silently:
+// the model returns whole files, so a truncated view becomes deleted content (ADR-0028).
 const fileContentParts = [];
+const shownPaths = new Set();
+const hiddenPaths = new Set();
+let fileCharsLeft = fileBudget * 4;
 for (const filePath of changedFiles.slice(0, MAX_FILES)) {
   const absPath = path.resolve(repoRoot, filePath);
   if (!absPath.startsWith(repoRoot + path.sep)) continue;
+  let content;
   try {
-    const content = await fsPromises.readFile(absPath, 'utf8');
-    fileContentParts.push(
-      `### Current file: ${filePath}\n\`\`\`\n${content.slice(0, MAX_FILE_SIZE)}\n\`\`\``,
-    );
+    content = await fsPromises.readFile(absPath, 'utf8');
   } catch {
-    // File deleted or unreadable — skip
+    continue; // File deleted or unreadable — skip
+  }
+  const part = `### Current file: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
+  if (content.length <= MAX_FILE_SIZE && part.length <= fileCharsLeft) {
+    fileContentParts.push(part);
+    shownPaths.add(normalizeRepoPath(filePath));
+    fileCharsLeft -= part.length + 2;
+  } else {
+    const marker = `### File withheld (too large for the context budget): ${filePath} — do NOT target this file`;
+    fileContentParts.push(marker);
+    hiddenPaths.add(normalizeRepoPath(filePath));
+    fileCharsLeft -= marker.length + 2;
   }
 }
-const rawFileContents =
+const fileContents =
   fileContentParts.length > 0
     ? fileContentParts.join('\n\n')
     : 'No existing files identified as relevant to this review.';
-const fileContents = truncateToTokenBudget(rawFileContents, fileBudget);
 
 const userPrompt = interpolatePrompt(userPromptTemplate, {
   reviewFeedback,
@@ -398,31 +458,34 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   throw new Error('AI response JSON must be an object');
 }
 
+if (Array.isArray(aiOutput.changes) && aiOutput.changes.length === 0) {
+  // Model text lands in a PR comment and a GITHUB_OUTPUT heredoc: one line, bounded.
+  const reason = String(aiOutput.blocked_reason || aiOutput.summary || 'no reason given').replace(/\s+/g, ' ').trim().slice(0, 500);
+  await reportBlocked([`Model declined to change files: ${reason}`]);
+}
+
 const { summary, changes } = validateAiOutput(aiOutput);
+
+const existing = new Map();
+for (const { targetPath } of changes) {
+  const key = normalizeRepoPath(targetPath);
+  try {
+    existing.set(key, await fsPromises.readFile(path.resolve(repoRoot, key), 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    existing.set(key, null);
+  }
+}
+const violations = findUnsafeChanges(changes, { existing, shownPaths, hiddenPaths });
+if (violations.length) {
+  await reportBlocked(violations.map((v) => `\`${v.targetPath}\`: ${v.reason}`));
+}
+
 const outputPaths = await writeGeneratedFiles(changes);
 
 obsLog({ stage: 'autofix', event: 'autofix.push', level: 'info', duration_ms: Date.now() - autofixStartMs, meta: { paths: outputPaths, attempt: nextAttempt, prNumber } });
 
-const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${nextAttempt}`;
-const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
-  method: 'POST',
-  body: JSON.stringify({
-    name: attemptLabelName,
-    color: 'fbca04',
-    description: `Auto-fix iteration ${nextAttempt}`,
-  }),
-});
-if (!createLabelRes.ok && createLabelRes.status !== 422) {
-  throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
-}
-
-const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
-  method: 'POST',
-  body: JSON.stringify({ labels: [attemptLabelName] }),
-});
-if (!applyLabelRes.ok) {
-  throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
-}
+await applyAttemptLabel(nextAttempt);
 
 if (process.env.GITHUB_OUTPUT) {
   await fsPromises.appendFile(
