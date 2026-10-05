@@ -45,6 +45,19 @@ export function findLatestReviewComment(comments, heading) {
   return null;
 }
 
+// The review comment pr_review.mjs owns: the newest trusted comment with the heading AND a valid
+// marker. A member's own comment that merely quotes the heading (AI_PR_TOKEN is a member's PAT)
+// is never picked, so it is neither PATCHed nor read as the verdict. Heading-only comments count
+// only on PRs where no trusted comment carries a marker yet (reviewed before ADR-0028).
+export function findReviewComment(comments, heading) {
+  if (!Array.isArray(comments)) return null;
+  for (let i = comments.length - 1; i >= 0; i--) {
+    const c = comments[i];
+    if (typeof c?.body === 'string' && c.body.includes(heading) && isTrustedReviewComment(c) && parseReviewMarker(c.body)) return c;
+  }
+  return findLatestReviewComment(comments, heading);
+}
+
 // Returns { sha, verdict } from a review comment body, or null when it carries no marker
 // (comments written before ADR-0028, or by a human).
 export function parseReviewMarker(body) {

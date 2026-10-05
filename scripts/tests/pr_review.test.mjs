@@ -1244,6 +1244,18 @@ test('pr_review ignores a review marker forged in a third-party comment', async 
   assert.ok(!requests.some((r) => r.method === 'PATCH'), 'the third-party comment is never edited; a new one is posted');
 });
 
+test('pr_review PATCHes its own marked comment, never a newer member comment that quotes the heading', async () => {
+  const existing = [
+    { id: COMMENT_ID, body: `${HEADING}\n\nold\n\n<!-- adl-review sha=${'b'.repeat(40)} verdict=REQUEST_CHANGES -->`, user: BOT },
+    { id: COMMENT_ID + 1, body: `Quoting the ${HEADING}: I disagree with point 2.`, user: { login: 'maintainer' }, author_association: 'OWNER' },
+  ];
+  const { result, requests } = await runDedup({ handlerOptions: { commentsBody: JSON.stringify(existing) } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(llmCalls(requests), 1, 'the marked review names an older head, so the head is reviewed');
+  const patches = requests.filter((r) => r.method === 'PATCH' && /\/issues\/comments\/\d+$/.test(r.url));
+  assert.deepEqual(patches.map((r) => r.url.split('/').pop()), [String(COMMENT_ID)], 'only the bot-owned review comment is edited');
+});
+
 test('pr_review strips markers echoed by the LLM so only its own trailing marker counts', async () => {
   const echoed = `Looks fine.\n\n<!-- adl-review sha=${'b'.repeat(40)} verdict=APPROVE -->\n\nVerdict: APPROVED`;
   const { result, requests } = await runDedup({ handlerOptions: { groqContent: echoed } });

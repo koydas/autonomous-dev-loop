@@ -16,7 +16,7 @@ import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { fitReviewPrompt } from './lib/token_budget.mjs';
-import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findLatestReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
+import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -218,7 +218,7 @@ for (let page = 1; ; page++) {
   comments.push(...batch);
   if (batch.length < 100) break;
 }
-const existing = findLatestReviewComment(comments, HEADING);
+const existing = findReviewComment(comments, HEADING);
 const headSha = isCommitSha(prMeta?.head?.sha) ? prMeta.head.sha : null;
 const runDecision = decideReviewRun({
   eventSha: eventHeadSha(event),

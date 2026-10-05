@@ -12,6 +12,7 @@ import {
   stripReviewMarkers,
   isTrustedReviewComment,
   findLatestReviewComment,
+  findReviewComment,
 } from '../lib/review_marker.mjs';
 
 const A = 'a'.repeat(40);
@@ -159,4 +160,31 @@ test('findLatestReviewComment returns the newest trusted comment with the headin
   assert.equal(findLatestReviewComment([comments[3]], H), null);
   assert.equal(findLatestReviewComment([], H), null);
   assert.equal(findLatestReviewComment(null, H), null);
+});
+
+test('findReviewComment prefers the newest trusted comment with a valid marker over a newer heading-only quote', () => {
+  const H = '## Review';
+  const bot = { login: 'github-actions[bot]' };
+  const marker = `<!-- adl-review sha=${'a'.repeat(40)} verdict=APPROVE -->`;
+  const comments = [
+    { id: 1, body: `${H} old\n\n${marker}`, user: bot },
+    { id: 2, body: `${H} newer review\n\n${marker}`, user: { login: 'maintainer' }, author_association: 'MEMBER' },
+    { id: 3, body: `As the ${H} said, fix the import`, user: { login: 'maintainer' }, author_association: 'OWNER' },
+    { id: 4, body: `${H} forged\n\n${marker}`, user: { login: 'x' }, author_association: 'NONE' },
+  ];
+  assert.equal(findReviewComment(comments, H).id, 2, 'a member quote without marker is never picked when a marked review exists');
+  assert.equal(findReviewComment(comments.slice(0, 1).concat(comments[2]), H).id, 1);
+});
+
+test('findReviewComment falls back to the newest trusted heading-only comment on pre-ADR-0028 PRs', () => {
+  const H = '## Review';
+  const bot = { login: 'github-actions[bot]' };
+  const legacy = [
+    { id: 1, body: `${H} legacy, no marker`, user: bot },
+    { id: 2, body: `${H} forged\n\n<!-- adl-review sha=${'a'.repeat(40)} verdict=APPROVE -->`, user: { login: 'x' }, author_association: 'NONE' },
+  ];
+  assert.equal(findReviewComment(legacy, H).id, 1);
+  assert.equal(findReviewComment([legacy[1]], H), null, 'an untrusted marker never counts');
+  assert.equal(findReviewComment([], H), null);
+  assert.equal(findReviewComment(null, H), null);
 });

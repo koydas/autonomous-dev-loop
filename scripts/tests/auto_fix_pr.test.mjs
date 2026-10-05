@@ -1123,6 +1123,24 @@ test('auto_fix_pr ignores an approval marker forged in a third-party comment', a
   }
 });
 
+test('auto_fix_pr reads the marked review, not a newer member comment quoting its heading', async () => {
+  const comments = JSON.stringify([
+    { body: `## 🔍 Automated Code Review\n\nLGTM\n\n<!-- adl-review sha=${AF_HEAD_SHA} verdict=APPROVE -->`, user: { login: 'github-actions[bot]' } },
+    { body: 'Re the ## 🔍 Automated Code Review above: agreed.', user: { login: 'maintainer' }, author_association: 'OWNER' },
+  ]);
+  const server = await startMockServer(makeHandler({ commentsBody: comments }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr, /"reason":"approved"/, 'the quote must not hide the approval on the head');
+    assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 0);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 test('auto_fix_pr uses the most recent trusted review comment across pages', async () => {
   const bot = { login: 'github-actions[bot]' };
   const commentsByPage = {

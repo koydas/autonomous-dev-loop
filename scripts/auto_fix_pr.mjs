@@ -12,7 +12,7 @@ import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findLatestReviewComment } from './lib/review_marker.mjs';
+import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 
 let tracer;
@@ -166,7 +166,7 @@ async function loadLatestAutomatedReviewComment() {
     comments.push(...batch);
     if (batch.length < 100) break;
   }
-  return findLatestReviewComment(comments, '## \u{1F50D} Automated Code Review')?.body ?? null;
+  return findReviewComment(comments, '## \u{1F50D} Automated Code Review')?.body ?? null;
 }
 
 const runId = process.env.GITHUB_RUN_ID ?? randomUUID();
