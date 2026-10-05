@@ -18,12 +18,12 @@ export function parseRetryAfterMs(value, nowMs = Date.now()) {
   return Math.max(0, dateMs - nowMs);
 }
 
-// Longest server-imposed wait (Retry-After) worth honoring: three retries must fit well
-// inside the shortest job timeout (pr-review: 2 min). Longer waits fail fast instead.
+// Longest server-imposed wait (Retry-After) on GitHub API calls worth honoring: three retries
+// must fit well inside the shortest job timeout. Longer waits fail fast instead.
 export const MAX_RETRY_AFTER_MS = 10000;
 
-// LLM rate-limit waits (Groq TPM) are per-minute: one window is worth waiting out in stages
-// with long timeouts. Short-timeout jobs lower it via LLM_MAX_RETRY_WAIT_MS (ADR-0022).
+// LLM rate-limit waits (Groq TPM) are per-minute: one window is always worth waiting out.
+// Every LLM workflow sets LLM_MAX_RETRY_WAIT_MS=60000 explicitly (ADR-0022, ADR-0028).
 export const MAX_LLM_RETRY_AFTER_MS = 60000;
 
 // fetch does not throw on HTTP errors. Returns a retryable error for 429/5xx (carrying

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { buildDeterministicPrompt, loadConfigFromEnv, validateStartup } from './lib/config.mjs';
+import { buildDeterministicPrompt, loadConfigFromEnv, loadLLMConfig, validateStartup } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
 import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
@@ -9,6 +9,7 @@ import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { buildFileContentsBlock } from './lib/file_injector.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
 import { estimateTokens } from './lib/metrics.mjs';
+import { assertInputBudget } from './lib/token_budget.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -51,6 +52,8 @@ async function main() {
 
   let raw;
   try {
+    // ADR-0028: an over-budget request can only end in 413, which would be retried until the job timeout.
+    assertInputBudget('generation', inputTokensEst, loadLLMConfig('generation').maxInputTokens);
     raw = await callLLM({
       prompt,
       systemPrompt,

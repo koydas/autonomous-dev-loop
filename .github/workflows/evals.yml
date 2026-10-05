@@ -15,7 +15,7 @@ on:
       repeats:
         description: Runs per case (>1 measures consistency)
         required: true
-        default: '1'
+        default: '3'
       publish:
         description: Add the run to the eval dashboard on GitHub Pages (default branch only)
         type: boolean
@@ -40,6 +40,9 @@ concurrency:
 jobs:
   eval:
     runs-on: ubuntu-latest
+    # cases x repeats calls share the 8K TPM with every other pipeline run: slow, never failing.
+    # One call may wait 20 retries x 60 s; the rest of the run fits the remaining time (ADR-0028).
+    timeout-minutes: 120
     steps:
       # The eval step handles LLM output and API keys: no push credential on disk.
       - uses: actions/checkout@v4
@@ -54,6 +57,10 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           SUITE: ${{ inputs.suite }}
           REPEATS: ${{ inputs.repeats }}
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '20'
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           AI_PROVIDER: ${{ vars.AI_PROVIDER }}

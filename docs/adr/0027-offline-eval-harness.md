@@ -100,6 +100,6 @@ Consequences:
 - ✅ A validator that rejects a third of the valid issues now fails the gate (`valid` recall ≈ 0.69), where it used to pass (`verdict_match` 0.867, `invalid` recall 1.0).
 - ✅ A rejection for the wrong rule is visible in `blocker_match`.
 - ⚠️ Issue validation comments now show the rule code in front of each blocker.
-- ⚠️ `consistency` is gated only on runs with `--repeats > 1`. The workflow default stays `1`.
+- ⚠️ `consistency` is gated only on runs with `--repeats > 1`. The Evals workflow defaults to `repeats: 3` (ADR-0028 amendment), so CI runs are gated; a local `--repeats 1` run skips it.
 - ⚠️ `blocker_match` depends on the model following the prefix instruction. A blocker without a code counts as a miss.
 

@@ -85,7 +85,8 @@ If `meta.file` is absent, the annotation has no file reference.
 | `review.start`     | info   | —             | `prNumber`, `model`                                      |
 | `review.llm_request` | info | —             | `model`, `input_tokens_est`, `prNumber`                  |
 | `review.llm_response`| info | —             | `output_tokens_est`, `prNumber`                          |
-| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override` |
+| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override` |
+| `review.skipped`   | info   | ✓             | `reason` (`already_reviewed` \| `superseded`), `prNumber`, `headSha` — no LLM call (ADR-0028) |
 | `review.error`     | error  | —             | `error`                                                  |
 
 ### `review_evidence`
@@ -109,6 +110,7 @@ The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trac
 | `autofix.llm_response`         | info   | —             | `output_tokens_est`, `attempt`, `prNumber`|
 | `autofix.push`                 | info   | ✓             | `paths`, `attempt`, `prNumber`            |
 | `autofix.max_attempts_reached` | warn   | —             | `attempt`, `prNumber`                     |
+| `autofix.skipped`              | info / warn | ✓        | `reason` (`approved`, info: no LLM call \| `no_changes`, warn: attempt consumed, `needs-human` applied, summary commented, `autofix_skip` metric), `attempt`, `prNumber`, `headSha` (approved only) — exit 0, nothing pushed (ADR-0028) |
 | `autofix.error`                | error  | ✓             | `error`, `attempt`, `prNumber`            |
 
 ---
