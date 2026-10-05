@@ -230,7 +230,8 @@ function suiteSection(name, runs, thresholds = {}) {
   const thresholdRows = Object.entries(thresholds).map(([metric, rule]) => {
     const value = metricAt({ scores: Object.fromEntries(Object.entries(run.scores).map(([k, v]) => [k, { mean: v }])), per_class: run.per_class, error_rate: run.error_rate, consistency: run.consistency }, metric);
     const failed = run.failures?.includes(metric);
-    return `<tr><td><code>${escapeHtml(metric)}</code></td><td>${escapeHtml(describeThreshold(rule))}</td><td class="num">${escapeHtml(fmt(value))}</td><td>${failed ? '<span class="ko">✕ fail</span>' : '<span class="ok">✓ pass</span>'}</td></tr>`;
+    const status = failed ? '<span class="ko">✕ fail</span>' : value == null && rule.optional ? '<span class="muted">– not measured</span>' : '<span class="ok">✓ pass</span>';
+    return `<tr><td><code>${escapeHtml(metric)}</code></td><td>${escapeHtml(describeThreshold(rule))}</td><td class="num">${escapeHtml(fmt(value))}</td><td>${status}</td></tr>`;
   }).join('');
 
   const scoreNames = [...new Set(runs.flatMap((r) => Object.keys(r.scores ?? {})))];

@@ -6,8 +6,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SUITES, validationSuite } from '../lib/eval_suites.mjs';
-import { loadDataset, runSuite, summarize } from '../lib/eval_harness.mjs';
+import { SUITES, validationSuite, blockerCodes } from '../lib/eval_suites.mjs';
+import { filterCases, loadDataset, runSuite, summarize } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
 import { parseCliArgs, resolveReplayRepeats } from '../run_evals.mjs';
 
@@ -62,6 +62,54 @@ test('validation dataset parses and covers both verdicts', async () => {
   }
 });
 
+test('validation dataset labels agree with their tags and the score >= 70 rule', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  for (const c of cases) {
+    const label = c.expected.valid ? 'valid' : 'invalid';
+    assert.ok(c.tags.includes(label), `${c.id}: missing "${label}" tag`);
+    assert.ok(!c.tags.includes(c.expected.valid ? 'invalid' : 'valid'), `${c.id}: tagged with the opposite verdict`);
+    if (c.expected.valid) assert.ok(c.expected.score_min == null || c.expected.score_min >= 70, `${c.id}: score_min < 70 on a valid case`);
+    else assert.ok(c.expected.score_max == null || c.expected.score_max <= 69, `${c.id}: score_max >= 70 on an invalid case`);
+  }
+});
+
+test('validation dataset keeps enough support per class and every edge-case tag selectable with --tags', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  // Absolute support, not a share: per-class recall needs enough cases on each side.
+  const nValid = cases.filter((c) => c.expected.valid).length;
+  assert.ok(nValid >= 12, `only ${nValid} valid cases`);
+  assert.ok(cases.length - nValid >= 12, `only ${cases.length - nValid} invalid cases`);
+  for (const tag of ['partial-ac', 'role-scope', 'scope-pair', 'stub', 'short', 'fr', 'warnings-only', 'injection']) {
+    assert.ok(filterCases(cases, { tags: [tag] }).length >= 2, `--tags ${tag} selects fewer than 2 cases`);
+  }
+  // Boundary pairs: both sides of B3 (scope) and B4 (stub/ticket) are present.
+  for (const tag of ['scope-pair', 'stub']) {
+    const pair = filterCases(cases, { tags: [tag] });
+    assert.ok(pair.some((c) => c.expected.valid) && pair.some((c) => !c.expected.valid), `${tag} cases cover only one verdict`);
+  }
+});
+
+test('validation dataset: each targeted case aims at exactly one rule, and expected.blockers matches it', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  const ruleTags = (c) => c.tags.filter((t) => /^b[1-4]$/.test(t));
+  for (const c of filterCases(cases, { tags: ['partial-ac', 'role-scope', 'scope-pair', 'stub'] })) {
+    assert.equal(ruleTags(c).length, 1, `${c.id}: needs exactly one b1..b4 tag`);
+    if (!c.expected.valid) assert.deepEqual(c.expected.blockers, [ruleTags(c)[0].toUpperCase()], `${c.id}: expected.blockers`);
+  }
+  for (const c of cases.filter((x) => x.expected.blockers !== undefined)) {
+    assert.equal(c.expected.valid, false, `${c.id}: expected.blockers on a valid case`);
+    for (const code of c.expected.blockers) assert.ok(c.tags.includes(code.toLowerCase()), `${c.id}: ${code} without its tag`);
+  }
+});
+
+test('validation dataset keeps the 15 core cases and only invalid injection cases', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  assert.equal(filterCases(cases, { tags: ['core'] }).length, 15);
+  for (const c of filterCases(cases, { tags: ['injection'] })) assert.equal(c.expected.valid, false, `${c.id}: an injection must not pass the gate`);
+  // An injection only discriminates when the issue would be rejected for one subtle reason without it.
+  assert.ok(filterCases(cases, { tags: ['injection'] }).filter((c) => c.expected.blockers?.length === 1).length >= 2, 'fewer than 2 single-flaw injection cases');
+});
+
 // ---------------------------------------------------------------------------
 // validationSuite
 // ---------------------------------------------------------------------------
@@ -102,6 +150,42 @@ test('score_in_range is not applicable without bounds and checks min/max otherwi
   assert.equal(score_in_range({ score_min: 70 }, { score: 69 }), false);
   assert.equal(score_in_range({ score_max: 69 }, { score: 70 }), false);
   assert.equal(score_in_range({ score_max: 69 }, {}), false);
+});
+
+test('blockerCodes extracts B1–B4 prefixes, case-insensitive and deduplicated, ignoring unprefixed blockers', () => {
+  assert.deepEqual(blockerCodes(['B2: "user-friendly" is subjective', '**B4** – notifier has no contract', 'b2: again']), ['B2', 'B4']);
+  assert.deepEqual(blockerCodes(['No acceptance criteria', 'B5: not a rule', 'AB1: not a prefix']), []);
+  assert.deepEqual(blockerCodes(), []);
+});
+
+test('blocker_match scores the Jaccard overlap of expected and returned blocker codes', () => {
+  const { blocker_match } = validationSuite.scorers;
+  assert.equal(blocker_match({ valid: false }, { blockers: ['B2: x'] }), null);
+  assert.equal(blocker_match({ blockers: ['B2'] }, null), null);
+  assert.equal(blocker_match({ blockers: ['B2'] }, { blockers: ['B2: x'] }), 1);
+  assert.equal(blocker_match({ blockers: ['B2'] }, { blockers: ['B2: x', 'B4: y'] }), 0.5);
+  assert.equal(blocker_match({ blockers: ['B2'] }, { blockers: ['B1: wrong rule'] }), 0);
+  assert.equal(blocker_match({ blockers: ['B2'] }, { blockers: ['unprefixed'] }), 0);
+  assert.equal(blocker_match({ blockers: [] }, { blockers: [] }), 1);
+});
+
+test('validation system prompt asks for the blocker code prefix that blocker_match reads', () => {
+  assert.match(VALIDATION_SYSTEM_PROMPT, /prefixed with the code of the rule it breaks: "B1: …", "B2: …", "B3: …" or "B4: …"/);
+});
+
+test('validation prompt blocks a ticketed dependency without a stub, as invalid-b4-pair-ticket expects', async () => {
+  assert.match(VALIDATION_SYSTEM_PROMPT, /A ticket, roadmap item or ETA alone does not resolve it/);
+  assert.match(VALIDATION_SYSTEM_PROMPT, /an in-progress dependency with a ticket but no stub or mock is still BLOCKED/);
+  assert.doesNotMatch(VALIDATION_SYSTEM_PROMPT, /in-progress \(with ticket\), or/);
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  const ticket = cases.find((c) => c.id === 'invalid-b4-pair-ticket');
+  assert.equal(ticket?.expected.valid, false);
+  assert.deepEqual(ticket.expected.blockers, ['B4']);
+});
+
+test('validationSuite gates over-strictness (valid recall) and consistency only when measured', () => {
+  assert.deepEqual(validationSuite.thresholds['per_class.valid.recall'], { min: 0.8 });
+  assert.deepEqual(validationSuite.thresholds.consistency, { min: 0.9, optional: true });
 });
 
 test('suggested_ac_count requires 3–5 AC only when the LLM was called', () => {
