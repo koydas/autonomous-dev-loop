@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS, isDestructiveShrink, SHRINK_GUARD_MIN_LINES } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS, isDestructiveShrink, SHRINK_GUARD_MIN_LINES, GuardrailError } from '../lib/output_writer.mjs';
 
 // parseJsonResponse tests
 
@@ -463,7 +463,8 @@ for (const target of ['src/docs/helper.mjs', 'README.txt', 'notes/readme-draft.m
 
 // Shrink guard (ADR-0009, enforced in code)
 
-const lines = (n) => Array.from({ length: n }, (_, i) => `line ${i}`).join('\n');
+// Fixed-width lines, so half the lines is also half the content.
+const lines = (n) => Array.from({ length: n }, (_, i) => `line ${String(i).padStart(4, '0')}`).join('\n');
 
 test('isDestructiveShrink flags a large file cut by more than half, and only that', () => {
   assert.equal(isDestructiveShrink(lines(145), lines(9)), true, 'README incident: 145 → 9');
@@ -472,6 +473,25 @@ test('isDestructiveShrink flags a large file cut by more than half, and only tha
   assert.equal(isDestructiveShrink(lines(40), lines(60)), false, 'growth is allowed');
   assert.equal(isDestructiveShrink(lines(SHRINK_GUARD_MIN_LINES - 1), lines(1)), false, 'small files are exempt');
   assert.equal(isDestructiveShrink(lines(SHRINK_GUARD_MIN_LINES), lines(1)), true);
+});
+
+test('isDestructiveShrink also flags a rewrite that keeps the lines but drops the content', () => {
+  const paddedStub = `# Title\n${'\n'.repeat(140)}(existing content above unchanged)`;
+  assert.equal(isDestructiveShrink(lines(145), paddedStub), true, 'stub padded with blank lines');
+  const longLines = [...lines(23).split('\n'), 'x'.repeat(5000), 'y'.repeat(5000)].join('\n');
+  assert.equal(isDestructiveShrink(longLines, lines(25)), true, 'content held on a few long lines');
+  assert.equal(isDestructiveShrink(lines(40), ''), true, 'emptied file');
+  assert.equal(isDestructiveShrink(lines(40), lines(40).replace(/line/g, 'LINE')), false, 'same-size edit is allowed');
+});
+
+test('guardrail rejections are GuardrailError, malformed responses are not', async () => {
+  assert.throws(() => validateAiOutput(changeAt('README.md')), GuardrailError);
+  assert.throws(() => validateAiOutput(changeAt('../outside.mjs')), GuardrailError);
+  assert.throws(() => validateAiOutput({ summary: 's', changes: [] }), (err) => !(err instanceof GuardrailError));
+  await inTmpRepo(async (dir) => {
+    await fs.writeFile(path.join(dir, 'big.mjs'), lines(100));
+    await assert.rejects(writeGeneratedFiles([{ targetPath: 'big.mjs', fileContent: lines(10) }]), GuardrailError);
+  });
 });
 
 test('writeGeneratedFiles rejects a destructive rewrite and writes nothing from the batch', async () => {

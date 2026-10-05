@@ -12,6 +12,15 @@ export class JsonParseError extends Error {
   }
 }
 
+// A write the guardrails refuse (unsafe or protected path, symlink, destructive shrink), as opposed
+// to a malformed model response. Callers escalate it to a human instead of crashing.
+export class GuardrailError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'GuardrailError';
+  }
+}
+
 export function parseJsonResponse(raw) {
   const parseErrors = [];
 
@@ -94,9 +103,17 @@ function lineCount(text) {
   return text.split('\n').length;
 }
 
+// Non-whitespace characters: a stub padded with blank lines, or a file whose content sits on a
+// few long lines, loses its content mass even when the line count holds.
+function contentSize(text) {
+  return text.replace(/\s/g, '').length;
+}
+
 export function isDestructiveShrink(existingContent, nextContent) {
   const before = lineCount(existingContent);
-  return before >= SHRINK_GUARD_MIN_LINES && lineCount(nextContent) < before * SHRINK_GUARD_MAX_RATIO;
+  if (before < SHRINK_GUARD_MIN_LINES) return false;
+  return lineCount(nextContent) < before * SHRINK_GUARD_MAX_RATIO
+    || contentSize(nextContent) < contentSize(existingContent) * SHRINK_GUARD_MAX_RATIO;
 }
 
 function findProtectedPathEntry(targetPath) {
@@ -128,11 +145,11 @@ function validateSingleChange(change, index) {
     throw new Error(`AI response changes[${index}] missing non-empty file_content`);
   }
   if (targetPath.startsWith('/') || targetPath.includes('..')) {
-    throw new Error(`AI response changes[${index}] target_path must be a safe relative path`);
+    throw new GuardrailError(`AI response changes[${index}] target_path must be a safe relative path`);
   }
   const protectedEntry = findProtectedPathEntry(targetPath);
   if (protectedEntry) {
-    throw new Error(`AI response changes[${index}] target_path "${targetPath}" is in a protected path (${protectedEntry})`);
+    throw new GuardrailError(`AI response changes[${index}] target_path "${targetPath}" is in a protected path (${protectedEntry})`);
   }
   if (fileContent.length > MAX_FILE_CONTENT_LENGTH) {
     throw new Error(`AI response changes[${index}] file_content too large (>16000 chars)`);
@@ -181,10 +198,10 @@ async function nearestExistingRealPath(dir) {
 async function assertRealWriteTarget(targetPath, outputPath, repoRoot) {
   const relParent = path.relative(repoRoot, await nearestExistingRealPath(path.dirname(outputPath)));
   if (relParent === '..' || relParent.startsWith(`..${path.sep}`) || path.isAbsolute(relParent)) {
-    throw new Error(`target_path "${targetPath}" escapes the repository through a symlink`);
+    throw new GuardrailError(`target_path "${targetPath}" escapes the repository through a symlink`);
   }
   if (relParent.split(path.sep)[0] === '.git') {
-    throw new Error(`target_path "${targetPath}" resolves into git metadata through a symlink`);
+    throw new GuardrailError(`target_path "${targetPath}" resolves into git metadata through a symlink`);
   }
   let stat = null;
   try {
@@ -193,7 +210,7 @@ async function assertRealWriteTarget(targetPath, outputPath, repoRoot) {
     if (err.code !== 'ENOENT') throw err;
   }
   if (stat?.isSymbolicLink()) {
-    throw new Error(`target_path "${targetPath}" is a symlink; refusing to write through it`);
+    throw new GuardrailError(`target_path "${targetPath}" is a symlink; refusing to write through it`);
   }
 }
 
@@ -212,7 +229,7 @@ export async function writeGeneratedFiles(changes) {
       if (err.code !== 'ENOENT') throw err;
     }
     if (existingContent !== null && isDestructiveShrink(existingContent, fileContent)) {
-      throw new Error(`target_path "${targetPath}" would shrink from ${lineCount(existingContent)} to ${lineCount(fileContent)} lines (more than ${SHRINK_GUARD_MAX_RATIO * 100}% removed); rewrite rejected (ADR-0009)`);
+      throw new GuardrailError(`target_path "${targetPath}" would shrink from ${lineCount(existingContent)} to ${lineCount(fileContent)} lines (${contentSize(existingContent)} to ${contentSize(fileContent)} non-blank chars, more than ${SHRINK_GUARD_MAX_RATIO * 100}% removed); rewrite rejected (ADR-0009)`);
     }
   }
 

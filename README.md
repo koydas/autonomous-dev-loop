@@ -27,7 +27,7 @@ Prompts are advice; an LLM can ignore them. So the loop separates what it *asks*
 | PR code runs in a job holding **no secrets** (`contents: read`, no persisted credentials, credential-like env vars stripped) | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
 | Pipeline scripts, prompts and config always run from the **default branch** — a PR cannot rewrite the code that reviews it | [ADR-0023](docs/adr/0023-trusted-pipeline-execution.md) |
 | Write denylist: the model cannot touch `.github/`, `scripts/`, `prompts/`, `config/`, `docs/`, `README.md`, lockfiles, `.npmrc`, or escape via symlinks | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) |
-| A change that cuts an existing file of 20+ lines to under half its lines rejects the whole patch, before anything is written | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) (amendment), [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) |
+| A change that cuts an existing file of 20+ lines to under half its lines or its non-whitespace content rejects the whole patch, before anything is written; auto-fix escalates the rejection to `needs-human` | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) (amendment), [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) |
 | Max 6 files per run, no absolute paths, no `..`, 16 000 chars per file | [ADR-0003](docs/adr/0003-safe-output-scope.md) |
 | Max 3 auto-fix attempts, then escalation to a human; per-PR concurrency | [ADR-0006](docs/adr/0006-label-driven-auto-fix-trigger.md), [ADR-0020](docs/adr/0020-per-pr-workflow-concurrency.md) |
 | Under-specified issues never reach generation (validation gate, `ready-for-dev` label) | [ADR-0001](docs/adr/0001-trigger-policy-and-label-gate.md) |

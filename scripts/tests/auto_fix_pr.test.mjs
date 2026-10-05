@@ -277,6 +277,40 @@ test('auto_fix_pr surfaces an empty changes array to a human without pushing', a
   }
 });
 
+// A patch rejected by the denylist or the shrink guard escalates like a no-change run instead of
+// crashing the workflow without a label or a comment.
+test('auto_fix_pr escalates a guardrail-rejected patch to a human without writing or pushing', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-guard-'));
+  const server = await startMockServer(makeHandler({ llmResponse: validLLMJson('README.md') }));
+  const eventFile = await writeEventFile();
+  const outputFile = path.join(os.tmpdir(), `autofix-output-guard-${Date.now()}.txt`);
+  const metricsFile = path.join(os.tmpdir(), `autofix-metrics-guard-${Date.now()}.jsonl`);
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir, extraEnv: { GITHUB_OUTPUT: outputFile, METRICS_FILE: metricsFile } });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr, /"event":"autofix\.skipped","level":"warn"/);
+    assert.match(result.stderr, /"reason":"guardrail_rejected"/);
+    const applied = server.requests
+      .filter((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url))
+      .flatMap((r) => JSON.parse(r.body).labels);
+    assert.deepEqual(applied, ['auto-fix-attempt-1', 'needs-human'], 'attempt consumed and needs-human applied');
+    const comment = server.requests.find((r) => r.method === 'POST' && /\/issues\/\d+\/comments$/.test(r.url));
+    assert.match(JSON.parse(comment.body).body, /Patch Rejected[\s\S]*protected path \(README\.md\)/);
+    const metric = JSON.parse((await fs.readFile(metricsFile, 'utf8')).trim());
+    assert.equal(metric.reason, 'guardrail_rejected');
+    assert.equal(metric.attempt, 1);
+    const output = await fs.readFile(outputFile, 'utf8').catch(() => '');
+    assert.doesNotMatch(output, /fixed_paths/);
+    await assert.rejects(fs.access(path.join(tmpDir, 'README.md')), 'nothing written');
+  } finally {
+    await fs.unlink(outputFile).catch(() => {});
+    await fs.unlink(metricsFile).catch(() => {});
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
 test('auto_fix_pr falls back to automated review comment when review payload has no feedback', async () => {
   const commentsBody = JSON.stringify([
     { body: 'Random note' },

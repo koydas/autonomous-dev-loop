@@ -6,7 +6,7 @@ import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, GuardrailError } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
@@ -438,8 +438,8 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   throw new Error('AI response JSON must be an object');
 }
 
-// Reviewer and fixer disagree: surface it to a human, and count the attempt so re-triggers stay capped.
-if (hasNoProposedChanges(aiOutput)) {
+// Surface the run to a human and count the attempt so re-triggers stay capped. Exits 0 without a push.
+async function escalateToHuman(reason, heading, explanation, details) {
   await applyAttemptLabel(nextAttempt);
   const needsHuman = loadLabelsConfig('autofix').needs_human;
   const createNeedsHumanRes = await ghFetch(`/repos/${owner}/${repo}/labels`, { method: 'POST', body: JSON.stringify(needsHuman) });
@@ -448,27 +448,51 @@ if (hasNoProposedChanges(aiOutput)) {
   }
   const applyNeedsHumanRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, { method: 'POST', body: JSON.stringify({ labels: [needsHuman.name] }) });
   if (!applyNeedsHumanRes.ok) throw new Error(`Add label "${needsHuman.name}" failed: ${applyNeedsHumanRes.status}`);
-  const modelSummary = String(aiOutput.summary ?? '(no summary)').slice(0, 2000);
-  const noChangeRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+  const escalationRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({
-      body: `## \u{1F914} Auto-Fix: No Changes Proposed\n\nAttempt ${nextAttempt}/${MAX_ATTEMPTS}: the model proposed no change for the review feedback, so the reviewer and the fixer disagree. A human needs to decide (\`${needsHuman.name}\`).\n\n**Model summary:** ${modelSummary}`,
+      body: `## ${heading}\n\nAttempt ${nextAttempt}/${MAX_ATTEMPTS}: ${explanation} A human needs to decide (\`${needsHuman.name}\`).\n\n${details}`,
     }),
   });
-  if (!noChangeRes.ok) throw new Error(`No-change comment failed: ${noChangeRes.status}`);
+  if (!escalationRes.ok) throw new Error(`Escalation comment failed (${reason}): ${escalationRes.status}`);
   await appendMetric({
     type: 'autofix_skip',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-autofix-skip` : `local-${Date.now()}`,
     pr_number: prNumber,
     attempt: nextAttempt,
-    reason: 'no_changes',
+    reason,
     ts: new Date().toISOString(),
   });
-  await skipAutofix('no_changes', {}, 'warn');
+  await skipAutofix(reason, {}, 'warn');
 }
 
-const { summary, changes } = validateAiOutput(aiOutput);
-const outputPaths = await writeGeneratedFiles(changes);
+// Reviewer and fixer disagree.
+if (hasNoProposedChanges(aiOutput)) {
+  const modelSummary = String(aiOutput.summary ?? '(no summary)').slice(0, 2000);
+  await escalateToHuman(
+    'no_changes',
+    '\u{1F914} Auto-Fix: No Changes Proposed',
+    'the model proposed no change for the review feedback, so the reviewer and the fixer disagree.',
+    `**Model summary:** ${modelSummary}`,
+  );
+}
+
+// The write denylist or the shrink guard (ADR-0021, ADR-0009) rejected the patch before any write.
+let summary;
+let outputPaths;
+try {
+  const validated = validateAiOutput(aiOutput);
+  summary = validated.summary;
+  outputPaths = await writeGeneratedFiles(validated.changes);
+} catch (rejection) {
+  if (!(rejection instanceof GuardrailError)) throw rejection;
+  await escalateToHuman(
+    'guardrail_rejected',
+    '\u{1F6E1}\u{FE0F} Auto-Fix: Patch Rejected',
+    'the proposed patch was rejected by the output guardrails, so nothing was written or pushed.',
+    `**Reason:** ${String(rejection.message).slice(0, 2000)}`,
+  );
+}
 
 obsLog({ stage: 'autofix', event: 'autofix.push', level: 'info', duration_ms: Date.now() - autofixStartMs, meta: { paths: outputPaths, attempt: nextAttempt, prNumber } });
 
