@@ -85,8 +85,10 @@ export const validationSuite = {
 // review — pr_review.mjs prompt builder, verdict parser and decideVerdict (ADR-0024/0026/0028)
 // ---------------------------------------------------------------------------
 
-// A heading line: "### ✅ Summary" or a line that is bold only ("**🚀 Verdict**").
-const isHeading = (line) => /^\s*(?:#{1,6}\s|\*\*[^*]+\*\*:?\s*$)/.test(line);
+// A heading line: "### ✅ Summary", or a bold-only line naming a review section ("**🚀 Verdict**").
+// Other bold-only lines (a "**scripts/foo.mjs**" group inside Issues Found) do not end the section.
+const SECTION_TITLE = /Change Classification|Summary|Issues Found|Verdict/i;
+const isHeading = (line) => /^\s*#{1,6}\s/.test(line) || (/^\s*\*\*[^*]+\*\*:?\s*$/.test(line) && SECTION_TITLE.test(line));
 
 // Lines of the review whose section heading passes keep(heading); lines before any heading have heading ''.
 function filterSections(review, keep) {
@@ -116,9 +118,15 @@ export function matchesFlag(text, entry) {
 let reviewPrompts;
 const loadReviewPrompts = () => (reviewPrompts ??= { system: loadPrompt('pr-review-system'), user: loadPrompt('pr-review-user') });
 
-// Same budget as production: review_max_input_tokens on Groq, none (12,000-char diff cap) on Anthropic.
-function reviewInputBudget() {
-  return detectProvider() === 'anthropic' ? null : parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10);
+// Same budget as loadLLMConfig('review').maxInputTokens: review_max_input_tokens, else max_input_tokens, on Groq;
+// none (12,000-char diff cap) on Anthropic. Not loadLLMConfig itself: it requires an API key, which a replay has not.
+export function reviewInputBudget(defaults = GROQ_MODEL_DEFAULTS) {
+  if (detectProvider() === 'anthropic') return null;
+  const raw = defaults.review_max_input_tokens ?? defaults.max_input_tokens;
+  if (raw === undefined) return null;
+  const budget = parseInt(raw, 10);
+  if (isNaN(budget) || budget <= 0) throw new Error(`Invalid max_input_tokens for stage "review": ${raw} (must be a positive integer)`);
+  return budget;
 }
 
 export const reviewSuite = {
@@ -154,11 +162,19 @@ export const reviewSuite = {
 
   scorers: {
     verdict_match: (expected, output) => output?.verdict === expected.verdict,
-    // Right reason, not only the right verdict: share of must_flag entries the review mentions.
+    // Right reason, not only the right verdict: share of expected entries the review raises.
+    // must_flag is searched in Issues Found only (a Summary describing the diff is not a finding);
+    // must_note (e.g. the truncation note the prompt puts under the summary) in the whole review minus
+    // its classification section. An approving review raised nothing: 0.
     flags_issue: (expected, output) => {
-      if (!Array.isArray(expected.must_flag) || expected.must_flag.length === 0) return null;
-      const text = reviewFindingsText(output?.review);
-      return expected.must_flag.filter((entry) => matchesFlag(text, entry)).length / expected.must_flag.length;
+      const flags = Array.isArray(expected.must_flag) ? expected.must_flag : [];
+      const notes = Array.isArray(expected.must_note) ? expected.must_note : [];
+      if (flags.length + notes.length === 0) return null;
+      if (output?.llm_verdict !== 'REQUEST_CHANGES') return 0;
+      const issues = issuesSection(output.review);
+      const text = reviewFindingsText(output.review);
+      const hits = flags.filter((entry) => matchesFlag(issues, entry)).length + notes.filter((entry) => matchesFlag(text, entry)).length;
+      return hits / (flags.length + notes.length);
     },
     // Clean cases (expected APPROVE or WITHHELD): the model approved and raised no High/Medium finding.
     no_false_alarm: (expected, output) => {

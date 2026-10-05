@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag } from '../lib/eval_suites.mjs';
+import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag, reviewInputBudget } from '../lib/eval_suites.mjs';
 import { filterCases, loadDataset, runSuite, summarize, checkThresholds } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
@@ -378,7 +378,11 @@ const reviewText = ({ verdict, issues = [], summary = 'Changes X.' }) => [
 // Oracle reviewer: approves the clean cases, requests changes with every must_flag keyword otherwise.
 // For an evidence case the LLM verdict differs from the final one (WITHHELD comes from an approval).
 const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
-  ? reviewText({ verdict: 'REQUEST_CHANGES', issues: (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: x Lines: 1 Root cause: r Fix: f`) })
+  ? reviewText({
+    verdict: 'REQUEST_CHANGES',
+    summary: ['Changes X.', ...(c.expected.must_note ?? []).map((n) => `Note: ${n.split('|')[0]}.`)].join('\n'),
+    issues: (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: x Lines: 1 Root cause: r Fix: f`),
+  })
   : reviewText({ verdict: 'APPROVED' }));
 
 // Runs reviewSuite.run with a stub LLM; returns the output (or error) and the captured request.
@@ -414,10 +418,11 @@ test('review dataset parses, labels every case with a pipeline verdict and its t
     const label = c.expected.verdict.toLowerCase();
     assert.ok(c.tags.includes(label), `${c.id}: missing "${label}" tag`);
     for (const other of REVIEW_VERDICTS.map((v) => v.toLowerCase()).filter((v) => v !== label)) assert.ok(!c.tags.includes(other), `${c.id}: tagged ${other}`);
-    if (c.expected.must_flag !== undefined) {
-      assert.equal(c.expected.verdict, 'REQUEST_CHANGES', `${c.id}: must_flag on a case that should not raise findings`);
-      assert.ok(Array.isArray(c.expected.must_flag) && c.expected.must_flag.length > 0, `${c.id}: must_flag`);
-      for (const entry of c.expected.must_flag) assert.ok(entry.split('|').every((k) => k.trim()), `${c.id}: empty keyword in "${entry}"`);
+    for (const key of ['must_flag', 'must_note']) {
+      if (c.expected[key] === undefined) continue;
+      assert.equal(c.expected.verdict, 'REQUEST_CHANGES', `${c.id}: ${key} on a case that should not raise findings`);
+      assert.ok(Array.isArray(c.expected[key]) && c.expected[key].length > 0, `${c.id}: ${key}`);
+      for (const entry of c.expected[key]) assert.ok(entry.split('|').every((k) => k.trim()), `${c.id}: empty keyword in "${entry}"`);
     }
   }
 });
@@ -469,7 +474,7 @@ test('review dataset: only truncated cases overflow the production budget, every
     const { request } = await runReview(c.input);
     assert.match(request.prompt, /- diff_truncated: true/);
     assert.match(request.prompt, /headers\.get\('retry-after'\)\.trim\(\)/);
-    assert.ok(c.expected.must_flag.some((f) => f.includes('truncat')), `${c.id}: must_flag the truncation`);
+    assert.ok(c.expected.must_note?.some((f) => f.includes('truncat')), `${c.id}: must_note the truncation`);
   }
 });
 
@@ -595,11 +600,54 @@ test('flags_issue scores the share of must_flag entries the review mentions, out
   const review = reviewText({ verdict: 'REQUEST_CHANGES', issues: ['[High] Shell injection via execSync'] });
   assert.equal(flags_issue({ verdict: 'APPROVE' }, { review }), null);
   assert.equal(flags_issue({ verdict: 'REQUEST_CHANGES', must_flag: [] }, { review }), null);
-  assert.equal(flags_issue({ must_flag: ['inject|execfilesync'] }, { review }), 1);
-  assert.equal(flags_issue({ must_flag: ['inject', 'truncat|partial'] }, { review }), 0.5);
+  const rc = { llm_verdict: 'REQUEST_CHANGES', review };
+  assert.equal(flags_issue({ must_flag: ['inject|execfilesync'] }, rc), 1);
+  assert.equal(flags_issue({ must_flag: ['inject', 'truncat|partial'] }, rc), 0.5);
   // "Tests expected: yes" in the classification section is not a test finding.
-  assert.equal(flags_issue({ must_flag: ['test'] }, { review }), 0);
+  assert.equal(flags_issue({ must_flag: ['test'] }, rc), 0);
   assert.equal(flags_issue({ must_flag: ['inject'] }, null), 0);
+});
+
+test('flags_issue ignores a Summary that only describes the diff, and an approving review (#177 review)', () => {
+  const { flags_issue } = reviewSuite.scorers;
+  const summary = 'Replaces the for loop with recipients.forEach(async …)';
+  const approved = reviewText({ verdict: 'APPROVED', summary });
+  assert.equal(flags_issue({ must_flag: ['foreach'] }, { llm_verdict: 'APPROVED', review: approved }), 0);
+  // Same keyword in the Summary of a rejection for another reason: still not this finding.
+  const other = reviewText({ verdict: 'REQUEST_CHANGES', summary, issues: ['[Medium] Missing docs'] });
+  assert.equal(flags_issue({ must_flag: ['foreach'] }, { llm_verdict: 'REQUEST_CHANGES', review: other }), 0);
+  const found = reviewText({ verdict: 'REQUEST_CHANGES', summary, issues: ['[High] forEach does not await the sends'] });
+  assert.equal(flags_issue({ must_flag: ['foreach'] }, { llm_verdict: 'REQUEST_CHANGES', review: found }), 1);
+});
+
+test('flags_issue reads must_note outside the classification section, e.g. the truncation note under the summary', () => {
+  const { flags_issue } = reviewSuite.scorers;
+  const review = reviewText({ verdict: 'REQUEST_CHANGES', summary: 'Adds X.\nNote: the diff is truncated.', issues: ['[High] null header'] });
+  const out = { llm_verdict: 'REQUEST_CHANGES', review };
+  assert.equal(flags_issue({ must_flag: ['null'], must_note: ['truncat'] }, out), 1);
+  assert.equal(flags_issue({ must_note: ['truncat|partial'] }, out), 1);
+  assert.equal(flags_issue({ must_flag: ['truncat'] }, out), 0, 'a note is not a finding');
+  assert.equal(flags_issue({ must_note: ['tests expected'] }, out), 0, 'the classification section never counts');
+  assert.equal(flags_issue({ must_note: ['truncat'] }, { llm_verdict: 'APPROVED', review }), 0);
+});
+
+test('findingSeverities keeps reading Issues Found past a bold-only file group line (#177 review)', () => {
+  const review = ['### ⚠️ Issues Found', '**scripts/foo.mjs**', '- [High] a', '**Fix:**', '- [Medium] b', '**🚀 Verdict**', 'REQUEST_CHANGES'].join('\n');
+  assert.deepEqual(findingSeverities(review), ['high', 'medium']);
+  const { no_false_alarm } = reviewSuite.scorers;
+  assert.equal(no_false_alarm({ verdict: 'APPROVE' }, { llm_verdict: 'APPROVED', review }), false);
+});
+
+test('reviewInputBudget mirrors loadLLMConfig: stage key, then max_input_tokens, validated; none on Anthropic', async () => {
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined }, () => {
+    assert.equal(reviewInputBudget(), parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10));
+    assert.equal(reviewInputBudget({ review_max_input_tokens: '5000', max_input_tokens: '4000' }), 5000);
+    assert.equal(reviewInputBudget({ max_input_tokens: '4000' }), 4000);
+    assert.equal(reviewInputBudget({}), null);
+    assert.throws(() => reviewInputBudget({ review_max_input_tokens: 'abc' }), /Invalid max_input_tokens for stage "review": abc/);
+    assert.throws(() => reviewInputBudget({ review_max_input_tokens: '0' }), /must be a positive integer/);
+  });
+  await withEnv({ AI_PROVIDER: 'anthropic' }, () => assert.equal(reviewInputBudget({ review_max_input_tokens: 'abc' }), null));
 });
 
 test('no_false_alarm applies to clean cases: approved with no High or Medium finding', () => {
