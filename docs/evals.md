@@ -10,6 +10,7 @@ Unit/smoke tests prove the wiring with a mocked LLM; evals measure the quality o
 npm run eval -- --suite validation
 npm run eval -- --suite validation --repeats 3          # + consistency
 npm run eval -- --suite validation --tags b3,b4 --limit 5
+npm run eval -- --suite review --repeats 3              # PR review stage, ≈ 11 min per repeat on Groq free tier
 
 # Re-score a recorded run, no LLM call (parser / scorer changes)
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json
@@ -68,11 +69,33 @@ Rules:
 | `latency_ms.{p50,p95}` | Per run, including retries |
 | `llm_calls`, `tokens_est` | Call count and chars/4 token estimates |
 
+### `validation`
+
 `validation` thresholds: `scores.verdict_match.mean ≥ 0.8`, `per_class.invalid.recall ≥ 0.8`, `per_class.valid.recall ≥ 0.8` (over-strictness), `consistency ≥ 0.9` (only with `--repeats > 1`), `error_rate ≤ 0.05`.
 
 `validation` scorers: `verdict_match`, `score_in_range` (cases with `score_min`/`score_max`), `suggested_ac_count`, and `blocker_match`. `blocker_match` is the Jaccard overlap between `expected.blockers` and the `B1`–`B4` codes the model prefixes its blockers with. It applies only to cases with `expected.blockers` and is not gated.
 
 Dataset tags: `core` marks the original 15 cases, so `--tags core` compares with runs from before the dataset grew. The edge-case tags are `partial-ac`, `role-scope`, `scope-pair`, `stub` (B4 minimal pair), `short`, `fr`, `warnings-only` and `injection`.
+
+### `review`
+
+`run` goes through the production code of `scripts/pr_review.mjs`: `buildReviewPrompt` (diff filter, classification / automation-gate / dependency / evidence contexts, token budget) and `parseReviewVerdict` from `scripts/lib/review_prompt.mjs`, then `decideVerdict` (ADR-0024/0026). The label is the **final pipeline verdict**: `approve`, `request_changes` or `withheld`.
+
+- Dataset (`evals/datasets/review.jsonl`, 23 cases: 14 `request_changes`, 8 `approve`, 1 `withheld`): `{ id, tags, input: { title, body, diff, dependencies?, evidence?, head_sha? }, expected: { verdict, must_flag?, must_note? } }`. `dependencies` replaces the target repo's `package.json` (dependency manifest context). `evidence` is an evidence file as written by `run_review_evidence.mjs`; a case without it is a repository that has not opted in, so missing evidence does not withhold an approval.
+- Cases: real bugs (`off-by-one`, `null`, `shell-injection` via `execSync`, `deleted-test`, `undeclared-import`, the prompt's named checks, an unawaited `forEach`, `missing-tests`), unrequested docs deletion, minimal `pair`s (same issue, buggy vs clean diff), clean `docs` and `test-only` diffs (`tests_expected: false` per `change_classifier`), a complete `automation` change (tests + docs + c8 gate), `injection` in the PR body and in a code comment, `evidence` (pass, fail, timeout) and a `truncated` diff whose bug stays visible.
+- A review without a verdict line is an **errored run** (`error_rate`), not a `REQUEST_CHANGES`: production fails closed, but counting it as a rejection would inflate `request_changes` recall.
+
+| Scorer | Applies to | Meaning |
+|---|---|---|
+| `verdict_match` | all | Final verdict = `expected.verdict` |
+| `flags_issue` | cases with `must_flag` / `must_note` | Share of entries the review raises. `must_flag` is searched in the Issues Found section only (a Summary that describes the diff is not a finding); `must_note` (the truncation note the prompt puts under the summary) anywhere outside the Change Classification section. An approving review scores 0. An entry is `"a\|b\|c"`: any alternative, case-insensitive substring. Not gated |
+| `no_false_alarm` | expected `APPROVE` / `WITHHELD` | The model approved and listed no `[High]` / `[Medium]` finding in Issues Found. Not gated |
+
+`review` thresholds: `scores.verdict_match.mean ≥ 0.75`, `per_class.request_changes.recall ≥ 0.8` (a missed bug reaches the merge gate unflagged), `per_class.approve.recall ≥ 0.6` (over-severity: a false `REQUEST_CHANGES` starts auto-fix on a correct PR; support 8, one case ≈ 12 points), `consistency ≥ 0.8` (only with `--repeats > 1`; looser than `validation` because `review_temperature` is 0.6), `error_rate ≤ 0.05`.
+
+**Duration and tokens.** Each prompt is fitted to `review_max_input_tokens` (6300 estimated tokens; × 1.10 + `review_max_tokens` 1024 = 7954 ≤ 8000 TPM), exactly like production. The dataset averages ≈ 2.9k estimated input tokens per call (system prompt ≈ 1.9k); the `truncated` case sits at the budget. One repeat ≈ 66k input + ≤ 24k output tokens. On the Groq free tier (8K TPM, `--concurrency 1`, TPM is the bottleneck) that is **≈ 11–12 min per repeat, ≈ 35–40 min for the default `--repeats 3`** with the 60 s rate-limit waits; worst case (every call at the budget, TPM shared with live pipeline runs) ≈ 70 min, inside the 120 min job timeout. Anthropic has no budget: the diff keeps the 12,000-char cap.
+
+**Replay fixture.** `scripts/tests/fixtures/review-replay.json` holds hand-written model outputs in the production format (`<think>` block, bold and inline verdict headings) with four planted failures: a truncated review without verdict, a missed bug, an over-severe docs review and a right verdict for the wrong reason. `eval_suites.test.mjs` replays it through `run_evals.mjs` and pins the resulting metrics. Adding a case to the dataset means adding its recorded output to the fixture.
 
 ## Extend
 
@@ -80,13 +103,13 @@ Dataset tags: `core` marks the original 15 cases, so `--tags core` compares with
 
 **Add a scorer** — one entry in the suite's `scorers`: `(expected, output, { error, calls }) → 0..1 | boolean | null`. It shows up in the summary and the report automatically, and can be gated in `thresholds` as `scores.<name>.mean`. A threshold marked `optional: true` is skipped when the run did not measure the metric (e.g. `consistency` with `--repeats 1`) instead of failing.
 
-**Add a suite** (new stage) — add an object to `SUITES` in `scripts/lib/eval_suites.mjs`:
+**Add a suite** (new stage) — add an object to `SUITES` in `scripts/lib/eval_suites.mjs`, and the name to the `suite` choice in `.github/workflows/evals.yml` (`workflow_gates.test.mjs` checks both lists match):
 
 ```js
-export const reviewSuite = {
-  name: 'review',
-  stage: 'review',                          // loadLLMConfig stage
-  dataset: 'evals/datasets/review.jsonl',
+export const autofixSuite = {
+  name: 'autofix',
+  stage: 'autofix',                         // loadLLMConfig stage
+  dataset: 'evals/datasets/autofix.jsonl',
   run: async (input, { llm }) => { /* call the stage's production logic with llm */ },
   scorers: { /* ... */ },
   label: (output) => output.verdict,        // optional: confusion matrix + consistency
@@ -95,12 +118,13 @@ export const reviewSuite = {
 };
 ```
 
-`run` must go through the stage's production code (prompt builder + parser), not a copy, so parser regressions are caught. Add a test in `scripts/tests/eval_suites.test.mjs`.
+`run` must go through the stage's production code (prompt builder + parser), not a copy, so parser regressions are caught. When an entrypoint script keeps that logic inline (`pr_review.mjs` did), extract it to `scripts/lib/` first, as `review_prompt.mjs` was. Add a test in `scripts/tests/eval_suites.test.mjs`. The dashboard needs no change: it renders one section, badge (`badges/<suite>.json`) and trend per suite.
 
 ## Tests and coverage
 
 - `scripts/lib/eval_harness.mjs`, `scripts/lib/eval_scorecard.mjs`, `scripts/lib/eval_site.mjs` and `scripts/lib/eval_suites.mjs` are under the CI-enforced **80% minimum coverage** gate (`c8 --check-coverage --lines 80 --branches 80 --functions 80 --statements 80` in `.github/workflows/test.yml`), each measured with its own test file.
 - `scripts/run_evals.mjs` is exercised end to end in replay mode by `eval_suites.test.mjs` (thresholds, repeats, filtered runs, dataset hash). `scripts/build_eval_site.mjs` is covered by `build_eval_site.test.mjs`: history read from a stubbed site (404, errors, invalid format), history window pruning, outage skipping, and the CLI.
+- `scripts/lib/review_prompt.mjs` (review prompt builder and verdict parser, shared with `pr_review.mjs`) is under the same c8 gate, measured with `review_prompt.test.mjs`; `pr_review.test.mjs` and `entrypoints.test.mjs` still exercise it end to end through the script.
 - The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR.
 
 ## Results file

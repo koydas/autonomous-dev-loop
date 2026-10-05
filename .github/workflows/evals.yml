@@ -9,9 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: Eval suite (see scripts/lib/eval_suites.mjs)
+        description: Eval suite (see scripts/lib/eval_suites.mjs). review ≈ 11 min per repeat on the Groq free tier
+        type: choice
         required: true
         default: validation
+        options:
+          - validation
+          - review
       repeats:
         description: Runs per case (>1 measures consistency)
         required: true

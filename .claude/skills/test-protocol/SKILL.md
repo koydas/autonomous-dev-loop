@@ -48,6 +48,7 @@ Modules with CI-enforced ≥ 80% coverage (`c8 --check-coverage` in `test.yml`):
 - `scripts/lib/eval_scorecard.mjs`
 - `scripts/lib/eval_site.mjs`
 - `scripts/lib/eval_suites.mjs`
+- `scripts/lib/review_prompt.mjs`
 
 Specific required paths for `scripts/lib/prompts.mjs`:
 - `loadPrompt`: file exists + non-empty (happy path), file-not-found (`Prompt file not found` error with path), empty file (`Prompt file is empty` error with path)

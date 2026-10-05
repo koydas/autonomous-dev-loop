@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs'];
 
 test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
@@ -341,4 +341,13 @@ test('evals.yml keeps write access out of the eval job and publishes from the de
   assert.doesNotMatch(publishJob, /contents: write|pull-requests: write/);
   assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && inputs\.publish && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
   assert.doesNotMatch(publishJob, /secrets\./, 'the publish job must not receive LLM API keys');
+});
+
+test('evals.yml offers exactly the registered eval suites as a choice', async () => {
+  const { SUITES } = await import('../lib/eval_suites.mjs');
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
+  const suite = text.slice(text.indexOf('      suite:'), text.indexOf('      repeats:'));
+  assert.match(suite, /type: choice/);
+  const options = [...suite.slice(suite.indexOf('options:')).matchAll(/^\s+- (\S+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(options, Object.keys(SUITES));
 });

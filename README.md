@@ -3,6 +3,7 @@
 [![Tests](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml/badge.svg)](https://github.com/koydas/autonomous-dev-loop/actions/workflows/test.yml)
 [![Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml/badge.svg)](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml)
 [![validation eval](https://img.shields.io/endpoint?url=https://koydas.github.io/autonomous-dev-loop/badges/validation.json)](https://koydas.github.io/autonomous-dev-loop/)
+[![review eval](https://img.shields.io/endpoint?url=https://koydas.github.io/autonomous-dev-loop/badges/review.json)](https://koydas.github.io/autonomous-dev-loop/)
 
 **An AI dev loop that isn't allowed to wreck your repo.**
 
@@ -113,18 +114,21 @@ Tests mock the LLM to prove the wiring; evals call the real model on a fixed, la
 | Suite | Stage | Dataset | Gate (exit 1 below) |
 |---|---|---|---|
 | `validation` | Issue validation | [35 issues](evals/datasets/validation.jsonl) — 15 `core` (valid + each blocker B1–B4) and edge cases: partial AC, scope and B4 minimal pairs, short/French, warnings only, prompt injection | verdict accuracy ≥ 0.8 · `invalid` and `valid` recall ≥ 0.8 · consistency ≥ 0.9 (with `--repeats > 1`) · error rate ≤ 0.05 |
+| `review` | PR review (prompt builder, verdict parser and evidence decision of `pr_review.mjs`) | [23 PR diffs](evals/datasets/review.jsonl) — real bugs (off-by-one, unhandled null, shell injection via `execSync`, deleted tests, undeclared import, …), buggy/clean minimal pairs, docs-only and test-only diffs, prompt injection, tool evidence (pass/fail/timeout), truncated diff | final verdict accuracy ≥ 0.75 · `request_changes` recall ≥ 0.8 · `approve` recall ≥ 0.6 · consistency ≥ 0.8 (with `--repeats > 1`) · error rate ≤ 0.05 |
 
 ```bash
 npm run eval -- --suite validation --repeats 3     # live, needs GROQ_API_KEY or ANTHROPIC_API_KEY
 npm run eval -- --suite validation --repeats 3 --scorecard   # + local dashboard preview in evals/site/
+npm run eval -- --suite review --repeats 3         # ≈ 35–40 min on the Groq free tier (8K TPM)
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json   # re-score, no LLM call
 ```
 
 ### Latest results
 
 [![validation eval](https://img.shields.io/endpoint?url=https://koydas.github.io/autonomous-dev-loop/badges/validation.json)](https://koydas.github.io/autonomous-dev-loop/)
+[![review eval](https://img.shields.io/endpoint?url=https://koydas.github.io/autonomous-dev-loop/badges/review.json)](https://koydas.github.io/autonomous-dev-loop/)
 
-**[Eval dashboard →](https://koydas.github.io/autonomous-dev-loop/)** Per suite: the gate and its thresholds, the latest metrics with Δ against the previous run on the same dataset, a trend chart and the last 10 runs. Per run: the confusion matrix, per-class precision/recall/F1, and every case with its expected and predicted verdict, scores, latency and the raw model output. The badge above reads the dashboard live.
+**[Eval dashboard →](https://koydas.github.io/autonomous-dev-loop/)** Per suite: the gate and its thresholds, the latest metrics with Δ against the previous run on the same dataset, a trend chart and the last 10 runs. Per run: the confusion matrix, per-class precision/recall/F1, and every case with its expected and predicted verdict, scores, latency and the raw model output. The badges above read the dashboard live.
 
 Each run prints a Markdown report (metrics, threshold failures, failing cases), writes the full replayable results to `evals/results/`, and appends a summary to `evals/history.jsonl`. In CI: **Actions → [Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml) → Run workflow** — the report lands on the run's summary page, results in the artifacts, and a run on `main` is added to the [eval dashboard](https://koydas.github.io/autonomous-dev-loop/) (GitHub Pages), with nothing committed.
 

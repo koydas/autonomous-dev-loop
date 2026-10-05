@@ -104,3 +104,20 @@ Consequences:
 - ⚠️ `consistency` is gated only on runs with `--repeats > 1`. The Evals workflow defaults to `repeats: 3` (ADR-0028 amendment), so CI runs are gated; a local `--repeats 1` run skips it.
 - ⚠️ `blocker_match` depends on the model following the prefix instruction. A blocker without a code counts as a miss.
 
+## Amendment (2026-10-05): `review` suite
+
+The review stage decides what reaches the human merge gate and what starts auto-fix, and it had no offline measure.
+
+- **Production path.** The prompt builder and verdict parser lived inline in `scripts/pr_review.mjs` (an entrypoint with top-level side effects, not importable). They move unchanged to `scripts/lib/review_prompt.mjs` (`buildReviewPrompt`, `parseReviewVerdict`); `pr_review.mjs` calls them. No exported signature changes. The suite then applies `decideVerdict` (ADR-0024/0026) with the case's evidence, and fits the prompt to `review_max_input_tokens` like production (ADR-0028).
+- **Label = final pipeline verdict** (`approve` / `request_changes` / `withheld`), not the model's raw verdict: what the pipeline acts on. Evidence cases (pass, fail, timeout) check the prompt + `decideVerdict` wiring; their final verdict is partly decided in code.
+- **Dataset:** 23 diffs (14 / 8 / 1). Real bugs, minimal buggy/clean pairs, docs-only and test-only diffs, an automation change that satisfies the prompt's three gates, prompt injection (PR body, code comment) and a truncated diff whose bug stays visible. Labels follow `prompts/pr-review-system.md`: an automation change without tests, docs and a coverage gate is a `REQUEST_CHANGES` by that prompt's rules, so most code cases sit outside the automation scope to keep the verdict about the bug.
+- **Scorers:** `verdict_match`, `flags_issue` (right reason: share of `must_flag` keywords found in Issues Found, plus `must_note` keywords anywhere outside the classification section; 0 when the model approved) and `no_false_alarm` (clean cases: approved without High/Medium findings). The last two are reported, not gated, like `blocker_match`.
+- **Gate:** `verdict_match ≥ 0.75`, `request_changes` recall ≥ 0.8, and, following the over-strictness gate of the `validation` amendment, `approve` recall ≥ 0.6. `consistency ≥ 0.8` is optional (temperature 0.6). `error_rate ≤ 0.05`; a review without a verdict line counts as an error, not as a fail-closed rejection.
+- **Cost:** ≈ 66k estimated input tokens per repeat (≈ 2.9k per call); ≈ 11–12 min per repeat at 8K TPM with concurrency 1, ≈ 35–40 min for the workflow default of 3 repeats.
+
+Consequences:
+- ✅ A prompt or model change to the reviewer is compared on fixed diffs, through the same builder and parser as production; a parser regression shows in `error_rate`.
+- ✅ The dashboard and the Evals workflow handle several suites without change; the workflow input becomes a `choice` checked against the registry.
+- ⚠️ Support is small (8 `approve`, one case ≈ 12 points): thresholds are a starting point until a baseline exists.
+- ⚠️ `flags_issue` is a keyword match: a finding phrased without any listed keyword scores 0. Broad keywords (`test`, `null`, `fail`) are to be tightened against the first live baseline.
+- ⚠️ The replay fixture is hand-written, not recorded from a live run; replace it with a recorded run once one exists.

@@ -182,3 +182,46 @@ test('buildSite on an empty scorecard still produces a valid site', () => {
   const files = buildSite({ scorecard: emptyScorecard() });
   assert.deepEqual(Object.keys(files).sort(), ['.nojekyll', 'index.html', 'scorecard.json', 'scorecard.md']);
 });
+
+function reviewResults({ runId = 'rv1', ts = '2026-10-05T10:00:00.000Z' } = {}) {
+  const r = results({ runId, ts });
+  r.meta = { ...r.meta, suite: 'review', dataset: 'evals/datasets/review.jsonl' };
+  r.summary = {
+    ...r.summary,
+    scores: { verdict_match: { mean: 0.87, n: 69 }, flags_issue: { mean: 0.86, n: 42 }, no_false_alarm: { mean: 0.78, n: 27 } },
+    confusion: { request_changes: { request_changes: 39, approve: 3 }, approve: { approve: 18, request_changes: 6 }, withheld: { withheld: 3 } },
+    per_class: {
+      request_changes: { precision: 0.87, recall: 0.93, f1: 0.9, support: 42 },
+      approve: { precision: 0.86, recall: 0.75, f1: 0.8, support: 24 },
+      withheld: { precision: 1, recall: 1, f1: 1, support: 3 },
+    },
+  };
+  return r;
+}
+
+test('renderIndex and buildSite show several suites, each with its own gate, tiles, trend and badge', () => {
+  const sc = scorecardOf(results({ runId: 'v1' }), reviewResults({ runId: 'rv0', ts: '2026-10-04T10:00:00Z' }), reviewResults({ runId: 'rv1' }));
+  const thresholds = {
+    validation: { 'per_class.invalid.recall': { min: 0.8 } },
+    review: { 'per_class.request_changes.recall': { min: 0.8 }, 'per_class.approve.recall': { min: 0.6 } },
+  };
+  const html = renderIndex(sc, { thresholds });
+  assert.match(html, /<h2><code>validation<\/code>/);
+  assert.match(html, /<h2><code>review<\/code>/);
+  assert.ok(html.indexOf('<code>validation</code>') < html.indexOf('<code>review</code>'), 'suites keep registry/insertion order');
+  assert.match(html, /<code>per_class\.request_changes\.recall<\/code><\/td><td>≥ 0\.8<\/td><td class="num">0\.93<\/td><td><span class="ok">✓ pass/);
+  assert.match(html, /<code>per_class\.approve\.recall<\/code><\/td><td>≥ 0\.6<\/td><td class="num">0\.75<\/td>/);
+  assert.match(html, /withheld recall<\/div>/);
+  assert.match(html, /id="trend-review"/);
+  // The validation section has a single run: no trend chart id clash and no review threshold leaks into it.
+  const validationSection = html.slice(html.indexOf('<code>validation</code>'), html.indexOf('<h2><code>review</code>'));
+  assert.doesNotMatch(validationSection, /request_changes/);
+
+  const files = buildSite({ scorecard: sc, details: { v1: results({ runId: 'v1' }), rv1: reviewResults() }, thresholds });
+  assert.equal(JSON.parse(files['badges/review.json']).label, 'eval review');
+  assert.match(JSON.parse(files['badges/review.json']).message, /^verdict match 0\.87/);
+  assert.ok(files['badges/validation.json']);
+  assert.match(files['runs/rv1.html'], /<code>review<\/code>/);
+  assert.match(files['runs/rv1.html'], /<th class="num">withheld<\/th>/);
+  assert.ok(files['runs/v1.html']);
+});

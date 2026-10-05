@@ -6,9 +6,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SUITES, validationSuite, blockerCodes } from '../lib/eval_suites.mjs';
-import { filterCases, loadDataset, runSuite, summarize } from '../lib/eval_harness.mjs';
+import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag, reviewInputBudget } from '../lib/eval_suites.mjs';
+import { filterCases, loadDataset, runSuite, summarize, checkThresholds } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
+import { loadPrompt } from '../lib/prompts.mjs';
+import { buildChangeClassificationContext } from '../lib/change_classifier.mjs';
+import { parseEvidence } from '../lib/review_evidence.mjs';
+import { GROQ_MODEL_DEFAULTS } from '../lib/config.mjs';
+import { estimateTokens } from '../lib/metrics.mjs';
 import { parseCliArgs, resolveReplayRepeats } from '../run_evals.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -354,4 +359,374 @@ test('run_evals records the dataset content hash in the results meta', async () 
   const { createHash } = await import('node:crypto');
   const expected = createHash('sha256').update(await fs.readFile(path.join(REPO_ROOT, validationSuite.dataset))).digest('hex');
   assert.equal(saved.meta.dataset_sha256, expected);
+});
+
+// ---------------------------------------------------------------------------
+// reviewSuite
+// ---------------------------------------------------------------------------
+
+const REVIEW_FIXTURE = path.join(REPO_ROOT, 'scripts', 'tests', 'fixtures', 'review-replay.json');
+const REVIEW_VERDICTS = ['APPROVE', 'REQUEST_CHANGES', 'WITHHELD'];
+const loadReviewCases = () => loadDataset(path.join(REPO_ROOT, reviewSuite.dataset));
+
+const reviewText = ({ verdict, issues = [], summary = 'Changes X.' }) => [
+  '## 🔍 Automated Code Review', '', '### 🏷️ Change Classification', 'Type: feature | Tests expected: yes — code changes', '',
+  '### ✅ Summary', summary, '', '### ⚠️ Issues Found', issues.length ? issues.map((i) => `- ${i}`).join('\n') : 'None.', '',
+  '### 🚀 Verdict', verdict,
+].join('\n');
+
+// Oracle reviewer: approves the clean cases, requests changes with every must_flag keyword otherwise.
+// For an evidence case the LLM verdict differs from the final one (WITHHELD comes from an approval).
+const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
+  ? reviewText({
+    verdict: 'REQUEST_CHANGES',
+    summary: ['Changes X.', ...(c.expected.must_note ?? []).map((n) => `Note: ${n.split('|')[0]}.`)].join('\n'),
+    issues: (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: x Lines: 1 Root cause: r Fix: f`),
+  })
+  : reviewText({ verdict: 'APPROVED' }));
+
+// Runs reviewSuite.run with a stub LLM; returns the output (or error) and the captured request.
+async function runReview(input, raw = reviewText({ verdict: 'APPROVED' })) {
+  let request;
+  try {
+    const output = await reviewSuite.run(input, { llm: async (args) => { request = args; return raw; } });
+    return { output, request };
+  } catch (error) {
+    return { error, request };
+  }
+}
+
+function withEnv(vars, fn) {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  for (const [k, v] of Object.entries(vars)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  const restore = () => { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  return Promise.resolve().then(fn).finally(restore);
+}
+
+const SMALL_DIFF = 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1 @@\n-const a = 1;\n+const a = 2;\n';
+const passingEvidence = (status = 'pass', headSha = 'abc1234') => ({
+  version: 1, head_sha: headSha, checks: [{ name: 'tests', command: 'npm test', status, exit_code: status === 'pass' ? 0 : 1, output_tail: status === 'fail' ? 'not ok 1 - boom' : '' }],
+});
+
+test('review dataset parses, labels every case with a pipeline verdict and its tag', async () => {
+  const cases = await loadReviewCases();
+  assert.ok(cases.length >= 20, `only ${cases.length} cases`);
+  for (const c of cases) {
+    for (const field of ['title', 'body', 'diff']) assert.equal(typeof c.input[field], 'string', `${c.id}: input.${field}`);
+    assert.match(c.input.diff, /^diff --git a\//, `${c.id}: input.diff is not a unified diff`);
+    assert.ok(REVIEW_VERDICTS.includes(c.expected.verdict), `${c.id}: expected.verdict`);
+    const label = c.expected.verdict.toLowerCase();
+    assert.ok(c.tags.includes(label), `${c.id}: missing "${label}" tag`);
+    for (const other of REVIEW_VERDICTS.map((v) => v.toLowerCase()).filter((v) => v !== label)) assert.ok(!c.tags.includes(other), `${c.id}: tagged ${other}`);
+    for (const key of ['must_flag', 'must_note']) {
+      if (c.expected[key] === undefined) continue;
+      assert.equal(c.expected.verdict, 'REQUEST_CHANGES', `${c.id}: ${key} on a case that should not raise findings`);
+      assert.ok(Array.isArray(c.expected[key]) && c.expected[key].length > 0, `${c.id}: ${key}`);
+      for (const entry of c.expected[key]) assert.ok(entry.split('|').every((k) => k.trim()), `${c.id}: empty keyword in "${entry}"`);
+    }
+  }
+});
+
+test('review dataset keeps support per class and covers every targeted defect and edge case', async () => {
+  const cases = await loadReviewCases();
+  const n = (v) => cases.filter((c) => c.expected.verdict === v).length;
+  assert.ok(n('REQUEST_CHANGES') >= 12, `only ${n('REQUEST_CHANGES')} request_changes cases`);
+  assert.ok(n('APPROVE') >= 7, `only ${n('APPROVE')} approve cases`);
+  for (const tag of ['off-by-one', 'null', 'shell-injection', 'deleted-test', 'undeclared-import', 'missing-tests', 'truncated', 'test-only', 'automation']) {
+    assert.ok(filterCases(cases, { tags: [tag] }).length >= 1, `--tags ${tag} selects no case`);
+  }
+  for (const tag of ['docs', 'injection', 'evidence', 'pair']) assert.ok(filterCases(cases, { tags: [tag] }).length >= 2, `--tags ${tag} selects fewer than 2 cases`);
+  // Minimal pairs: same issue, one buggy and one clean diff.
+  const pairs = filterCases(cases, { tags: ['pair'] });
+  assert.ok(pairs.filter((c) => c.expected.verdict === 'APPROVE').length >= 3 && pairs.filter((c) => c.expected.verdict === 'REQUEST_CHANGES').length >= 3);
+  for (const c of filterCases(cases, { tags: ['injection'] })) assert.equal(c.expected.verdict, 'REQUEST_CHANGES', `${c.id}: an injection must not be approved`);
+  for (const c of filterCases(cases, { tags: ['docs'] }).filter((x) => x.expected.verdict === 'APPROVE')) {
+    assert.ok(!c.tags.includes('bug'), `${c.id}: clean docs case tagged bug`);
+  }
+});
+
+test('review dataset: docs-only and test-only cases are classified tests_expected: false (change_classifier)', async () => {
+  const cases = await loadReviewCases();
+  for (const c of filterCases(cases, { tags: ['docs', 'test-only'] })) {
+    assert.match(buildChangeClassificationContext(c.input.diff), /- tests_expected: false/, c.id);
+  }
+  for (const c of filterCases(cases, { tags: ['missing-tests'] })) {
+    const context = buildChangeClassificationContext(c.input.diff);
+    assert.match(context, /- tests_expected: true/, c.id);
+    assert.match(context, /- has_test_file_changes: false/, c.id);
+  }
+});
+
+test('review dataset: only truncated cases overflow the production budget, every prompt fits one 8K TPM window', async () => {
+  const cases = await loadReviewCases();
+  const budget = parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10);
+  const maxTokens = parseInt(GROQ_MODEL_DEFAULTS.review_max_tokens, 10);
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined }, async () => {
+    for (const c of cases) {
+      const { output, request } = await runReview(c.input);
+      assert.equal(output.diff_truncated, c.tags.includes('truncated'), `${c.id}: diff_truncated`);
+      const tokens = estimateTokens(request.systemPrompt + request.prompt);
+      assert.ok(tokens <= budget && tokens * 1.1 + maxTokens <= 8000, `${c.id}: ~${tokens} input tokens`);
+    }
+  });
+  // Truncation keeps the visible bug: the review can still be judged on it, and must say it saw a partial diff.
+  for (const c of filterCases(cases, { tags: ['truncated'] })) {
+    const { request } = await runReview(c.input);
+    assert.match(request.prompt, /- diff_truncated: true/);
+    assert.match(request.prompt, /headers\.get\('retry-after'\)\.trim\(\)/);
+    assert.ok(c.expected.must_note?.some((f) => f.includes('truncat')), `${c.id}: must_note the truncation`);
+  }
+});
+
+test('review dataset: evidence cases carry a valid evidence file for the case head SHA', async () => {
+  const cases = await loadReviewCases();
+  const withEvidence = cases.filter((c) => c.input.evidence !== undefined);
+  assert.deepEqual(withEvidence.map((c) => c.id).sort(), filterCases(cases, { tags: ['evidence'] }).map((c) => c.id).sort());
+  for (const c of withEvidence) {
+    const parsed = parseEvidence(JSON.stringify(c.input.evidence));
+    assert.ok(parsed.ok, `${c.id}: ${parsed.reason}`);
+    assert.equal(parsed.evidence.head_sha, c.input.head_sha, `${c.id}: evidence is stale`);
+  }
+  assert.deepEqual([...new Set(withEvidence.map((c) => c.expected.verdict))].sort(), REVIEW_VERDICTS);
+});
+
+test('reviewSuite.run sends the production system prompt and a user prompt with every review context', async () => {
+  const { output, request } = await runReview({
+    title: 'Fix the counter', body: 'Counter starts at 2.', diff: SMALL_DIFF, dependencies: { ajv: '^8.0.0' }, evidence: passingEvidence(), head_sha: 'abc1234',
+  });
+  assert.equal(request.systemPrompt, loadPrompt('pr-review-system'));
+  assert.match(request.prompt, /Title: Fix the counter/);
+  assert.match(request.prompt, /Counter starts at 2\./);
+  assert.match(request.prompt, /\+const a = 2;/);
+  assert.match(request.prompt, /Change classification context:/);
+  assert.match(request.prompt, /### Declared npm dependencies \(from package\.json\)\n- ajv/);
+  assert.match(request.prompt, /## Tool evidence\nResults of executing/);
+  assert.deepEqual(
+    { verdict: output.verdict, llm_verdict: output.llm_verdict, evidence_state: output.evidence_state, diff_truncated: output.diff_truncated, body_truncated: output.body_truncated },
+    { verdict: 'APPROVE', llm_verdict: 'APPROVED', evidence_state: 'available', diff_truncated: false, body_truncated: false },
+  );
+  assert.match(output.review, /### 🚀 Verdict/);
+});
+
+test('reviewSuite.run without evidence or body: missing evidence does not withhold approval, empty body gets the production placeholder', async () => {
+  const { output, request } = await runReview({ title: 'T', body: '', diff: SMALL_DIFF });
+  assert.match(request.prompt, /\(no description provided\)/);
+  assert.match(request.prompt, /No usable tool evidence \(missing: no evidence file at evidence[/\\]review-evidence\.json\)/);
+  assert.doesNotMatch(request.prompt, /Declared npm dependencies/);
+  assert.equal(output.verdict, 'APPROVE');
+  assert.equal(output.evidence_state, 'missing');
+});
+
+test('reviewSuite.run applies decideVerdict: failing check overrides an approval, unverified or stale evidence withholds it', async () => {
+  const base = { title: 'T', body: 'B', diff: SMALL_DIFF, head_sha: 'abc1234' };
+  const failing = await runReview({ ...base, evidence: passingEvidence('fail') });
+  assert.equal(failing.output.verdict, 'REQUEST_CHANGES');
+  assert.equal(failing.output.llm_verdict, 'APPROVED');
+  assert.match(failing.output.reason, /failing checks: tests/);
+  assert.match(failing.request.prompt, /Output tail of failing check `tests`/);
+
+  const timeout = await runReview({ ...base, evidence: passingEvidence('timeout') });
+  assert.equal(timeout.output.verdict, 'WITHHELD');
+  assert.match(timeout.output.reason, /unverified checks/);
+
+  const stale = await runReview({ ...base, evidence: passingEvidence('pass', 'def5678') });
+  assert.equal(stale.output.verdict, 'WITHHELD');
+  assert.equal(stale.output.evidence_state, 'stale');
+
+  const invalid = await runReview({ ...base, evidence: { version: 2 } });
+  assert.equal(invalid.output.verdict, 'WITHHELD');
+  assert.match(invalid.output.reason, /unsupported evidence version/);
+
+  const rejected = await runReview({ ...base, evidence: passingEvidence() }, reviewText({ verdict: 'REQUEST_CHANGES' }));
+  assert.equal(rejected.output.verdict, 'REQUEST_CHANGES');
+  assert.equal(rejected.output.reason, null);
+});
+
+test('reviewSuite.run throws on a review without a verdict line instead of failing closed', async () => {
+  const { error } = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, '### ⚠️ Issues Found\nNone.\n\n### 🚀');
+  assert.match(error.message, /No verdict line in the review/);
+  const think = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, '<think>Verdict: APPROVED</think>\nno verdict here');
+  assert.match(think.error.message, /No verdict line/);
+});
+
+test('reviewSuite.run propagates an LLM failure (errored run)', async () => {
+  await assert.rejects(reviewSuite.run({ title: 'T', body: 'B', diff: SMALL_DIFF }, { llm: async () => { throw new Error('Groq 429'); } }), /Groq 429/);
+});
+
+test('reviewSuite.run follows the provider budget: Groq truncates to review_max_input_tokens, Anthropic keeps the 12,000-char cap', async () => {
+  const big = `diff --git a/src/big.js b/src/big.js\n--- /dev/null\n+++ b/src/big.js\n@@ -0,0 +1,900 @@\n${Array.from({ length: 900 }, (_, i) => `+export const value${i} = ${i} * 2; // padding line`).join('\n')}\n`;
+  const input = { title: 'T', body: 'B', diff: big };
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
+    const { output, request } = await runReview(input);
+    assert.equal(output.diff_truncated, true);
+    assert.ok(estimateTokens(request.systemPrompt + request.prompt) <= parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10));
+  });
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: 'test-key', GROQ_API_KEY: undefined }, async () => {
+    const { output, request } = await runReview(input);
+    assert.equal(output.diff_truncated, true);
+    assert.ok(request.prompt.includes(big.slice(0, 11000)));
+    assert.ok(!request.prompt.includes(big.slice(0, 12001)));
+  });
+});
+
+test('findingSeverities reads finding bullets from the Issues Found section only', () => {
+  const review = [
+    '### 🏷️ Change Classification', '- [High] not a finding (wrong section)',
+    '### ⚠️ Issues Found', '- [High] a', '* **[Medium]** b', '- [Low] c', '- note without severity',
+    '**🚀 Verdict**', 'REQUEST_CHANGES', '- [High] after the verdict',
+  ].join('\n');
+  assert.deepEqual(findingSeverities(review), ['high', 'medium', 'low']);
+  assert.deepEqual(findingSeverities(reviewText({ verdict: 'APPROVED' })), []);
+  assert.deepEqual(findingSeverities('no headings at all\n- [High] x'), []);
+  assert.deepEqual(findingSeverities(undefined), []);
+});
+
+test('matchesFlag matches any "|" alternative, case-insensitive, ignoring empty alternatives', () => {
+  assert.equal(matchesFlag('Uses execSync with a SHELL string', 'inject|shell'), true);
+  assert.equal(matchesFlag('Off-by-one in the loop', 'off-by-one'), true);
+  assert.equal(matchesFlag('looks fine', 'inject||shell'), false);
+  assert.equal(matchesFlag(null, 'x'), false);
+});
+
+test('review verdict_match compares the final pipeline verdict', () => {
+  const { verdict_match } = reviewSuite.scorers;
+  assert.equal(verdict_match({ verdict: 'WITHHELD' }, { verdict: 'WITHHELD', llm_verdict: 'APPROVED' }), true);
+  assert.equal(verdict_match({ verdict: 'APPROVE' }, { verdict: 'WITHHELD' }), false);
+  assert.equal(verdict_match({ verdict: 'APPROVE' }, null), false);
+});
+
+test('flags_issue scores the share of must_flag entries the review mentions, outside the classification section', () => {
+  const { flags_issue } = reviewSuite.scorers;
+  const review = reviewText({ verdict: 'REQUEST_CHANGES', issues: ['[High] Shell injection via execSync'] });
+  assert.equal(flags_issue({ verdict: 'APPROVE' }, { review }), null);
+  assert.equal(flags_issue({ verdict: 'REQUEST_CHANGES', must_flag: [] }, { review }), null);
+  const rc = { llm_verdict: 'REQUEST_CHANGES', review };
+  assert.equal(flags_issue({ must_flag: ['inject|execfilesync'] }, rc), 1);
+  assert.equal(flags_issue({ must_flag: ['inject', 'truncat|partial'] }, rc), 0.5);
+  // "Tests expected: yes" in the classification section is not a test finding.
+  assert.equal(flags_issue({ must_flag: ['test'] }, rc), 0);
+  assert.equal(flags_issue({ must_flag: ['inject'] }, null), 0);
+});
+
+test('flags_issue ignores a Summary that only describes the diff, and an approving review (#177 review)', () => {
+  const { flags_issue } = reviewSuite.scorers;
+  const summary = 'Replaces the for loop with recipients.forEach(async …)';
+  const approved = reviewText({ verdict: 'APPROVED', summary });
+  assert.equal(flags_issue({ must_flag: ['foreach'] }, { llm_verdict: 'APPROVED', review: approved }), 0);
+  // Same keyword in the Summary of a rejection for another reason: still not this finding.
+  const other = reviewText({ verdict: 'REQUEST_CHANGES', summary, issues: ['[Medium] Missing docs'] });
+  assert.equal(flags_issue({ must_flag: ['foreach'] }, { llm_verdict: 'REQUEST_CHANGES', review: other }), 0);
+  const found = reviewText({ verdict: 'REQUEST_CHANGES', summary, issues: ['[High] forEach does not await the sends'] });
+  assert.equal(flags_issue({ must_flag: ['foreach'] }, { llm_verdict: 'REQUEST_CHANGES', review: found }), 1);
+});
+
+test('flags_issue reads must_note outside the classification section, e.g. the truncation note under the summary', () => {
+  const { flags_issue } = reviewSuite.scorers;
+  const review = reviewText({ verdict: 'REQUEST_CHANGES', summary: 'Adds X.\nNote: the diff is truncated.', issues: ['[High] null header'] });
+  const out = { llm_verdict: 'REQUEST_CHANGES', review };
+  assert.equal(flags_issue({ must_flag: ['null'], must_note: ['truncat'] }, out), 1);
+  assert.equal(flags_issue({ must_note: ['truncat|partial'] }, out), 1);
+  assert.equal(flags_issue({ must_flag: ['truncat'] }, out), 0, 'a note is not a finding');
+  assert.equal(flags_issue({ must_note: ['tests expected'] }, out), 0, 'the classification section never counts');
+  assert.equal(flags_issue({ must_note: ['truncat'] }, { llm_verdict: 'APPROVED', review }), 0);
+});
+
+test('findingSeverities keeps reading Issues Found past a bold-only file group line (#177 review)', () => {
+  const review = ['### ⚠️ Issues Found', '**scripts/foo.mjs**', '- [High] a', '**Fix:**', '- [Medium] b', '**🚀 Verdict**', 'REQUEST_CHANGES'].join('\n');
+  assert.deepEqual(findingSeverities(review), ['high', 'medium']);
+  const { no_false_alarm } = reviewSuite.scorers;
+  assert.equal(no_false_alarm({ verdict: 'APPROVE' }, { llm_verdict: 'APPROVED', review }), false);
+});
+
+test('reviewInputBudget mirrors loadLLMConfig: stage key, then max_input_tokens, validated; none on Anthropic', async () => {
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined }, () => {
+    assert.equal(reviewInputBudget(), parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10));
+    assert.equal(reviewInputBudget({ review_max_input_tokens: '5000', max_input_tokens: '4000' }), 5000);
+    assert.equal(reviewInputBudget({ max_input_tokens: '4000' }), 4000);
+    assert.equal(reviewInputBudget({}), null);
+    assert.throws(() => reviewInputBudget({ review_max_input_tokens: 'abc' }), /Invalid max_input_tokens for stage "review": abc/);
+    assert.throws(() => reviewInputBudget({ review_max_input_tokens: '0' }), /must be a positive integer/);
+  });
+  await withEnv({ AI_PROVIDER: 'anthropic' }, () => assert.equal(reviewInputBudget({ review_max_input_tokens: 'abc' }), null));
+});
+
+test('no_false_alarm applies to clean cases: approved with no High or Medium finding', () => {
+  const { no_false_alarm } = reviewSuite.scorers;
+  assert.equal(no_false_alarm({ verdict: 'REQUEST_CHANGES' }, { llm_verdict: 'APPROVED', review: '' }), null);
+  assert.equal(no_false_alarm({ verdict: 'APPROVE' }, { llm_verdict: 'APPROVED', review: reviewText({ verdict: 'APPROVED' }) }), true);
+  assert.equal(no_false_alarm({ verdict: 'APPROVE' }, { llm_verdict: 'APPROVED', review: reviewText({ verdict: 'APPROVED', issues: ['[Low] nit'] }) }), true);
+  assert.equal(no_false_alarm({ verdict: 'WITHHELD' }, { llm_verdict: 'APPROVED', review: reviewText({ verdict: 'APPROVED', issues: ['[Medium] x'] }) }), false);
+  assert.equal(no_false_alarm({ verdict: 'APPROVE' }, { llm_verdict: 'REQUEST_CHANGES', review: reviewText({ verdict: 'REQUEST_CHANGES' }) }), false);
+  assert.equal(no_false_alarm({ verdict: 'APPROVE' }, null), false);
+});
+
+test('reviewSuite labels are lowercase verdicts and the gate covers misses, over-severity and errors', () => {
+  assert.equal(reviewSuite.label({ verdict: 'REQUEST_CHANGES' }), 'request_changes');
+  assert.equal(reviewSuite.expectedLabel({ verdict: 'APPROVE' }), 'approve');
+  assert.deepEqual(reviewSuite.thresholds, {
+    'scores.verdict_match.mean': { min: 0.75 },
+    'per_class.request_changes.recall': { min: 0.8 },
+    'per_class.approve.recall': { min: 0.6 },
+    consistency: { min: 0.8, optional: true },
+    error_rate: { max: 0.05 },
+  });
+});
+
+test('review suite end-to-end with an oracle reviewer meets every threshold', async () => {
+  const cases = await loadReviewCases();
+  const byId = new Map(cases.map((c) => [c.id, c]));
+  const results = await runSuite({ suite: reviewSuite, cases, llmFor: (key) => async () => oracleReview(byId.get(key.split('#')[0])) });
+  const summary = summarize(results);
+  assert.equal(summary.error_rate, 0);
+  assert.equal(summary.scores.verdict_match.mean, 1);
+  assert.equal(summary.scores.flags_issue.mean, 1);
+  assert.equal(summary.scores.no_false_alarm.mean, 1);
+  assert.deepEqual(checkThresholds(summary, reviewSuite.thresholds), []);
+});
+
+test('run_evals --suite review --replay scores the hand-written fixture through the production parser', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const { code, stdout } = await runEvals(['--suite', 'review', '--replay', REVIEW_FIXTURE, '--out-dir', dir], dir);
+  assert.equal(code, 0, stdout);
+  assert.match(stdout, /## ✅ All thresholds met/);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'review-test-run.json'), 'utf8'));
+  assert.equal(saved.meta.suite, 'review');
+  const byId = Object.fromEntries(saved.results.map((r) => [r.case_id, r]));
+  // Planted failures: a truncated review (no verdict), a missed bug, an over-severe docs review, a wrong reason.
+  assert.match(byId['clean-test-only'].error, /No verdict line/);
+  assert.equal(byId['bug-async-foreach'].label, 'approve');
+  assert.equal(byId['docs-only-runbook-fix'].label, 'request_changes');
+  assert.equal(byId['docs-only-runbook-fix'].scores.no_false_alarm, 0);
+  assert.equal(byId['bug-undeclared-import'].scores.verdict_match, 1);
+  assert.equal(byId['bug-undeclared-import'].scores.flags_issue, 0);
+  // Format variants the parser accepts: <think> block, bold heading, inline "**🚀 Verdict:** X".
+  assert.equal(byId['bug-null-assignee'].label, 'request_changes');
+  assert.equal(byId['clean-null-pair'].label, 'approve');
+  assert.equal(byId['clean-execfilesync-pair'].label, 'approve');
+  // decideVerdict on recorded output: an approval over a timed-out check is withheld.
+  assert.equal(byId['evidence-unverified-timeout'].output.llm_verdict, 'APPROVED');
+  assert.equal(byId['evidence-unverified-timeout'].label, 'withheld');
+  const { summary } = saved;
+  assert.deepEqual(
+    [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
+    [23, 0.0435, 0.8696, 0.8571, 0.7778],
+  );
+  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9286, 0.75]);
+});
+
+test('run_evals --suite review exits 1 when the reviewer approves everything', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const cases = await loadReviewCases();
+  const results = cases.map((c) => ({ case_id: c.id, repeat: 0, calls: [{ raw: reviewText({ verdict: 'APPROVED' }) }] }));
+  const recorded = path.join(dir, 'recorded.json');
+  await fs.writeFile(recorded, JSON.stringify({ meta: { model: 'groq:test' }, results }));
+  const { code, stdout } = await runEvals(['--suite', 'review', '--replay', recorded, '--out-dir', dir], dir);
+  assert.equal(code, 1);
+  assert.match(stdout, /per_class\.request_changes\.recall/);
+  assert.doesNotMatch(stdout, /per_class\.approve\.recall/);
+});
+
+test('parseCliArgs accepts --suite review', () => {
+  assert.equal(parseCliArgs(['--suite', 'review']).suite, reviewSuite);
+  assert.throws(() => parseCliArgs([]), /one of: validation, review/);
 });

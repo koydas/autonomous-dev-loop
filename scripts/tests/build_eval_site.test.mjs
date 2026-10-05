@@ -208,3 +208,15 @@ test('buildEvalSite passes allowEmpty through to the site read-back', async () =
   await buildEvalSite({ outDir: dir, siteUrl: 'https://x.io', resultFiles: [], fetchImpl: impl, allowEmpty: true, log: () => {} });
   await fs.access(path.join(dir, 'index.html'));
 });
+
+test('assembleSite publishes runs of several suites with each suite\'s registry thresholds', () => {
+  const review = results({ runId: 'rv' });
+  review.meta = { ...review.meta, suite: 'review' };
+  const { scorecard, files } = assembleSite({ previous: empty(), resultsList: [results({ runId: 'v' }), review], generatedAt: 'T' });
+  assert.deepEqual(Object.keys(scorecard.suites), ['validation', 'review']);
+  assert.ok(files['runs/v.html'] && files['runs/rv.html']);
+  assert.ok(files['badges/validation.json'] && files['badges/review.json']);
+  assert.match(files['index.html'], /<code>per_class\.invalid\.recall<\/code>/);
+  assert.match(files['index.html'], /<code>per_class\.request_changes\.recall<\/code>/);
+  assert.match(files['index.html'], /<code>per_class\.approve\.recall<\/code>/);
+});

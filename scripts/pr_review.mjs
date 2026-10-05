@@ -5,19 +5,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
-import { filterDiff } from './lib/file_filters.mjs';
-import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
+import { loadPrompt } from './lib/prompts.mjs';
+import { buildReviewPrompt, parseReviewVerdict } from './lib/review_prompt.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
-import { buildAutomationGateContext } from './lib/coverage_checker.mjs';
-import { buildChangeClassificationContext } from './lib/change_classifier.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { fitReviewPrompt } from './lib/token_budget.mjs';
 import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
-import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceContext, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
+import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
 const _reviewStartMs = Date.now();
@@ -237,11 +234,6 @@ if (!runDecision.run) {
 
 const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
-// Groq (review_max_input_tokens set): the diff is bounded by the token budget below. Anthropic
-// keeps the 12,000-char cap. Comparing against the uncapped filtered diff tells whether
-// anything was cut — used to warn the reviewer it saw a partial diff.
-const fullDiff = filterDiff(rawDiff, Infinity);
-const cappedDiff = maxInputTokens == null ? filterDiff(rawDiff) : fullDiff;
 
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
 const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
@@ -253,17 +245,10 @@ const evidence = assessEvidence(evidenceParse, {
   touchedPaths: findTouchedEvidencePaths(rawDiff),
 });
 log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
-const reviewContexts = `${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${formatEvidenceContext(evidence)}`;
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
-const { userPrompt, diffTruncated, bodyTruncated } = fitReviewPrompt({
-  systemPrompt,
-  diff: cappedDiff,
-  prBody,
-  maxInputTokens,
-  diffTruncated: cappedDiff.length < fullDiff.length,
-  buildUserPrompt: ({ diff, prBody: body, diffTruncated: truncated }) =>
-    `${interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: body })}${buildChangeClassificationContext(rawDiff, truncated)}${reviewContexts}`,
+const { userPrompt, diffTruncated, bodyTruncated } = buildReviewPrompt({
+  systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
 });
 if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens });
 
@@ -283,10 +268,9 @@ const rawReview = await callLLM({
 
 obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { output_tokens_est: estimateTokens(rawReview), prNumber } });
 
-const cleanReview = rawReview.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
-// The heading may come back bold (`**🚀 Verdict**`) instead of `### 🚀 Verdict`: allow closing `**` after the word.
-const verdictMatch = cleanReview.match(/verdict\**(?::\**\s*|\s*\n+\s*)\**(APPROVED|REQUEST_CHANGES)/i);
-const llmApproved = verdictMatch?.[1]?.toUpperCase() === 'APPROVED';
+// No verdict line (e.g. a truncated review) fails closed: not approved.
+const { cleanReview, verdict: llmVerdict } = parseReviewVerdict(rawReview);
+const llmApproved = llmVerdict === 'APPROVED';
 // ADR-0024: a failing check blocks APPROVE in code, whatever the LLM concluded.
 // ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.
 // Same resolution as run_review_evidence.mjs: without a config the repo has not opted in to evidence.
