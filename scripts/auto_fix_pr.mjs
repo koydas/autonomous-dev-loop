@@ -12,6 +12,7 @@ import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
+import { findUnsafeChanges, normalizeRepoPath } from './lib/autofix_guard.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 
@@ -320,7 +321,7 @@ if (!feedbackParts.length) {
   }
 }
 
-const effectiveDiffRatio = cfgDiffRatio ?? 0.45;
+const effectiveDiffRatio = cfgDiffRatio ?? 0.15;
 const effectiveFeedbackRatio = cfgFeedbackRatio ?? 0.25;
 if (effectiveDiffRatio + effectiveFeedbackRatio >= 1) {
   throw new Error(`Token budget config error: autofix_diff_ratio (${effectiveDiffRatio}) + autofix_feedback_ratio (${effectiveFeedbackRatio}) must sum to less than 1.0; adjust config/models.yaml`);
@@ -368,24 +369,37 @@ if (allChangedFiles.includes(SELF_PATH)) {
 const changedFiles = allChangedFiles.filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
+// A file is either shown in full or withheld with an explicit marker — never cut silently:
+// the model returns whole files, so a truncated view becomes deleted content (ADR-0029).
 const fileContentParts = [];
+const shownPaths = new Set();
+const hiddenPaths = new Set();
+let fileCharsLeft = fileBudget * 4;
 for (const filePath of changedFiles.slice(0, MAX_FILES)) {
   const absPath = path.resolve(repoRoot, filePath);
   if (!absPath.startsWith(repoRoot + path.sep)) continue;
+  let content;
   try {
-    const content = await fsPromises.readFile(absPath, 'utf8');
-    fileContentParts.push(
-      `### Current file: ${filePath}\n\`\`\`\n${content.slice(0, MAX_FILE_SIZE)}\n\`\`\``,
-    );
+    content = await fsPromises.readFile(absPath, 'utf8');
   } catch {
-    // File deleted or unreadable — skip
+    continue; // File deleted or unreadable — skip
+  }
+  const part = `### Current file: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
+  if (content.length <= MAX_FILE_SIZE && part.length <= fileCharsLeft) {
+    fileContentParts.push(part);
+    shownPaths.add(normalizeRepoPath(filePath));
+    fileCharsLeft -= part.length + 2;
+  } else {
+    const marker = `### File withheld (too large for the context budget): ${filePath} — do NOT target this file`;
+    fileContentParts.push(marker);
+    hiddenPaths.add(normalizeRepoPath(filePath));
+    fileCharsLeft -= marker.length + 2;
   }
 }
-const rawFileContents =
+const fileContents =
   fileContentParts.length > 0
     ? fileContentParts.join('\n\n')
     : 'No existing files identified as relevant to this review.';
-const fileContents = truncateToTokenBudget(rawFileContents, fileBudget);
 
 const userPrompt = interpolatePrompt(userPromptTemplate, {
   reviewFeedback,
@@ -466,9 +480,10 @@ async function escalateToHuman(reason, heading, explanation, details) {
   await skipAutofix(reason, {}, 'warn');
 }
 
-// Reviewer and fixer disagree.
+// Reviewer and fixer disagree, or the model declined with a blocked_reason.
 if (hasNoProposedChanges(aiOutput)) {
-  const modelSummary = String(aiOutput.summary ?? '(no summary)').slice(0, 2000);
+  // Model text lands in a PR comment: one line, bounded.
+  const modelSummary = String(aiOutput.blocked_reason || aiOutput.summary || '(no summary)').replace(/\s+/g, ' ').trim().slice(0, 500);
   await escalateToHuman(
     'no_changes',
     '\u{1F914} Auto-Fix: No Changes Proposed',
@@ -477,12 +492,25 @@ if (hasNoProposedChanges(aiOutput)) {
   );
 }
 
-// The write denylist or the shrink guard (ADR-0021, ADR-0009) rejected the patch before any write.
+// The write guard (ADR-0029), the write denylist and the shrink guard (ADR-0021, ADR-0009)
+// reject the patch before any write.
 let summary;
 let outputPaths;
 try {
   const validated = validateAiOutput(aiOutput);
   summary = validated.summary;
+  const existing = new Map();
+  for (const { targetPath } of validated.changes) {
+    const key = normalizeRepoPath(targetPath);
+    try {
+      existing.set(key, await fsPromises.readFile(path.resolve(repoRoot, key), 'utf8'));
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      existing.set(key, null);
+    }
+  }
+  const violations = findUnsafeChanges(validated.changes, { existing, shownPaths, hiddenPaths });
+  if (violations.length) throw new GuardrailError(violations.map((v) => `\`${v.targetPath}\`: ${v.reason}`).join('; '));
   outputPaths = await writeGeneratedFiles(validated.changes);
 } catch (rejection) {
   if (!(rejection instanceof GuardrailError)) throw rejection;

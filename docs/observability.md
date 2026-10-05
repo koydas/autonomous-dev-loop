@@ -110,7 +110,7 @@ The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trac
 | `autofix.llm_response`         | info   | —             | `output_tokens_est`, `attempt`, `prNumber`|
 | `autofix.push`                 | info   | ✓             | `paths`, `attempt`, `prNumber`            |
 | `autofix.max_attempts_reached` | warn   | —             | `attempt`, `prNumber`                     |
-| `autofix.skipped`              | info / warn | ✓        | `reason` (`approved`, info: no LLM call \| `no_changes`, warn: attempt consumed, `needs-human` applied, summary commented, `autofix_skip` metric \| `guardrail_rejected`, warn: same, with the rejection reason commented), `attempt`, `prNumber`, `headSha` (approved only) — exit 0, nothing pushed (ADR-0028) |
+| `autofix.skipped`              | info / warn | ✓        | `reason` (`approved`, info: no LLM call \| `no_changes`, warn: attempt consumed, `needs-human` applied, summary commented, `autofix_skip` metric \| `guardrail_rejected`, warn: same, with the rejection reason commented — write denylist, shrink guard or ADR-0029 write guard), `attempt`, `prNumber`, `headSha` (approved only) — exit 0, nothing pushed (ADR-0028) |
 | `autofix.error`                | error  | ✓             | `error`, `attempt`, `prNumber`            |
 
 ---

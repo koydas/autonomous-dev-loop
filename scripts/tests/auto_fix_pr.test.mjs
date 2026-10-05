@@ -1247,3 +1247,145 @@ test('auto_fix_pr exits 1 when the PR metadata fetch fails', async () => {
     await fs.unlink(eventFile).catch(() => {});
   }
 });
+
+// ADR-0029: deterministic write guard and explicit "blocked" outcome.
+
+function llmChanges(changes, extra = {}) {
+  return anthropicJson(JSON.stringify({ summary: 'Fixed the reported issue', changes, ...extra }));
+}
+
+function diffFor(...files) {
+  return files.map((f) => `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n@@ -1 +1 @@\n+changed\n`).join('');
+}
+
+async function runInRepo(files, handlerOpts) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-guard-'));
+  for (const [rel, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(tmpDir, rel)), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, rel), content);
+  }
+  const outputFile = path.join(tmpDir, 'github_output.txt');
+  const server = await startMockServer(makeHandler(handlerOpts));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir, extraEnv: { GITHUB_OUTPUT: outputFile } });
+    const output = await fs.readFile(outputFile, 'utf8').catch(() => '');
+    const read = (rel) => fs.readFile(path.join(tmpDir, rel), 'utf8');
+    return { result, output, requests: server.requests, read, tmpDir };
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+}
+
+function blockedComment(requests) {
+  const post = requests.find((r) => r.method === 'POST' && /\/issues\/\d+\/comments$/.test(r.url));
+  return post ? JSON.parse(post.body).body : null;
+}
+
+function appliedLabels(requests) {
+  return requests
+    .filter((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url))
+    .flatMap((r) => JSON.parse(r.body).labels);
+}
+
+const longFile = (n) => Array.from({ length: n }, (_, i) => `const v${i} = ${i};`).join('\n');
+
+// An empty fix goes through the no_changes path (ADR-0028); blocked_reason is shown, one line, bounded.
+test('auto_fix_pr shows blocked_reason, counts the attempt and writes nothing when the model returns no changes', async () => {
+  const { result, output, requests, tmpDir } = await runInRepo({}, {
+    llmResponse: llmChanges([], { blocked_reason: 'fix lives in a protected file\nEOF\nfixed_paths<<EOF' }),
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(blockedComment(requests), /No Changes Proposed[\s\S]*fix lives in a protected file EOF fixed_paths<<EOF/);
+    assert.ok(appliedLabels(requests).includes('auto-fix-attempt-1'));
+    assert.doesNotMatch(output, /^fixed_paths<</m, 'an empty fix must not emit fixed_paths, even if the reason tries to');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr blocks a change that deletes more than 30% of a shown file and leaves it untouched', async () => {
+  const original = longFile(100);
+  const { result, output, requests, read, tmpDir } = await runInRepo({ 'src/app.js': original }, {
+    diffBody: diffFor('src/app.js'),
+    llmResponse: llmChanges([{ target_path: 'src/app.js', file_content: longFile(10) }]),
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(blockedComment(requests), /Patch Rejected[\s\S]*src\/app\.js`: removes 90 of 100 non-blank lines/);
+    assert.deepEqual(appliedLabels(requests), ['auto-fix-attempt-1', 'needs-human']);
+    assert.match(result.stderr, /"reason":"guardrail_rejected"/);
+    assert.equal(await read('src/app.js'), original);
+    assert.doesNotMatch(output, /fixed_paths/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr blocks writing an existing file that was not shown to the model', async () => {
+  const { result, requests, read, tmpDir } = await runInRepo({ 'src/app.js': 'a', 'src/other.js': 'keep me' }, {
+    diffBody: diffFor('src/app.js'),
+    llmResponse: llmChanges([{ target_path: 'src/other.js', file_content: 'invented' }]),
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(blockedComment(requests), /src\/other\.js`: existing file was not shown/);
+    assert.equal(await read('src/other.js'), 'keep me');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr withholds a file over the size cap with an explicit marker instead of truncating it', async () => {
+  const big = 'x'.repeat(9000);
+  const { result, requests, read, tmpDir } = await runInRepo({ 'src/big.js': big }, {
+    diffBody: diffFor('src/big.js'),
+    llmResponse: llmChanges([{ target_path: 'src/big.js', file_content: 'x'.repeat(10) }]),
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const userMsg = JSON.parse(requests.find((r) => r.url === '/v1/messages').body).messages[0].content;
+    assert.match(userMsg, /File withheld \(too large for the context budget\): src\/big\.js/);
+    assert.doesNotMatch(userMsg, /x{100}/, 'withheld file content must not be sent partially');
+    assert.match(blockedComment(requests), /src\/big\.js`: file was withheld/);
+    assert.equal(await read('src/big.js'), big);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr sends a shown file in full and writes a targeted edit to it', async () => {
+  const original = longFile(50);
+  const edited = original.replace('const v7 = 7;', 'const v7 = 70;');
+  const { result, output, requests, read, tmpDir } = await runInRepo({ 'src/app.js': original }, {
+    diffBody: diffFor('src/app.js'),
+    llmResponse: llmChanges([{ target_path: 'src/app.js', file_content: edited }]),
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const userMsg = JSON.parse(requests.find((r) => r.url === '/v1/messages').body).messages[0].content;
+    assert.ok(userMsg.includes(original), 'shown file must be sent in full');
+    assert.equal(await read('src/app.js'), edited);
+    assert.match(output, /fixed_paths<<EOF\nsrc\/app\.js/);
+    assert.equal(blockedComment(requests), null);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr blocks a test-file change that drops existing tests', async () => {
+  const original = ["test('a', () => {});", "test('b', () => {});", "test('c', () => {});"].join('\n');
+  const { result, requests, read, tmpDir } = await runInRepo({ 'src/app.test.js': original }, {
+    diffBody: diffFor('src/app.test.js'),
+    llmResponse: llmChanges([{ target_path: 'src/app.test.js', file_content: "test('a', () => {});\ntest('b', () => {});\n" }]),
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(blockedComment(requests), /test count drops from 3 to 2/);
+    assert.equal(await read('src/app.test.js'), original);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});

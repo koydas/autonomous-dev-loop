@@ -198,9 +198,25 @@ describe('prompt file contents', () => {
     assert.ok(/still need an explicit.*import.*require/i.test(content));
   });
 
-  test('auto-fix-system requires including missing tests regardless of path', () => {
+  test('auto-fix-system requires including missing tests unless the path is protected', () => {
     const content = loadPrompt('auto-fix-system');
-    assert.ok(content.includes('regardless of its path'));
+    assert.ok(content.includes('include that test file'));
+    assert.ok(content.includes('unless its path is protected'));
+    assert.ok(!content.includes('regardless of its path'), 'must not contradict the protected-path rule');
+  });
+
+  test('auto-fix-system forbids targeting withheld files and allows an empty fix (ADR-0029)', () => {
+    const content = loadPrompt('auto-fix-system');
+    assert.ok(content.includes('File withheld'));
+    assert.ok(content.includes('blocked_reason'));
+    assert.ok(content.includes('0 to 6'));
+  });
+
+  test('auto-fix-user documents blocked_reason and puts the feedback after the file contents', () => {
+    const content = loadPrompt('auto-fix-user');
+    assert.ok(content.includes('blocked_reason'));
+    assert.ok(content.indexOf('{{fileContents}}') < content.indexOf('{{reviewFeedback}}'));
+    assert.ok(!content.includes('If the fix touches scripts/'), 'must not invite edits to protected paths');
   });
 
   test('auto-fix-system requires a read-only property and persistence self-check', () => {

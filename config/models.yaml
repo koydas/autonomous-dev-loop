@@ -52,5 +52,7 @@ autofix_max_tokens:     4096
 # (890 + 2600) × 1.10 + 4096 = 7935 ≤ 8000. The former 3000 gave 8375: no margin at all.
 # Raise this value on the Groq Developer plan (higher TPM) or when using Anthropic.
 autofix_max_input_tokens: 2600
-autofix_diff_ratio:     0.45
+# Files get the remainder (0.60). A file that does not fit is withheld with an explicit marker
+# and cannot be targeted (ADR-0029); the diff already repeats most of the shown files.
+autofix_diff_ratio:     0.15
 autofix_feedback_ratio: 0.25
