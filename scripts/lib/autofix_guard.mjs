@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-// Deterministic write guard for auto-fix (ADR-0028). The model returns whole-file contents,
+// Deterministic write guard for auto-fix (ADR-0029). The model returns whole-file contents,
 // so anything it did not see in full is at risk of being dropped. Prompt guardrails
 // (ADR-0009) ask the model not to do that; this module enforces it before anything is written.
 

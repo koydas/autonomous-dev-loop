@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
-import { requireEnv, loadLLMConfig } from './lib/config.mjs';
+import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
 import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
@@ -13,6 +13,7 @@ import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from '
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { findUnsafeChanges, normalizeRepoPath } from './lib/autofix_guard.mjs';
+import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 
 let tracer;
@@ -148,54 +149,28 @@ async function ghFetch(endpoint, options = {}) {
   }
 }
 
+// GET /issues/{n}/comments lists oldest first and ignores sort/direction: read every page,
+// then keep the most recent comment by a trusted author (review_marker.mjs).
 async function loadLatestAutomatedReviewComment() {
-  let page = 1;
-  while (true) {
+  const comments = [];
+  for (let page = 1; ; page++) {
     const commentsRes = await ghFetch(
-      `/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100&sort=created&direction=desc&page=${page}`,
+      `/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`,
     );
     if (!commentsRes.ok) {
       logError('Automated review comment fallback fetch failed', { prNumber, statusCode: commentsRes.status, page });
       return null;
     }
 
-    const comments = await commentsRes.json();
-    if (!Array.isArray(comments) || comments.length === 0) return null;
-
-    const automatedReviewComment = comments.find(
-      (c) => typeof c.body === 'string' && c.body.includes('## \u{1F50D} Automated Code Review'),
-    );
-    if (automatedReviewComment?.body) return automatedReviewComment.body;
-
-    if (comments.length < 100) return null;
-    page += 1;
+    const batch = await commentsRes.json();
+    if (!Array.isArray(batch)) break;
+    comments.push(...batch);
+    if (batch.length < 100) break;
   }
+  return findReviewComment(comments, '## \u{1F50D} Automated Code Review')?.body ?? null;
 }
 
-async function applyAttemptLabel(attempt) {
-  const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${attempt}`;
-  const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
-    method: 'POST',
-    body: JSON.stringify({
-      name: attemptLabelName,
-      color: 'fbca04',
-      description: `Auto-fix iteration ${attempt}`,
-    }),
-  });
-  if (!createLabelRes.ok && createLabelRes.status !== 422) {
-    throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
-  }
-
-  const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
-    method: 'POST',
-    body: JSON.stringify({ labels: [attemptLabelName] }),
-  });
-  if (!applyLabelRes.ok) {
-    throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
-  }
-}
-
-// Nothing is written: the attempt still counts, so a blocked fix cannot loop (ADR-0028).
+// Nothing is written: the attempt still counts, so a blocked fix cannot loop (ADR-0029).
 async function reportBlocked(reasons) {
   const body = `## \u{1F6D1} Auto-Fix Blocked\n\nAttempt ${nextAttempt} wrote no files:\n\n${reasons.map((r) => `- ${r}`).join('\n')}\n\nFix the remaining review findings manually, or rerun auto-fix once the cause is addressed.`;
   const commentRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
@@ -226,7 +201,50 @@ tracer.startSpan('autofix', { prNumber });
 let nextAttempt = null;
 let autofixStartMs = Date.now();
 
+async function applyAttemptLabel(attempt) {
+  const attemptLabelName = `${ATTEMPT_LABEL_PREFIX}${attempt}`;
+  const createLabelRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
+    method: 'POST',
+    body: JSON.stringify({
+      name: attemptLabelName,
+      color: 'fbca04',
+      description: `Auto-fix iteration ${attempt}`,
+    }),
+  });
+  if (!createLabelRes.ok && createLabelRes.status !== 422) {
+    throw new Error(`Auto-fix label create failed: ${createLabelRes.status}`);
+  }
+
+  const applyLabelRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
+    method: 'POST',
+    body: JSON.stringify({ labels: [attemptLabelName] }),
+  });
+  if (!applyLabelRes.ok) {
+    throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
+  }
+}
+
+// No-op exit (ADR-0028): no push, no failed check.
+async function skipAutofix(reason, meta = {}, level = 'info') {
+  log('Auto-fix skipped', { prNumber, reason, ...meta });
+  obsLog({ stage: 'autofix', event: 'autofix.skipped', level, duration_ms: Date.now() - autofixStartMs, meta: { reason, attempt: nextAttempt, prNumber, ...meta } });
+  tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason } });
+  await tracer.finalize('partial');
+  process.exit(0);
+}
+
 try {
+// A changes-requested label can outlive its review: when the latest automated review
+// approved the current head, there is nothing to fix and no LLM call is made. An explicit
+// checkbox rerun by a trusted human still runs.
+const prMetaRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`);
+if (!prMetaRes.ok) throw new Error(`PR metadata fetch failed: ${prMetaRes.status}`);
+const prMeta = await prMetaRes.json();
+const headSha = isCommitSha(prMeta?.head?.sha) ? prMeta.head.sha : null;
+const latestReviewCommentBody = await loadLatestAutomatedReviewComment();
+const autofixDecision = decideAutofixRun({ headSha, previous: parseReviewMarker(latestReviewCommentBody), manualRerun: isManualRerunRequested(event) });
+if (!autofixDecision.run) await skipAutofix(autofixDecision.reason, { headSha });
+
 const labelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
 if (!labelsRes.ok) throw new Error(`Label list failed: ${labelsRes.status}`);
 const prLabels = await labelsRes.json();
@@ -320,9 +338,8 @@ if (reviewId) {
 }
 
 if (!feedbackParts.length) {
-  const automatedReviewCommentBody = await loadLatestAutomatedReviewComment();
-  if (automatedReviewCommentBody) {
-    feedbackParts.push(automatedReviewCommentBody);
+  if (latestReviewCommentBody) {
+    feedbackParts.push(latestReviewCommentBody);
     log('Using latest automated review comment as feedback fallback', { prNumber });
   }
 }
@@ -376,7 +393,7 @@ const changedFiles = allChangedFiles.filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
 // A file is either shown in full or withheld with an explicit marker — never cut silently:
-// the model returns whole files, so a truncated view becomes deleted content (ADR-0028).
+// the model returns whole files, so a truncated view becomes deleted content (ADR-0029).
 const fileContentParts = [];
 const shownPaths = new Set();
 const hiddenPaths = new Set();
@@ -458,10 +475,34 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
   throw new Error('AI response JSON must be an object');
 }
 
-if (Array.isArray(aiOutput.changes) && aiOutput.changes.length === 0) {
-  // Model text lands in a PR comment and a GITHUB_OUTPUT heredoc: one line, bounded.
-  const reason = String(aiOutput.blocked_reason || aiOutput.summary || 'no reason given').replace(/\s+/g, ' ').trim().slice(0, 500);
-  await reportBlocked([`Model declined to change files: ${reason}`]);
+// Reviewer and fixer disagree: surface it to a human, and count the attempt so re-triggers stay capped.
+if (hasNoProposedChanges(aiOutput)) {
+  await applyAttemptLabel(nextAttempt);
+  const needsHuman = loadLabelsConfig('autofix').needs_human;
+  const createNeedsHumanRes = await ghFetch(`/repos/${owner}/${repo}/labels`, { method: 'POST', body: JSON.stringify(needsHuman) });
+  if (!createNeedsHumanRes.ok && createNeedsHumanRes.status !== 422) {
+    throw new Error(`Label create failed for "${needsHuman.name}": ${createNeedsHumanRes.status}`);
+  }
+  const applyNeedsHumanRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`, { method: 'POST', body: JSON.stringify({ labels: [needsHuman.name] }) });
+  if (!applyNeedsHumanRes.ok) throw new Error(`Add label "${needsHuman.name}" failed: ${applyNeedsHumanRes.status}`);
+  // Model text lands in a PR comment: one line, bounded.
+  const modelSummary = String(aiOutput.blocked_reason || aiOutput.summary || '(no summary)').replace(/\s+/g, ' ').trim().slice(0, 500);
+  const noChangeRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({
+      body: `## \u{1F914} Auto-Fix: No Changes Proposed\n\nAttempt ${nextAttempt}/${MAX_ATTEMPTS}: the model proposed no change for the review feedback, so the reviewer and the fixer disagree. A human needs to decide (\`${needsHuman.name}\`).\n\n**Model summary:** ${modelSummary}`,
+    }),
+  });
+  if (!noChangeRes.ok) throw new Error(`No-change comment failed: ${noChangeRes.status}`);
+  await appendMetric({
+    type: 'autofix_skip',
+    run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-autofix-skip` : `local-${Date.now()}`,
+    pr_number: prNumber,
+    attempt: nextAttempt,
+    reason: 'no_changes',
+    ts: new Date().toISOString(),
+  });
+  await skipAutofix('no_changes', {}, 'warn');
 }
 
 const { summary, changes } = validateAiOutput(aiOutput);

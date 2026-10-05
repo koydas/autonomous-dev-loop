@@ -1,4 +1,4 @@
-# ADR-0028: Deterministic write guard for auto-fix
+# ADR-0029: Deterministic write guard for auto-fix
 
 - **Date:** 2026-10-05
 - **Status:** Accepted
@@ -23,7 +23,7 @@ ADR-0009 added prompt guardrails (no test removal, ≤ 30% rewrite) and rejected
    - it is a test file and its `test(` / `it(` count drops.
 
    New files are allowed.
-3. **Explicit "blocked" outcome.** The model may return `"changes": []` with a `blocked_reason`. That case, and any guard violation, produces an `Auto-Fix Blocked` PR comment, writes no files and emits no `fixed_paths`. The attempt label is still applied, so the 3-attempt limit holds. A new `autofix.blocked` event (warn, `duration_ms`) is logged, and the run exits 0.
+3. **Explicit "blocked" outcome.** Any guard violation produces an `Auto-Fix Blocked` PR comment listing the reason per file, writes no files and emits no `fixed_paths`. The attempt label is still applied, so the 3-attempt limit holds. A new `autofix.blocked` event (warn, `duration_ms`) is logged, and the run exits 0. The model may also decline with `"changes": []` and a `blocked_reason`: that case goes through the `no_changes` path of ADR-0028 (attempt counted, `needs-human`, `autofix.skipped`), whose comment now shows `blocked_reason` when present, collapsed to one line and capped at 500 chars.
 4. **Prompt cleanup.** The system prompt allows 0 to 6 changes and forbids targeting withheld or unshown files. The test rule no longer says "regardless of its path". The user prompt drops the block that invited edits to protected paths and puts the review feedback after the file contents.
 5. **Budget rebalance.** `autofix_diff_ratio` goes from `0.45` to `0.15`. Files now get 60% of the budget: the diff mostly repeats them, and only files shown in full can be edited.
 

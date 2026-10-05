@@ -109,3 +109,14 @@ jobs:
             --functions 80 \
             --statements 80 \
             node --test scripts/tests/eval_site.test.mjs
+
+      - name: Check eval_suites coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/eval_suites.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/eval_suites.test.mjs

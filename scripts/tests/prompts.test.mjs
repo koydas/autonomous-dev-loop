@@ -205,7 +205,7 @@ describe('prompt file contents', () => {
     assert.ok(!content.includes('regardless of its path'), 'must not contradict the protected-path rule');
   });
 
-  test('auto-fix-system forbids targeting withheld files and allows an empty fix (ADR-0028)', () => {
+  test('auto-fix-system forbids targeting withheld files and allows an empty fix (ADR-0029)', () => {
     const content = loadPrompt('auto-fix-system');
     assert.ok(content.includes('File withheld'));
     assert.ok(content.includes('blocked_reason'));

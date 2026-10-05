@@ -75,7 +75,7 @@ These were added after a benchmark session found a local coding model violating 
 - **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`); when this actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
 - **Auto-fix mirrors the same guardrails as generation:** `auto-fix-system.md` requires including a missing test file (unless its path is protected) when review feedback calls one out, and a self-check for read-only property assignment and non-persistent refs before returning a fix — so a fix pass doesn't reintroduce what it's meant to repair.
 
-- **Auto-fix write guard (ADR-0028):** the model returns whole files, so it only gets to edit files it saw in full. `auto_fix_pr.mjs` sends each changed file (up to 5) in full, or replaces it with a `File withheld … do NOT target this file` marker when it exceeds 8,000 chars or the remaining file budget. Nothing is cut silently. Before writing, `scripts/lib/autofix_guard.mjs` rejects a change to an existing file that was withheld or not shown, that removes more than `max(20, 30%)` of its non-blank lines, or that lowers a test file's `test(`/`it(` count. The model may also return `"changes": []` with `blocked_reason`. In both cases the PR gets an `Auto-Fix Blocked` comment, no file is written, `fixed_paths` is empty (nothing is pushed), the attempt label is still applied, and `autofix.blocked` is logged.
+- **Auto-fix write guard (ADR-0029):** the model returns whole files, so it only gets to edit files it saw in full. `auto_fix_pr.mjs` sends each changed file (up to 5) in full, or replaces it with a `File withheld … do NOT target this file` marker when it exceeds 8,000 chars or the remaining file budget. Nothing is cut silently. Before writing, `scripts/lib/autofix_guard.mjs` rejects a change to an existing file that was withheld or not shown, that removes more than `max(20, 30%)` of its non-blank lines, or that lowers a test file's `test(`/`it(` count. On a violation the PR gets an `Auto-Fix Blocked` comment, no file is written, `fixed_paths` is empty (nothing is pushed), the attempt label is still applied, and `autofix.blocked` is logged. The model may also decline with `"changes": []` and `blocked_reason`: that follows the `no_changes` path (ADR-0028), whose comment shows `blocked_reason`.
 
 Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See the proposed static-verification-backstop ADR in [PR #158](https://github.com/koydas/autonomous-dev-loop/pull/158) for the fuller writeup (not yet merged as of this change).
 
@@ -125,7 +125,7 @@ The project now runs as a continuous loop rather than a one-shot generation:
 
 1. **Issue validation** (`validate-issue.yml`) reviews issue quality and applies `ready-for-dev` or `needs-refinement`.
 2. **Code generation** (`code-generation.yml`) starts only when `ready-for-dev` is applied and opens/updates a PR for that issue.
-3. **PR review** (`pr-review.yml`) runs on branch pushes, posts structured feedback, submits review status, and applies `review-approved` or `changes-requested`.
+3. **PR review** (`pr-review.yml`) runs on branch pushes, posts structured feedback, submits review status, and applies `review-approved` or `changes-requested`. Each head SHA is reviewed by the LLM once: a run whose head the review comment's marker already names, or whose commit is no longer the PR head, exits without an LLM call (ADR-0028).
 4. **Auto-fix** (`auto-fix-pr.yml`) runs when `changes-requested` is applied, generates a targeted fix commit, and pushes it.
 5. The push from auto-fix re-triggers **PR review**, creating the iterative review loop.
 6. The loop ends when either:
@@ -266,6 +266,7 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 | `<stage>` | `openai/gpt-oss-120b` | Groq model. `GROQ_MODEL` overrides every stage. |
 | `<stage>_temperature` | per stage | `0`–`2`. |
 | `<stage>_max_tokens` | `1024` (validation, review), `4096` (generation, autofix) | Output cap, reasoning tokens included. Prompt + this value must stay under the Groq TPM per request (8K on the free tier), or Groq returns 413. |
+| `<stage>_max_input_tokens` | `6300` (validation, review), `3500` (generation), `2600` (autofix, user prompt only) | Estimated input budget (chars/4). Rule: input × 1.10 + `<stage>_max_tokens` ≤ 8000 (the estimate runs ~3% low; `workflow_gates.test.mjs` enforces it). Review shrinks the diff, then the PR body, to fit; every stage fails before the LLM call when the prompt still does not fit, since Groq would reject it (ADR-0028 amendment). |
 | `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0025). |
 
 ## Auto-Fix Token Budget
@@ -276,15 +277,15 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `3000` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set to stay within `8000 − system_tokens − max_output_tokens` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025). The static wrapper text of `auto-fix-user.md` (~192 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
-| `autofix_diff_ratio` | `0.15` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. Kept low because the diff mostly repeats the shown files, and only files shown in full can be edited (ADR-0028). |
+| `autofix_max_input_tokens` | `2600` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set so that `(system_tokens + autofix_max_input_tokens) × 1.10 + max_output_tokens ≤ 8000` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025, ADR-0028 amendment): (890 + 2600) × 1.10 + 4096 = 7935. The static wrapper text of `auto-fix-user.md` (~192 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_diff_ratio` | `0.15` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. Kept low because the diff mostly repeats the shown files, and only files shown in full can be edited (ADR-0029). |
 | `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents; a file that does not fit whole is withheld, never truncated. |
 
 **Tuning for your provider tier:**
 
 | Provider / Tier | Recommended `autofix_max_input_tokens` |
 |---|---|
-| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `3000` (default) |
+| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `2600` (default) |
 | Groq Developer plan | Raise or remove the key (TPM is far above a single request) |
 | Anthropic (`claude-opus-4-7`) | Remove the key (200k context window; no per-request TPM limit) |
 

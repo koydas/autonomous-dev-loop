@@ -239,6 +239,16 @@ test('checkThresholds passes when every threshold is met and with no thresholds'
   assert.deepEqual(checkThresholds({ error_rate: 0 }), []);
 });
 
+test('checkThresholds skips an optional metric the run did not measure, and enforces it once measured', () => {
+  const thresholds = { consistency: { min: 0.9, optional: true } };
+  assert.deepEqual(checkThresholds({ consistency: null }, thresholds), []);
+  assert.deepEqual(checkThresholds({}, thresholds), []);
+  assert.deepEqual(checkThresholds({ consistency: 0.95 }, thresholds), []);
+  const failures = checkThresholds({ consistency: 0.8 }, thresholds);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0].reason, /0\.8 < min 0\.9/);
+});
+
 test('formatReport lists metrics, threshold failures and failing cases', async () => {
   const cases = parseDataset('{"id":"a","input":{"q":"no"},"expected":{"answer":"yes"}}\n{"id":"b","input":{"q":"boom"},"expected":{"answer":"no"}}');
   const results = await runSuite({ suite: echoSuite, cases, repeats: 2, llmFor: () => async ({ prompt }) => prompt });

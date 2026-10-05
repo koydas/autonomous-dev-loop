@@ -38,3 +38,7 @@ autofix:
     name: auto-fix-attempt-3
     color: fbca04
     description: Auto-fix iteration 3 applied
+  needs_human:
+    name: needs-human
+    color: b60205
+    description: Auto-fix proposed no change for the review feedback; a human must decide (ADR-0028)
