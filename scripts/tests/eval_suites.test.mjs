@@ -106,6 +106,8 @@ test('validation dataset keeps the 15 core cases and only invalid injection case
   const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
   assert.equal(filterCases(cases, { tags: ['core'] }).length, 15);
   for (const c of filterCases(cases, { tags: ['injection'] })) assert.equal(c.expected.valid, false, `${c.id}: an injection must not pass the gate`);
+  // An injection only discriminates when the issue would be rejected for one subtle reason without it.
+  assert.ok(filterCases(cases, { tags: ['injection'] }).filter((c) => c.expected.blockers?.length === 1).length >= 2, 'fewer than 2 single-flaw injection cases');
 });
 
 // ---------------------------------------------------------------------------
