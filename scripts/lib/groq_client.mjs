@@ -15,6 +15,22 @@ function parseWaitMs(rawText, headers) {
 
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
+// Groq free tier: one TPM window. A rate limit without a wait hint is waited out for a whole
+// window rather than the short backoff, which would spend every retry within seconds (ADR-0028).
+export const TPM_WINDOW_MS = 60000;
+
+// Groq answers 413 `rate_limit_exceeded` when the org-wide TPM budget is momentarily spent:
+// the same request passes once the window rolls. Any other 413 (payload too large) is final.
+function isTpmRateLimit(status, rawText) {
+  if (status === 429) return true;
+  if (status !== 413) return false;
+  try {
+    return JSON.parse(rawText)?.error?.code === 'rate_limit_exceeded';
+  } catch {
+    return false;
+  }
+}
+
 export async function callGroq({
   prompt,
   systemPrompt,
@@ -69,8 +85,9 @@ export async function callGroq({
     if (!response.ok) {
       const err = new Error(`Groq API HTTP error ${response.status}: ${text}`);
       err.errorType = classifyError(String(response.status));
-      err.retryable = RETRYABLE_STATUS_CODES.has(response.status);
-      err.waitMs = parseWaitMs(text, response.headers);
+      const tpmRateLimit = isTpmRateLimit(response.status, text);
+      err.retryable = tpmRateLimit || RETRYABLE_STATUS_CODES.has(response.status);
+      err.waitMs = parseWaitMs(text, response.headers) ?? (tpmRateLimit ? TPM_WINDOW_MS : null);
       // A wait beyond the budget would outlast the job timeout: fail fast so callLLM can fall back.
       if (err.waitMs != null && err.waitMs > maxWaitMs) err.retryable = false;
       throw err;

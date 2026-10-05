@@ -75,7 +75,10 @@ jobs:
     # A crashed evidence job degrades the review (evidence "missing"), it never blocks it.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # Long on purpose: the 8K TPM is shared by every PR and stage of the org, so a review may have to
+    # wait several windows. GROQ_MAX_RETRIES x LLM_MAX_RETRY_WAIT_MS = 12 min of waits, + 3 min for the
+    # rest of the job (ADR-0022, ADR-0028 amendment).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,12 +162,15 @@ jobs:
           path: ${{ runner.temp }}/evidence
 
       - name: Run automated review
+        id: review
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
           REVIEW_EVIDENCE_PATH: ${{ runner.temp }}/evidence/review-evidence.json
           METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          # timeout-minutes: 2 — never wait out long LLM rate limits here (ADR-0022).
-          LLM_MAX_RETRY_WAIT_MS: '10000'
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '12'
           CHECKPOINT_RUN_ID: pr-${{ steps.ckpt.outputs.pr_number }}
           GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -176,8 +182,10 @@ jobs:
           GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
         run: node "$RUNNER_TEMP/pipeline/scripts/pr_review.mjs"
 
+      # A skipped run (head already reviewed, superseded, no open PR) wrote no checkpoint: uploading
+      # the copy it downloaded would replace the newest checkpoints-pr-<N> with an older one (ADR-0028).
       - name: Upload checkpoint artifact
-        if: always()
+        if: ${{ always() && steps.review.outputs.skipped != 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}

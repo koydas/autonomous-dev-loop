@@ -222,10 +222,92 @@ test('auto-fix-pr.yml resolves the head ref only for trusted rerun comments', ()
   assert.match(headIf, /- \[x\] Relancer Auto Fixer/);
 });
 
-test('pr-review.yml caps LLM rate-limit waits to fit its 2-minute timeout', () => {
+// ADR-0028 amendment: a Groq rate limit must never fail a job. Every workflow that hands
+// GROQ_API_KEY to a step must let that step wait out TPM windows (hint-less limits wait 60 s)
+// within an explicit job timeout, keeping 3 minutes for evidence, the call and the rest.
+const LLM_WORKFLOWS = ['pr-review.yml', 'auto-fix-pr.yml', 'code-generation.yml', 'validate-issue.yml', 'evals.yml'];
+
+// Splits a workflow into its jobs (2-space-indented keys under `jobs:`).
+function jobsOf(text) {
+  const body = text.slice(text.indexOf('\njobs:\n') + '\njobs:\n'.length);
+  return body.split(/\n(?=  [A-Za-z0-9_-]+:\n)/).map((chunk) => ({ name: chunk.match(/^\s*([A-Za-z0-9_-]+):/)?.[1], text: chunk }));
+}
+
+function llmRetryBudget(name) {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+  const job = jobsOf(text).find((j) => j.text.includes('secrets.GROQ_API_KEY'));
+  assert.ok(job, `${name}: no job receives GROQ_API_KEY`);
+  const step = job.text.split(/\n(?=      - )/).find((st) => st.includes('secrets.GROQ_API_KEY'));
+  return {
+    job: job.name,
+    timeoutMin: Number(job.text.match(/^    timeout-minutes: (\d+)/m)?.[1]),
+    waitMs: Number(step.match(/LLM_MAX_RETRY_WAIT_MS: '(\d+)'/)?.[1]),
+    retries: Number(step.match(/GROQ_MAX_RETRIES: '(\d+)'/)?.[1]),
+  };
+}
+
+test('exactly the expected workflows hand GROQ_API_KEY to a step', () => {
+  const withKey = readWorkflows().filter(({ text }) => text.includes('secrets.GROQ_API_KEY')).map(({ name }) => name).sort();
+  assert.deepEqual(withKey, [...LLM_WORKFLOWS].sort());
+});
+
+for (const name of LLM_WORKFLOWS) {
+  test(`${name} waits out Groq rate limits (one 60 s TPM window per retry) within an explicit job timeout`, () => {
+    const { job, timeoutMin, waitMs, retries } = llmRetryBudget(name);
+    assert.ok(Number.isFinite(timeoutMin), `${name} job ${job} must declare timeout-minutes`);
+    assert.ok(waitMs >= 60_000, `${name}: LLM_MAX_RETRY_WAIT_MS (${waitMs}) must cover a full TPM window (60000)`);
+    assert.ok(retries >= 5, `${name}: GROQ_MAX_RETRIES (${retries}) must be >= 5`);
+    assert.ok(retries * waitMs <= (timeoutMin - 3) * 60_000,
+      `${name}: ${retries} x ${waitMs} ms of waits must fit timeout-minutes (${timeoutMin}) - 3 min`);
+  });
+}
+
+test('evals.yml measures consistency by default and tolerates a long TPM queue', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
+  const repeats = text.slice(text.indexOf('      repeats:'));
+  assert.equal(repeats.match(/default: '(\d+)'/)?.[1], '3');
+  assert.ok(llmRetryBudget('evals.yml').retries >= 10);
+});
+
+test('no workflow serializes LLM calls through a global concurrency group (GitHub keeps one pending run per group and cancels the rest)', () => {
+  for (const { name, text } of readWorkflows()) {
+    for (const [, group] of text.matchAll(/group: (.+)/g)) {
+      assert.match(group, /\$\{\{/, `${name}: concurrency group "${group}" must be keyed per PR/issue/ref`);
+    }
+  }
+});
+
+// ADR-0028: estimated input × 1.10 (chars/4 under-estimates by ~3%) + max_tokens <= 8000 TPM.
+test('config/models.yaml: every Groq stage input budget + max_tokens keeps the 10% margin under 8K TPM', async () => {
+  const { parseFlatYaml } = await import('../lib/yaml.mjs');
+  const { estimateTokens } = await import('../lib/metrics.mjs');
+  const models = parseFlatYaml(readFileSync(resolve(ROOT, 'config/models.yaml'), 'utf8'));
+  assert.equal(models.groq_max_retries, undefined, 'retries are per workflow (GROQ_MAX_RETRIES), sized to each job timeout');
+  // autofix_max_input_tokens bounds the user prompt only: its system prompt comes on top.
+  const autofixSystem = estimateTokens(readFileSync(resolve(ROOT, 'prompts/auto-fix-system.md'), 'utf8').trim());
+  const extra = { autofix: autofixSystem };
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    const maxTokens = Number(models[`${stage}_max_tokens`]);
+    const budget = Number(models[`${stage}_max_input_tokens`]);
+    assert.ok(maxTokens > 0 && budget > 0, `${stage}: max_tokens and max_input_tokens must be set`);
+    const input = budget + (extra[stage] ?? 0);
+    assert.ok(input * 1.1 + maxTokens <= 8000, `${stage}: ${input} x 1.10 + ${maxTokens} = ${Math.round(input * 1.1 + maxTokens)} > 8000`);
+  }
+});
+
+test('config/models.yaml: the review budget leaves room for a diff after the fixed prompt', async () => {
+  const { parseFlatYaml } = await import('../lib/yaml.mjs');
+  const { estimateTokens } = await import('../lib/metrics.mjs');
+  const models = parseFlatYaml(readFileSync(resolve(ROOT, 'config/models.yaml'), 'utf8'));
+  const fixed = ['pr-review-system', 'pr-review-user'].reduce((n, f) => n + estimateTokens(readFileSync(resolve(ROOT, `prompts/${f}.md`), 'utf8')), 0);
+  assert.ok(Number(models.review_max_input_tokens) - fixed >= 2000, `review prompts (${fixed}) leave < 2000 tokens for diff, body and contexts`);
+});
+
+// ADR-0028: a run that reviewed nothing must not replace the newest checkpoints-pr-<N> artifact.
+test('pr-review.yml uploads checkpoints only when the review step did not skip', () => {
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
-  assert.match(text, /timeout-minutes: 2/);
-  assert.match(text, /LLM_MAX_RETRY_WAIT_MS: '10000'/);
+  assert.match(text, /- name: Run automated review\n\s+id: review\n/);
+  assert.match(text, /- name: Upload checkpoint artifact\n\s+if: \$\{\{ always\(\) && steps\.review\.outputs\.skipped != 'true' \}\}/);
 });
 
 // ADR-0027: the eval workflow publishes the dashboard to GitHub Pages; it never commits.

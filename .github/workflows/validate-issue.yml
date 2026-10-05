@@ -16,6 +16,8 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # 12 Groq retries x 60 s + 3 min for the comment and labels (ADR-0028).
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -38,6 +40,10 @@ jobs:
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
           METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '12'
           CHECKPOINT_RUN_ID: issue-${{ github.event.issue.number }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}

@@ -286,6 +286,88 @@ test('callGroq honors LLM_MAX_RETRY_WAIT_MS for short-timeout jobs', async () =>
   }
 });
 
+// ADR-0028: Groq answers 413 rate_limit_exceeded when the org-wide TPM budget is momentarily
+// spent (run 37174238930); the same request passed 48 s later.
+const TPM_413 = { error: { message: 'Request too large for model: Limit 8000, Requested 8521', type: 'tokens', code: 'rate_limit_exceeded' } };
+
+function withRecordedWaits(fn) {
+  return async () => {
+    const waits = [];
+    const origSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (cb, ms) => { waits.push(ms); cb(); return {}; };
+    try {
+      await fn(waits);
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+      delete process.env.GROQ_MAX_RETRIES;
+      delete process.env.LLM_MAX_RETRY_WAIT_MS;
+    }
+  };
+}
+
+test('callGroq retries a 413 rate_limit_exceeded (TPM window spent) and waits one TPM window', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '3';
+  let calls = 0;
+  globalThis.fetch = async () => (++calls === 1 ? makeResponse(TPM_413, 413) : makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+  assert.equal(await callGroq(BASE_ARGS), 'ok');
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [60000]);
+}));
+
+test('callGroq does not retry a 413 without the rate_limit_exceeded code', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '3';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse({ error: { message: 'Payload too large', code: 'request_too_large' } }, 413); };
+  await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 413/);
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+}));
+
+test('callGroq does not retry a 413 whose body is not JSON', withRecordedWaits(async () => {
+  process.env.GROQ_MAX_RETRIES = '3';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('<html>413 Request Entity Too Large</html>', 413); };
+  await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 413/);
+  assert.equal(calls, 1);
+}));
+
+test('callGroq waits a full TPM window (60 s) on a 429 without wait hint, not the short backoff', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '2';
+  let calls = 0;
+  globalThis.fetch = async () => (++calls <= 2 ? makeResponse('rate limited', 429) : makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+  assert.equal(await callGroq(BASE_ARGS), 'ok');
+  assert.deepEqual(waits, [60000, 60000]);
+}));
+
+test('callGroq keeps the server hint over the TPM-window default on a 413 rate limit', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '1';
+  let calls = 0;
+  const body = { error: { ...TPM_413.error, message: `${TPM_413.error.message}. Please try again in 31.5s` } };
+  globalThis.fetch = async () => (++calls === 1 ? makeResponse(body, 413) : makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+  assert.equal(await callGroq(BASE_ARGS), 'ok');
+  assert.deepEqual(waits, [31500]);
+}));
+
+test('callGroq does not retry a hint-less rate limit when the TPM window exceeds LLM_MAX_RETRY_WAIT_MS', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '3';
+  process.env.LLM_MAX_RETRY_WAIT_MS = '45000';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse(TPM_413, 413); };
+  await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 413/);
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+}));
+
+test('callGroq gives up after GROQ_MAX_RETRIES TPM-window waits on a persistent 413 rate limit', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '4';
+  process.env.LLM_MAX_RETRY_WAIT_MS = '60000';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse(TPM_413, 413); };
+  await assert.rejects(() => callGroq(BASE_ARGS), /Groq API HTTP error 413/);
+  assert.equal(calls, 5);
+  assert.deepEqual(waits, [60000, 60000, 60000, 60000]);
+}));
+
 test('callGroq sends reasoning_effort when reasoningEffort is set', async () => {
   let capturedBody;
   globalThis.fetch = async (_url, opts) => {
