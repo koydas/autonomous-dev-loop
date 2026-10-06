@@ -8,8 +8,10 @@
  *
  * No LLM call and no secret: recorded responses are served again (ADR-0027 amendment). Prints a
  * Markdown report (also appended to GITHUB_STEP_SUMMARY when set) and GitHub annotations.
- * Exit 1 only when a threshold met by the published run fails in the replay; an unreachable site,
- * a suite without a published run or a changed dataset only warns (exit 0).
+ * Exit 1 when a threshold the published run meets fails in the replay (both under the PR's thresholds),
+ * or when the PR's own code cannot run the replay (a malformed dataset, a suite module that throws on
+ * import or outside a case). An unreachable site, a suite without a published run, a malformed
+ * published file or a changed dataset only warns (exit 0).
  */
 
 import fs from 'node:fs/promises';

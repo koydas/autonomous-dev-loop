@@ -132,7 +132,7 @@ npm run eval -- --suite validation --replay evals/results/validation-<runId>.jso
 
 Each run prints a Markdown report (metrics, threshold failures, failing cases), writes the full replayable results to `evals/results/`, and appends a summary to `evals/history.jsonl`. In CI: **Actions → [Evals](https://github.com/koydas/autonomous-dev-loop/actions/workflows/evals.yml) → Run workflow** — the report lands on the run's summary page, results in the artifacts, and a run on `main` is added to the [eval dashboard](https://koydas.github.io/autonomous-dev-loop/) (GitHub Pages), with nothing committed.
 
-On a PR that touches a parser, `decideVerdict`, a scorer, a prompt or a dataset, the **Eval replay** workflow replays the last published live run of each suite against the PR's code (no LLM call, no secret), posts the Δ per metric and the cases that change verdict in the job summary, and fails when a threshold the published run met breaks. It does not measure a prompt change: the recorded responses stay the same. See [docs/evals.md](docs/evals.md#pr-replay-gate).
+On a PR that touches a parser, `decideVerdict`, a scorer, a prompt or a dataset, the **Eval replay** workflow replays the last published live run of each suite against the PR's code (no LLM call, no secret), posts the Δ per metric and the cases that change verdict in the job summary, and fails when a threshold the published numbers meet breaks under the PR's thresholds. It does not measure a prompt change: the recorded responses stay the same. See [docs/evals.md](docs/evals.md#pr-replay-gate).
 
 Adding a case, a scorer or a suite for another stage: [docs/evals.md](docs/evals.md). Design rationale: [ADR-0027](docs/adr/0027-offline-eval-harness.md).
 

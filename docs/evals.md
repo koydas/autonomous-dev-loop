@@ -37,7 +37,7 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 
 > **A prompt change is not measured.** The replay serves the responses the model gave to the *recorded* prompt, so changing `prompts/*.md` cannot move the scores here. The replay validates what runs on those responses: the parsers (`issue_validator.mjs`, `review_prompt.mjs`), `decideVerdict` (`review_evidence.mjs`), the scorers and the thresholds, plus the prompt wiring (a template that no longer loads or interpolates makes every case error). To measure a prompt or model change, run the [Evals workflow](#run) live.
 
-`.github/workflows/eval-replay.yml` runs on `pull_request` when the PR touches `prompts/**`, `scripts/lib/issue_validator.mjs`, `scripts/lib/review_prompt.mjs`, `scripts/lib/review_evidence.mjs`, `scripts/lib/output_writer.mjs`, `scripts/lib/eval_*.mjs`, `scripts/replay_evals_ci.mjs`, `evals/datasets/**` or the workflow itself. A PR that only changes docs does not trigger it. For each suite in the registry, `scripts/replay_evals_ci.mjs` (logic in `scripts/lib/eval_replay_ci.mjs`):
+`.github/workflows/eval-replay.yml` runs on `pull_request` when the PR touches `prompts/**`, `scripts/lib/issue_validator.mjs`, `scripts/lib/review_prompt.mjs`, `scripts/lib/review_evidence.mjs`, `scripts/lib/output_writer.mjs`, `scripts/lib/eval_*.mjs`, every other `scripts/lib/` module the suites import (`prompts.mjs`, `config.mjs`, `token_budget.mjs`, … — `workflow_gates.test.mjs` walks the import graph and fails on an uncovered one), `config/models.yaml`, `scripts/replay_evals_ci.mjs`, `evals/datasets/**` or the workflow itself. A PR that only changes docs does not trigger it. For each suite in the registry, `scripts/replay_evals_ci.mjs` (logic in `scripts/lib/eval_replay_ci.mjs`):
 
 1. reads `scorecard.json` from the [dashboard](#dashboard), then `runs/<id>.json` of the newest run of the suite (a run without a detail page is skipped, with a warning, for the previous one);
 2. replays it against the PR's code with the recorded repeat count, as `--replay` does;
@@ -45,13 +45,16 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 
 | Situation | Outcome |
 |---|---|
-| A threshold met by the published run fails in the replay | ❌ job fails (`::error::`) |
-| A threshold already failing in the published run still fails | ⚠️ warning, not blocking |
+| A threshold the published numbers meet fails in the replay | ❌ job fails (`::error::`) |
+| The PR's code cannot run the replay (malformed dataset, suite module that throws on import) | ❌ job fails (`eval_replay.error`) |
+| A threshold the published numbers already miss still fails | ⚠️ warning, not blocking |
 | Dataset changed since the run (`meta.dataset_sha256` ≠ current file), or the run recorded no hash | ⚠️ only the common cases are replayed; added, removed and relabelled cases are listed; thresholds are advisory (warnings) |
 | Dashboard unreachable (network, 404, unsupported format), suite never published, or no case in common | ⚪ neutral: warning, exit 0 |
 
-- **Baseline:** with an unchanged dataset, the published `summary` and `failures` as they are on the site. With a changed dataset, the published results restricted to the common cases, summarized by the PR's code.
-- ⚠️ The published run was scored by the code of its day. A change merged to the default branch after the last live run therefore shows up as a Δ on every PR until the next live run.
+- **Thresholds:** both sides are checked against the PR's `thresholds`, the published numbers included (not the `failures` recorded with the thresholds of the run's day). Only the code's effect on the recorded responses can block; a threshold changed since the run, on `main` or in the PR, never does — a live run judges it.
+- **Robustness:** a network error or a 5xx on the site is retried once. A malformed published file is treated as a missing run (neutral), never as a crash.
+- **Baseline:** with an unchanged dataset, the published `summary` as it is on the site. With a changed dataset, the published results restricted to the common cases, summarized by the PR's code.
+- ⚠️ The published run was scored by the code of its day. A scorer change merged to the default branch after the last live run therefore shows up as a Δ on every PR until the next live run.
 - **Security:** the PR's code runs, so the workflow uses `pull_request` (never `pull_request_target`), `permissions: contents: read`, no secret, `persist-credentials: false` (ADR-0023/0024). The site URL defaults to `https://<owner>.github.io/<repo>`; the repository variable `EVAL_SITE_URL` overrides it.
 - GitHub Actions has no "neutral" job conclusion: a neutral outcome is a green job with a warning annotation and a ⚪ summary.
 - **Locally:** `node scripts/replay_evals_ci.mjs --site-url https://koydas.github.io/autonomous-dev-loop [--suite review]`, or `--site-dir <unzipped eval-site-<runId> artifact>` offline.

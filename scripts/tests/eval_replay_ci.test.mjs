@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   REPLAY_DISCLAIMER, siteGetter, dirGetter, loadPublishedRuns, sha256, diffDataset, replayRecorded,
   metricPaths, metricDeltas, verdictChanges, classifyGate, evaluateSuite, overallStatus,
-  formatReplayReport, annotations, runReplayCi,
+  formatReplayReport, annotations, runReplayCi, getWithRetry,
 } from '../lib/eval_replay_ci.mjs';
 import { loadDataset, runSuite, summarize, checkThresholds, createReplayLLM } from '../lib/eval_harness.mjs';
 import { reviewSuite, validationSuite } from '../lib/eval_suites.mjs';
@@ -248,9 +248,10 @@ test('evaluateSuite: a parser regression breaks thresholds the published run met
   assert.equal(r.deltas.find((d) => d.metric === 'error_rate').after, 1);
 });
 
-test('evaluateSuite: a threshold already failing in the published run only warns', async () => {
+test('evaluateSuite: a threshold the published numbers already miss under the PR thresholds only warns', async () => {
   const published = await publishedReview();
-  published.failures = [{ metric: 'scores.verdict_match.mean', reason: 'x' }];
+  // Published as passing under the thresholds of its day; the PR (or main since) tightened the rule.
+  assert.deepEqual(published.failures, []);
   const strict = { ...reviewSuite, thresholds: { 'scores.verdict_match.mean': { min: 0.99 } } };
   const r = await evaluateSuite({ suite: strict, published: { recorded: published } });
   assert.equal(r.status, 'warn');
@@ -464,4 +465,82 @@ test('replay_evals_ci.mjs: empty or unreadable site → neutral, exit 0; bad arg
   await fs.mkdir(path.join(dir, 'broken', 'scorecard.json'), { recursive: true });
   const crashed = await runScript(['--site-dir', path.join(dir, 'broken'), '--suite', 'review'], dir);
   assert.equal(crashed.code, 0, 'an unreadable scorecard is still a neutral outcome');
+});
+
+// ---------------------------------------------------------------------------
+// Review follow-ups on #179: retry, malformed published files, PR thresholds on both sides,
+// PR-side crash
+// ---------------------------------------------------------------------------
+
+// get() that answers from a script of outcomes per call: a status number, an Error, or a body.
+function scriptedGetter(outcomes) {
+  const calls = [];
+  const get = async (rel) => {
+    calls.push(rel);
+    const next = outcomes.shift();
+    if (next instanceof Error) throw next;
+    return typeof next === 'number' ? json(next, null) : json(200, next);
+  };
+  return { get, calls };
+}
+
+test('getWithRetry retries once on a network error or a 5xx, never on a 4xx', async () => {
+  const thrown = scriptedGetter([new Error('ECONNRESET'), { ok: 1 }]);
+  assert.equal((await getWithRetry(thrown.get, 'a')).status, 200);
+  assert.deepEqual(thrown.calls, ['a', 'a']);
+  const fivexx = scriptedGetter([502, { ok: 1 }]);
+  assert.equal((await getWithRetry(fivexx.get, 'a')).status, 200);
+  assert.equal(fivexx.calls.length, 2);
+  const notFound = scriptedGetter([404]);
+  assert.equal((await getWithRetry(notFound.get, 'a')).status, 404);
+  assert.equal(notFound.calls.length, 1);
+  const twice = scriptedGetter([new Error('down'), new Error('still down')]);
+  await assert.rejects(getWithRetry(twice.get, 'a'), /still down/);
+  const twice5xx = scriptedGetter([503, 503]);
+  assert.equal((await getWithRetry(twice5xx.get, 'a')).status, 503);
+});
+
+test('loadPublishedRuns survives one transient failure on the scorecard and on the run detail', async () => {
+  const recorded = { meta: { suite: 'review', run_id: '1' }, results: [{ case_id: 'a', repeat: 0 }] };
+  const { get, calls } = scriptedGetter([new Error('ETIMEDOUT'), scorecardOf({ review: ['1'] }), 500, recorded]);
+  const out = await loadPublishedRuns(get, ['review']);
+  assert.equal(out.available, true);
+  assert.equal(out.suites.review.recorded, recorded);
+  assert.deepEqual(calls, ['scorecard.json', 'scorecard.json', 'runs/1.json', 'runs/1.json']);
+});
+
+test('loadPublishedRuns treats a published file with malformed results as a missing run, not a crash', async () => {
+  const sc = { 'scorecard.json': scorecardOf({ review: ['9'] }) };
+  for (const results of [[null], [{ case_id: 1, repeat: 0 }], [{ case_id: 'a' }], [{ case_id: 'a', repeat: '0' }]]) {
+    const out = await loadPublishedRuns(memoryGetter({ ...sc, 'runs/9.json': { meta: { suite: 'review' }, results } }), ['review']);
+    assert.deepEqual(out.suites.review, { missing: 'runs/9.json: not a review results file' }, JSON.stringify(results));
+  }
+});
+
+test('evaluateSuite: the published failures list is ignored — a code regression blocks even if it was recorded as failing', async () => {
+  const published = await publishedReview();
+  // Recorded under some other threshold set as failing error_rate; under the PR thresholds the numbers pass it.
+  published.failures = [{ metric: 'error_rate', reason: 'stale' }];
+  const r = await evaluateSuite({ suite: brokenReviewSuite, published: { recorded: published } });
+  assert.equal(r.status, 'fail');
+  assert.ok(r.gate.blocking.some((f) => f.metric === 'error_rate'));
+  assert.ok(!r.gate.preexisting.some((f) => f.metric === 'error_rate'));
+});
+
+test('evaluateSuite: a loosened threshold that the published numbers now meet can block a regression', async () => {
+  const published = await publishedReview();
+  const loose = { ...reviewSuite, thresholds: { error_rate: { max: 0.5 } } };
+  const ok = await evaluateSuite({ suite: loose, published: { recorded: published } });
+  assert.equal(ok.status, 'pass');
+  const broken = await evaluateSuite({ suite: { ...brokenReviewSuite, thresholds: loose.thresholds }, published: { recorded: published } });
+  assert.deepEqual(broken.gate.blocking.map((f) => f.metric), ['error_rate']);
+});
+
+test('runReplayCi rejects when the PR\'s dataset is malformed (the CLI exits 1 with eval_replay.error)', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'replay-root-'));
+  await fs.mkdir(path.join(root, 'evals', 'datasets'), { recursive: true });
+  await fs.writeFile(path.join(root, reviewSuite.dataset), '{"id": "a", "input": {}, "expected": {}}\n{not json}\n');
+  const published = await publishedReview();
+  const get = memoryGetter({ 'scorecard.json': scorecardOf({ review: ['100'] }), 'runs/100.json': published });
+  await assert.rejects(runReplayCi({ get, suites: [reviewSuite], repoRoot: root }), /review\.jsonl:2: invalid JSON/);
 });

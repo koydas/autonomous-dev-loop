@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -386,7 +386,7 @@ test('eval-replay.yml triggers on parser, verdict, scorer, prompt and dataset ch
     assert.ok(paths.includes(required), `missing paths filter ${required}`);
   }
   const triggers = (file) => paths.some((g) => globMatch(g, file));
-  for (const file of ['prompts/pr-review-system.md', 'scripts/lib/review_prompt.mjs', 'scripts/lib/eval_harness.mjs', 'scripts/lib/eval_replay_ci.mjs', 'evals/datasets/review.jsonl']) {
+  for (const file of ['prompts/pr-review-system.md', 'scripts/lib/review_prompt.mjs', 'scripts/lib/eval_harness.mjs', 'scripts/lib/eval_replay_ci.mjs', 'evals/datasets/review.jsonl', 'config/models.yaml']) {
     assert.ok(triggers(file), `${file} must trigger the replay`);
   }
   for (const file of ['README.md', 'docs/evals.md', 'CHANGELOG.md', 'docs/adr/0027-offline-eval-harness.md', 'scripts/lib/eval/nested.mjs', 'scripts/lib/llm_client.mjs']) {
@@ -402,4 +402,31 @@ test('eval-replay.yml keys concurrency on the PR, keeps the observability contra
   assert.match(text, /^    timeout-minutes: \d+$/m);
   const runs = [...text.matchAll(/^\s+run: (.+)$/gm)].map((m) => m[1]);
   assert.deepEqual(runs, ['node scripts/replay_evals_ci.mjs --site-url "$EVAL_SITE_URL"']);
+});
+
+// Relative imports reachable from the replay entry points: a module the suites load that the paths
+// filter misses lets a PR break every replayed case without triggering the gate (#179 review).
+function relativeImportClosure(entries) {
+  const seen = new Set();
+  const queue = [...entries];
+  while (queue.length) {
+    const file = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const text = readFileSync(resolve(ROOT, file), 'utf8');
+    for (const [, spec] of text.matchAll(/^\s*(?:import|export)\b[^'"]*?\bfrom\s+['"](\.{1,2}\/[^'"]+)['"]/gm)) {
+      queue.push(posix.normalize(posix.join(posix.dirname(file), spec)));
+    }
+  }
+  return [...seen].sort();
+}
+
+test('eval-replay.yml paths filter covers every module the replay loads', () => {
+  const closure = relativeImportClosure(['scripts/replay_evals_ci.mjs', 'scripts/lib/eval_replay_ci.mjs', 'scripts/lib/eval_suites.mjs']);
+  assert.ok(closure.includes('scripts/lib/prompts.mjs') && closure.includes('scripts/lib/token_budget.mjs'), closure.join(', '));
+  const paths = pathsFilter(evalReplay());
+  const uncovered = closure.filter((file) => !paths.some((g) => globMatch(g, file)));
+  assert.deepEqual(uncovered, [], `add to eval-replay.yml paths: ${uncovered.join(', ')}`);
+  // config.mjs parses config/models.yaml at import time.
+  assert.ok(paths.includes('config/models.yaml'));
 });

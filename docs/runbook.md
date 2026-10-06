@@ -130,7 +130,7 @@ Key steps to expand per workflow:
 - **Verify CHANGELOG.md updated for entrypoint or ADR changes** — exits 0 (skipped) when no entrypoints or ADRs changed; exits 1 with a plain-text error message describing which trigger files were found and what is missing
 
 ### `eval-replay` (`eval-replay.yml`)
-- **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 only when a threshold met by the published run breaks; an unreachable dashboard, an unpublished suite or a changed dataset only warns
+- **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 when a threshold the published numbers meet breaks (PR thresholds on both sides), or when the PR's code cannot run the replay (malformed dataset, suite crash); an unreachable dashboard, an unpublished suite or a changed dataset only warns
 
 ### `auto-fix-pr` (`auto-fix-pr.yml`)
 - **Resolve PR payload for issue_comment** _(only for checkbox-rerun triggers)_ — GitHub PR API call; extracts `head.ref` branch name needed for the checkout step. Failure here means the checkout will not have the correct branch ref.
@@ -178,7 +178,8 @@ Key steps to expand per workflow:
 | Failure | Recovery |
 |---------|----------|
 | ❌ `Thresholds broken by this PR`, verdict flips to `error` | The PR changed how recorded responses are parsed or scored (`parseReviewVerdict`, `validateIssue` parsing, `decideVerdict`, a scorer). Fix the regression; the "change verdict" table lists the cases to reproduce with `npm run eval -- --suite <s> --replay <runs/<id>.json from the dashboard>` |
-| The threshold change is intended (stricter gate, scorer redefinition) | The replay compares against the published run: the gate stays red until a live run meets the new rule. Run **Actions → Evals** on the PR branch to check it live, then merge with the reviewer's agreement and publish a live run from `main` |
+| A threshold change alone | Never blocks: both sides use the PR's thresholds, a published value that misses the new rule is reported under "Already failing". Run **Actions → Evals** on the PR branch to check the new rule live |
+| `eval_replay.error`, job red without a report | The PR's code cannot run the replay: malformed `evals/datasets/*.jsonl` (the error names file and line) or a suite module that throws on import. Run `node scripts/replay_evals_ci.mjs --site-url …` locally |
 | ⚪ "dashboard unreachable" or "not replayed" | Neutral (green job). Check the Pages site and the `EVAL_SITE_URL` repository variable; a suite with no live run yet needs one **Actions → Evals** run on `main` |
 | ⚠️ "Dataset changed since the run" | Expected after a dataset edit: thresholds are advisory until the next live run on `main` records the new hash |
 

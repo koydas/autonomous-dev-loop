@@ -8,8 +8,9 @@
  * prompt.
  *
  * Gate, per suite:
- *   - blocking  — a threshold that the published run met and the replay misses;
- *   - preexisting — a threshold the published run already missed (warning);
+ *   - blocking  — a threshold that the published numbers meet and the replay misses, both checked
+ *                 against the PR's thresholds (a threshold change alone never blocks);
+ *   - preexisting — a threshold the published numbers already miss (warning);
  *   - advisory  — every replay failure when the dataset changed since the run, or when the run
  *                 recorded no dataset hash (warning). Only the cases common to both are replayed.
  * A site that cannot be read, or a suite without a published run, is neutral (warning, exit 0).
@@ -54,11 +55,22 @@ export function dirGetter(dir) {
   };
 }
 
+// One retry on a network error or a 5xx: a transient failure would otherwise turn the gate off.
+export async function getWithRetry(get, rel) {
+  try {
+    const res = await get(rel);
+    if (res.status < 500) return res;
+  } catch {
+    // retried below
+  }
+  return get(rel);
+}
+
 // → { available: false, reason } | { available: true, suites: { [name]: { recorded } | { missing } }, warnings }
 export async function loadPublishedRuns(get, suiteNames) {
   let scorecard;
   try {
-    const res = await get('scorecard.json');
+    const res = await getWithRetry(get, 'scorecard.json');
     if (!res.ok) return { available: false, reason: `scorecard.json: HTTP ${res.status}` };
     scorecard = await res.json();
   } catch (err) {
@@ -81,7 +93,7 @@ export async function loadPublishedRuns(get, suiteNames) {
       let res;
       let recorded;
       try {
-        res = await get(`runs/${encodeURIComponent(run.run_id)}.json`);
+        res = await getWithRetry(get, `runs/${encodeURIComponent(run.run_id)}.json`);
         if (res.ok) recorded = await res.json();
       } catch (err) {
         suites[name] = { missing: `runs/${run.run_id}.json: ${err.message}` };
@@ -95,7 +107,8 @@ export async function loadPublishedRuns(get, suiteNames) {
         suites[name] = { missing: `runs/${run.run_id}.json: HTTP ${res.status}` };
         break;
       }
-      if (!Array.isArray(recorded?.results) || recorded.meta?.suite !== name) {
+      const wellFormed = Array.isArray(recorded?.results) && recorded.results.every((r) => typeof r?.case_id === 'string' && Number.isInteger(r.repeat));
+      if (!wellFormed || recorded.meta?.suite !== name) {
         suites[name] = { missing: `runs/${run.run_id}.json: not a ${name} results file` };
         break;
       }
@@ -218,7 +231,9 @@ export async function evaluateSuite({ suite, published, repoRoot = REPO_ROOT }) 
   const baseline = dataset.status === 'same' ? recorded.summary : summarize(recordedCommon);
   const gate = classifyGate({
     replayFailures: checkThresholds(summary, suite.thresholds),
-    baselineFailures: dataset.status === 'same' ? (recorded.failures ?? []) : [],
+    // The PR's thresholds on both sides: only the code's effect on the recorded responses can block,
+    // never a threshold changed since the run (on main or in this PR).
+    baselineFailures: dataset.status === 'same' ? checkThresholds(recorded.summary, suite.thresholds) : [],
     datasetStatus: dataset.status,
   });
   const status = gate.blocking.length ? 'fail' : gate.preexisting.length || gate.advisory.length || dataset.status !== 'same' ? 'warn' : 'pass';

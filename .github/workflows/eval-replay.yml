@@ -16,6 +16,19 @@ on:
       - 'scripts/lib/review_evidence.mjs'
       - 'scripts/lib/output_writer.mjs'
       - 'scripts/lib/eval_*.mjs'
+      # Everything else the suites load: workflow_gates.test.mjs walks the import graph of
+      # eval_suites.mjs / eval_replay_ci.mjs / replay_evals_ci.mjs and fails on an uncovered module.
+      - 'scripts/lib/prompts.mjs'
+      - 'scripts/lib/config.mjs'
+      - 'scripts/lib/yaml.mjs'
+      - 'scripts/lib/metrics.mjs'
+      - 'scripts/lib/observability.mjs'
+      - 'scripts/lib/dependency_manifest.mjs'
+      - 'scripts/lib/file_filters.mjs'
+      - 'scripts/lib/coverage_checker.mjs'
+      - 'scripts/lib/change_classifier.mjs'
+      - 'scripts/lib/token_budget.mjs'
+      - 'config/models.yaml'
       - 'scripts/replay_evals_ci.mjs'
       - 'evals/datasets/**'
       - '.github/workflows/eval-replay.yml'
@@ -40,8 +53,9 @@ jobs:
         with:
           node-version: '24'
 
-      # Unreachable dashboard or no published run: warning, exit 0. Exit 1 only when a threshold
-      # met by the published run fails in the replay (and the dataset has not changed since).
+      # Unreachable dashboard or no published run: warning, exit 0. Exit 1 when a threshold the
+      # published numbers meet fails in the replay (PR thresholds on both sides, dataset unchanged),
+      # or when the PR's code cannot run the replay at all (malformed dataset, suite crash).
       - name: Replay published eval runs
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
