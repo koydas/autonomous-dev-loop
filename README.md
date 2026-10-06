@@ -134,6 +134,8 @@ Each run prints a Markdown report (metrics, threshold failures, failing cases), 
 
 On a PR that touches a parser, `decideVerdict`, a scorer, a prompt or a dataset, the **Eval replay** workflow replays the last published live run of each suite against the PR's code (no LLM call, no secret), posts the Δ per metric and the cases that change verdict in the job summary, and fails when a threshold the published numbers meet breaks under the PR's thresholds. It does not measure a prompt change: the recorded responses stay the same. See [docs/evals.md](docs/evals.md#pr-replay-gate).
 
+To measure a prompt change before merge, a maintainer adds the **`run-evals`** label to the PR: **PR evals** runs the suites of the changed prompts live, with the PR's `prompts/**` on top of `main`'s scripts and config, and comments the Δ against the last published run. A PR that also touches `scripts/` or `config/` is refused, nothing is published to the dashboard, and the label is removed after the run ([ADR-0030](docs/adr/0030-live-pr-prompt-evals.md), [docs/evals.md](docs/evals.md#live-pr-eval-run-evals-label)).
+
 Adding a case, a scorer or a suite for another stage: [docs/evals.md](docs/evals.md). Design rationale: [ADR-0027](docs/adr/0027-offline-eval-harness.md).
 
 ## Tests
