@@ -121,3 +121,26 @@ Consequences:
 - ⚠️ Support is small (8 `approve`, one case ≈ 12 points): thresholds are a starting point until a baseline exists.
 - ⚠️ `flags_issue` is a keyword match: a finding phrased without any listed keyword scores 0. Broad keywords (`test`, `null`, `fail`) are to be tightened against the first live baseline.
 - ⚠️ The replay fixture is hand-written, not recorded from a live run; replace it with a recorded run once one exists.
+
+## Amendment (2026-10-05): replay gate on pull requests
+
+A live run costs minutes of the shared 8K TPM and is manual, so a PR that breaks a parser, `decideVerdict` or a scorer was only caught by unit tests on hand-written inputs, never on the responses the model actually gives. Every published run already holds those responses (`runs/<id>.json`), and `--replay` re-scores them for free.
+
+- **Workflow `eval-replay.yml`**, on `pull_request` touching `prompts/**`, the two parsers (`issue_validator.mjs`, `review_prompt.mjs`), `review_evidence.mjs`, `output_writer.mjs`, `scripts/lib/eval_*.mjs`, every other `scripts/lib/` module the suites import (pinned by an import-graph walk in `workflow_gates.test.mjs`), `config/models.yaml`, `evals/datasets/**`, its script or itself. For each suite in the registry it replays the newest published live run against the PR's code and writes the Δ per metric and the cases × repeats whose outcome changed to the job summary. Logic in `scripts/lib/eval_replay_ci.mjs` (c8-gated); `scripts/replay_evals_ci.mjs` is the entrypoint; the workflow only orchestrates.
+- **What is measured:** parsing, `decideVerdict`, the scorers and the thresholds on real recorded responses. **A prompt change is not measured**: the responses stay those of the recorded prompt. The job summary and `docs/evals.md` say so first.
+- **Gate:** fails on a threshold that the published numbers meet and the replay misses, both checked against the PR's thresholds: a threshold changed since the run (on `main` or in the PR) never blocks unrelated code, and a live run judges it. It also fails when the PR's code cannot run the replay (malformed dataset, suite crash). A threshold the published numbers already miss warns. A network error or 5xx is retried once; a malformed published file is a missing run. A dataset whose `sha256` differs from the run's (or a run without a hash) replays the common cases, lists added, removed and relabelled cases, and only warns. An unreachable dashboard, an unpublished suite or no case in common is neutral (green job, warning annotation: Actions has no neutral job conclusion).
+- **Baseline:** the published `summary` as it is on the site (same dataset); with a changed dataset, the published results restricted to the common cases, summarized by the PR's code.
+- **Security (ADR-0023/0024):** the PR's code runs, so `pull_request` only (never `pull_request_target`), `permissions: contents: read`, no secret, `persist-credentials: false`. The only network read is the public dashboard. `workflow_gates.test.mjs` pins it, along with the paths filter (docs-only PRs do not trigger it), the per-PR concurrency group and the trace upload.
+
+Alternatives considered:
+- *Replay against the base branch too, and diff the two replays.* Attributes Δ to the PR exactly, but needs a second checkout and doubles the job for a case (a scorer change merged after the last live run) that the next live run fixes. Rejected for now; the drift is documented.
+- *Committed replay fixtures per suite.* Hand-written responses drift from what the model says; the published run is the real distribution and is refreshed by every live run.
+- *Live run on PRs.* Needs the API keys in a job that runs PR code (ADR-0023) and spends TPM on every push. Rejected.
+
+Consequences:
+- ✅ A parser or scorer regression fails the PR on the model's real outputs, with the flipped cases listed, at no LLM cost.
+- ✅ Dataset edits are visible on the PR (added / removed / relabelled) without blocking it.
+- ⚠️ Prompt changes still need a live Evals run; the replay cannot tell a better prompt from a worse one.
+- ⚠️ The published run was scored by the code of its day: a scorer change merged after it shows as a Δ on later PRs until the next live run.
+- ⚠️ A PR that tightens a threshold beyond the published value only warns: the replay cannot tell whether the model would meet it.
+- ⚠️ The gate depends on the dashboard being up; when it is not, the job is neutral and the PR is unprotected by it.

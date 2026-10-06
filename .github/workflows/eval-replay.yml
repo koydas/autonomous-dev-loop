@@ -1,0 +1,72 @@
+name: Eval replay
+
+# PR gate (ADR-0027 amendment): replays the last live eval run published on the dashboard
+# against the PR's code, with no LLM call. Recorded responses are served again, so the parser,
+# decideVerdict and the scorers are checked; a prompt change is NOT measured (same responses).
+# Logic lives in scripts/lib/eval_replay_ci.mjs; this workflow only orchestrates.
+#
+# The PR's code runs here: `pull_request` only (never pull_request_target), read-only token,
+# no secrets, no push credential on disk (ADR-0023/0024).
+on:
+  pull_request:
+    paths:
+      - 'prompts/**'
+      - 'scripts/lib/issue_validator.mjs'
+      - 'scripts/lib/review_prompt.mjs'
+      - 'scripts/lib/review_evidence.mjs'
+      - 'scripts/lib/output_writer.mjs'
+      - 'scripts/lib/eval_*.mjs'
+      # Everything else the suites load: workflow_gates.test.mjs walks the import graph of
+      # eval_suites.mjs / eval_replay_ci.mjs / replay_evals_ci.mjs and fails on an uncovered module.
+      - 'scripts/lib/prompts.mjs'
+      - 'scripts/lib/config.mjs'
+      - 'scripts/lib/yaml.mjs'
+      - 'scripts/lib/metrics.mjs'
+      - 'scripts/lib/observability.mjs'
+      - 'scripts/lib/dependency_manifest.mjs'
+      - 'scripts/lib/file_filters.mjs'
+      - 'scripts/lib/coverage_checker.mjs'
+      - 'scripts/lib/change_classifier.mjs'
+      - 'scripts/lib/token_budget.mjs'
+      - 'config/models.yaml'
+      - 'scripts/replay_evals_ci.mjs'
+      - 'evals/datasets/**'
+      - '.github/workflows/eval-replay.yml'
+
+permissions:
+  contents: read
+
+# Read-only: a newer push to the same PR supersedes the running replay.
+concurrency:
+  group: eval-replay-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Unreachable dashboard or no published run: warning, exit 0. Exit 1 when a threshold the
+      # published numbers meet fails in the replay (PR thresholds on both sides, dataset unchanged),
+      # or when the PR's code cannot run the replay at all (malformed dataset, suite crash).
+      - name: Replay published eval runs
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          EVAL_SITE_URL: ${{ vars.EVAL_SITE_URL || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+        run: node scripts/replay_evals_ci.mjs --site-url "$EVAL_SITE_URL"
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true

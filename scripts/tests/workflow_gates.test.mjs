@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs'];
 
 test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
@@ -39,6 +39,7 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['eval_harness.mjs', 'eval_harness.test.mjs'],
     ['eval_scorecard.mjs', 'eval_scorecard.test.mjs'],
     ['eval_site.mjs', 'eval_site.test.mjs'],
+    ['eval_replay_ci.mjs', 'eval_replay_ci.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -76,7 +77,7 @@ const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'code-generation.yml'];
 
 test('every workflow declares a concurrency group keyed per PR/issue', () => {
   const workflows = readWorkflows();
-  assert.equal(workflows.length, 8, `expected 8 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  assert.equal(workflows.length, 9, `expected 9 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
   for (const { name, text } of workflows) {
     const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1]);
     assert.equal(groups.length, 1, `${name} must declare exactly one concurrency group`);
@@ -196,7 +197,7 @@ test('pr-review.yml evidence job runs PR checks without secrets, from the truste
 });
 
 test('workflows that run PR code without secrets use a read-only token', () => {
-  for (const name of ['test.yml', 'changelog-check.yml']) {
+  for (const name of ['test.yml', 'changelog-check.yml', 'eval-replay.yml']) {
     const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
     assert.match(text, /^permissions:\n  contents: read\n/m, `${name} must declare permissions: contents: read`);
     assert.ok(!/secrets\./.test(text), `${name} must not use secrets`);
@@ -350,4 +351,82 @@ test('evals.yml offers exactly the registered eval suites as a choice', async ()
   assert.match(suite, /type: choice/);
   const options = [...suite.slice(suite.indexOf('options:')).matchAll(/^\s+- (\S+)$/gm)].map((m) => m[1]);
   assert.deepEqual(options, Object.keys(SUITES));
+});
+
+// ADR-0027 amendment: the eval replay gate runs PR code, so it is read-only and secret-free, and
+// it only triggers on the files a replay can judge (parsers, decideVerdict, scorers, prompts, datasets).
+const evalReplay = () => readFileSync(resolve(WORKFLOWS_DIR, 'eval-replay.yml'), 'utf8');
+
+function pathsFilter(text) {
+  const block = text.slice(text.indexOf('    paths:\n'), text.indexOf('\npermissions:'));
+  return [...block.matchAll(/^      - '([^']+)'$/gm)].map((m) => m[1]);
+}
+
+// GitHub paths-filter globs: `**` crosses directories, `*` does not.
+function globMatch(glob, file) {
+  const re = glob.split('**').map((part) => part.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*')).join('.*');
+  return new RegExp(`^${re}$`).test(file);
+}
+
+test('eval-replay.yml runs on pull_request only, read-only, without secrets or a persisted credential', () => {
+  const text = evalReplay();
+  assert.match(text, /^on:\n  pull_request:\n    paths:\n/m);
+  assert.doesNotMatch(text, /^\s+pull_request_target:/m);
+  assert.doesNotMatch(text, /^\s+(push|workflow_run|issue_comment):/m);
+  assert.match(text, /^permissions:\n  contents: read\n\n/m);
+  assert.equal((text.match(/^\s+permissions:/gm) ?? []).length, 1, 'no job-level permission override');
+  assert.doesNotMatch(text, /secrets\.|github\.token|GITHUB_TOKEN/);
+  assert.match(text, /uses: actions\/checkout@v4\n\s+with:\n\s+persist-credentials: false/);
+  assert.doesNotMatch(text, /git (push|commit)|gh (pr|api)/);
+});
+
+test('eval-replay.yml triggers on parser, verdict, scorer, prompt and dataset changes, not on docs', () => {
+  const paths = pathsFilter(evalReplay());
+  for (const required of ['prompts/**', 'scripts/lib/issue_validator.mjs', 'scripts/lib/review_prompt.mjs', 'scripts/lib/review_evidence.mjs', 'scripts/lib/output_writer.mjs', 'scripts/lib/eval_*.mjs']) {
+    assert.ok(paths.includes(required), `missing paths filter ${required}`);
+  }
+  const triggers = (file) => paths.some((g) => globMatch(g, file));
+  for (const file of ['prompts/pr-review-system.md', 'scripts/lib/review_prompt.mjs', 'scripts/lib/eval_harness.mjs', 'scripts/lib/eval_replay_ci.mjs', 'evals/datasets/review.jsonl', 'config/models.yaml']) {
+    assert.ok(triggers(file), `${file} must trigger the replay`);
+  }
+  for (const file of ['README.md', 'docs/evals.md', 'CHANGELOG.md', 'docs/adr/0027-offline-eval-harness.md', 'scripts/lib/eval/nested.mjs', 'scripts/lib/llm_client.mjs']) {
+    assert.ok(!triggers(file), `${file} must not trigger the replay`);
+  }
+});
+
+test('eval-replay.yml keys concurrency on the PR, keeps the observability contract and only orchestrates', () => {
+  const text = evalReplay();
+  assert.match(text, /^concurrency:\n  group: eval-replay-\$\{\{ github\.event\.pull_request\.number \}\}\n  cancel-in-progress: true$/m);
+  assert.match(text, /GITHUB_RUN_ID: \$\{\{ github\.run_id \}\}/);
+  assert.match(text, /- name: Upload run trace\n\s+if: always\(\)\n\s+uses: actions\/upload-artifact@v4\n\s+with:\n\s+name: run-trace-\$\{\{ github\.run_id \}\}\n\s+path: \.\/observability\/traces\/\$\{\{ github\.run_id \}\}\.json/);
+  assert.match(text, /^    timeout-minutes: \d+$/m);
+  const runs = [...text.matchAll(/^\s+run: (.+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(runs, ['node scripts/replay_evals_ci.mjs --site-url "$EVAL_SITE_URL"']);
+});
+
+// Relative imports reachable from the replay entry points: a module the suites load that the paths
+// filter misses lets a PR break every replayed case without triggering the gate (#179 review).
+function relativeImportClosure(entries) {
+  const seen = new Set();
+  const queue = [...entries];
+  while (queue.length) {
+    const file = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const text = readFileSync(resolve(ROOT, file), 'utf8');
+    for (const [, spec] of text.matchAll(/^\s*(?:import|export)\b[^'"]*?\bfrom\s+['"](\.{1,2}\/[^'"]+)['"]/gm)) {
+      queue.push(posix.normalize(posix.join(posix.dirname(file), spec)));
+    }
+  }
+  return [...seen].sort();
+}
+
+test('eval-replay.yml paths filter covers every module the replay loads', () => {
+  const closure = relativeImportClosure(['scripts/replay_evals_ci.mjs', 'scripts/lib/eval_replay_ci.mjs', 'scripts/lib/eval_suites.mjs']);
+  assert.ok(closure.includes('scripts/lib/prompts.mjs') && closure.includes('scripts/lib/token_budget.mjs'), closure.join(', '));
+  const paths = pathsFilter(evalReplay());
+  const uncovered = closure.filter((file) => !paths.some((g) => globMatch(g, file)));
+  assert.deepEqual(uncovered, [], `add to eval-replay.yml paths: ${uncovered.join(', ')}`);
+  // config.mjs parses config/models.yaml at import time.
+  assert.ok(paths.includes('config/models.yaml'));
 });
