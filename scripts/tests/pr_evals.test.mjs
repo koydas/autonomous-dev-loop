@@ -11,7 +11,7 @@ import {
   RUN_EVALS_LABEL, TRUSTED_PERMISSIONS, REPORT_MARKER, MAX_PROMPT_BYTES, PR_EVAL_DISCLAIMER,
   isTrustedPermission, parseRepeats, checkTrigger, parseRawDiff, isSafePromptPath, suitesForPrompts,
   planPrEvals, collectPrChanges, readPromptContents, validatePlanForApply, applyPlan, compareSuite,
-  overallPrStatus, cell, formatPrEvalReport, buildPrEvalReport,
+  overallPrStatus, cell, code, formatPrEvalReport, buildPrEvalReport,
 } from '../lib/pr_evals.mjs';
 import { summarize } from '../lib/eval_harness.mjs';
 import { sha256 } from '../lib/eval_replay_ci.mjs';
@@ -90,7 +90,7 @@ test('parseRawDiff reads modes, status and path of -z output', () => {
 test('isSafePromptPath keeps normalized paths under prompts/', () => {
   assert.equal(isSafePromptPath('prompts/a.md'), true);
   assert.equal(isSafePromptPath('prompts/sub/a.md'), true);
-  for (const p of ['prompts/../scripts/x.mjs', 'prompts//a.md', 'prompts/./a.md', 'prompts\\a.md', 'scripts/a.md', '/prompts/a.md', 42]) {
+  for (const p of ['prompts/a\u0000.md', 'prompts/a\n.md', 'prompts/../scripts/x.mjs', 'prompts//a.md', 'prompts/./a.md', 'prompts\\a.md', 'scripts/a.md', '/prompts/a.md', 42]) {
     assert.equal(isSafePromptPath(p), false, String(p));
   }
 });
@@ -190,9 +190,45 @@ test('collectPrChanges diffs the PR head against its merge base, and readPromptC
   assert.deepEqual(plan.suites, ['validation', 'review']);
 });
 
-test('readPromptContents rejects a prompt over the size cap', () => {
-  const exec = () => Buffer.alloc(MAX_PROMPT_BYTES + 1);
-  assert.throws(() => readPromptContents({ head_sha: SHA, prompts: [{ path: 'prompts/a.md', status: 'M' }] }, { exec }), /exceeds 65536/);
+test('readPromptContents refuses the plan when a prompt is over the size cap, without any content', () => {
+  const exec = (cmd, args) => (args[1].endsWith('big.md') ? Buffer.alloc(MAX_PROMPT_BYTES + 1) : Buffer.from('ok'));
+  const plan = readPromptContents({
+    status: 'run', head_sha: SHA, refused: [],
+    prompts: [{ path: 'prompts/a.md', status: 'M' }, { path: 'prompts/big.md', status: 'A' }, { path: 'prompts/gone.md', status: 'D' }],
+  }, { exec });
+  assert.equal(plan.status, 'refused');
+  assert.match(plan.reason, /prompt too large: `prompts\/big\.md` \(65537 bytes, over the 65536-byte limit\)/);
+  assert.deepEqual(plan.refused.map((r) => r.path), ['prompts/big.md']);
+  assert.ok(plan.prompts.every((p) => !('content' in p)), 'a refused plan carries no content');
+  assert.match(formatPrEvalReport({ plan }), /# ⛔ Live eval refused[\s\S]*\| `prompts\/big\.md` \| 65537 bytes/);
+  // At the cap exactly: kept.
+  const atCap = readPromptContents({ status: 'run', head_sha: SHA, prompts: [{ path: 'prompts/a.md', status: 'M' }] }, { exec: () => Buffer.alloc(MAX_PROMPT_BYTES) });
+  assert.equal(atCap.status, 'run');
+});
+
+test('code() keeps author-controlled text inside one inline code span', () => {
+  const evil = 'docs/a`\n\n# Pwned @user [click](https://x)\n\n`|y.md';
+  const out = code(evil);
+  assert.equal(out.split('`').length, 3, 'exactly one opening and one closing backtick');
+  assert.doesNotMatch(out, /\n/);
+  assert.match(out, /\\\|y\.md`$/);
+  assert.equal(code('x'.repeat(500)).length, 202);
+});
+
+test('a PR file name with a newline or a pipe cannot inject Markdown into the comment', () => {
+  const ignored = planPrEvals({ changes: [change('prompts/pr-review-system.md'), change('docs/a`\n\n# Pwned @user\n\n`.md')] });
+  assert.equal(ignored.status, 'run');
+  const md = formatPrEvalReport({ plan: { ...ignored, head_sha: SHA, actor: 'alice', repeats: 1 }, reports: [] });
+  assert.doesNotMatch(md, /^# Pwned/m);
+  const refused = planPrEvals({ changes: [change('scripts/x|y\n\n@user.mjs')] });
+  const table = formatPrEvalReport({ plan: refused });
+  assert.doesNotMatch(table, /^@user/m);
+  assert.match(table, /\| `scripts\/x\\\|y\ufffd\ufffd@user\.mjs` \| pipeline code/);
+  assert.match(refused.reason, /`scripts\/x\\\|y\ufffd\ufffd@user\.mjs`/);
+  // Under prompts/, a control character makes the path unsafe: the whole plan is refused.
+  const prompt = planPrEvals({ changes: [change('prompts/pr-review-\nsystem.md')] });
+  assert.equal(prompt.status, 'refused');
+  assert.equal(prompt.refused[0].reason, 'unsafe path');
 });
 
 test('makePlan wires trigger, changes and contents (plan_pr_evals.mjs)', () => {

@@ -133,7 +133,9 @@ jobs:
     timeout-minutes: 150
     permissions:
       contents: read
-    # One live eval per PR at a time (they share the TPM budget); never cancel a paid run.
+    # One live eval per PR at a time (they share the TPM budget); the running one is never cancelled.
+    # GitHub keeps one pending job per concurrency key, so a third trigger while one runs and one waits cancels the
+    # waiting one, whose comment then reports "no results file".
     concurrency:
       group: pr-evals-${{ needs.plan.outputs.pr_number }}
       cancel-in-progress: false

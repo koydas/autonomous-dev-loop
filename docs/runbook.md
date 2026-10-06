@@ -202,6 +202,7 @@ Key steps to expand per workflow:
 | ❌ "Live eval failed before planning" | The `plan` job failed (PR not found or closed for a dispatch, fetch of `refs/pull/<n>/head` failed). Check its log and re-run |
 | Comment says "no baseline" | Dashboard unreachable or the suite was never published: check `EVAL_SITE_URL` and run **Actions → Evals** on `main` once |
 | Δ of one case between two runs | Expected noise with `repeats: 1`; dispatch with `repeats: 3` |
+| ❌ suite "Not measured: no results file" right after another run on the same PR | Three triggers queued on one PR: GitHub keeps one pending `eval` job per concurrency group and cancelled the waiting one. Trigger again once the running eval is done |
 | Label still on the PR after a run | The run was cancelled (the removal step runs on every other outcome). Remove it by hand |
 
 ### `auto-fix-pr`

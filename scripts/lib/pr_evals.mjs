@@ -35,6 +35,11 @@ export const REPORT_MARKER = '<!-- adl-pr-evals -->';
 
 const REGULAR_MODES = new Set(['100644', '100755']);
 const MAX_CHANGED_ROWS = 50;
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+// Inline code span for author-controlled text (PR file paths, logins): a newline or a backtick would
+// close the span and inject Markdown (headings, links, mentions) into the bot comment; `|` breaks tables.
+export const code = (s) => `\`${String(s).replace(/[\u0000-\u001f\u007f]/g, '\ufffd').replace(/`/g, "'").replace(/\|/g, '\\|').slice(0, 200)}\``;
 
 // ---------------------------------------------------------------------------
 // Trigger
@@ -51,10 +56,10 @@ export function parseRepeats(value) {
 // → null when the run may proceed, else the refusal reason.
 export function checkTrigger({ eventName, actor, permission, ref, defaultBranch, expectedSha, headSha }) {
   if (!['pull_request_target', 'workflow_dispatch'].includes(eventName)) return `unsupported event "${eventName}"`;
-  if (!isTrustedPermission(permission)) return `\`${actor}\` has \`${permission || 'no'}\` permission on the repository; write access is required`;
-  if (eventName === 'workflow_dispatch' && ref !== `refs/heads/${defaultBranch}`) return `dispatched from \`${ref}\`; dispatch from \`${defaultBranch}\``;
+  if (!isTrustedPermission(permission)) return `${code(actor)} has ${code(permission || 'no')} permission on the repository; write access is required`;
+  if (eventName === 'workflow_dispatch' && ref !== `refs/heads/${defaultBranch}`) return `dispatched from ${code(ref)}; dispatch from ${code(defaultBranch)}`;
   if (!expectedSha || !headSha) return 'PR head SHA unknown';
-  if (expectedSha !== headSha) return `the PR head moved since the trigger (\`${expectedSha.slice(0, 12)}\` → \`${headSha.slice(0, 12)}\`); set the label again`;
+  if (expectedSha !== headSha) return `the PR head moved since the trigger (${code(expectedSha.slice(0, 12))} → ${code(headSha.slice(0, 12))}); set the label again`;
   return null;
 }
 
@@ -75,7 +80,7 @@ export function parseRawDiff(raw) {
 }
 
 export function isSafePromptPath(p) {
-  return typeof p === 'string' && p.startsWith(PROMPTS_PREFIX) && path.posix.normalize(p) === p && !p.split('/').includes('..') && !p.includes('\\');
+  return typeof p === 'string' && p.startsWith(PROMPTS_PREFIX) && path.posix.normalize(p) === p && !p.split('/').includes('..') && !p.includes('\\') && !CONTROL_CHARS.test(p);
 }
 
 export function suitesForPrompts(paths, prefixes = SUITE_PROMPT_PREFIXES) {
@@ -102,12 +107,12 @@ export function planPrEvals({ changes, triggerRefusal = null, pr = null, headSha
       plan.ignored.push(c.path);
     }
   }
-  if (plan.refused.length) return refuse(`the PR changes files this run cannot take from it: ${plan.refused.map((r) => `\`${r.path}\` (${r.reason})`).join(', ')}. Split the prompt change into its own PR`);
+  if (plan.refused.length) return refuse(`the PR changes files this run cannot take from it: ${plan.refused.map((r) => `${code(r.path)} (${r.reason})`).join(', ')}. Split the prompt change into its own PR`);
   if (plan.prompts.length === 0) return Object.assign(plan, { status: 'nothing', reason: 'the PR changes no file under `prompts/`' });
 
   const { suites, unmeasured } = suitesForPrompts(plan.prompts.map((p) => p.path), prefixes);
   Object.assign(plan, { suites, unmeasured });
-  if (suites.length === 0) return Object.assign(plan, { status: 'nothing', reason: `no eval suite covers ${unmeasured.map((p) => `\`${p}\``).join(', ')}` });
+  if (suites.length === 0) return Object.assign(plan, { status: 'nothing', reason: `no eval suite covers ${unmeasured.map(code).join(', ')}` });
   return plan;
 }
 
@@ -122,13 +127,28 @@ export function collectPrChanges({ head, base = 'HEAD', cwd = process.cwd(), exe
 }
 
 // Prompt contents read from git objects (`git show <sha>:<path>`), never from a checkout of the PR.
+// A prompt over MAX_PROMPT_BYTES refuses the plan (reported in the comment), without any content.
 export function readPromptContents(plan, { cwd = process.cwd(), exec = execFileSync } = {}) {
-  const files = plan.prompts.map((p) => {
-    if (p.status === 'D') return { ...p, content: null };
+  const files = [];
+  const oversize = [];
+  for (const p of plan.prompts) {
+    if (p.status === 'D') {
+      files.push({ ...p, content: null });
+      continue;
+    }
     const buf = git(exec, cwd, ['show', `${plan.head_sha}:${p.path}`]);
-    if (buf.length > MAX_PROMPT_BYTES) throw new Error(`${p.path}: ${buf.length} bytes exceeds ${MAX_PROMPT_BYTES}`);
-    return { ...p, content: buf.toString('utf8') };
-  });
+    if (buf.length > MAX_PROMPT_BYTES) oversize.push({ path: p.path, reason: `${buf.length} bytes, over the ${MAX_PROMPT_BYTES}-byte limit` });
+    else files.push({ ...p, content: buf.toString('utf8') });
+  }
+  if (oversize.length) {
+    return {
+      ...plan,
+      status: 'refused',
+      reason: `prompt too large: ${oversize.map((r) => `${code(r.path)} (${r.reason})`).join(', ')}`,
+      prompts: plan.prompts.map(({ path: p, status }) => ({ path: p, status })),
+      refused: oversize,
+    };
+  }
   return { ...plan, prompts: files };
 }
 
@@ -199,7 +219,7 @@ export function compareSuite({ suite, results, published }) {
   });
   const notes = [];
   if (!same) notes.push(`dataset ${dataset.status === 'changed' ? 'changed since the published run' : 'hash missing on one side'}: Δ over the ${dataset.common.size} common case(s), thresholds advisory`);
-  if ((recorded.meta?.model ?? null) !== (results.meta?.model ?? null)) notes.push(`model differs (main \`${recorded.meta?.model ?? '?'}\`, PR \`${results.meta?.model ?? '?'}\`): the Δ mixes prompt and model`);
+  if ((recorded.meta?.model ?? null) !== (results.meta?.model ?? null)) notes.push(`model differs (main ${code(recorded.meta?.model ?? '?')}, PR ${code(results.meta?.model ?? '?')}): the Δ mixes prompt and model`);
   if ((recorded.meta?.repeats ?? 1) !== (results.meta?.repeats ?? 1)) notes.push(`repeats differ (main ${recorded.meta?.repeats ?? 1}, PR ${results.meta?.repeats ?? 1}): consistency is not comparable; case changes are matched on (case, repeat)`);
   const status = gate.blocking.length ? 'fail' : gate.preexisting.length || gate.advisory.length || notes.length ? 'warn' : 'pass';
   return {
@@ -226,7 +246,6 @@ const fmt = (v) => (v == null ? '—' : String(v));
 const signed = (d) => (d == null ? '—' : d === 0 ? '=' : d > 0 ? `▲ ${d}` : `▼ ${Math.abs(d)}`);
 // Model-derived text: no table break, no mention, no HTML comment.
 export const cell = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ').replace(/@/g, '@​').replace(/</g, '&lt;').slice(0, 160);
-const code = (s) => `\`${String(s).replace(/`/g, "'")}\``;
 
 export const PR_EVAL_DISCLAIMER = [
   '> **What this measures.** The suites ran live with this PR\'s `prompts/**` on top of the default branch\'s scripts, harness, config and datasets.',
