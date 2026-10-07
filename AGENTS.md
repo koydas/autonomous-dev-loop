@@ -57,6 +57,10 @@ Before committing any change to `scripts/` or `prompts/`:
 - Test files live only in `scripts/tests/` and use `node:test`; `scripts/tests/test_layout.test.mjs` fails the suite for a test file that `npm test` would not run (anywhere else, in a subdirectory, or not `.test.mjs`) or one using the Jest API, because `npm test` would never run it.
 - The suite includes **unit tests** (modules in isolation) and **smoke tests** (`smoke.test.mjs`, cross-module pipelines with real config/prompt files). Both must pass.
 
+### Eval Gates (ADR-0031)
+
+A failing eval (`evals.yml`, `pr-evals.yml`, `eval-replay.yml`) is fixed **in the stage**: prompt, parser or production code. Never make it pass by lowering a `min`, raising a `max`, marking a metric `optional`, removing or relabelling the failing cases, or running a filtered subset. `scripts/tests/eval_threshold_floor.test.mjs` enforces it: thresholds only tighten, datasets only grow. A dataset label may be corrected only when it is wrong on its own merits, in a separate PR; loosening a gate needs a new ADR.
+
 ### Test Coverage Policy
 
 Minimum required path coverage for automation modules (enforced by code review):
