@@ -16,7 +16,7 @@ npm run eval -- --suite review --repeats 3              # PR review stage, ≈ 1
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json
 ```
 
-CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, the run is added to the [eval dashboard](#dashboard) on GitHub Pages (`publish` input, on by default).
+CI: **Actions → Evals → Run workflow** (`workflow_dispatch`), plus a [weekly run](#weekly-run) of every suite. The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, the run is added to the [eval dashboard](#dashboard) on GitHub Pages (`publish` input, on by default).
 
 Δ on the dashboard only compares runs on the same dataset content: each run records the dataset's `sha256`, and when it changes the dashboard shows "dataset changed" instead of a Δ, so a label fix never reads as a model improvement.
 
@@ -109,6 +109,27 @@ Rules:
 - **Prerequisite:** **Settings → Pages → Build and deployment → Source: GitHub Actions**, set before the first run. Without it, `actions/configure-pages` fails with an explicit error. The first run also needs `init_site` ticked.
 - ⚠️ The live history exists only on the deployed site. The `eval-site-*` backups cover 90 days.
 
+### Weekly run
+
+`evals.yml` also runs on `schedule`, **Mondays 06:23 UTC** (`23 6 * * 1`, off the hour: GitHub delays `:00` schedules). The [replay gate](#pr-replay-gate) and the [live PR eval](#live-pr-eval-run-evals-label) compare with the last published run; without a regular run that reference goes stale.
+
+- **What runs:** every suite of the registry (`validation`, `review`), `repeats: 3`, on the default branch, published. On `schedule` the workflow inputs are empty, so the defaults are explicit: `publish` on, `repeats` 3, **`init_site` off and no `restore_run_id`**. An unattended run never starts an empty history nor restores a backup; a 404 on the deployed scorecard fails the run instead. `workflow_gates.test.mjs` pins this.
+- **One suite at a time:** a matrix job per suite with `max-parallel: 1` (they share the 8K TPM) and `fail-fast: false`: a threshold miss, a crash or a timeout in one suite never cancels the next. Each suite job has its own 120 min timeout.
+- **One deploy:** the `publish` job downloads every `eval-results-<runId>-<suite>` artifact (`pattern` + `merge-multiple`) and passes all results files to `build_eval_site.mjs` in one build, then deploys once. A suite that failed on `error_rate` (provider outage) is skipped with a warning; the other suites are published. A suite whose job produced no results is simply absent.
+- **Run IDs:** every run of `evals.yml` (weekly or manual) records `meta.run_id = <workflow run ID>-<suite>` (`EVAL_RUN_ID`) and `meta.workflow_run_id = <workflow run ID>`. The dashboard keys `runs/<id>.json` by `run_id` alone, so two suites of one workflow run must not share it; `build_eval_site.mjs` refuses a build where two suites use the same `run_id`. Runs published before this change keep their bare numeric IDs. The run page links the workflow run through `workflow_run_id`.
+- **Duration:** validation ≈ 4–6 min per repeat, review ≈ 11–12 min per repeat: **≈ 50–60 min end to end** (≈ 15 + 35 min of evals, plus runner setup and the deploy). Worst case: each suite up to its 120 min timeout.
+- **Tokens per week** (chars/4 estimate, the harness's `tokens_est`): validation ≈ 71k input per repeat (35 calls × ≈ 1.9k system prompt + the issue), review ≈ 66k (23 calls × ≈ 2.9k); × 3 repeats ≈ **410k input tokens per week**, plus at most ≈ 180k output tokens (`max_tokens` × calls; actual output is far lower).
+
+**Concurrency with other eval runs:**
+
+| Overlap | Behavior |
+|---|---|
+| Weekly run + manual `evals.yml` run on the default branch | Same group (`evals-<ref>`): the second one waits. GitHub keeps one pending run per group, so a third run cancels the **pending** one, never the running one (`cancel-in-progress: false`). |
+| Weekly run + `pr-evals.yml` | Different groups (`evals-<ref>` vs `pr-evals-<PR>`): neither waits for the other. Both call Groq with the same key and share its TPM: each waits out the other's 429s (ADR-0028), so both run slower while they overlap but neither fails for it. A weekly review suite overlapping a 3-repeat PR review eval can roughly double in duration, still inside its timeout in the usual case. |
+| Weekly run + `eval-replay.yml` | No LLM call in the replay. A replay that reads the site during the deploy sees either the previous or the new tree. |
+
+There is deliberately no global group serializing LLM workflows: GitHub would cancel every pending run beyond the first (`workflow_gates.test.mjs`).
+
 **Locally:** `npm run eval -- --suite validation --repeats 3 --scorecard` adds the run to a preview in `evals/site/`; open `evals/site/index.html`. To rebuild from downloaded artifacts, run `npm run eval:site -- --out evals/site --previous-dir evals/site <results.json…>`, or `--site-url https://koydas.github.io/autonomous-dev-loop` to start from the live history.
 
 ## Metrics
@@ -179,7 +200,7 @@ export const autofixSuite = {
 - `scripts/run_evals.mjs` is exercised end to end in replay mode by `eval_suites.test.mjs` (thresholds, repeats, filtered runs, dataset hash). `scripts/build_eval_site.mjs` is covered by `build_eval_site.test.mjs`: history read from a stubbed site (404, errors, invalid format), history window pruning, outage skipping, and the CLI.
 - `scripts/lib/review_prompt.mjs` (review prompt builder and verdict parser, shared with `pr_review.mjs`) is under the same c8 gate, measured with `review_prompt.test.mjs`; `pr_review.test.mjs` and `entrypoints.test.mjs` still exercise it end to end through the script.
 - `scripts/lib/eval_replay_ci.mjs` (PR replay gate) is under the same c8 gate, measured with `eval_replay_ci.test.mjs`, which also runs `scripts/replay_evals_ci.mjs` end to end against a local copy of the site.
-- The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR. For `eval-replay.yml`, it pins `pull_request` only, the read-only token, no secret, the paths filter (docs-only changes do not trigger it), the per-PR concurrency group and the trace upload.
+- The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR. For the weekly run: the cron (Monday, off the hour), the suite matrix against the registry, `max-parallel: 1` / `fail-fast: false`, the per-suite `EVAL_RUN_ID` and artifact names, the merged download, a single deploy, the disjoint `evals` / `pr-evals` concurrency groups, and that `init_site` and `restore_run_id` are read only behind the `schedule` guard. For `eval-replay.yml`, it pins `pull_request` only, the read-only token, no secret, the paths filter (docs-only changes do not trigger it), the per-PR concurrency group and the trace upload.
 
 ## Results file
 

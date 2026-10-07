@@ -1,11 +1,19 @@
 name: Evals
 
-# Manual only: each run spends real LLM tokens (Groq free tier: 8K TPM).
+# Manual, plus one weekly run: each run spends real LLM tokens (Groq free tier: 8K TPM).
 # With `publish`, a run on the default branch is added to the eval dashboard on
 # GitHub Pages (ADR-0027 amendment): the `publish` job reads the history back from the
 # deployed site, adds the run and redeploys. Nothing is committed. Runs on other refs
 # stay artifact-only.
+#
+# Weekly (ADR-0027 amendment): eval-replay.yml and pr-evals.yml compare with the last published
+# run, which goes stale without a regular one. Every registered suite, repeats 3, one suite at a
+# time, one Pages deploy at the end. On `schedule` every input is empty: the defaults below are
+# explicit (publish on, init_site off, no restore); workflow_gates.test.mjs pins them.
 on:
+  schedule:
+    # Mondays 06:23 UTC: off the hour (GitHub delays :00 schedules). ≈ 50-60 min end to end.
+    - cron: '23 6 * * 1'
   workflow_dispatch:
     inputs:
       suite:
@@ -36,7 +44,11 @@ on:
 permissions:
   contents: read
 
-# One run per branch at a time: each publish reads the deployed site, then redeploys it.
+# One run per branch at a time: each publish reads the deployed site, then redeploys it. The weekly
+# run (ref = default branch) queues behind a manual run on the default branch and vice versa; GitHub
+# keeps one pending run per group, so a third run cancels the pending one, never the running one.
+# pr-evals.yml keys its own group per PR, so the two never block each other. They share the Groq TPM,
+# each waiting out the other's 429s (ADR-0028), only slower while they overlap.
 concurrency:
   group: evals-${{ github.ref }}
   cancel-in-progress: false
@@ -46,7 +58,16 @@ jobs:
     runs-on: ubuntu-latest
     # cases x repeats calls share the 8K TPM with every other pipeline run: slow, never failing.
     # One call may wait 20 retries x 60 s; the rest of the run fits the remaining time (ADR-0028).
+    # Per suite: review x 3 ≈ 35-40 min, ≈ 70 min worst case.
     timeout-minutes: 120
+    strategy:
+      # One suite at a time (they share the TPM); a threshold miss or a timeout in one suite never
+      # cancels the next, and publish still gets the others.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        # schedule: every suite in the registry (scripts/lib/eval_suites.mjs, checked by workflow_gates.test.mjs).
+        suite: ${{ fromJSON(github.event_name == 'schedule' && '["validation","review"]' || format('["{0}"]', inputs.suite)) }}
     steps:
       # The eval step handles LLM output and API keys: no push credential on disk.
       - uses: actions/checkout@v4
@@ -59,8 +80,10 @@ jobs:
       - name: Run eval suite
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
-          SUITE: ${{ inputs.suite }}
-          REPEATS: ${{ inputs.repeats }}
+          # The dashboard keys run details by run_id: one per suite, or the suites overwrite each other.
+          EVAL_RUN_ID: ${{ github.run_id }}-${{ matrix.suite }}
+          SUITE: ${{ matrix.suite }}
+          REPEATS: ${{ inputs.repeats || '3' }}
           # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
           # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
           LLM_MAX_RETRY_WAIT_MS: '60000'
@@ -78,17 +101,18 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: eval-results-${{ github.run_id }}
+          name: eval-results-${{ github.run_id }}-${{ matrix.suite }}
           path: |
             evals/results/
             evals/history.jsonl
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload run trace
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: run-trace-${{ github.run_id }}
+          name: run-trace-${{ github.run_id }}-${{ matrix.suite }}
           path: ./observability/traces/${{ github.run_id }}.json
           if-no-files-found: ignore
           overwrite: true
@@ -101,8 +125,9 @@ jobs:
   # never deploys a site without history.
   publish:
     needs: eval
-    if: ${{ !cancelled() && inputs.publish && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.publish) && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: read
@@ -111,6 +136,10 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
+    # Unattended runs never start an empty history nor restore a backup: both stay manual choices.
+    env:
+      INIT_SITE: ${{ github.event_name != 'schedule' && inputs.init_site }}
+      RESTORE_RUN_ID: ${{ github.event_name != 'schedule' && inputs.restore_run_id || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,19 +148,21 @@ jobs:
         with:
           node-version: '24'
 
+      # One artifact per suite; results files are named <suite>-<runId>-<suite>.json, so merging never collides.
       - name: Download eval results
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: eval-results-${{ github.run_id }}
+          pattern: eval-results-${{ github.run_id }}-*
+          merge-multiple: true
           path: ${{ runner.temp }}/eval-results
 
       - name: Download history backup to restore
-        if: inputs.restore_run_id != ''
+        if: env.RESTORE_RUN_ID != ''
         uses: actions/download-artifact@v4
         with:
-          name: eval-site-${{ inputs.restore_run_id }}
-          run-id: ${{ inputs.restore_run_id }}
+          name: eval-site-${{ env.RESTORE_RUN_ID }}
+          run-id: ${{ env.RESTORE_RUN_ID }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/eval-site-restore
 
@@ -145,8 +176,6 @@ jobs:
         id: build
         env:
           SITE_URL: ${{ steps.pages.outputs.base_url }}
-          INIT_SITE: ${{ inputs.init_site }}
-          RESTORE_RUN_ID: ${{ inputs.restore_run_id }}
           RESTORE_DIR: ${{ runner.temp }}/eval-site-restore
           RESULTS_DIR: ${{ runner.temp }}/eval-results
           SITE_DIR: ${{ runner.temp }}/eval-site

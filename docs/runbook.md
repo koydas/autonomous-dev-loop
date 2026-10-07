@@ -129,6 +129,10 @@ Key steps to expand per workflow:
 ### `changelog-check` (`changelog-check.yml`)
 - **Verify CHANGELOG.md updated for entrypoint or ADR changes** — exits 0 (skipped) when no entrypoints or ADRs changed; exits 1 with a plain-text error message describing which trigger files were found and what is missing
 
+### `evals` (`evals.yml`)
+- **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly run (Mondays 06:23 UTC): every suite, repeats 3, one at a time; a failed suite does not cancel the next
+- **publish → Build eval dashboard** — history read back from the site, the runs added (`<run_id>-<suite>`), runs skipped on `error_rate` as warnings; `eval-site-<run_id>` backup, then one Pages deploy. A 404 on `scorecard.json` fails a weekly run: it never sets `init_site`; re-run manually with `init_site` (first deploy) or `restore_run_id`
+
 ### `eval-replay` (`eval-replay.yml`)
 - **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 when a threshold the published numbers meet breaks (PR thresholds on both sides), or when the PR's code cannot run the replay (malformed dataset, suite crash); an unreachable dashboard, an unpublished suite or a changed dataset only warns
 

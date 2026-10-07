@@ -232,9 +232,10 @@ test('parseCliArgs rejects a missing or unknown suite and bad integers', () => {
   assert.throws(() => parseCliArgs(['--suite', 'validation', '--concurrency', 'x']), /--concurrency must be an integer >= 1/);
 });
 
-async function runEvals(args, cwd) {
-  const env = { ...process.env, GITHUB_RUN_ID: 'test-run', EVAL_HISTORY_FILE: path.join(cwd, 'history.jsonl') };
+async function runEvals(args, cwd, extraEnv = {}) {
+  const env = { ...process.env, GITHUB_RUN_ID: 'test-run', EVAL_HISTORY_FILE: path.join(cwd, 'history.jsonl'), ...extraEnv };
   delete env.GITHUB_STEP_SUMMARY;
+  if (!('EVAL_RUN_ID' in extraEnv)) delete env.EVAL_RUN_ID;
   try {
     const { stdout, stderr } = await promisify(execFile)(process.execPath, [RUN_EVALS, ...args], { cwd, env });
     return { code: 0, stdout, stderr };
@@ -301,6 +302,23 @@ test('run_evals results file carries the run timestamp', async () => {
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
   assert.match(saved.meta.ts, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(saved.meta.suite, 'validation');
+});
+
+test('run_evals keys results by EVAL_RUN_ID and keeps the workflow run ID for the run link', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const recorded = await writeRecording(dir, (c) => c.expected.valid);
+  await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir], dir, { EVAL_RUN_ID: 'test-run-validation' });
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run-validation.json'), 'utf8'));
+  assert.equal(saved.meta.run_id, 'test-run-validation');
+  assert.equal(saved.meta.workflow_run_id, 'test-run');
+});
+
+test('run_evals falls back to GITHUB_RUN_ID when EVAL_RUN_ID is empty', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const recorded = await writeRecording(dir, (c) => c.expected.valid);
+  await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir], dir, { EVAL_RUN_ID: '' });
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.equal(saved.meta.run_id, 'test-run');
 });
 
 test('validation dataset only holds cases the LLM judges (no title-guard short-circuit)', async () => {

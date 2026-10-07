@@ -160,6 +160,14 @@ test('renderRun shows metrics, confusion matrix, cases and escaped model output'
   assert.doesNotMatch(html, /<script>alert|<b>/);
 });
 
+test('renderRun links the workflow run, not the per-suite run_id, when they differ', () => {
+  const r = results({ runId: '123-review' });
+  r.meta.workflow_run_id = '123';
+  const html = renderRun(r);
+  assert.match(html, /actions\/runs\/123"/);
+  assert.match(html, /href="123-review\.json"/);
+});
+
 test('renderRun tolerates a minimal results file', () => {
   const html = renderRun({ meta: { run_id: 'x', suite: 'validation' } });
   assert.match(html, /Run <code>x<\/code>/);

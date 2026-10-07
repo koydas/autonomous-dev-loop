@@ -75,9 +75,23 @@ export async function readPreviousSiteDir(dir) {
   return { scorecard, details };
 }
 
+// runs/<id>.json is keyed by run_id alone: two suites under one id would overwrite each other's detail.
+function assertRunIdsPerSuite(scorecard, publishable) {
+  const owner = new Map(Object.entries(scorecard.suites).flatMap(([suite, s]) => (s.runs ?? []).map((r) => [r.run_id, suite])));
+  for (const { meta } of publishable) {
+    if (!meta?.run_id) continue; // toScorecardRun reports it
+    const other = owner.get(meta.run_id);
+    if (other && other !== meta.suite) {
+      throw new Error(`run_id ${meta.run_id} is used by suites ${other} and ${meta.suite}: each suite's run needs its own run_id (EVAL_RUN_ID)`);
+    }
+    owner.set(meta.run_id, meta.suite);
+  }
+}
+
 // Pure: previous site state + new results → files to deploy.
 export function assembleSite({ previous, resultsList, generatedAt = new Date().toISOString() }) {
   const { publishable, skipped } = partitionPublishable(resultsList);
+  assertRunIdsPerSuite(previous.scorecard, publishable);
   let scorecard = previous.scorecard;
   const details = { ...previous.details };
   for (const results of publishable) {

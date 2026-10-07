@@ -288,7 +288,7 @@ export function renderRun(detail) {
   }).join('');
 
   return page(`Eval run ${meta.run_id}`, `<h1>Run <code>${escapeHtml(meta.run_id)}</code> · <code>${escapeHtml(meta.suite)}</code> ${gateHtml(failures.length === 0, failures.map((f) => f.metric))}</h1>
-<p class="sub">${escapeHtml(meta.ts)} · model <code>${escapeHtml(meta.model)}</code> · ${escapeHtml(fmt(meta.repeats))} repeats · dataset <code>${escapeHtml(meta.dataset)}</code> (<code>${escapeHtml((meta.dataset_sha256 ?? '').slice(0, 12))}</code>) · <a href="https://github.com/koydas/autonomous-dev-loop/actions/runs/${encodeURIComponent(meta.run_id)}">workflow run</a> · <a href="${encodeURIComponent(meta.run_id)}.json">results JSON</a></p>
+<p class="sub">${escapeHtml(meta.ts)} · model <code>${escapeHtml(meta.model)}</code> · ${escapeHtml(fmt(meta.repeats))} repeats · dataset <code>${escapeHtml(meta.dataset)}</code> (<code>${escapeHtml((meta.dataset_sha256 ?? '').slice(0, 12))}</code>) · <a href="https://github.com/koydas/autonomous-dev-loop/actions/runs/${encodeURIComponent(meta.workflow_run_id ?? meta.run_id)}">workflow run</a> · <a href="${encodeURIComponent(meta.run_id)}.json">results JSON</a></p>
 ${failures.length ? `<div class="card"><strong class="ko">Threshold failures</strong><ul>${failures.map((f) => `<li><code>${escapeHtml(f.metric)}</code>: ${escapeHtml(f.reason)}</li>`).join('')}</ul></div>` : ''}
 <h3>Metrics</h3><div class="card table-wrap"><table><tbody>${metrics}</tbody></table></div>
 ${confusionTable(summary.confusion)}
