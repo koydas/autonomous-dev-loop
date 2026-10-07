@@ -35,7 +35,7 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 
 ## PR replay gate
 
-> **A prompt change is not measured.** The replay serves the responses the model gave to the *recorded* prompt, so changing `prompts/*.md` cannot move the scores here. The replay validates what runs on those responses: the parsers (`issue_validator.mjs`, `review_prompt.mjs`), `decideVerdict` (`review_evidence.mjs`), the scorers and the thresholds, plus the prompt wiring (a template that no longer loads or interpolates makes every case error). To measure a prompt or model change, run the [Evals workflow](#run) live.
+> **A prompt change is not measured.** The replay serves the responses the model gave to the *recorded* prompt, so changing `prompts/*.md` cannot move the scores here. The replay validates what runs on those responses: the parsers (`issue_validator.mjs`, `review_prompt.mjs`), `decideVerdict` (`review_evidence.mjs`), the scorers and the thresholds, plus the prompt wiring (a template that no longer loads or interpolates makes every case error). To measure a prompt change on a PR, use the [live PR eval](#live-pr-eval-run-evals-label); for a model change, run the [Evals workflow](#run) live.
 
 `.github/workflows/eval-replay.yml` runs on `pull_request` when the PR touches `prompts/**`, `scripts/lib/issue_validator.mjs`, `scripts/lib/review_prompt.mjs`, `scripts/lib/review_evidence.mjs`, `scripts/lib/output_writer.mjs`, `scripts/lib/eval_*.mjs`, every other `scripts/lib/` module the suites import (`prompts.mjs`, `config.mjs`, `token_budget.mjs`, … — `workflow_gates.test.mjs` walks the import graph and fails on an uncovered one), `config/models.yaml`, `scripts/replay_evals_ci.mjs`, `evals/datasets/**` or the workflow itself. A PR that only changes docs does not trigger it. For each suite in the registry, `scripts/replay_evals_ci.mjs` (logic in `scripts/lib/eval_replay_ci.mjs`):
 
@@ -58,6 +58,33 @@ CI: **Actions → Evals → Run workflow** (`workflow_dispatch` only). The repor
 - **Security:** the PR's code runs, so the workflow uses `pull_request` (never `pull_request_target`), `permissions: contents: read`, no secret, `persist-credentials: false` (ADR-0023/0024). The site URL defaults to `https://<owner>.github.io/<repo>`; the repository variable `EVAL_SITE_URL` overrides it.
 - GitHub Actions has no "neutral" job conclusion: a neutral outcome is a green job with a warning annotation and a ⚪ summary.
 - **Locally:** `node scripts/replay_evals_ci.mjs --site-url https://koydas.github.io/autonomous-dev-loop [--suite review]`, or `--site-dir <unzipped eval-site-<runId> artifact>` offline.
+
+## Live PR eval (`run-evals` label)
+
+Measures a PR's **prompt** change live, with the PR's prompts and the default branch's everything else, and comments the comparison with the last published run ([ADR-0030](./adr/0030-live-pr-prompt-evals.md)). `.github/workflows/pr-evals.yml`, logic in `scripts/lib/pr_evals.mjs`.
+
+**Trigger** (a human with write access, never automatic):
+- add the **`run-evals`** label to the PR → `repeats: 1`;
+- or **Actions → PR evals → Run workflow** from the default branch with `pr_number` and `repeats: 3` (consistency; `review` ≈ 35 min).
+
+The label is removed after the run, whatever the outcome; add it again to re-run. A label set by someone without `write`/`maintain`/`admin` permission, or a push to the PR between the label and the run, gets a ⛔ refusal comment.
+
+**Suites** come from the changed prompts: `prompts/validation-*` → `validation` (≈ 4–6 min per repeat on the Groq free tier), `prompts/pr-review-*` → `review` (≈ 11–12 min). Other prompts (`generation-*`, `auto-fix-*`) have no suite: "nothing to run".
+
+**What runs where:**
+
+| Job | Does | Token | Secrets |
+|---|---|---|---|
+| `plan` | checks the trigger, lists the PR's changes from its merge base, keeps `prompts/**` as git blobs → `plan.json` | `contents: read`, `pull-requests: read` | none |
+| `eval` | default-branch checkout, writes the PR's prompts over `prompts/`, runs the default branch's `run_evals.mjs` per suite | `contents: read` | LLM keys |
+| `comment` | compares with the dashboard (`scripts/report_pr_evals.mjs`), posts the comment, removes the label | `pull-requests: write` | none |
+
+- **Refused** when the PR also touches `scripts/` or `config/` (the run would use the default branch's code, not the PR's: split the prompt change out), or ships a prompt that is a symlink, a submodule, over 64 KiB, or has an unsafe path (incl. control characters). Other files (docs, datasets, `.github/`) are ignored: the default branch's version is used and the comment lists them.
+- **Comparison:** same table as the [replay gate](#pr-replay-gate) — published vs PR value and Δ per quality metric, thresholds (❌ a threshold the published run meets and the PR misses; ⚠️ already failing; advisory when the dataset changed since the published run, Δ then over the common cases), and every case × repeat that changes verdict. A different model or repeat count is flagged: the Δ then mixes causes. An unreachable dashboard or an unpublished suite still shows the PR's numbers, without a baseline.
+- **Noise:** with `repeats: 1`, one flipped case moves `verdict_match` by 1/cases, and `review` samples at temperature 0.6. Confirm a small Δ with `repeats: 3`.
+- **Never published** to the dashboard: the PR's results stay in the `pr-evals-results-<runId>` artifact.
+- ⚠️ The PR's changed prompt files replace the default branch's wholesale. If the default branch changed the same prompt since the PR branched, rebase before running.
+- **Locally**, the same comparison over a downloaded results file: `node scripts/report_pr_evals.mjs --plan plan.json --results-dir <dir> --site-url https://koydas.github.io/autonomous-dev-loop --out report.md`.
 
 ## Dashboard
 

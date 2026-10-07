@@ -1,0 +1,277 @@
+name: PR evals
+
+# Live eval of a PR's prompt change (ADR-0030). eval-replay.yml cannot measure one: it serves the
+# recorded responses again. This workflow runs the suites the changed prompts feed, live, and comments
+# the comparison with the last run published on the eval dashboard. Logic lives in
+# scripts/lib/pr_evals.mjs; this workflow only orchestrates.
+#
+# Trust model:
+#   - Human trigger only: the `run-evals` label, honored when the labeler has write access, or a manual
+#     dispatch from the default branch (repeats 3). Never on push / pull_request.
+#   - pull_request_target, not pull_request: the workflow YAML comes from the default branch, so a PR
+#     cannot rewrite the job that receives the secrets. No PR code is ever checked out as a worktree.
+#   - plan (no secret) takes only prompts/** from the PR, as git blobs, and refuses a PR touching
+#     scripts/ or config/. eval (LLM secrets, read-only token) runs the default branch's scripts,
+#     harness and config. comment (pull-requests: write, no LLM secret) reads the artifacts.
+#   - Nothing is published to the dashboard.
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR whose prompts to evaluate
+        required: true
+        type: number
+      repeats:
+        description: Runs per case (review ≈ 11-12 min per repeat on the Groq free tier)
+        type: choice
+        required: true
+        default: '1'
+        options:
+          - '1'
+          - '3'
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    # Every label on every PR triggers the workflow; only `run-evals` goes further.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-evals' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      status: ${{ steps.plan.outputs.status }}
+      suites: ${{ steps.plan.outputs.suites }}
+      repeats: ${{ steps.plan.outputs.repeats }}
+      pr_number: ${{ steps.pr.outputs.number }}
+    steps:
+      # Default branch, full history (merge base). The persisted credential is this job's read-only
+      # token (fetching refs/pull/N/head of a private repo needs it); no secret here, the PR head is
+      # fetched as objects only and nothing from it is executed.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Fail closed: an unknown head SHA or permission ends in a refused plan, never in a run.
+      - name: Resolve PR and trigger
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          LABEL_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTOR: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$LABEL_SHA"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq 'select(.state == "open") | .head.sha' 2>/dev/null) || HEAD_SHA=""
+          fi
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || HEAD_SHA=""
+          PERMISSION=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq '.permission' 2>/dev/null) || PERMISSION=unknown
+          [[ "$PERMISSION" =~ ^[a-z]+$ ]] || PERMISSION=unknown
+          {
+            echo "number=$PR_NUMBER"
+            echo "head_sha=$HEAD_SHA"
+            echo "permission=$PERMISSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fetch PR head (objects only)
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+
+      - name: Plan
+        id: plan
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PERMISSION: ${{ steps.pr.outputs.permission }}
+          ACTOR: ${{ github.event.sender.login }}
+          EVENT_NAME: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPEATS: ${{ inputs.repeats || '1' }}
+        run: >-
+          node scripts/plan_pr_evals.mjs plan --pr "$PR_NUMBER" --head refs/remotes/pr/head
+          --expect-sha "$HEAD_SHA" --event "$EVENT_NAME" --actor "$ACTOR" --permission "$PERMISSION"
+          --ref "$GITHUB_REF" --default-branch "$DEFAULT_BRANCH" --repeats "$REPEATS"
+          --out "$RUNNER_TEMP/pr-evals/plan.json"
+
+      - name: Upload plan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-evals-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr-evals/plan.json
+          if-no-files-found: ignore
+
+      # One trace per job: the jobs share the run ID, an overwrite would keep only the last one.
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-plan
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+  eval:
+    needs: plan
+    if: ${{ needs.plan.outputs.status == 'run' }}
+    runs-on: ubuntu-latest
+    # Up to two suites x 3 repeats share the 8K TPM with every other pipeline run. One call may wait
+    # 20 retries x 60 s; the rest fits the remaining time (ADR-0028).
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    # One live eval per PR at a time (they share the TPM budget); the running one is never cancelled.
+    # GitHub keeps one pending job per concurrency key, so a third trigger while one runs and one waits cancels the
+    # waiting one, whose comment then reports "no results file".
+    concurrency:
+      group: pr-evals-${{ needs.plan.outputs.pr_number }}
+      cancel-in-progress: false
+    steps:
+      # The default branch only: scripts, harness, config and datasets are trusted (ADR-0023).
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download plan
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-evals-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr-evals
+
+      # Writes the PR's prompts (data) over prompts/ of the default-branch checkout. Re-validates
+      # every path and content: the plan job's output is not trusted blindly.
+      - name: Apply PR prompts
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node scripts/plan_pr_evals.mjs apply --plan "$RUNNER_TEMP/pr-evals/plan.json"
+
+      # A threshold miss (exit 1) is a result, reported in the comment; a crash leaves no results file,
+      # which the comment reports too. Results stay artifacts: nothing reaches the dashboard.
+      - name: Run eval suites
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          SUITES: ${{ needs.plan.outputs.suites }}
+          REPEATS: ${{ needs.plan.outputs.repeats }}
+          EVAL_HISTORY_FILE: ${{ runner.temp }}/pr-evals/history.jsonl
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '20'
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
+        run: |
+          for suite in $SUITES; do
+            node scripts/run_evals.mjs --suite "$suite" --repeats "$REPEATS" --out-dir "$RUNNER_TEMP/pr-evals/results" \
+              || echo "::warning::run_evals.mjs --suite $suite exited non-zero (threshold miss or crash, see the PR comment)"
+          done
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-evals-results-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr-evals/results/
+          if-no-files-found: ignore
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-eval
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+  # Separate job: the write token never shares a runner with the LLM keys. Runs after a refused,
+  # empty, failed or successful eval alike, and always removes the label.
+  comment:
+    needs: [plan, eval]
+    if: ${{ !cancelled() && needs.plan.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download plan
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: pr-evals-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr-evals
+
+      - name: Download eval results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: pr-evals-results-${{ github.run_id }}
+          path: ${{ runner.temp }}/pr-evals/results
+
+      - name: Compare with the published run
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          EVAL_SITE_URL: ${{ vars.EVAL_SITE_URL || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          node scripts/report_pr_evals.mjs --plan "$RUNNER_TEMP/pr-evals/plan.json"
+          --results-dir "$RUNNER_TEMP/pr-evals/results" --site-url "$EVAL_SITE_URL"
+          --run-url "$RUN_URL" --out "$RUNNER_TEMP/pr-evals/report.md"
+
+      - name: Post PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/pr-evals/report.md"
+          [ -s "$REPORT" ] || printf '<!-- adl-pr-evals -->\n# ❌ Live eval: no report\n\nThe report step failed; see the [workflow run](%s).\n' "$RUN_URL" > "$REPORT"
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F "body=@$REPORT" --silent
+
+      # One label, one run: removed whatever the outcome, so an unrelated later event never re-runs it.
+      - name: Remove run-evals label
+        if: ${{ always() && github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels/run-evals" --silent || echo "::warning::run-evals label already removed"
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-comment
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true

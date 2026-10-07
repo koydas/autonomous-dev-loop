@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs'];
 
 test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
@@ -40,6 +40,7 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['eval_scorecard.mjs', 'eval_scorecard.test.mjs'],
     ['eval_site.mjs', 'eval_site.test.mjs'],
     ['eval_replay_ci.mjs', 'eval_replay_ci.test.mjs'],
+    ['pr_evals.mjs', 'pr_evals.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -70,14 +71,14 @@ test('every issue_comment-triggered workflow gates on trusted comment author_ass
 
 // Workflows whose jobs push commits or mutate labels/comments: a run must never be
 // cancelled halfway, so they queue (cancel-in-progress: false) instead.
-const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'code-generation.yml', 'validate-issue.yml', 'reset-auto-fix.yml', 'evals.yml'];
+const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'code-generation.yml', 'validate-issue.yml', 'reset-auto-fix.yml', 'evals.yml', 'pr-evals.yml'];
 // Triggers fire for unrelated labels/comments too; a workflow-level group would let a
 // skipped run replace the pending real one, so the group must sit on the gated job.
-const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'code-generation.yml'];
+const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'code-generation.yml', 'pr-evals.yml'];
 
 test('every workflow declares a concurrency group keyed per PR/issue', () => {
   const workflows = readWorkflows();
-  assert.equal(workflows.length, 9, `expected 9 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  assert.equal(workflows.length, 10, `expected 10 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
   for (const { name, text } of workflows) {
     const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1]);
     assert.equal(groups.length, 1, `${name} must declare exactly one concurrency group`);
@@ -226,7 +227,7 @@ test('auto-fix-pr.yml resolves the head ref only for trusted rerun comments', ()
 // ADR-0028 amendment: a Groq rate limit must never fail a job. Every workflow that hands
 // GROQ_API_KEY to a step must let that step wait out TPM windows (hint-less limits wait 60 s)
 // within an explicit job timeout, keeping 3 minutes for evidence, the call and the rest.
-const LLM_WORKFLOWS = ['pr-review.yml', 'auto-fix-pr.yml', 'code-generation.yml', 'validate-issue.yml', 'evals.yml'];
+const LLM_WORKFLOWS = ['pr-review.yml', 'auto-fix-pr.yml', 'code-generation.yml', 'validate-issue.yml', 'evals.yml', 'pr-evals.yml'];
 
 // Splits a workflow into its jobs (2-space-indented keys under `jobs:`).
 function jobsOf(text) {
@@ -429,4 +430,106 @@ test('eval-replay.yml paths filter covers every module the replay loads', () => 
   assert.deepEqual(uncovered, [], `add to eval-replay.yml paths: ${uncovered.join(', ')}`);
   // config.mjs parses config/models.yaml at import time.
   assert.ok(paths.includes('config/models.yaml'));
+});
+
+// ADR-0030: live eval of a PR's prompts. The job holding the LLM secrets runs default-branch code only
+// and takes prompts/** from the PR as data; a human with write access triggers it; the comment is
+// posted by a job without LLM secrets; nothing is published.
+const prEvals = () => readFileSync(resolve(WORKFLOWS_DIR, 'pr-evals.yml'), 'utf8');
+const prEvalsJobs = () => Object.fromEntries(jobsOf(prEvals()).map((j) => [j.name, j.text]));
+
+test('pr-evals.yml is human-triggered only: run-evals label (pull_request_target) or dispatch, never push or pull_request', async () => {
+  const { RUN_EVALS_LABEL } = await import('../lib/pr_evals.mjs');
+  const text = prEvals();
+  assert.match(text, /^on:\n  pull_request_target:\n    types: \[labeled\]\n  workflow_dispatch:\n/m);
+  assert.doesNotMatch(text, /^  (push|pull_request|issue_comment|workflow_run|schedule):/m);
+  const { plan } = prEvalsJobs();
+  assert.match(plan, new RegExp(`if: \\$\\{\\{ github\\.event_name == 'workflow_dispatch' \\|\\| github\\.event\\.label\\.name == '${RUN_EVALS_LABEL}' \\}\\}`));
+  // The labeler's write access is checked from the API (labeled payloads carry no author_association).
+  assert.match(plan, /gh api "repos\/\$GITHUB_REPOSITORY\/collaborators\/\$ACTOR\/permission"/);
+  assert.match(plan, /--permission "\$PERMISSION"/);
+  assert.match(plan, /--expect-sha "\$HEAD_SHA"/);
+  assert.match(plan, /ACTOR: \$\{\{ github\.event\.sender\.login \}\}/);
+});
+
+test('pr-evals.yml repeats: 1 by default, 3 on dispatch', () => {
+  const text = prEvals();
+  const repeats = text.slice(text.indexOf('      repeats:'), text.indexOf('\npermissions:'));
+  assert.match(repeats, /type: choice/);
+  assert.match(repeats, /default: '1'/);
+  assert.deepEqual([...repeats.matchAll(/^\s+- '(\d)'$/gm)].map((m) => m[1]), ['1', '3']);
+  assert.match(prEvalsJobs().plan, /REPEATS: \$\{\{ inputs\.repeats \|\| '1' \}\}/);
+});
+
+test('pr-evals.yml declares least-privilege permissions per job', () => {
+  const text = prEvals();
+  assert.match(text, /^permissions:\n  contents: read\n\n/m);
+  const jobs = prEvalsJobs();
+  assert.deepEqual(Object.keys(jobs), ['plan', 'eval', 'comment']);
+  const perms = (job) => job.match(/\n    permissions:\n((?:      .+\n)+)/)?.[1].trim().split(/\n\s*/);
+  assert.deepEqual(perms(jobs.plan), ['contents: read', 'pull-requests: read']);
+  assert.deepEqual(perms(jobs.eval), ['contents: read']);
+  assert.deepEqual(perms(jobs.comment), ['contents: read', 'pull-requests: write']);
+  assert.doesNotMatch(text, /contents: write|pages: write|id-token: write|actions: write|issues: write/);
+});
+
+test('pr-evals.yml hands LLM secrets to the eval job only', () => {
+  const jobs = prEvalsJobs();
+  assert.match(jobs.eval, /secrets\.GROQ_API_KEY/);
+  assert.match(jobs.eval, /secrets\.ANTHROPIC_API_KEY/);
+  for (const name of ['plan', 'comment']) assert.doesNotMatch(jobs[name], /secrets\./, `${name} must not receive secrets`);
+  assert.doesNotMatch(jobs.eval, /github\.token|GH_TOKEN|GITHUB_TOKEN/, 'the eval job holds no GitHub token in its env');
+});
+
+test('pr-evals.yml checks out the default branch only; the PR head is fetched as objects', () => {
+  const text = prEvals();
+  const checkouts = text.match(/uses: actions\/checkout@v4\n\s+with:\n(\s{10}.+\n)+/g) ?? [];
+  assert.equal(checkouts.length, 3);
+  for (const c of checkouts) assert.match(c, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
+  assert.doesNotMatch(text, /ref: \$\{\{ github\.(event\.pull_request\.head|head_ref)/);
+  assert.doesNotMatch(text, /github\.head_ref/);
+  const jobs = prEvalsJobs();
+  for (const name of ['eval', 'comment']) assert.match(jobs[name], /persist-credentials: false/, `${name} must not persist a credential`);
+  assert.match(jobs.plan, /git fetch --no-tags origin "\+refs\/pull\/\$\{PR_NUMBER\}\/head:refs\/remotes\/pr\/head"/);
+  assert.doesNotMatch(jobs.eval, /git (fetch|checkout|worktree)/, 'the eval job never touches the PR head');
+});
+
+test('pr-evals.yml eval job applies the PR prompts, runs the default-branch harness and never publishes', () => {
+  const text = prEvals();
+  const { eval: evalJob } = prEvalsJobs();
+  assert.match(evalJob, /needs: plan\n    if: \$\{\{ needs\.plan\.outputs\.status == 'run' \}\}/);
+  const apply = evalJob.indexOf('node scripts/plan_pr_evals.mjs apply --plan "$RUNNER_TEMP/pr-evals/plan.json"');
+  const run = evalJob.indexOf('node scripts/run_evals.mjs --suite "$suite" --repeats "$REPEATS"');
+  assert.ok(apply > 0 && run > apply, 'prompts are applied before the suites run');
+  assert.doesNotMatch(text, /--scorecard|build_eval_site|deploy-pages|upload-pages-artifact|configure-pages|github-pages/);
+  assert.doesNotMatch(text, /git (push|commit|add)\b/);
+  assert.match(evalJob, /EVAL_HISTORY_FILE: \$\{\{ runner\.temp \}\}\//);
+  assert.match(evalJob, /^    concurrency:\n      group: pr-evals-\$\{\{ needs\.plan\.outputs\.pr_number \}\}\n      cancel-in-progress: false$/m);
+});
+
+test('pr-evals.yml comment job reads the artifacts, comments and always removes the label', async () => {
+  const { RUN_EVALS_LABEL } = await import('../lib/pr_evals.mjs');
+  const { comment } = prEvalsJobs();
+  assert.match(comment, /needs: \[plan, eval\]\n    if: \$\{\{ !cancelled\(\) && needs\.plan\.result != 'skipped' \}\}/);
+  assert.match(comment, /name: pr-evals-plan-\$\{\{ github\.run_id \}\}/);
+  assert.match(comment, /name: pr-evals-results-\$\{\{ github\.run_id \}\}/);
+  assert.match(comment, /node scripts\/report_pr_evals\.mjs --plan /);
+  assert.match(comment, /gh api "repos\/\$GITHUB_REPOSITORY\/issues\/\$PR_NUMBER\/comments" -F "body=@\$REPORT"/);
+  assert.match(comment, new RegExp(`- name: Remove ${RUN_EVALS_LABEL} label\\n\\s+if: \\$\\{\\{ always\\(\\) && github\\.event_name == 'pull_request_target' \\}\\}`));
+  assert.match(comment, new RegExp(`gh api -X DELETE "repos/\\$GITHUB_REPOSITORY/issues/\\$PR_NUMBER/labels/${RUN_EVALS_LABEL}"`));
+});
+
+test('pr-evals.yml passes event values through env, never interpolated into run scripts', () => {
+  const text = prEvals();
+  const runBlocks = [...text.matchAll(/^\s+run: (?:\||>-)?\n?((?:\s{10,}.+\n)+|.+)/gm)].map((m) => m[1]);
+  assert.ok(runBlocks.length >= 6);
+  for (const block of runBlocks) assert.doesNotMatch(block, /\$\{\{/, `run script interpolates an expression: ${block.trim().slice(0, 80)}`);
+});
+
+test('pr-evals.yml keeps the observability contract in every job', () => {
+  for (const [name, job] of Object.entries(prEvalsJobs())) {
+    assert.match(job, /GITHUB_RUN_ID: \$\{\{ github\.run_id \}\}/, `${name}: GITHUB_RUN_ID`);
+    assert.match(job, new RegExp(`- name: Upload run trace\\n\\s+if: always\\(\\)\\n\\s+uses: actions/upload-artifact@v4\\n\\s+with:\\n\\s+name: run-trace-\\$\\{\\{ github\\.run_id \\}\\}-${name}\\n`), `${name}: trace upload`);
+    assert.match(job, /^    timeout-minutes: \d+$/m, `${name}: timeout`);
+  }
 });

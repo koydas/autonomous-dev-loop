@@ -132,6 +132,12 @@ Key steps to expand per workflow:
 ### `eval-replay` (`eval-replay.yml`)
 - **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 when a threshold the published numbers meet breaks (PR thresholds on both sides), or when the PR's code cannot run the replay (malformed dataset, suite crash); an unreachable dashboard, an unpublished suite or a changed dataset only warns
 
+### `pr-evals` (`pr-evals.yml`)
+- **plan → Resolve PR and trigger / Plan** — labeler permission, pinned head SHA, the plan (`run`, `refused` with the reason, `nothing`) and the suites; `pr-evals-plan-<run_id>` artifact
+- **eval → Apply PR prompts / Run eval suites** — the prompts written over the default-branch checkout, then one `run_evals.mjs` report per suite; `pr-evals-results-<run_id>` artifact
+- **comment → Compare with the published run / Post PR comment / Remove run-evals label**
+- Traces: `run-trace-<run_id>-plan`, `-eval`, `-comment` (one per job, they share the run ID)
+
 ### `auto-fix-pr` (`auto-fix-pr.yml`)
 - **Resolve PR payload for issue_comment** _(only for checkbox-rerun triggers)_ — GitHub PR API call; extracts `head.ref` branch name needed for the checkout step. Failure here means the checkout will not have the correct branch ref.
 - **Checkout PR branch** — verifies the correct PR branch is checked out (uses `head_ref` from the resolve step for `issue_comment` events, `pull_request.head.ref` for label events)
@@ -182,6 +188,22 @@ Key steps to expand per workflow:
 | `eval_replay.error`, job red without a report | The PR's code cannot run the replay: malformed `evals/datasets/*.jsonl` (the error names file and line) or a suite module that throws on import. Run `node scripts/replay_evals_ci.mjs --site-url …` locally |
 | ⚪ "dashboard unreachable" or "not replayed" | Neutral (green job). Check the Pages site and the `EVAL_SITE_URL` repository variable; a suite with no live run yet needs one **Actions → Evals** run on `main` |
 | ⚠️ "Dataset changed since the run" | Expected after a dataset edit: thresholds are advisory until the next live run on `main` records the new hash |
+
+### `pr-evals`
+
+| Failure | Recovery |
+|---------|----------|
+| Labelled `run-evals`, no run, or run with every job skipped | Only `run-evals` passes the `plan` gate. Labels added by `GITHUB_TOKEN` trigger no workflow: add it as a person |
+| ⛔ "`<user>` has `triage`/`read`/`unknown` permission" | The labeler needs write access. `unknown`: the permission API failed — add the label again |
+| ⛔ "the PR head moved since the trigger" | A push landed between the label and the plan. Add the label again |
+| ⛔ "the PR changes files this run cannot take from it" | The PR touches `scripts/` or `config/` (or ships a non-regular prompt). Move the prompt change to its own PR, or measure after merge with **Actions → Evals** on `main` |
+| ⚪ "nothing to run" | No changed prompt maps to a suite (`validation-*`, `pr-review-*`) |
+| ❌ suite "Not measured: no results file" | `run_evals.mjs` crashed or the job hit `timeout-minutes` (150). Check the **Run eval suites** log: provider error (keys, `AI_PROVIDER`), or a prompt the default-branch code cannot load (empty file, deleted prompt) |
+| ❌ "Live eval failed before planning" | The `plan` job failed (PR not found or closed for a dispatch, fetch of `refs/pull/<n>/head` failed). Check its log and re-run |
+| Comment says "no baseline" | Dashboard unreachable or the suite was never published: check `EVAL_SITE_URL` and run **Actions → Evals** on `main` once |
+| Δ of one case between two runs | Expected noise with `repeats: 1`; dispatch with `repeats: 3` |
+| ❌ suite "Not measured: no results file" right after another run on the same PR | Three triggers queued on one PR: GitHub keeps one pending `eval` job per concurrency group and cancelled the waiting one. Trigger again once the running eval is done |
+| Label still on the PR after a run | The run was cancelled (the removal step runs on every other outcome). Remove it by hand |
 
 ### `auto-fix-pr`
 

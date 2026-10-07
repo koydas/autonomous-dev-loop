@@ -33,3 +33,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0027: Offline eval harness for LLM pipeline stages](./0027-offline-eval-harness.md)
 - [ADR-0028: One LLM review per head SHA](./0028-one-review-per-head-sha.md)
 - [ADR-0029: Deterministic write guard for auto-fix](./0029-autofix-deterministic-write-guard.md)
+- [ADR-0030: Live evals of a PR's prompt change](./0030-live-pr-prompt-evals.md)
