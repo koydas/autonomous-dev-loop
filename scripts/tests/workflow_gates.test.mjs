@@ -9,6 +9,17 @@ const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8
 
 const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs'];
 
+// Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
+const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
+const GATE_COUNT = GATED_MODULES.length + GATED_ENTRYPOINTS.length;
+
+test('test.yml enforces c8 coverage for gated entrypoints with their dedicated test file', () => {
+  for (const [script, testFile] of GATED_ENTRYPOINTS) {
+    assert.ok(workflow.includes(`--include 'scripts/${script}'`), `Missing coverage gate for ${script}`);
+    assert.ok(workflow.includes(`node --test scripts/tests/${testFile}`), `Missing test reference: ${testFile}`);
+  }
+});
+
 test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
     assert.ok(workflow.includes(`scripts/lib/${mod}`), `Missing coverage gate for ${mod}`);
@@ -17,15 +28,15 @@ test('test.yml enforces c8 coverage for all critical modules', () => {
 
 test('test.yml uses --check-coverage for each gated module', () => {
   const gateCount = (workflow.match(/--check-coverage/g) || []).length;
-  assert.equal(gateCount, GATED_MODULES.length,
-    `Expected ${GATED_MODULES.length} --check-coverage flags, found ${gateCount}`);
+  assert.equal(gateCount, GATE_COUNT,
+    `Expected ${GATE_COUNT} --check-coverage flags, found ${gateCount}`);
 });
 
 test('test.yml sets 80% threshold on all four dimensions for each gate', () => {
   for (const flag of ['--lines 80', '--branches 80', '--functions 80', '--statements 80']) {
     const count = (workflow.match(new RegExp(flag.replace(' ', '\\s+'), 'g')) || []).length;
-    assert.equal(count, GATED_MODULES.length,
-      `Expected ${GATED_MODULES.length} occurrences of "${flag}", found ${count}`);
+    assert.equal(count, GATE_COUNT,
+      `Expected ${GATE_COUNT} occurrences of "${flag}", found ${count}`);
   }
 });
 
