@@ -183,6 +183,14 @@ test('buildSite on an empty scorecard still produces a valid site', () => {
   assert.deepEqual(Object.keys(files).sort(), ['.nojekyll', 'index.html', 'scorecard.json', 'scorecard.md']);
 });
 
+test('buildSite writes a "no run yet" badge for a registered suite with no published run', () => {
+  const files = buildSite({ scorecard: scorecardOf(results({ runId: 'v1' })), thresholds: { validation: {}, review: {} } });
+  const badge = JSON.parse(files['badges/review.json']);
+  assert.equal(badge.message, 'no run yet');
+  assert.equal(badge.color, 'lightgrey');
+  assert.equal(JSON.parse(files['badges/validation.json']).color, 'brightgreen');
+});
+
 function reviewResults({ runId = 'rv1', ts = '2026-10-05T10:00:00.000Z' } = {}) {
   const r = results({ runId, ts });
   r.meta = { ...r.meta, suite: 'review', dataset: 'evals/datasets/review.jsonl' };
