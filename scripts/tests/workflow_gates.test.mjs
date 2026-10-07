@@ -9,6 +9,17 @@ const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8
 
 const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'issue_validator.mjs'];
 
+// Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
+const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
+const GATE_COUNT = GATED_MODULES.length + GATED_ENTRYPOINTS.length;
+
+test('test.yml enforces c8 coverage for gated entrypoints with their dedicated test file', () => {
+  for (const [script, testFile] of GATED_ENTRYPOINTS) {
+    assert.ok(workflow.includes(`--include 'scripts/${script}'`), `Missing coverage gate for ${script}`);
+    assert.ok(workflow.includes(`node --test scripts/tests/${testFile}`), `Missing test reference: ${testFile}`);
+  }
+});
+
 test('test.yml enforces c8 coverage for all critical modules', () => {
   for (const mod of GATED_MODULES) {
     assert.ok(workflow.includes(`scripts/lib/${mod}`), `Missing coverage gate for ${mod}`);
@@ -17,15 +28,15 @@ test('test.yml enforces c8 coverage for all critical modules', () => {
 
 test('test.yml uses --check-coverage for each gated module', () => {
   const gateCount = (workflow.match(/--check-coverage/g) || []).length;
-  assert.equal(gateCount, GATED_MODULES.length,
-    `Expected ${GATED_MODULES.length} --check-coverage flags, found ${gateCount}`);
+  assert.equal(gateCount, GATE_COUNT,
+    `Expected ${GATE_COUNT} --check-coverage flags, found ${gateCount}`);
 });
 
 test('test.yml sets 80% threshold on all four dimensions for each gate', () => {
   for (const flag of ['--lines 80', '--branches 80', '--functions 80', '--statements 80']) {
     const count = (workflow.match(new RegExp(flag.replace(' ', '\\s+'), 'g')) || []).length;
-    assert.equal(count, GATED_MODULES.length,
-      `Expected ${GATED_MODULES.length} occurrences of "${flag}", found ${count}`);
+    assert.equal(count, GATE_COUNT,
+      `Expected ${GATE_COUNT} occurrences of "${flag}", found ${count}`);
   }
 });
 
@@ -342,7 +353,7 @@ test('evals.yml keeps write access out of the eval job and publishes from the de
   assert.match(publishJob, /pages: write/);
   assert.match(publishJob, /id-token: write/);
   assert.doesNotMatch(publishJob, /contents: write|pull-requests: write/);
-  assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && inputs\.publish && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
+  assert.match(publishJob, /if: \$\{\{ !cancelled\(\) && \(github\.event_name == 'schedule' \|\| inputs\.publish\) && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \}\}/);
   assert.doesNotMatch(publishJob, /secrets\./, 'the publish job must not receive LLM API keys');
 });
 
@@ -353,6 +364,74 @@ test('evals.yml offers exactly the registered eval suites as a choice', async ()
   assert.match(suite, /type: choice/);
   const options = [...suite.slice(suite.indexOf('options:')).matchAll(/^\s+- (\S+)$/gm)].map((m) => m[1]);
   assert.deepEqual(options, Object.keys(SUITES));
+});
+
+// ADR-0027 amendment (weekly run): the published run that eval-replay.yml and pr-evals.yml compare
+// with is refreshed every week. On `schedule` every input is empty, so each default is explicit.
+const evalsYml = () => readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
+const evalsJobs = () => Object.fromEntries(jobsOf(evalsYml()).map((j) => [j.name, j.text]));
+
+test('evals.yml runs weekly on Monday morning UTC, off the hour', () => {
+  const crons = [...evalsYml().matchAll(/^\s+- cron: '([^']+)'$/gm)].map((m) => m[1]);
+  assert.equal(crons.length, 1);
+  const [minute, hour, dom, month, dow] = crons[0].split(' ');
+  assert.ok(Number(minute) % 15 !== 0, `minute ${minute} must not be round (GitHub delays :00 schedules)`);
+  assert.ok(Number(hour) >= 5 && Number(hour) <= 7, `hour ${hour} must be about 06:00 UTC`);
+  assert.deepEqual([dom, month, dow], ['*', '*', '1']);
+  assert.match(evalsYml(), /^on:\n  schedule:\n[\s\S]*?\n  workflow_dispatch:\n/m);
+});
+
+test('evals.yml never starts an empty history nor restores a backup on schedule', () => {
+  const text = evalsYml();
+  const publish = evalsJobs().publish;
+  // init_site and restore_run_id are read once each, behind the schedule guard, into job env.
+  assert.deepEqual([...text.matchAll(/inputs\.init_site\b[^\n]*/g)].map((m) => m[0]), ['inputs.init_site }}']);
+  assert.match(publish, /^      INIT_SITE: \$\{\{ github\.event_name != 'schedule' && inputs\.init_site \}\}$/m);
+  assert.deepEqual([...text.matchAll(/inputs\.restore_run_id\b/g)].length, 1);
+  assert.match(publish, /^      RESTORE_RUN_ID: \$\{\{ github\.event_name != 'schedule' && inputs\.restore_run_id \|\| '' \}\}$/m);
+  // Steps read the guarded env only, and --allow-empty comes from INIT_SITE alone.
+  assert.equal([...text.matchAll(/^\s+INIT_SITE:/gm)].length, 1, 'no step may redefine INIT_SITE');
+  assert.equal([...text.matchAll(/^\s+RESTORE_RUN_ID:/gm)].length, 1, 'no step may redefine RESTORE_RUN_ID');
+  assert.equal([...text.matchAll(/--allow-empty/g)].length, 1);
+  assert.match(publish, /if: env\.RESTORE_RUN_ID != ''/);
+  assert.match(publish, /name: eval-site-\$\{\{ env\.RESTORE_RUN_ID \}\}\n\s+run-id: \$\{\{ env\.RESTORE_RUN_ID \}\}/);
+  // publish defaults on for schedule; repeats defaults to 3 when the input is empty.
+  assert.match(publish, /\(github\.event_name == 'schedule' \|\| inputs\.publish\)/);
+  assert.match(evalsJobs().eval, /REPEATS: \$\{\{ inputs\.repeats \|\| '3' \}\}/);
+});
+
+test('evals.yml schedule runs every registered suite, one at a time, each under its own run_id', async () => {
+  const { SUITES } = await import('../lib/eval_suites.mjs');
+  const job = evalsJobs().eval;
+  const matrix = job.match(/suite: \$\{\{ fromJSON\(github\.event_name == 'schedule' && '(\[[^']+\])' \|\| format\('\["\{0\}"\]', inputs\.suite\)\) \}\}/);
+  assert.ok(matrix, 'matrix: every suite on schedule, the chosen one on dispatch');
+  assert.deepEqual(JSON.parse(matrix[1]), Object.keys(SUITES));
+  assert.match(job, /max-parallel: 1\n/, 'suites share the 8K TPM: never in parallel');
+  assert.match(job, /fail-fast: false\n/, 'a failing suite must not cancel the next one');
+  assert.match(job, /SUITE: \$\{\{ matrix\.suite \}\}/);
+  assert.match(job, /EVAL_RUN_ID: \$\{\{ github\.run_id \}\}-\$\{\{ matrix\.suite \}\}/);
+  assert.match(job, /name: eval-results-\$\{\{ github\.run_id \}\}-\$\{\{ matrix\.suite \}\}\n/);
+  assert.match(job, /name: run-trace-\$\{\{ github\.run_id \}\}-\$\{\{ matrix\.suite \}\}\n/);
+  // Every suite, worst case, within the per-suite job timeout.
+  assert.ok(Number(job.match(/^    timeout-minutes: (\d+)$/m)[1]) >= 90);
+});
+
+test('evals.yml publishes every suite of the run in one Pages deploy', () => {
+  const publish = evalsJobs().publish;
+  assert.match(publish, /pattern: eval-results-\$\{\{ github\.run_id \}\}-\*\n\s+merge-multiple: true\n/);
+  assert.equal([...publish.matchAll(/uses: actions\/deploy-pages@/g)].length, 1);
+  assert.match(publish, /needs: eval\n/);
+  assert.match(publish, /^    timeout-minutes: \d+$/m);
+});
+
+// evals.yml and pr-evals.yml share the Groq quota but must never queue behind (or cancel) each other.
+test('evals.yml and pr-evals.yml use disjoint concurrency groups that never cancel a running eval', () => {
+  const groupOf = (text) => text.match(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/m)[1].trim();
+  const prEvalsText = readFileSync(resolve(WORKFLOWS_DIR, 'pr-evals.yml'), 'utf8');
+  // "evals-refs/heads/…" can never equal "pr-evals-<number>": neither run waits for the other.
+  assert.equal(groupOf(evalsYml()), 'evals-${{ github.ref }}');
+  assert.equal(groupOf(prEvalsText), 'pr-evals-${{ needs.plan.outputs.pr_number }}');
+  for (const text of [evalsYml(), prEvalsText]) assert.match(text, /cancel-in-progress: false/);
 });
 
 // ADR-0027 amendment: the eval replay gate runs PR code, so it is read-only and secret-free, and

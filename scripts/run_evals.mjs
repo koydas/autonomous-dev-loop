@@ -6,7 +6,7 @@
  *   node scripts/run_evals.mjs --suite validation [--repeats 3] [--concurrency 1]
  *                              [--tags edge,docs] [--limit 5] [--replay evals/results/<file>.json] [--scorecard]
  *
- * Writes evals/results/<suite>-<runId>.json (full results, replayable), appends one summary line to
+ * Writes evals/results/<suite>-<runId>.json (full results, replayable; runId = EVAL_RUN_ID, else GITHUB_RUN_ID), appends one summary line to
  * EVAL_HISTORY_FILE (default evals/history.jsonl), prints a Markdown report (also to
  * GITHUB_STEP_SUMMARY when set). --scorecard also adds the run to a local preview of the eval dashboard
  * (EVAL_SITE_DIR, default evals/site; live full-dataset runs only). Exit 1 when a suite threshold fails.
@@ -93,9 +93,12 @@ async function buildLLM(suite, replayFile) {
 async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const { suite } = opts;
-  const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
+  const workflowRunId = process.env.GITHUB_RUN_ID;
+  const traceRunId = workflowRunId ?? `local-${Date.now()}`;
+  // EVAL_RUN_ID keys the results (dashboard runs/<id>.json): one per suite when a workflow run evaluates several.
+  const runId = process.env.EVAL_RUN_ID || traceRunId;
   const startMs = Date.now();
-  const tracer = createTracer({ runId, traceDir: path.join(process.cwd(), 'observability', 'traces') });
+  const tracer = createTracer({ runId: traceRunId, traceDir: path.join(process.cwd(), 'observability', 'traces') });
 
   obsLog({ stage: 'eval', event: 'eval.start', meta: { suite: suite.name, repeats: opts.repeats, replay: Boolean(opts.replay) } });
   tracer.startSpan('eval', { suite: suite.name });
@@ -125,7 +128,10 @@ async function main() {
     for (const f of thresholdResults.filter((x) => !failures.includes(x))) {
       process.stderr.write(`Warning: threshold ${f.metric} skipped on a filtered run (${f.reason})\n`);
     }
-    const meta = { run_id: runId, ts: new Date().toISOString(), model, repeats: opts.repeats, dataset: suite.dataset, dataset_sha256: datasetSha256 };
+    const meta = {
+      run_id: runId, ...(workflowRunId ? { workflow_run_id: workflowRunId } : {}),
+      ts: new Date().toISOString(), model, repeats: opts.repeats, dataset: suite.dataset, dataset_sha256: datasetSha256,
+    };
     const report = formatReport({ suite: suite.name, summary, failures, results, meta });
 
     await fs.mkdir(opts.outDir, { recursive: true });

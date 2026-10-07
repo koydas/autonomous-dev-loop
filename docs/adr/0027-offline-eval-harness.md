@@ -144,3 +144,29 @@ Consequences:
 - ⚠️ The published run was scored by the code of its day: a scorer change merged after it shows as a Δ on later PRs until the next live run.
 - ⚠️ A PR that tightens a threshold beyond the published value only warns: the replay cannot tell whether the model would meet it.
 - ⚠️ The gate depends on the dashboard being up; when it is not, the job is neutral and the PR is unprotected by it.
+
+## Amendment (2026-10-07): weekly run of every suite
+
+`eval-replay.yml` and `pr-evals.yml` (ADR-0030) both compare with the last run published on the dashboard. Live runs were manual only, so that reference aged with every prompt, scorer or model change merged since, and the Δ shown on PRs mixed the PR's effect with that drift.
+
+- **Schedule.** `evals.yml` adds `schedule: '23 6 * * 1'` (Mondays 06:23 UTC, off the hour because GitHub delays `:00` schedules). The run evaluates every suite in the registry with `repeats: 3` on the default branch and publishes.
+- **Explicit defaults.** On `schedule` every workflow input is empty. `repeats` falls back to `'3'` and `publish` to on (`github.event_name == 'schedule' || inputs.publish`). `init_site` and `restore_run_id` are read once each, at the `publish` job level, behind `github.event_name != 'schedule'`, so an unattended run never starts an empty history nor restores a backup. A 404 on the deployed scorecard fails the weekly run, as it does a manual run without `init_site`. `workflow_gates.test.mjs` pins the guards, including that no step redefines them.
+- **Sequence.** The `eval` job becomes a matrix over the suites (`validation`, `review` on schedule; the chosen suite on dispatch), with `max-parallel: 1` because the suites share the 8K TPM, and `fail-fast: false` so a threshold miss, crash or timeout in one suite never cancels the next. Each suite job keeps the 120 min timeout and its retry budget (ADR-0028). The suite list is checked against `SUITES` by a test, like the `suite` choice.
+- **One deploy.** Artifacts are per suite (`eval-results-<runId>-<suite>`, `run-trace-<runId>-<suite>`). `publish` downloads them with `pattern` + `merge-multiple` and passes every results file to `build_eval_site.mjs` in one build, then deploys once. A suite that failed on `error_rate` is skipped by `partitionPublishable`; the others are published.
+- **One run_id per suite.** The dashboard keys `runs/<id>.json` by `run_id` alone, and `run_evals.mjs` used `GITHUB_RUN_ID`: two suites of one workflow run would have overwritten each other's detail page, and the replay gate would have found the wrong suite's file. `run_evals.mjs` now takes `EVAL_RUN_ID` for `meta.run_id` and the results file name (falling back to `GITHUB_RUN_ID`) and records `meta.workflow_run_id`; `evals.yml` sets `EVAL_RUN_ID=<run_id>-<suite>` for every run, weekly or manual. The run page links the workflow run through `workflow_run_id`. `assembleSite` refuses a build in which two suites share a `run_id` (in the batch or against the history), so the collision fails the deploy instead of corrupting the site.
+- **Concurrency.** The weekly run uses the existing `evals-<ref>` group: it queues behind a manual run on the default branch, and vice versa. `pr-evals.yml` keeps its per-PR group, so the two never wait for each other; they share the Groq TPM and each waits out the other's 429s. No global group serializes LLM workflows: GitHub keeps one pending run per group and cancels the rest.
+- **Cost.** ≈ 50–60 min end to end (validation 3 × 4–6 min, review 3 × 11–12 min, plus setup and deploy). ≈ 410k estimated input tokens per week (validation ≈ 71k, review ≈ 66k per repeat), plus at most ≈ 180k output tokens.
+
+Alternatives considered:
+- *One job looping over the suites.* One timeout for the whole sequence (≈ 50 min nominal, ≈ 140 min worst case beyond the retry budget), and a crash or timeout of one suite loses the others' artifacts. Rejected for the matrix.
+- *One workflow run per suite (two crons).* Two Pages deploys and two history read-backs per week, which can race on the deployed site if a run is slow. Rejected.
+- *A global concurrency group shared with `pr-evals.yml`.* Would serialize Groq calls, but GitHub cancels every pending run beyond the first in a group, so a labelled PR eval could be dropped silently. Rejected; overlapping runs are slowed, not failed.
+- *Suite-qualified detail paths (`runs/<suite>/<id>.json`).* Changes the site layout that the replay gate, the PR eval report and the history read-back depend on. Rejected for a per-suite `run_id`.
+
+Consequences:
+- ✅ The published reference for the replay gate and the live PR eval is at most a week old.
+- ✅ A provider outage or a failing suite does not block the other suites' publication.
+- ✅ A shared `run_id` can no longer overwrite another suite's detail page; the build fails closed.
+- ⚠️ ≈ 410k input tokens of the Groq free-tier quota every Monday morning. A pipeline run or a PR eval overlapping it is slower.
+- ⚠️ New run IDs are `<workflow run>-<suite>`; runs published before keep their bare numeric IDs. Consumers treat `run_id` as opaque.
+- ⚠️ GitHub disables scheduled workflows after 60 days without repository activity; the weekly run stops with it.

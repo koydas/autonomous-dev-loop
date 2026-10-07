@@ -137,6 +137,28 @@ test('assembleSite prunes details of runs that fell out of the history window', 
   assert.ok(files['runs/new.json']);
 });
 
+test('assembleSite refuses two suites under one run_id (their runs/<id>.json would collide)', () => {
+  const review = results({ runId: 'same' });
+  review.meta = { ...review.meta, suite: 'review' };
+  assert.throws(() => assembleSite({ previous: empty(), resultsList: [results({ runId: 'same' }), review] }), /run_id same is used by suites validation and review/);
+  // Against the history too: a new review run cannot take a published validation run's id.
+  const previous = { scorecard: addRun(emptyScorecard(), 'validation', toScorecardRun(results({ runId: 'old' }))), details: {} };
+  const clash = results({ runId: 'old' });
+  clash.meta = { ...clash.meta, suite: 'review' };
+  assert.throws(() => assembleSite({ previous, resultsList: [clash] }), /run_id old is used by suites validation and review/);
+  // The same suite re-publishing its run_id (a re-run) replaces it; a skipped outage is not checked.
+  const outage = results({ runId: 'same', errorRate: 1, failures: [{ metric: 'error_rate' }] });
+  outage.meta = { ...outage.meta, suite: 'review' };
+  const { scorecard } = assembleSite({ previous, resultsList: [results({ runId: 'old' }), results({ runId: 'same' }), outage] });
+  assert.deepEqual(scorecard.suites.validation.runs.map((r) => r.run_id).sort(), ['old', 'same']);
+});
+
+test('assembleSite leaves a results file without run_id to toScorecardRun', () => {
+  const bad = results();
+  delete bad.meta.run_id;
+  assert.throws(() => assembleSite({ previous: empty(), resultsList: [bad] }), /missing meta\.suite, meta\.run_id or summary/);
+});
+
 test('assembleSite rejects a replay run', () => {
   const replay = results({ runId: 'r' });
   replay.meta.model = 'replay:groq:m';
@@ -199,6 +221,21 @@ test('build_eval_site CLI restores from --previous-dir even when --site-url is g
   await promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(dir, 'out'), '--site-url', 'http://127.0.0.1:9', '--previous-dir', backup, file]);
   const sc = JSON.parse(await fs.readFile(path.join(dir, 'out', 'scorecard.json'), 'utf8'));
   assert.deepEqual(sc.suites.validation.runs.map((r) => r.run_id), ['new', 'kept']);
+});
+
+test('build_eval_site CLI publishes several suites of one workflow run in one build', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const validation = results({ runId: '42-validation' });
+  const review = results({ runId: '42-review' });
+  review.meta = { ...review.meta, suite: 'review' };
+  const outage = results({ runId: '42-other', errorRate: 1, failures: [{ metric: 'error_rate' }] });
+  const files = ['validation-42-validation.json', 'review-42-review.json', 'validation-42-other.json'].map((f) => path.join(dir, f));
+  await Promise.all([validation, review, outage].map((r, i) => fs.writeFile(files[i], JSON.stringify(r))));
+  const { stdout } = await promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(dir, 'out'), ...files], { env: { ...process.env, GITHUB_ACTIONS: '' } });
+  assert.match(stdout, /Warning: run 42-other not recorded/);
+  const sc = JSON.parse(await fs.readFile(path.join(dir, 'out', 'scorecard.json'), 'utf8'));
+  assert.deepEqual(Object.fromEntries(Object.entries(sc.suites).map(([k, v]) => [k, v.runs.map((r) => r.run_id)])), { validation: ['42-validation'], review: ['42-review'] });
+  for (const id of ['42-validation', '42-review']) assert.equal(JSON.parse(await fs.readFile(path.join(dir, 'out', 'runs', `${id}.json`), 'utf8')).meta.run_id, id);
 });
 
 test('buildEvalSite passes allowEmpty through to the site read-back', async () => {
