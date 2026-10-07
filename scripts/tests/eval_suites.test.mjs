@@ -213,6 +213,19 @@ test('validation suite end-to-end with an oracle LLM meets every threshold', asy
   assert.equal(summary.per_class.invalid.recall, 1);
 });
 
+test('validation suite: a response without suggested_ac keeps its verdict and scores suggested_ac_count 0, not an error', async () => {
+  const { cases, llmFor } = await oracleLlmFor();
+  const withoutAc = (key) => async () => {
+    const { suggested_ac, ...rest } = JSON.parse(await llmFor(key)());
+    return JSON.stringify(rest);
+  };
+  const results = await runSuite({ suite: validationSuite, cases, llmFor: withoutAc });
+  const summary = summarize(results);
+  assert.equal(summary.error_rate, 0);
+  assert.equal(summary.scores.verdict_match.mean, 1);
+  assert.equal(summary.scores.suggested_ac_count.mean, 0);
+});
+
 // ---------------------------------------------------------------------------
 // run_evals.mjs
 // ---------------------------------------------------------------------------
