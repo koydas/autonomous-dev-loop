@@ -134,7 +134,7 @@ There is deliberately no global group serializing LLM workflows: GitHub would ca
 
 ## Gates only tighten (ADR-0031)
 
-A red eval is fixed in the stage (prompt, parser, production code), never by loosening its gate: no lower `min`, higher `max`, new `optional`, dropped or relabelled case, or filtered run. `scripts/tests/eval_threshold_floor.test.mjs` pins every suite's thresholds and minimum case count; tightening a threshold or adding cases raises the floor in the same PR. Loosening needs a new ADR.
+A red eval is fixed in the stage (prompt, parser, production code), never by loosening its gate: no lower `min`, higher `max`, new `optional`, dropped or relabelled case, or filtered run. `scripts/tests/eval_threshold_floor.test.mjs` pins every suite's thresholds, minimum case count and each case's id, label and input hash (a relabelled, removed or rewritten case fails it); tightening a threshold or adding cases raises the floor in the same PR. Loosening needs a new ADR.
 
 ## Metrics
 

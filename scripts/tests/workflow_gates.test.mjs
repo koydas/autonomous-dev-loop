@@ -283,6 +283,16 @@ test('evals.yml measures consistency by default and tolerates a long TPM queue',
   assert.ok(llmRetryBudget('evals.yml').retries >= 10);
 });
 
+// ADR-0031: a gated eval run covers the whole dataset. --tags / --limit make run_evals.mjs skip the
+// thresholds of the classes they leave out, so no workflow may pass them.
+test('evals.yml and pr-evals.yml never run a filtered subset (ADR-0031)', () => {
+  for (const name of ['evals.yml', 'pr-evals.yml']) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    assert.match(text, /run_evals\.mjs/, `${name}: no run_evals.mjs invocation`);
+    assert.doesNotMatch(text, /--tags|--limit/, `${name}: filtered eval run`);
+  }
+});
+
 test('no workflow serializes LLM calls through a global concurrency group (GitHub keeps one pending run per group and cancels the rest)', () => {
   for (const { name, text } of readWorkflows()) {
     for (const [, group] of text.matchAll(/group: (.+)/g)) {
