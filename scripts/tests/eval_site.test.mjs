@@ -155,7 +155,7 @@ test('renderRun shows metrics, confusion matrix, cases and escaped model output'
   assert.match(html, /<code>invalid-&lt;b&gt;<\/code>/);
   assert.match(html, /boom &lt;script&gt;/);
   assert.match(html, /\{&quot;valid&quot;:true\}/);
-  assert.match(html, /actions\/runs\/r1/);
+  assert.doesNotMatch(html, /actions\/runs\//, 'run_id r1 is neither a workflow run ID nor carries one');
   assert.match(html, /href="\.\.\/index\.html"/);
   assert.doesNotMatch(html, /<script>alert|<b>/);
 });
@@ -166,6 +166,16 @@ test('renderRun links the workflow run, not the per-suite run_id, when they diff
   const html = renderRun(r);
   assert.match(html, /actions\/runs\/123"/);
   assert.match(html, /href="123-review\.json"/);
+});
+
+test('renderRun links a legacy numeric run_id to its workflow run', () => {
+  assert.match(renderRun(results({ runId: '37088738181' })), /actions\/runs\/37088738181"/);
+});
+
+test('renderRun omits the workflow run link for a local EVAL_RUN_ID', () => {
+  const html = renderRun(results({ runId: 'my-local-run' }));
+  assert.doesNotMatch(html, /workflow run<\/a>/);
+  assert.match(html, /href="my-local-run\.json">results JSON/);
 });
 
 test('renderRun tolerates a minimal results file', () => {

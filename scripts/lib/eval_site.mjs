@@ -31,6 +31,9 @@ const day = (ts) => String(ts ?? '').slice(0, 10);
 const stamp = (ts) => String(ts ?? '').slice(5, 16).replace('T', ' ');
 const compact = (n) => (n == null ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const runFile = (runId) => `runs/${encodeURIComponent(runId)}`;
+// A run published before workflow_run_id existed has the workflow run ID as run_id; anything else
+// (a local EVAL_RUN_ID) has no workflow run to link.
+const workflowRunId = (meta) => meta.workflow_run_id ?? (/^\d+$/.test(String(meta.run_id ?? '')) ? meta.run_id : null);
 
 function deltaHtml(current, previous) {
   if (current == null || previous == null) return '';
@@ -288,7 +291,7 @@ export function renderRun(detail) {
   }).join('');
 
   return page(`Eval run ${meta.run_id}`, `<h1>Run <code>${escapeHtml(meta.run_id)}</code> · <code>${escapeHtml(meta.suite)}</code> ${gateHtml(failures.length === 0, failures.map((f) => f.metric))}</h1>
-<p class="sub">${escapeHtml(meta.ts)} · model <code>${escapeHtml(meta.model)}</code> · ${escapeHtml(fmt(meta.repeats))} repeats · dataset <code>${escapeHtml(meta.dataset)}</code> (<code>${escapeHtml((meta.dataset_sha256 ?? '').slice(0, 12))}</code>) · <a href="https://github.com/koydas/autonomous-dev-loop/actions/runs/${encodeURIComponent(meta.workflow_run_id ?? meta.run_id)}">workflow run</a> · <a href="${encodeURIComponent(meta.run_id)}.json">results JSON</a></p>
+<p class="sub">${escapeHtml(meta.ts)} · model <code>${escapeHtml(meta.model)}</code> · ${escapeHtml(fmt(meta.repeats))} repeats · dataset <code>${escapeHtml(meta.dataset)}</code> (<code>${escapeHtml((meta.dataset_sha256 ?? '').slice(0, 12))}</code>)${workflowRunId(meta) ? ` · <a href="https://github.com/koydas/autonomous-dev-loop/actions/runs/${encodeURIComponent(workflowRunId(meta))}">workflow run</a>` : ''} · <a href="${encodeURIComponent(meta.run_id)}.json">results JSON</a></p>
 ${failures.length ? `<div class="card"><strong class="ko">Threshold failures</strong><ul>${failures.map((f) => `<li><code>${escapeHtml(f.metric)}</code>: ${escapeHtml(f.reason)}</li>`).join('')}</ul></div>` : ''}
 <h3>Metrics</h3><div class="card table-wrap"><table><tbody>${metrics}</tbody></table></div>
 ${confusionTable(summary.confusion)}

@@ -148,7 +148,8 @@ jobs:
         with:
           node-version: '24'
 
-      # One artifact per suite; results files are named <suite>-<runId>-<suite>.json, so merging never collides.
+      # One artifact per suite; results files (<suite>-<runId>-<suite>.json) never collide. Each artifact's
+      # history.jsonl does (last one wins); the build only reads *.json.
       - name: Download eval results
         uses: actions/download-artifact@v4
         continue-on-error: true
