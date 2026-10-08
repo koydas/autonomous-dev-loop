@@ -38,7 +38,7 @@ BLOCKED when any AC item is:
 - Unmeasurable: "should be faster", "more reliable", "better performance"
 - Emotionally defined: "should feel responsive", "should delight users"
 - Dependent on undefined human judgment: "the output should be reasonable"
-- Measured against a reference the issue does not state: "error messages follow the existing style", "consistent with the rest of the code", "works for all common models" — no rule, list or example to check against
+- Measured against a reference the issue does not state: "error messages follow the existing style", "consistent with the rest of the code", "works for all common models" — no rule, list or example to check against. Naming where the reference lives ("the existing error style of `scripts/lib/`") does not state it: which property must match is still unknown
 - Bounded by an unquantified qualifier: "works for large directories without timing out", "handles big inputs", "scales" — no size, duration or count
 - Defined by an unstated ranking or quality: "the 10 most relevant results", "the best match", "optimal" — no ranking rule
 
@@ -58,10 +58,10 @@ BLOCKED when:
 - The issue forces an undocumented binary architectural choice (database vs cache, REST vs GraphQL, sync vs async, etc.)
 - Key terms are undefined and could mean multiple incompatible things
 - The scope boundary is unclear (which endpoints? which environments? all users or a specific role?)
-- A group is named by a category instead of by its members ("admins", "users who are not allowed to manage members", "deployed environments", "privileged roles") and the issue leaves membership open: it never says who belongs to the category, or it lists candidates where at least one could reasonably fall on either side (two admin roles: one or both? a `ci.yaml` next to `staging.yaml`: deployed or not?)
+- A group is named by a category instead of by its members ("admins", "users who are not allowed to manage members", "deployed environments", "privileged roles"). Category test, for every such category in the AC: list the candidates the issue gives (roles, files, environments) and place each one from the issue text alone. BLOCKED when the issue gives no membership rule at all (who is "not allowed"?), or when any candidate can reasonably go either way (`org_admin` and a project-scoped `project_admin`: one or both? `ci.yaml` next to `staging.yaml`: deployed or not?). Name the category and the undecided candidate in the B3 blocker
 
 NOT BLOCKED when:
-- Named entities correspond to identifiable components, files, or flows within the target repository — these are references, not ambiguities
+- Named entities correspond to identifiable components, files, or flows within the target repository — these are references, not ambiguities. Naming the route, file or module does not settle who or what a category inside it covers: the category test above still applies
 - The deliverable is a documentation or configuration artifact with named components explicitly listed
 - In/Out scope boundaries are explicitly stated, even without exhaustive implementation detail
 - A category whose members follow unambiguously from what the issue lists (e.g. "deployed environments" when the only files are `local`, `preview`, `staging`, `production`, and `local` is excluded explicitly)
@@ -77,6 +77,8 @@ BLOCKED when:
 NOT BLOCKED when:
 - The dependency is a standard, stable platform capability (e.g. GitHub's native Mermaid rendering in Markdown, built-in language standard library features) — these require no configuration or resolution plan
 - Dependencies already exist and are listed as available, or are explicitly mocked/stubbed for this implementation (an in-progress dependency with a ticket but no stub or mock is still BLOCKED)
+
+Before the verdict, go through the AC one item at a time: is the item testable exactly as written (B2)? Does it name a category of users, roles or environments whose members the issue leaves open (B3)? Any yes is a blocker, whatever the score.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 WARNING CRITERIA — non-blocking, reduce score, noted for quality
