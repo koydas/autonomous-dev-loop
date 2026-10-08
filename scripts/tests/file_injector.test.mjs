@@ -10,6 +10,7 @@ import {
   readPackageJsonDependencies,
   formatDependencyAllowlist,
   buildFileContentsBlock,
+  buildFileContext,
 } from '../lib/file_injector.mjs';
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,16 @@ describe('readRelevantFiles', () => {
     const files = await readRelevantFiles([], tmpDir);
     assert.equal(files.length, 0);
   });
+
+  test('withholds a file over MAX_FILE_SIZE instead of truncating it (ADR-0029)', async () => {
+    await fs.writeFile(path.join(tmpDir, 'big.js'), 'x'.repeat(8001), 'utf8');
+    const files = await readRelevantFiles(['big.js'], tmpDir);
+    assert.deepEqual(files, [{ path: 'big.js', content: '', withheld: true }]);
+    assert.equal(
+      formatFileContents(files),
+      '### File withheld (too large for the context budget): big.js — do NOT target this file',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -208,6 +219,16 @@ describe('buildFileContentsBlock', () => {
     const block = await buildFileContentsBlock('Fix widget.js', '', tmpDir);
     assert.ok(block.includes('### Current file: widget.js'));
     assert.ok(block.includes('export function widget'));
+  });
+
+  test('buildFileContext reports shown and withheld paths for the write guard', async () => {
+    await fs.writeFile(path.join(tmpDir, 'huge.js'), 'y'.repeat(9000), 'utf8');
+    const context = await buildFileContext('Fix ./widget.js and huge.js', '', tmpDir);
+    assert.deepEqual([...context.shownPaths], ['widget.js']);
+    assert.deepEqual([...context.hiddenPaths], ['huge.js']);
+    assert.ok(context.block.includes('### Current file: widget.js'));
+    assert.ok(context.block.includes('File withheld (too large for the context budget): huge.js'));
+    assert.equal(context.block, await buildFileContentsBlock('Fix ./widget.js and huge.js', '', tmpDir));
   });
 
   test('returns the fallback message when no identified files exist', async () => {

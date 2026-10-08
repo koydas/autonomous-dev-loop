@@ -46,7 +46,7 @@ These apply to **all agents** (interactive and pipeline) whenever modifying exis
 - **External dependencies**: never introduce an `import` or `require` for a package not already present in the file's existing imports or in `package.json`.
 - **File rewrite scope**: if a single fix or feature requires replacing more than 30% of an existing file's lines, reduce scope to a targeted edit instead. Full rewrites are only acceptable for new files or when the request explicitly asks for a rewrite.
 
-See [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) for the incidents that motivated these rules.
+See [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) for the incidents that motivated these rules. For pipeline output (code generation and auto-fix) they are also enforced in code before any write — `scripts/lib/static_verifier.mjs` with the ADR-0029 write guard ([ADR-0019](docs/adr/0019-static-verification-backstop.md)): a violation rejects the patch and escalates to `needs-human`.
 
 ## Validation
 

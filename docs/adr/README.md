@@ -22,7 +22,7 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0016: Changelog CI gate for entrypoint scripts and ADR files](./0016-changelog-ci-gate.md)
 - [ADR-0017: Configurable per-stage token budget in `config/models.yaml`](./0017-configurable-token-budget.md)
 - [ADR-0018: Structured observability — JSON events to stderr + per-run trace files](./0018-structured-observability.md)
-- [ADR-0019: Static verification backstop for generated code (proposal)](./0019-static-verification-backstop.md)
+- [ADR-0019: Static verification backstop for generated code](./0019-static-verification-backstop.md)
 - [ADR-0020: Per-PR/issue workflow concurrency groups](./0020-per-pr-workflow-concurrency.md)
 - [ADR-0021: Protected write-path denylist for AI-generated changes](./0021-protected-write-path-denylist.md)
 - [ADR-0022: HTTP-aware retry policy for GitHub and LLM calls](./0022-github-api-retry-policy.md)

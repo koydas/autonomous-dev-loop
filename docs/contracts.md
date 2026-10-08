@@ -15,6 +15,9 @@ This document specifies the interface contract for each entrypoint script: requi
 | `ISSUE_NUMBER` | Issue number to validate |
 | `ISSUE_TITLE` | Issue title |
 | `GROQ_API_KEY` | LLM provider API key |
+| `GITHUB_TOKEN` | Token for the rejection comment and the `needs-human` label (`validateStartup()` requires it) |
+| `GITHUB_REPOSITORY` | `owner/repo` of the issue (`validateStartup()` requires it) |
+| `GITHUB_EVENT_PATH` | Event payload path (`validateStartup()` requires it) |
 
 ### Optional env vars
 
@@ -25,6 +28,8 @@ This document specifies the interface contract for each entrypoint script: requi
 | `GROQ_API_URL` | provider default | LLM API base URL |
 | `GITHUB_OUTPUT` | — | Path to GitHub Actions output file; outputs are skipped if absent |
 | `GITHUB_RUN_ID` | `local-<timestamp>` | Used as the trace file name and `run_id` in structured log events |
+| `GITHUB_API_URL` | `https://api.github.com` | GitHub API base URL for the rejection escalation |
+| `METRICS_FILE` | `./metrics/runs.jsonl` | Where the `codegen_skip` metric is appended; `code-generation.yml` sets it under `$RUNNER_TEMP` (ADR-0021) |
 
 ### Side effects
 
@@ -73,20 +78,22 @@ This document specifies the interface contract for each entrypoint script: requi
 
 - Writes generated source files to disk (paths determined by LLM output).
 - Writes `observability/traces/<GITHUB_RUN_ID>.json` with spans for both `code_gen` and `pr_prepare` stages.
+- On a guardrail rejection (ADR-0019, any `GuardrailError`): writes **no** file, posts a `Code Generation: Patch Rejected` comment on the issue (rules + reason per file), applies the `needs-human` label (created if missing) and appends a `codegen_skip` metric (`reason: "guardrail_rejected"`, `rules`).
 
 ### Workflow outputs
 
 | Key | Type | Description |
 |---|---|---|
 | `summary` | multiline string | AI-generated PR description |
-| `generated_paths` | multiline string | Newline-separated list of file paths to include in the PR via `add-paths` |
+| `generated_paths` | multiline string | Newline-separated list of file paths to include in the PR via `add-paths` (absent on a rejection) |
+| `rejected` | `true` | Present only when a guardrail rejected the patch; `code-generation.yml` then skips the PR step |
 
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | Files generated and outputs written |
-| `1` | LLM returned invalid JSON, validation failed, or fatal I/O error |
+| `0` | Files generated and outputs written, or the patch was rejected by a guardrail and escalated (`rejected=true`) |
+| `1` | LLM returned invalid JSON or a malformed response, the escalation of a rejection failed (GitHub API), or fatal I/O error |
 
 ---
 

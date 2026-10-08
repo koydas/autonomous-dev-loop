@@ -1338,6 +1338,31 @@ test('auto_fix_pr blocks writing an existing file that was not shown to the mode
   }
 });
 
+// ADR-0019: the AGENTS.md hard guardrails are enforced on auto-fix output, before any write.
+for (const [rule, before, after, reason] of [
+  ['module_system', "import x from 'node:fs';\nexport const a = 1;\n", "import x from 'node:fs';\nconst path = require('node:path');\nexport const a = 1;\n", /adds require\(\) to an ES module/],
+  ['exported_signature', 'export function build(rawDiffText) {\n  return rawDiffText;\n}\n', 'export async function build({ prBody }) {\n  return prBody;\n}\n', /changes the parameters of exported build\(rawDiffText\)/],
+  ['unresolved_import', 'export const a = 1;\n', "import nyc from 'nyc';\nexport const a = 1;\n", /imports package "nyc", which is not declared in package\.json/],
+]) {
+  test(`auto_fix_pr rejects a ${rule} violation on a shown file and leaves it untouched`, async () => {
+    const { result, output, requests, read, tmpDir } = await runInRepo({ 'src/app.mjs': before }, {
+      diffBody: diffFor('src/app.mjs'),
+      llmResponse: llmChanges([{ target_path: 'src/app.mjs', file_content: after }]),
+    });
+    try {
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      assert.match(blockedComment(requests), new RegExp(`Patch Rejected[\\s\\S]*\\*\\*Rules:\\*\\* ${rule}`));
+      assert.match(blockedComment(requests), reason);
+      assert.deepEqual(appliedLabels(requests), ['auto-fix-attempt-1', 'needs-human']);
+      assert.match(result.stderr, new RegExp(`"reason":"guardrail_rejected".*"rules":\\["${rule}"\\]`));
+      assert.equal(await read('src/app.mjs'), before);
+      assert.doesNotMatch(output, /fixed_paths/);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+}
+
 test('auto_fix_pr withholds a file over the size cap with an explicit marker instead of truncating it', async () => {
   const big = 'x'.repeat(9000);
   const { result, requests, read, tmpDir } = await runInRepo({ 'src/big.js': big }, {

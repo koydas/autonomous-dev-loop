@@ -112,6 +112,7 @@ jobs:
           LLM_MAX_RETRY_WAIT_MS: '60000'
           GROQ_MAX_RETRIES: '15'
           CHECKPOINT_RUN_ID: issue-${{ steps.issue.outputs.number }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}
           ISSUE_BODY: ${{ steps.issue.outputs.body }}
@@ -124,7 +125,9 @@ jobs:
           GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
         run: node scripts/generate_issue_change.mjs
 
+      # A guardrail rejection (ADR-0019) exits 0 with rejected=true: nothing was written.
       - name: Create pull request
+        if: steps.generate.outputs.rejected != 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
@@ -158,3 +161,28 @@ jobs:
           path: ./observability/traces/${{ github.run_id }}.json
           if-no-files-found: ignore
           overwrite: true
+
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+        run: |
+          # Only this run's records, written outside the checkout (ADR-0021): never the
+          # working-tree metrics/runs.jsonl, which generated code could have modified.
+          NEW_LINES=$(cat "$METRICS_FILE" 2>/dev/null || true)
+          [ -z "$NEW_LINES" ] && exit 0
+          UPLOADED=0
+          for i in 1 2 3; do
+            RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" 2>/dev/null || echo '{}')
+            SHA=$(echo "$RESP" | jq -r '.sha // empty')
+            CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
+            [ -n "$CURRENT" ] && CURRENT="${CURRENT}"$'\n'
+            NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
+            jq -nc --arg m "metrics: issue ${{ steps.issue.outputs.number }} code-generation [skip ci]" \
+              --arg c "$NEW_B64" --arg s "$SHA" \
+              '{message:$m,content:$c}+if $s!="" then {sha:$s} else {} end' \
+              | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
+              && { UPLOADED=1; break; } || sleep $((2**i))
+          done
+          [ "$UPLOADED" -eq 1 ] || echo "::warning::Failed to commit metrics after 3 attempts; data may be lost"
