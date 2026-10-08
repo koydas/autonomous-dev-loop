@@ -69,14 +69,24 @@ test('callAnthropic sends anthropic-version header', async () => {
   assert.equal(capturedHeaders['anthropic-version'], '2023-06-01');
 });
 
-test('callAnthropic sends temperature 0 by default', async () => {
+test('callAnthropic sends no temperature by default (rejected by Opus 4.7+ / 5.x)', async () => {
   let capturedBody;
   globalThis.fetch = async (_url, opts) => {
     capturedBody = JSON.parse(opts.body);
     return makeResponse({ content: [{ type: 'text', text: '{}' }] });
   };
   await callAnthropic(BASE_ARGS);
-  assert.equal(capturedBody.temperature, 0);
+  assert.equal('temperature' in capturedBody, false);
+});
+
+test('callAnthropic sends temperature when a caller sets one explicitly', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ content: [{ type: 'text', text: '{}' }] });
+  };
+  await callAnthropic({ ...BASE_ARGS, model: 'claude-haiku-4-5', temperature: 0.2 });
+  assert.equal(capturedBody.temperature, 0.2);
 });
 
 test('callAnthropic sends system prompt as a cacheable text block', async () => {
@@ -145,7 +155,7 @@ test('callAnthropic rethrows the network error after exhausting retries', async 
   }
 });
 
-test('callAnthropic does not forward reasoningEffort (Groq-only parameter)', async () => {
+test('callAnthropic sends reasoningEffort as output_config.effort, never as reasoning_effort', async () => {
   let capturedBody;
   globalThis.fetch = async (_url, opts) => {
     capturedBody = JSON.parse(opts.body);
@@ -154,4 +164,75 @@ test('callAnthropic does not forward reasoningEffort (Groq-only parameter)', asy
   await callAnthropic({ ...BASE_ARGS, reasoningEffort: 'low' });
   assert.equal('reasoning_effort' in capturedBody, false);
   assert.equal('reasoningEffort' in capturedBody, false);
+  assert.deepEqual(capturedBody.output_config, { effort: 'low' });
+});
+
+test('callAnthropic omits output_config when no effort is set', async () => {
+  let capturedBody;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    return makeResponse({ content: [{ type: 'text', text: '{}' }] });
+  };
+  await callAnthropic(BASE_ARGS);
+  assert.equal('output_config' in capturedBody, false);
+});
+
+test('callAnthropic returns the first text block after thinking blocks', async () => {
+  mockFetch(makeResponse({ stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: 'answer' }] }));
+  assert.equal(await callAnthropic(BASE_ARGS), 'answer');
+});
+
+test('callAnthropic throws on a refusal (HTTP 200, stop_reason refusal) with its category', async () => {
+  mockFetch(makeResponse({ stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' }, content: [] }));
+  await assert.rejects(() => callAnthropic(BASE_ARGS), /refused the request \(stop_reason: refusal, category: cyber\)/);
+});
+
+test('callAnthropic reports an unspecified refusal category when stop_details is null', async () => {
+  mockFetch(makeResponse({ stop_reason: 'refusal', stop_details: null, content: [] }));
+  await assert.rejects(() => callAnthropic(BASE_ARGS), /category: unspecified/);
+});
+
+test('callAnthropic retries a 529 overloaded response', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1 ? makeResponse('{"type":"error","error":{"type":"overloaded_error"}}', 529) : makeResponse({ content: [{ type: 'text', text: 'ok' }] });
+  };
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  try {
+    assert.equal(await callAnthropic(BASE_ARGS), 'ok');
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+  }
+  assert.equal(calls, 2);
+});
+
+test('callAnthropic opts into server-side refusal fallback for supported models on the Claude API', async () => {
+  let capturedBody;
+  let capturedHeaders;
+  globalThis.fetch = async (_url, opts) => {
+    capturedBody = JSON.parse(opts.body);
+    capturedHeaders = opts.headers;
+    return makeResponse({ content: [{ type: 'text', text: '{}' }] });
+  };
+  await callAnthropic({ ...BASE_ARGS, model: 'claude-opus-5-5' });
+  assert.equal(capturedBody.fallbacks, 'default');
+  assert.equal(capturedHeaders['anthropic-beta'], 'server-side-fallback-2026-07-01');
+});
+
+test('callAnthropic sends no server-side fallback for other models or a custom API URL', async () => {
+  const bodies = [];
+  const headers = [];
+  globalThis.fetch = async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    headers.push(opts.headers);
+    return makeResponse({ content: [{ type: 'text', text: '{}' }] });
+  };
+  await callAnthropic({ ...BASE_ARGS, model: 'claude-haiku-5-5' });
+  await callAnthropic({ ...BASE_ARGS, model: 'claude-opus-5-5', apiUrl: 'https://proxy.example/v1/messages' });
+  for (const [i, body] of bodies.entries()) {
+    assert.equal('fallbacks' in body, false);
+    assert.equal('anthropic-beta' in headers[i], false);
+  }
 });

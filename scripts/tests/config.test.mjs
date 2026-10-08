@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { estimateTokens } from '../lib/metrics.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
-import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, detectFallbackProvider, loadLLMConfig, loadProviderConfig, GROQ_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
+import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, detectFallbackProvider, loadLLMConfig, loadProviderConfig, GROQ_MODEL_DEFAULTS, ANTHROPIC_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
 
-const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL', 'GROQ_REASONING_EFFORT'];
+const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL', 'GROQ_REASONING_EFFORT', 'ANTHROPIC_EFFORT'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
 
 function setEnv(vars) {
@@ -47,8 +47,10 @@ test('detectProvider returns groq when AI_PROVIDER=groq regardless of keys', () 
   assert.equal(detectProvider(), 'groq');
 });
 
-test('detectProvider returns anthropic when AI_PROVIDER=anthropic regardless of keys', () => {
+test('detectProvider yields to the provider that has a key when AI_PROVIDER names one without a key', () => {
   setEnv({ GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic' });
+  assert.equal(detectProvider(), 'groq');
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic' });
   assert.equal(detectProvider(), 'anthropic');
 });
 
@@ -62,9 +64,34 @@ test('detectProvider returns groq when both keys set and AI_PROVIDER=groq', () =
   assert.equal(detectProvider(), 'groq');
 });
 
-test('detectProvider rejects an unknown AI_PROVIDER instead of silently picking one', () => {
-  setEnv({ AI_PROVIDER: 'openai' });
-  assert.throws(() => detectProvider(), /Invalid AI_PROVIDER "openai" \(must be groq or anthropic\)/);
+test('detectProvider falls back to the default provider on an unknown AI_PROVIDER', () => {
+  setEnv({ AI_PROVIDER: 'openai', GROQ_API_KEY: 'groq-key', ANTHROPIC_API_KEY: 'ant-key' });
+  assert.equal(detectProvider(), 'groq');
+  setEnv({ AI_PROVIDER: 'openai-typo' });
+  unsetEnv('GROQ_API_KEY');
+  assert.equal(detectProvider(), 'anthropic', 'the key-based default applies: only ANTHROPIC_API_KEY is set');
+});
+
+test('detectProvider logs a misconfigured AI_PROVIDER once, as a warn event on stderr', () => {
+  const lines = [];
+  const origWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try {
+    setEnv({ AI_PROVIDER: 'groqq-once', GROQ_API_KEY: 'groq-key' });
+    detectProvider();
+    detectProvider();
+  } finally {
+    process.stderr.write = origWrite;
+  }
+  const events = lines.filter(l => l.includes('provider_config_fallback')).map(l => JSON.parse(l));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].level, 'warn');
+  assert.match(events[0].meta.message, /AI_PROVIDER "groqq-once" is not groq or anthropic: using groq/);
+});
+
+test('detectProvider treats a blank AI_PROVIDER as unset', () => {
+  setEnv({ AI_PROVIDER: '   ', ANTHROPIC_API_KEY: 'ant-key' });
+  assert.equal(detectProvider(), 'anthropic');
 });
 
 // detectFallbackProvider
@@ -136,13 +163,13 @@ test('loadConfigFromEnv returns full config with all vars set', () => {
   assert.equal(config.issueTitle, 'Fix bug');
   assert.equal(config.issueBody, 'Details');
   assert.equal(config.apiKey, 'sk-ant-123');
-  assert.equal(config.model, 'claude-opus-4-7');
+  assert.equal(config.model, 'claude-opus-5-5');
 });
 
 test('loadConfigFromEnv uses default Anthropic model when ANTHROPIC_MODEL not set', () => {
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'k' });
   const { model } = loadConfigFromEnv();
-  assert.equal(model, 'claude-opus-4-7');
+  assert.equal(model, 'claude-opus-5-5');
 });
 
 test('loadConfigFromEnv uses custom model when ANTHROPIC_MODEL is set', () => {
@@ -542,6 +569,45 @@ test('loadLLMConfig throws on an invalid GROQ_REASONING_EFFORT value', () => {
 });
 
 test('loadLLMConfig ignores GROQ_REASONING_EFFORT for the anthropic provider', () => {
-  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic', GROQ_REASONING_EFFORT: 'high' });
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic', GROQ_REASONING_EFFORT: 'off' });
+  assert.equal(loadLLMConfig('review').reasoningEffort, GROQ_MODEL_DEFAULTS.anthropic_review_effort);
+});
+
+// Anthropic stage settings (ADR-0032)
+
+test('loadLLMConfig anthropic: per-stage model, effort and max_tokens from models.yaml, no temperature', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic' });
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    const cfg = loadLLMConfig(stage);
+    assert.equal(cfg.model, ANTHROPIC_MODEL_DEFAULTS[stage]);
+    assert.equal(cfg.model, GROQ_MODEL_DEFAULTS[`anthropic_${stage}`]);
+    assert.equal(cfg.reasoningEffort, GROQ_MODEL_DEFAULTS[`anthropic_${stage}_effort`]);
+    assert.equal(cfg.maxTokens, parseInt(GROQ_MODEL_DEFAULTS[`anthropic_${stage}_max_tokens`], 10));
+    assert.equal('temperature' in cfg, false, 'Opus 4.7+ / 5.x reject sampling parameters');
+  }
+});
+
+test('loadLLMConfig anthropic: ANTHROPIC_EFFORT overrides every stage, off sends none', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic', ANTHROPIC_EFFORT: 'XHIGH' });
+  assert.equal(loadLLMConfig('validation').reasoningEffort, 'xhigh');
+  setEnv({ ANTHROPIC_EFFORT: 'off' });
   assert.equal(loadLLMConfig('review').reasoningEffort, undefined);
+});
+
+test('loadLLMConfig anthropic: rejects an invalid effort', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic', ANTHROPIC_EFFORT: 'extreme' });
+  assert.throws(() => loadLLMConfig('review'), /Invalid anthropic effort for stage "review": extreme/);
+});
+
+test('loadLLMConfig anthropic: rejects an invalid max_tokens and defaults when the key is absent', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic' });
+  const saved = GROQ_MODEL_DEFAULTS.anthropic_review_max_tokens;
+  try {
+    GROQ_MODEL_DEFAULTS.anthropic_review_max_tokens = 'lots';
+    assert.throws(() => loadLLMConfig('review'), /Invalid anthropic max_tokens for stage "review": lots/);
+    delete GROQ_MODEL_DEFAULTS.anthropic_review_max_tokens;
+    assert.equal(loadLLMConfig('review').maxTokens, 16000);
+  } finally {
+    GROQ_MODEL_DEFAULTS.anthropic_review_max_tokens = saved;
+  }
 });

@@ -17,14 +17,12 @@ export async function callLLM(args) {
   const stage = args.stage ?? 'generation';
 
   const errors = [];
+  let errorType;
   try {
     return await PROVIDER_CALLS[primary](args);
   } catch (error) {
-    const errorType = error.errorType ?? classifyError(String(error.status ?? ''));
+    errorType = error.errorType ?? classifyError(String(error.status ?? ''));
     errors.push(`${primary}: ${error.message}`);
-    if (errorType === 'PERMANENT') {
-      throw new Error(`All providers failed: ${errors.join(', ')}`);
-    }
   }
 
   if (detectFallbackProvider() !== fallback) {
@@ -32,7 +30,10 @@ export async function callLLM(args) {
     throw new Error(`All providers failed: ${errors.join(', ')}`);
   }
 
-  log({ stage, event: 'llm_fallback', level: 'warn', meta: { from: primary, to: fallback, error: errors[0] } });
+  // Any primary failure falls back. 401/403 means the primary's key is wrong: logged as an error
+  // (GitHub annotation) so the misconfiguration stays visible while the fallback keeps the job running.
+  const level = errorType === 'PERMANENT' ? 'error' : 'warn';
+  log({ stage, event: 'llm_fallback', level, meta: { from: primary, to: fallback, error_type: errorType, error: errors[0] } });
   try {
     const fallbackConfig = loadProviderConfig(fallback, stage);
     const call = { prompt: args.prompt, systemPrompt: args.systemPrompt };

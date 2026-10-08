@@ -10,8 +10,9 @@ For a first-time setup, complete these steps in order:
    - `ANTHROPIC_API_KEY` and/or `GROQ_API_KEY`
    - `AI_PR_TOKEN` (recommended for reliable PR/label/review writes)
 2. (Optional) Configure provider variables:
-   - `AI_PROVIDER` — `anthropic` or `groq`: the primary provider. Unset: Anthropic when only `ANTHROPIC_API_KEY` is set, Groq otherwise. Any other value fails the job. The other provider is the fallback when its key is set: it is called with its own key, model and stage settings on any primary failure except 401/403 (ADR-0032). Anthropic primary → Groq fallback is best-effort: the prompt is not sized for Groq's input budgets and may get a 413.
-   - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
+   - `AI_PROVIDER` — `anthropic` or `groq`: the primary provider. Unset or blank: Anthropic when only `ANTHROPIC_API_KEY` is set, Groq otherwise. An unknown value uses that same default, and a provider whose key is missing yields to the one that has a key; both log a `provider_config_fallback` warn event and never fail the job. The other provider is the fallback when its key is set: it is called with its own key, model and stage settings on any primary failure, 401/403 included, and each fallback logs an `llm_fallback` event (`error` level, with a GitHub annotation, on 401/403; `warn` otherwise) (ADR-0032). Anthropic primary → Groq fallback is best-effort: the prompt is not sized for Groq's input budgets and may get a 413.
+   - `ANTHROPIC_MODEL` — Anthropic model for every stage (unset: `anthropic_<stage>` in `config/models.yaml`, `claude-opus-5-5`).
+   - `ANTHROPIC_EFFORT` — `low` | `medium` | `high` | `xhigh` | `max` overrides `anthropic_<stage>_effort` for every stage (sent as `output_config.effort`); `off` sends none.
    - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `openai/gpt-oss-120b` for every stage). If you point it at a non-reasoning model, also set `GROQ_REASONING_EFFORT=off`.
    - `GROQ_REASONING_EFFORT` — `low` | `medium` | `high` overrides `<stage>_reasoning_effort` for every stage; `off` stops sending `reasoning_effort` (required for non-reasoning `GROQ_MODEL` overrides). Unset: per-stage values from `config/models.yaml` (ADR-0025).
    - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
@@ -22,10 +23,10 @@ All four workflows pass both provider key sets, so provider selection is driven 
 
 | Workflow | Required secret(s) | Optional variables | Fallback |
 |---|---|---|---|
-| `validate-issue.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
-| `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
-| `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
-| `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `validate-issue.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `code-generation.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `pr-review.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
+| `auto-fix-pr.yml` | `ANTHROPIC_API_KEY` or `GROQ_API_KEY` | `AI_PROVIDER`, `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, `GROQ_MODEL`, `GROQ_REASONING_EFFORT`, `GROQ_API_URL` | Fails with clear error if neither key is present |
 
 `AI_PR_TOKEN` is used only by `code-generation.yml`, `pr-review.yml`, and `auto-fix-pr.yml` for GitHub API write operations.
 
@@ -273,7 +274,7 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 
 ## Per-Stage Model Keys
 
-`config/models.yaml` holds one block per stage (`validation`, `generation`, `review`, `autofix`). Keys apply to Groq only; `<key>` without a stage prefix is a global fallback.
+`config/models.yaml` holds one block per stage (`validation`, `generation`, `review`, `autofix`). The keys below apply to Groq; `<key>` without a stage prefix is a global fallback. Anthropic has its own keys (ADR-0032), listed after this table.
 
 | Key | Default | Description |
 |---|---|---|
@@ -282,6 +283,16 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 | `<stage>_max_tokens` | `1024` (validation, review), `4096` (generation, autofix) | Output cap, reasoning tokens included. Prompt + this value must stay under the Groq TPM per request (8K on the free tier), or Groq returns 413. |
 | `<stage>_max_input_tokens` | `6300` (validation, review), `3500` (generation), `2600` (autofix, user prompt only) | Estimated input budget (chars/4). Rule: input × 1.10 + `<stage>_max_tokens` ≤ 8000 (the estimate runs ~3% low; `workflow_gates.test.mjs` enforces it). Review shrinks the diff, then the PR body, to fit; every stage fails before the LLM call when the prompt still does not fit, since Groq would reject it (ADR-0028 amendment). |
 | `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0025). |
+
+Anthropic keys (ADR-0032):
+
+| Key | Default | Description |
+|---|---|---|
+| `anthropic_<stage>` | `claude-opus-5-5` | Anthropic model. `ANTHROPIC_MODEL` overrides every stage. |
+| `anthropic_<stage>_effort` | `low` (validation), `high` (generation, review, autofix) | `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `off`, sent as `output_config.effort`. `ANTHROPIC_EFFORT` overrides every stage. Without it, `claude-opus-5-5` runs at `medium`. |
+| `anthropic_<stage>_max_tokens` | `16000` | Output cap, thinking included (adaptive thinking is on by default on Opus 5.x). Requests are not streamed: a larger cap risks an HTTP timeout. |
+
+No temperature and no input budget for Anthropic: Opus 4.7+ / 5.x reject sampling parameters (400), and the 8K TPM limit is Groq's. Supported models (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-fable-5`, `claude-fable-5-1`) send `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) when `ANTHROPIC_API_URL` is unset: a safety-classifier refusal is re-run server-side on another Claude model. A refusal that still comes back fails the call, and the Groq fallback takes over.
 
 ## Auto-Fix Token Budget
 
@@ -301,7 +312,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 |---|---|
 | Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `2600` (default) |
 | Groq Developer plan | Raise or remove the key (TPM is far above a single request) |
-| Anthropic (`claude-opus-4-7`) | Remove the key (200k context window; no per-request TPM limit) |
+| Anthropic (`claude-opus-5-5`) | Not applied: Anthropic configs carry no input budget (200k budget from `MODEL_CONTEXT_WINDOW`; no per-request TPM limit) |
 
 The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual token counts for each section:
 
@@ -360,7 +371,7 @@ Automation scripts must fail before network calls when required startup inputs a
   - PR number: `pull_request.number` or fallback `issue.number`.
   - Branch reference (when needed): `pull_request.head.ref` or fallback `ref`.
 - **Provider payload parsing**: response-shape failures include concrete expected paths:
-  - Anthropic: `content[0].text`
+  - Anthropic: the first `text` block of `content` (thinking blocks come first on Opus 5.x); `stop_reason: "refusal"` fails with its `stop_details.category`
   - Groq: `choices[0].message.content`
 
 ## CI Coverage Enforcement

@@ -54,18 +54,18 @@ test('callLLM defaults to Groq when no keys are set', async () => {
   assert.equal(result, 'ok');
 });
 
-test('callLLM routes to Groq when AI_PROVIDER=groq even if only ANTHROPIC_API_KEY is set', async () => {
+test('callLLM routes to Anthropic when AI_PROVIDER=groq but only ANTHROPIC_API_KEY is set', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
   process.env.AI_PROVIDER = 'groq';
+  let capturedHeaders;
   globalThis.fetch = async (_url, opts) => {
-    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+    capturedHeaders = opts.headers;
+    return makeResponse({ content: [{ type: 'text', text: 'ok' }] });
   };
-  // callGroq will be invoked; key enforcement happens in loadLLMConfig (not tested here)
-  const result = await callLLM({
-    prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'llama-3.3-70b-versatile',
-    apiUrl: 'https://api.groq.com/openai/v1/chat/completions',
-  });
+  // AI_PROVIDER names a provider without a key: the one with a key is used (ADR-0032).
+  const result = await callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' });
   assert.equal(result, 'ok');
+  assert.equal(capturedHeaders['x-api-key'], 'sk-ant-key');
 });
 
 test('callLLM routes to Groq when AI_PROVIDER=groq and both keys are set', async () => {
@@ -226,7 +226,14 @@ test('callLLM skips the fallback when its API key is not configured', async () =
   assert.equal(groqCalls, 0);
 });
 
-test('callLLM does not fall back on a permanent error (401/403) from the primary', async () => {
+function captureStderr(fn) {
+  const lines = [];
+  const origWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  return fn().finally(() => { process.stderr.write = origWrite; }).then(result => ({ result, lines }));
+}
+
+test('callLLM falls back on a permanent error (401/403) and logs it as an error', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
   process.env.GROQ_API_KEY = 'groq-key';
   process.env.AI_PROVIDER = 'anthropic';
@@ -234,19 +241,44 @@ test('callLLM does not fall back on a permanent error (401/403) from the primary
   globalThis.fetch = async (_url, opts) => {
     if (opts.headers['x-api-key']) return makeResponse('invalid x-api-key', 401);
     groqCalls++;
-    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+    return makeResponse({ choices: [{ message: { content: 'fallback-ok' } }] });
   };
-  await assert.rejects(
-    () => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-4-7' }),
-    /All providers failed: anthropic: .*401/,
-  );
-  assert.equal(groqCalls, 0);
+  const { result, lines } = await captureStderr(() =>
+    callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' }));
+  assert.equal(result, 'fallback-ok');
+  assert.equal(groqCalls, 1);
+  const event = lines.filter(l => l.includes('"llm_fallback"')).map(l => JSON.parse(l))[0];
+  assert.equal(event.level, 'error', 'a wrong primary key must stay visible (GitHub annotation)');
+  assert.equal(event.stage, 'review');
+  assert.deepEqual([event.meta.from, event.meta.to, event.meta.error_type], ['anthropic', 'groq', 'PERMANENT']);
+  assert.match(event.meta.error, /401/);
 });
 
-test('callLLM rejects an unknown AI_PROVIDER', async () => {
+test('callLLM logs a transient primary failure as a warn fallback event', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) return makeResponse('bad request', 400);
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  const { lines } = await captureStderr(() => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' }));
+  const event = lines.filter(l => l.includes('"llm_fallback"')).map(l => JSON.parse(l))[0];
+  assert.equal(event.level, 'warn');
+  assert.equal(event.meta.error_type, 'UNKNOWN');
+});
+
+test('callLLM uses the default provider when AI_PROVIDER is unknown', async () => {
   process.env.AI_PROVIDER = 'openai';
-  globalThis.fetch = async () => { throw new Error('must not be called'); };
-  await assert.rejects(() => callLLM({ prompt: 'hi', systemPrompt: 'sys' }), /Invalid AI_PROVIDER "openai"/);
+  process.env.GROQ_API_KEY = 'groq-key';
+  let capturedHeaders;
+  globalThis.fetch = async (_url, opts) => {
+    capturedHeaders = opts.headers;
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  const result = await callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT });
+  assert.equal(result, 'ok');
+  assert.equal(capturedHeaders['Authorization'], 'Bearer groq-key');
 });
 
 test('callLLM throws descriptive error listing each provider failure when all fail', async () => {
