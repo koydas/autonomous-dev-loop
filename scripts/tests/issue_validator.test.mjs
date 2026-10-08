@@ -220,10 +220,19 @@ describe('parseGroqResponse', () => {
     );
   });
 
-  test('throws when "suggested_ac" is missing', () => {
+  test('defaults a missing or null "suggested_ac" to [] and keeps the verdict', () => {
+    const missing = parseGroqResponse('{"valid":true,"score":80,"blockers":[],"warnings":[]}');
+    assert.deepEqual(missing.suggested_ac, []);
+    assert.equal(missing.valid, true);
+    const nul = parseGroqResponse('{"valid":false,"score":40,"blockers":["B1: no AC"],"warnings":[],"suggested_ac":null}');
+    assert.deepEqual(nul.suggested_ac, []);
+    assert.equal(nul.valid, false);
+  });
+
+  test('throws when "suggested_ac" is present but not an array', () => {
     assert.throws(
-      () => parseGroqResponse('{"valid":true,"score":80,"blockers":[],"warnings":[]}'),
-      /"suggested_ac"/,
+      () => parseGroqResponse('{"valid":true,"score":80,"blockers":[],"warnings":[],"suggested_ac":"Given X"}'),
+      /"suggested_ac" is not an array/,
     );
   });
 });

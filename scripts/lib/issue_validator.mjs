@@ -53,7 +53,10 @@ export function parseGroqResponse(rawText) {
   if (typeof parsed.score !== 'number') throw new Error('Response missing "score" number');
   if (!Array.isArray(parsed.blockers)) throw new Error('Response missing "blockers" array');
   if (!Array.isArray(parsed.warnings)) throw new Error('Response missing "warnings" array');
-  if (!Array.isArray(parsed.suggested_ac)) throw new Error('Response missing "suggested_ac" array');
+  // suggested_ac is advisory (it never changes the verdict): a missing one costs the
+  // suggestions, not the validation run. Any other non-array value is still malformed.
+  parsed.suggested_ac ??= [];
+  if (!Array.isArray(parsed.suggested_ac)) throw new Error('Response "suggested_ac" is not an array');
 
   const score = Math.max(0, Math.min(100, Math.round(parsed.score)));
   // Enforce hard rules: blockers OR score < 70 → invalid

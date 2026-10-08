@@ -132,6 +132,10 @@ There is deliberately no global group serializing LLM workflows: GitHub would ca
 
 **Locally:** `npm run eval -- --suite validation --repeats 3 --scorecard` adds the run to a preview in `evals/site/`; open `evals/site/index.html`. To rebuild from downloaded artifacts, run `npm run eval:site -- --out evals/site --previous-dir evals/site <results.json…>`, or `--site-url https://koydas.github.io/autonomous-dev-loop` to start from the live history.
 
+## Gates only tighten (ADR-0031)
+
+A red eval is fixed in the stage (prompt, parser, production code), never by loosening its gate: no lower `min`, higher `max`, new `optional`, dropped or relabelled case, or filtered run. `scripts/tests/eval_threshold_floor.test.mjs` pins every suite's thresholds, minimum case count and each case's id, label and input hash (a relabelled, removed or rewritten case fails it), and fails when a suite's prompts share a 5-word run with one of its cases (prompt examples must not quote the dataset); tightening a threshold or adding cases raises the floor in the same PR. Loosening needs a new ADR.
+
 ## Metrics
 
 | Metric | Meaning |

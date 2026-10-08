@@ -308,8 +308,12 @@ export function buildSite({ scorecard, details = {}, thresholds = {}, generatedA
     'scorecard.json': JSON.stringify(scorecard, null, 2) + '\n',
     'scorecard.md': formatScorecard(scorecard),
   };
-  for (const [suite, { runs = [] }] of Object.entries(scorecard.suites)) {
-    files[`badges/${suite}.json`] = JSON.stringify(formatBadge(suite, runs[0])) + '\n';
+  // Every registered suite (thresholds keys) gets a badge: a missing file is a 404 that
+  // shields.io renders as a red "resource not found" in the README.
+  for (const suite of new Set([...Object.keys(thresholds), ...Object.keys(scorecard.suites)])) {
+    files[`badges/${suite}.json`] = JSON.stringify(formatBadge(suite, scorecard.suites[suite]?.runs?.[0])) + '\n';
+  }
+  for (const { runs = [] } of Object.values(scorecard.suites)) {
     for (const run of runs) {
       const detail = details[run.run_id];
       if (!detail) continue;
