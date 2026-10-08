@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { SUITES } from './lib/eval_suites.mjs';
 import {
   loadDataset, filterCases, runSuite, summarize, checkThresholds, formatReport, createReplayLLM,
+  estimateRunTokens, checkTokenBudget,
 } from './lib/eval_harness.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadLLMConfig } from './lib/config.mjs';
@@ -90,6 +91,26 @@ async function buildLLM(suite, replayFile) {
   return { llmFor: () => live, model: `${config.provider}:${config.model}` };
 }
 
+async function readHistory(file) {
+  let content;
+  try {
+    content = await fs.readFile(file, 'utf8');
+  } catch {
+    return [];
+  }
+  return content.split('\n').flatMap((line) => {
+    try { return line.trim() ? [JSON.parse(line)] : []; } catch { return []; }
+  });
+}
+
+// Single ::error:: (eval.error) for a run the circuit breaker cut short. Never a silent pass.
+export function circuitBreakerMessage(cb, { suite, nRuns }) {
+  const usage = cb.limit ? ` (limit ${cb.limit}, used ${cb.used ?? '?'})` : '';
+  const retry = cb.retry_after ? `retry after ${cb.retry_after}` : 'retry after: not given by the provider';
+  return `Eval ${suite} aborted by the circuit breaker: ${cb.provider} quota "${cb.quota}" exhausted${usage}; ${retry}. `
+    + `${nRuns - cb.skipped_runs}/${nRuns} runs executed, ${cb.skipped_runs} skipped. Provider failure: the run is not published.`;
+}
+
 async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const { suite } = opts;
@@ -100,13 +121,23 @@ async function main() {
   const startMs = Date.now();
   const tracer = createTracer({ runId: traceRunId, traceDir: path.join(process.cwd(), 'observability', 'traces') });
 
-  obsLog({ stage: 'eval', event: 'eval.start', meta: { suite: suite.name, repeats: opts.repeats, replay: Boolean(opts.replay) } });
+  const historyFile = process.env.EVAL_HISTORY_FILE ?? 'evals/history.jsonl';
   tracer.startSpan('eval', { suite: suite.name });
 
   try {
     const datasetPath = path.resolve(REPO_ROOT, suite.dataset);
     const datasetSha256 = createHash('sha256').update(await fs.readFile(datasetPath)).digest('hex');
     const cases = filterCases(await loadDataset(datasetPath), opts);
+    // A replay calls no provider; its repeat count comes from the recording, read below.
+    const estimate = opts.replay
+      ? { tokens: 0, per_run: 0, source: 'replay' }
+      : estimateRunTokens({ suite, nRuns: cases.length * opts.repeats, history: await readHistory(historyFile) });
+    obsLog({
+      stage: 'eval', event: 'eval.start',
+      meta: { suite: suite.name, repeats: opts.repeats, replay: Boolean(opts.replay), cases: cases.length, tokens_est: estimate.tokens, tokens_est_per_run: estimate.per_run, tokens_est_source: estimate.source },
+    });
+    const refusal = opts.replay ? null : checkTokenBudget(estimate, process.env.EVAL_TOKEN_BUDGET);
+    if (refusal) throw new Error(`Eval ${suite.name} refused before any LLM call: ${refusal}`);
     const { llmFor, model, recorded: replayed } = await buildLLM(suite, opts.replay);
     if (replayed) opts.repeats = resolveReplayRepeats(replayed.meta, opts);
 
@@ -143,7 +174,6 @@ async function main() {
       await buildEvalSite({ outDir: siteDir, previousDir: siteDir, resultFiles: [resultsFile], log: (m) => process.stderr.write(`${m}\n`) });
     }
 
-    const historyFile = process.env.EVAL_HISTORY_FILE ?? 'evals/history.jsonl';
     await fs.mkdir(path.dirname(historyFile), { recursive: true });
     await fs.appendFile(historyFile, JSON.stringify({
       suite: suite.name, ...meta, passed: failures.length === 0, summary,
@@ -153,6 +183,15 @@ async function main() {
     if (process.env.GITHUB_STEP_SUMMARY) await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, report + '\n');
 
     const duration_ms = Date.now() - startMs;
+    if (summary.circuit_breaker) {
+      const error = circuitBreakerMessage(summary.circuit_breaker, { suite: suite.name, nRuns: results.length });
+      process.stderr.write(`${error}\n`);
+      obsLog({ stage: 'eval', event: 'eval.error', level: 'error', duration_ms, meta: { error, reason: 'provider_quota', ...summary.circuit_breaker, resultsFile } });
+      tracer.endSpan('eval', { outcome: 'failed', meta: { reason: 'provider_quota' } });
+      await tracer.finalize('failed');
+      process.exitCode = 1;
+      return;
+    }
     obsLog({ stage: 'eval', event: 'eval.complete', duration_ms, meta: { suite: suite.name, passed: failures.length === 0, resultsFile } });
     tracer.endSpan('eval', { outcome: failures.length ? 'failed' : 'success', meta: { failures: failures.length } });
     await tracer.finalize(failures.length ? 'failed' : 'success');

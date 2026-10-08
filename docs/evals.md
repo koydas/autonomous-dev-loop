@@ -118,7 +118,7 @@ Rules:
 - **One deploy:** the `publish` job downloads every `eval-results-<runId>-<suite>` artifact (`pattern` + `merge-multiple`) and passes all results files to `build_eval_site.mjs` in one build, then deploys once. A suite that failed on `error_rate` (provider outage) is skipped with a warning; the other suites are published. A suite whose job produced no results is simply absent.
 - **Run IDs:** every run of `evals.yml` (weekly or manual) records `meta.run_id = <workflow run ID>-<suite>` (`EVAL_RUN_ID`) and `meta.workflow_run_id = <workflow run ID>`. The dashboard keys `runs/<id>.json` by `run_id` alone, so two suites of one workflow run must not share it; `build_eval_site.mjs` refuses a build where two suites use the same `run_id`. Runs published before this change keep their bare numeric IDs. The run page links the workflow run through `workflow_run_id`.
 - **Duration:** validation ≈ 4–6 min per repeat, review ≈ 11–12 min per repeat: **≈ 50–60 min end to end** (≈ 15 + 35 min of evals, plus runner setup and the deploy). Worst case: each suite up to its 120 min timeout.
-- **Tokens per week** (chars/4 estimate, the harness's `tokens_est`): validation ≈ 71k input per repeat (35 calls × ≈ 1.9k system prompt + the issue), review ≈ 66k (23 calls × ≈ 2.9k); × 3 repeats ≈ **410k input tokens per week**, plus at most ≈ 180k output tokens (`max_tokens` × calls; actual output is far lower).
+- **Tokens per week** (chars/4 estimate, the harness's `tokens_est`): validation ≈ 71k input per repeat (35 calls × ≈ 1.9k system prompt + the issue), review ≈ 66k (23 calls × ≈ 2.9k); × 3 repeats ≈ **410k input tokens per week**, plus at most ≈ 180k output tokens (`max_tokens` × calls; actual output is far lower). ⚠️ That is ≈ 575k Groq-reported tokens against a 200k/day quota shared with production: see [Token budget](#token-budget).
 
 **Concurrency with other eval runs:**
 
@@ -132,6 +132,33 @@ There is deliberately no global group serializing LLM workflows: GitHub would ca
 
 **Locally:** `npm run eval -- --suite validation --repeats 3 --scorecard` adds the run to a preview in `evals/site/`; open `evals/site/index.html`. To rebuild from downloaded artifacts, run `npm run eval:site -- --out evals/site --previous-dir evals/site <results.json…>`, or `--site-url https://koydas.github.io/autonomous-dev-loop` to start from the live history.
 
+## Token budget
+
+> **The Groq free tier caps `openai/gpt-oss-120b` at 200k tokens per day (TPD) per organization, shared with the production pipeline** (validation, generation, review, auto-fix use the same `GROQ_API_KEY`). The 8K TPM is waited out (ADR-0028); the TPD is not: once spent, every call fails until tokens age out of the window.
+
+| Run | Groq-reported cost (assumption: ≈ per repeat) | Source |
+|---|---|---|
+| `validation`, 1 repeat (35 cases) | ≈ 95k | observed; `tokensPerRunEst: 2700` in `eval_suites.mjs` |
+| `review`, 1 repeat (23 cases) | ≈ 97k | derived: chars/4 input × 1.34 (validation's measured ratio) + output; `tokensPerRunEst: 4200` |
+| weekly matrix (both suites × 3) | **≈ 575k ≈ 2.9 × the daily quota** | |
+
+The chars/4 `tokens_est` in results files undercounts by ≈ 1.34 (reasoning tokens, tokenizer).
+
+**Pre-flight estimate.** `eval.start` logs `meta.cases`, `meta.tokens_est`, `meta.tokens_est_per_run` and `meta.tokens_est_source`: runs (cases × repeats) × tokens per run, taken from the newest error-free live run of the suite in `EVAL_HISTORY_FILE` (`history:<run_id>`; local only, a CI runner starts with no history), else the suite's static `tokensPerRunEst` (`static`). A replay costs nothing (`replay`, 0).
+
+**`EVAL_TOKEN_BUDGET`** (env; repository variable `EVAL_TOKEN_BUDGET` in `evals.yml` and `pr-evals.yml`, unset = no cap): a live run whose estimate exceeds it is refused before any LLM call (`eval.error`, exit 1, no results file). A non-integer value, or a budget with no estimate available, is refused too. Replays ignore it.
+
+**Circuit breaker.** The first LLM call that fails on an exhausted quota stops the run (`detectQuotaExhaustion`, `eval_harness.mjs`):
+- a provider message naming a daily quota (`tokens per day (TPD)`, `requests per day (RPD)`), whatever the fallback provider answered; or
+- every provider refused with 401, 403 or 429 (`providerErrors` on the `callLLM` error), e.g. Groq 429 then Anthropic 401 (invalid key).
+
+A TPM 429 that outlasts the retries, a 5xx or a network error does not trip it. Once open, no further case starts; the remaining case × repeat are recorded as skipped (`skipped: true`, no call). The run is a **provider failure**: `summary.error_rate = 1` (by definition, not a ratio), `summary.circuit_breaker = { provider, quota, limit, used, retry_after, skipped_runs }`, an `error_rate` threshold failure even for a suite that does not gate it (so `partitionPublishable` never publishes it), a ⛔ section in the report, one `::error::` (`eval/eval.error`, `meta.reason: "provider_quota"`) naming quota, usage and retry-after, exit 1. The results file and trace are still uploaded. Before this, run 37719923057 made 45 calls that all failed (Groq TPD 429, then Anthropic 401).
+
+**Schedule vs production traffic** — proposal, not applied:
+- The 06:23 UTC start does not hit production directly: 100 `pr-review` runs (2026-10-01 → 10-08) cluster at 19–20h and 02–03h UTC, none at 06h; Tuesday is the quietest day (4/100).
+- The collision is the volume, not the hour. Assuming Groq's TPD is a rolling 24 h window (a `try again in 13m47s` at `Used 198931` points that way), a Monday 06:23 run that spends the quota starves production until about Tuesday 06:23, i.e. through the Monday evening and Tuesday 02–03h peaks. The breaker caps the waste at one failed call; it does not give back what the run already spent.
+- `repeats: 3` makes one suite alone (≈ 285k) exceed the quota, so a weekly run cannot complete on the shared free tier at any hour. Options, best first: (1) a separate Groq organization (own key, own TPD) for evals — removes the coupling; (2) weekly `repeats: 1` with one suite per day (≈ 95k each, half the quota), plus `EVAL_TOKEN_BUDGET ≈ 110000`; (3) the Groq Dev tier. Moving the cron alone fixes nothing.
+
 ## Gates only tighten (ADR-0031)
 
 A red eval is fixed in the stage (prompt, parser, production code), never by loosening its gate: no lower `min`, higher `max`, new `optional`, dropped or relabelled case, or filtered run. `scripts/tests/eval_threshold_floor.test.mjs` pins every suite's thresholds, minimum case count and each case's id, label and input hash (a relabelled, removed or rewritten case fails it), and fails when a suite's prompts share a 5-word run with one of its cases (prompt examples must not quote the dataset); tightening a threshold or adding cases raises the floor in the same PR. Loosening needs a new ADR.
@@ -141,7 +168,7 @@ A red eval is fixed in the stage (prompt, parser, production code), never by loo
 | Metric | Meaning |
 |---|---|
 | `scores.<scorer>.mean` | Mean over runs where the scorer applies (`null` = not applicable) |
-| `error_rate` | Share of runs that threw (unparseable output, provider failure) |
+| `error_rate` | Share of runs that threw (unparseable output, provider failure); 1 for a run the [circuit breaker](#token-budget) stopped |
 | `per_class.<label>.{precision,recall,f1}` | From the expected × predicted confusion matrix; errors count as misses |
 | `consistency` | Share of cases whose repeats all produced the same label |
 | `latency_ms.{p50,p95}` | Per run, including retries |

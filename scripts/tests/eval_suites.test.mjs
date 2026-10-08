@@ -14,7 +14,7 @@ import { buildChangeClassificationContext } from '../lib/change_classifier.mjs';
 import { parseEvidence } from '../lib/review_evidence.mjs';
 import { GROQ_MODEL_DEFAULTS } from '../lib/config.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
-import { parseCliArgs, resolveReplayRepeats } from '../run_evals.mjs';
+import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage } from '../run_evals.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RUN_EVALS = path.join(REPO_ROOT, 'scripts', 'run_evals.mjs');
@@ -760,4 +760,80 @@ test('run_evals --suite review exits 1 when the reviewer approves everything', a
 test('parseCliArgs accepts --suite review', () => {
   assert.equal(parseCliArgs(['--suite', 'review']).suite, reviewSuite);
   assert.throws(() => parseCliArgs([]), /one of: validation, review/);
+});
+
+// ---------------------------------------------------------------------------
+// run_evals.mjs — circuit breaker and token budget
+// ---------------------------------------------------------------------------
+
+const TPD_429 = 'All providers failed: groq: Groq API HTTP error 429: {"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD): Limit 200000, Used 198931, Requested 2984. Please try again in 13m47.28s. Need more tokens?"}}, anthropic: Anthropic API HTTP error 401: {"error":{"message":"Invalid API Key"}}';
+const eventsOf = (stderr) => stderr.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+
+test('run_evals aborts on an exhausted daily quota: one ::error::, error_rate 1, skipped runs, exit 1', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const recorded = await writeRecording(dir, (c) => c.expected.valid);
+  const rec = JSON.parse(await fs.readFile(recorded, 'utf8'));
+  rec.results[1] = { ...rec.results[1], calls: [], error: TPD_429 };
+  await fs.writeFile(recorded, JSON.stringify(rec));
+  const { code, stdout, stderr } = await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir], dir, { GITHUB_ACTIONS: 'true' });
+  assert.equal(code, 1);
+  assert.equal(stderr.split('\n').filter((l) => l.startsWith('::error')).length, 1, 'exactly one ::error:: annotation');
+  assert.match(stderr, /::error::eval\/eval\.error: .*aborted by the circuit breaker: groq quota \\"tokens per day \(TPD\)\\" exhausted \(limit 200000, used 198931\); retry after 13m47\.28s/);
+  assert.match(stderr, /2\/35 runs executed, 33 skipped/);
+  const events = eventsOf(stderr).map((e) => e.event);
+  assert.ok(events.includes('eval.error') && !events.includes('eval.complete'));
+  assert.match(stdout, /## ⛔ Circuit breaker: provider quota exhausted/);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.equal(saved.summary.error_rate, 1);
+  assert.equal(saved.summary.circuit_breaker.skipped_runs, 33);
+  assert.ok(saved.failures.some((f) => f.metric === 'error_rate'), 'partitionPublishable skips it');
+});
+
+test('a breaker-cut run fails on error_rate whether or not the suite gates error_rate', async () => {
+  const results = await runSuite({ suite: validationSuite, cases: (await oracleLlmFor()).cases.slice(0, 2), llmFor: () => async () => { throw new Error(TPD_429); } });
+  const summary = summarize(results);
+  assert.equal(summary.circuit_breaker.skipped_runs, 1);
+  const { error_rate: _gate, ...ungated } = validationSuite.thresholds;
+  assert.deepEqual(checkThresholds(summary, ungated).filter((f) => f.metric === 'error_rate'), [{ metric: 'error_rate', value: 1, reason: 'circuit breaker: provider quota exhausted' }]);
+  assert.deepEqual(checkThresholds(summary, validationSuite.thresholds).filter((f) => f.metric === 'error_rate').map((f) => f.reason), ['1 > max 0.05'], 'no duplicate when the gate already failed');
+});
+
+test('circuitBreakerMessage names the quota, usage and retry-after, or says they are unknown', () => {
+  assert.equal(
+    circuitBreakerMessage({ provider: 'groq', quota: 'tokens per day (TPD)', limit: 200000, used: 198931, retry_after: '13m47.28s', skipped_runs: 8 }, { suite: 'review', nRuns: 10 }),
+    'Eval review aborted by the circuit breaker: groq quota "tokens per day (TPD)" exhausted (limit 200000, used 198931); retry after 13m47.28s. 2/10 runs executed, 8 skipped. Provider failure: the run is not published.',
+  );
+  const bare = circuitBreakerMessage({ provider: 'groq+anthropic', quota: 'every provider refused', limit: null, used: null, retry_after: null, skipped_runs: 0 }, { suite: 's', nRuns: 1 });
+  assert.match(bare, /quota "every provider refused" exhausted; retry after: not given by the provider\. 1\/1 runs executed, 0 skipped/);
+  assert.match(circuitBreakerMessage({ provider: 'g', quota: 'q', limit: 5, used: null, retry_after: null, skipped_runs: 0 }, { suite: 's', nRuns: 1 }), /\(limit 5, used \?\)/);
+});
+
+test('run_evals logs the token estimate at eval.start and refuses a live run over EVAL_TOKEN_BUDGET', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--repeats', '3', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '200000', GROQ_API_KEY: '', ANTHROPIC_API_KEY: '' });
+  assert.equal(code, 1);
+  const start = eventsOf(stderr).find((e) => e.event === 'eval.start');
+  assert.deepEqual([start.meta.cases, start.meta.tokens_est, start.meta.tokens_est_per_run, start.meta.tokens_est_source], [35, 283500, 2700, 'static']);
+  assert.match(stderr, /Eval validation refused before any LLM call: estimated 283500 tokens \(2700\/run, static\) exceeds EVAL_TOKEN_BUDGET=200000/);
+  await assert.rejects(fs.access(path.join(dir, 'validation-test-run.json')), 'no results file: nothing ran');
+});
+
+test('run_evals estimates from the last error-free run in EVAL_HISTORY_FILE and rejects an invalid budget', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  await fs.writeFile(path.join(dir, 'history.jsonl'), 'not json\n' + JSON.stringify({ suite: 'validation', run_id: 'prev', model: 'groq:m', summary: { n_runs: 35, error_rate: 0, tokens_est: { in: 70000, out: 0 } } }) + '\n');
+  const over = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '1000' });
+  assert.equal(over.code, 1);
+  assert.match(over.stderr, /estimated 70000 tokens \(2000\/run, history:prev\) exceeds EVAL_TOKEN_BUDGET=1000/);
+  const bad = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: 'lots' });
+  assert.equal(bad.code, 1);
+  assert.match(bad.stderr, /EVAL_TOKEN_BUDGET must be a positive integer, got "lots"/);
+});
+
+test('run_evals --replay ignores EVAL_TOKEN_BUDGET (no provider call) and logs a zero estimate', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const recorded = await writeRecording(dir, (c) => c.expected.valid);
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--replay', recorded, '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '1' });
+  assert.equal(code, 0);
+  const start = eventsOf(stderr).find((e) => e.event === 'eval.start');
+  assert.deepEqual([start.meta.tokens_est, start.meta.tokens_est_source], [0, 'replay']);
 });

@@ -16,16 +16,20 @@ export async function callLLM(args) {
     : ALL_PROVIDERS;
 
   const errors = [];
+  // Per-provider status for callers that must tell an exhausted quota from a bad response (eval circuit breaker).
+  const providerErrors = [];
   for (const provider of ordered) {
     try {
       return await provider.call(args);
     } catch (error) {
       const errorType = error.errorType ?? classifyError(String(error.status ?? ''));
       errors.push(`${provider.name}: ${error.message}`);
+      const status = error.status ?? Number(String(error.message).match(/HTTP error (\d{3})/)?.[1]);
+      providerErrors.push({ provider: provider.name, status: Number.isFinite(status) ? status : null });
       if (errorType === 'PERMANENT') {
         break;
       }
     }
   }
-  throw new Error(`All providers failed: ${errors.join(', ')}`);
+  throw Object.assign(new Error(`All providers failed: ${errors.join(', ')}`), { providerErrors });
 }

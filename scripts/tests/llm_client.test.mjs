@@ -160,3 +160,43 @@ test('callLLM throws descriptive error listing each provider failure when all fa
     }
   );
 });
+
+test('callLLM attaches the HTTP status of each failed provider (eval circuit breaker)', async () => {
+  process.env.AI_PROVIDER = 'groq';
+  process.env.GROQ_MAX_RETRIES = '0';
+  globalThis.fetch = async (_url, opts) => (!opts.headers['x-api-key']
+    ? makeResponse({ error: { message: 'Rate limit reached on tokens per day (TPD): Limit 200000, Used 199000. Please try again in 13m47.28s.' } }, 429)
+    : makeResponse({ error: { message: 'Invalid API Key' } }, 401));
+  try {
+    await assert.rejects(
+      () => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'k', model: 'm', apiUrl: 'https://api.groq.com/openai/v1/chat/completions' }),
+      (err) => {
+        assert.deepEqual(err.providerErrors, [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: 401 }]);
+        return true;
+      },
+    );
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callLLM records a null status for a provider that failed without an HTTP response', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  process.env.GROQ_MAX_RETRIES = '0';
+  globalThis.fetch = async () => { throw new Error('connection refused'); };
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  try {
+    await assert.rejects(
+      () => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'k', model: 'm', apiUrl: 'https://api.groq.com/openai/v1/chat/completions' }),
+      (err) => {
+        assert.deepEqual(err.providerErrors.map((p) => p.status), [null, null]);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});

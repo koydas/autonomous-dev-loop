@@ -88,6 +88,8 @@ jobs:
           # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
           LLM_MAX_RETRY_WAIT_MS: '60000'
           GROQ_MAX_RETRIES: '20'
+          # Optional pre-flight cap (docs/evals.md#token-budget): unset repository variable = no cap.
+          EVAL_TOKEN_BUDGET: ${{ vars.EVAL_TOKEN_BUDGET }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           AI_PROVIDER: ${{ vars.AI_PROVIDER }}
