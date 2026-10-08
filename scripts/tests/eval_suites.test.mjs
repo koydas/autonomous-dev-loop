@@ -820,10 +820,10 @@ test('run_evals logs the token estimate at eval.start and refuses a live run ove
 
 test('run_evals estimates from the last error-free run in EVAL_HISTORY_FILE and rejects an invalid budget', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
-  await fs.writeFile(path.join(dir, 'history.jsonl'), 'not json\n' + JSON.stringify({ suite: 'validation', run_id: 'prev', model: 'groq:m', summary: { n_runs: 35, error_rate: 0, tokens_est: { in: 70000, out: 0 } } }) + '\n');
+  await fs.writeFile(path.join(dir, 'history.jsonl'), 'not json\n' + JSON.stringify({ suite: 'validation', run_id: 'prev', model: 'groq:m', summary: { n_runs: 35, error_rate: 0, tokens_est: { in: 140000, out: 0 } } }) + '\n');
   const over = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '1000' });
   assert.equal(over.code, 1);
-  assert.match(over.stderr, /estimated 70000 tokens \(2000\/run, history:prev\) exceeds EVAL_TOKEN_BUDGET=1000/);
+  assert.match(over.stderr, /estimated 140000 tokens \(4000\/run, history:prev\) exceeds EVAL_TOKEN_BUDGET=1000/);
   const bad = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: 'lots' });
   assert.equal(bad.code, 1);
   assert.match(bad.stderr, /EVAL_TOKEN_BUDGET must be a positive integer, got "lots"/);
@@ -836,4 +836,20 @@ test('run_evals --replay ignores EVAL_TOKEN_BUDGET (no provider call) and logs a
   assert.equal(code, 0);
   const start = eventsOf(stderr).find((e) => e.event === 'eval.start');
   assert.deepEqual([start.meta.tokens_est, start.meta.tokens_est_source], [0, 'replay']);
+});
+
+test('run_evals still logs eval.start before eval.error when the dataset cannot be read', async () => {
+  // A copy of the scripts without evals/datasets/: the dataset read fails before the estimate.
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-root-'));
+  for (const dir of ['scripts', 'config', 'prompts']) await fs.cp(path.join(REPO_ROOT, dir), path.join(root, dir), { recursive: true });
+  await fs.writeFile(path.join(root, 'package.json'), '{"type":"module"}');
+  const env = { ...process.env, GITHUB_RUN_ID: 'test-run', EVAL_HISTORY_FILE: path.join(root, 'history.jsonl') };
+  delete env.GITHUB_STEP_SUMMARY;
+  const { code, stderr } = await promisify(execFile)(process.execPath, [path.join(root, 'scripts', 'run_evals.mjs'), '--suite', 'validation'], { cwd: root, env })
+    .then((r) => ({ code: 0, ...r }), (err) => ({ code: err.code, stderr: err.stderr }));
+  assert.equal(code, 1);
+  const events = eventsOf(stderr);
+  assert.deepEqual(events.map((e) => e.event), ['eval.start', 'eval.error']);
+  assert.deepEqual(events[0].meta, { suite: 'validation', repeats: 1, replay: false });
+  assert.match(events[1].meta.error, /ENOENT/);
 });

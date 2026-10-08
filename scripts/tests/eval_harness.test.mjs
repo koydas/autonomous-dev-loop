@@ -405,7 +405,7 @@ test('estimateRunTokens uses the newest error-free live run of the suite', () =>
     histLine({ run_id: 'other', suite: 'review' }),
     null,
   ];
-  assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2700 }, nRuns: 4, history }), { tokens: 10004, per_run: 2501, source: 'history:good' });
+  assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 4, history }), { tokens: 10004, per_run: 2501, source: 'history:good' });
 });
 
 test('estimateRunTokens falls back to the static estimate, then to unknown', () => {
@@ -425,4 +425,20 @@ test('checkTokenBudget: no budget, within budget, over budget, invalid budget, u
   assert.match(checkTokenBudget(est, '15k'), /EVAL_TOKEN_BUDGET must be a positive integer, got "15k"/);
   assert.match(checkTokenBudget(est, '0'), /must be a positive integer/);
   assert.match(checkTokenBudget({ tokens: null }, '1000'), /EVAL_TOKEN_BUDGET=1000 set but no token estimate/);
+});
+
+test('estimateRunTokens keeps the static estimate when the chars/4 history is lower (budget never undercounts)', () => {
+  assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2700 }, nRuns: 4, history: [histLine({ run_id: 'good' })] }), { tokens: 10800, per_run: 2700, source: 'static' });
+  assert.equal(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2501 }, nRuns: 1, history: [histLine({ run_id: 'good' })] }).source, 'static', 'a tie keeps the static estimate');
+});
+
+test('detectQuotaExhaustion reads millisecond and hour retry hints without mistaking ms for minutes', () => {
+  const refused = (hint) => detectQuotaExhaustion(Object.assign(new Error(`groq: Groq API HTTP error 429: Please try again in ${hint}. , anthropic: 401`), {
+    providerErrors: [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: 401 }],
+  })).retry_after;
+  assert.equal(refused('520ms'), '520ms');
+  assert.equal(refused('1.5ms'), '1.5ms');
+  assert.equal(refused('1h2m3s'), '1h2m3s');
+  assert.equal(refused('7m'), '7m');
+  assert.equal(refused('later'), null);
 });

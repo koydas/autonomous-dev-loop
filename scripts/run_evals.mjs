@@ -122,6 +122,12 @@ async function main() {
   const tracer = createTracer({ runId: traceRunId, traceDir: path.join(process.cwd(), 'observability', 'traces') });
 
   const historyFile = process.env.EVAL_HISTORY_FILE ?? 'evals/history.jsonl';
+  // eval.start carries the token estimate, which needs the dataset: a failure before it still logs a start.
+  let started = false;
+  const logStart = (extra = {}) => {
+    started = true;
+    obsLog({ stage: 'eval', event: 'eval.start', meta: { suite: suite.name, repeats: opts.repeats, replay: Boolean(opts.replay), ...extra } });
+  };
   tracer.startSpan('eval', { suite: suite.name });
 
   try {
@@ -132,10 +138,7 @@ async function main() {
     const estimate = opts.replay
       ? { tokens: 0, per_run: 0, source: 'replay' }
       : estimateRunTokens({ suite, nRuns: cases.length * opts.repeats, history: await readHistory(historyFile) });
-    obsLog({
-      stage: 'eval', event: 'eval.start',
-      meta: { suite: suite.name, repeats: opts.repeats, replay: Boolean(opts.replay), cases: cases.length, tokens_est: estimate.tokens, tokens_est_per_run: estimate.per_run, tokens_est_source: estimate.source },
-    });
+    logStart({ cases: cases.length, tokens_est: estimate.tokens, tokens_est_per_run: estimate.per_run, tokens_est_source: estimate.source });
     const refusal = opts.replay ? null : checkTokenBudget(estimate, process.env.EVAL_TOKEN_BUDGET);
     if (refusal) throw new Error(`Eval ${suite.name} refused before any LLM call: ${refusal}`);
     const { llmFor, model, recorded: replayed } = await buildLLM(suite, opts.replay);
@@ -197,6 +200,7 @@ async function main() {
     await tracer.finalize(failures.length ? 'failed' : 'success');
     if (failures.length) process.exitCode = 1;
   } catch (err) {
+    if (!started) logStart();
     obsLog({ stage: 'eval', event: 'eval.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
     tracer.endSpan('eval', { outcome: 'failed', meta: { error: err.message } });
     await tracer.finalize('failed');

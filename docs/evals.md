@@ -144,7 +144,7 @@ There is deliberately no global group serializing LLM workflows: GitHub would ca
 
 The chars/4 `tokens_est` in results files undercounts by ≈ 1.34 (reasoning tokens, tokenizer).
 
-**Pre-flight estimate.** `eval.start` logs `meta.cases`, `meta.tokens_est`, `meta.tokens_est_per_run` and `meta.tokens_est_source`: runs (cases × repeats) × tokens per run, taken from the newest error-free live run of the suite in `EVAL_HISTORY_FILE` (`history:<run_id>`; local only, a CI runner starts with no history), else the suite's static `tokensPerRunEst` (`static`). A replay costs nothing (`replay`, 0).
+**Pre-flight estimate.** `eval.start` logs `meta.cases`, `meta.tokens_est`, `meta.tokens_est_per_run` and `meta.tokens_est_source`: runs (cases × repeats) × tokens per run, the larger of the newest error-free live run of the suite in `EVAL_HISTORY_FILE` (`history:<run_id>`; local only, a CI runner starts with no history) and the suite's static `tokensPerRunEst` (`static`): history is chars/4 and would undercount, so it only wins when it is higher. A replay costs nothing (`replay`, 0). `eval.start` is logged once the dataset is loaded; a failure before that still logs a bare `eval.start` before `eval.error`.
 
 **`EVAL_TOKEN_BUDGET`** (env; repository variable `EVAL_TOKEN_BUDGET` in `evals.yml` and `pr-evals.yml`, unset = no cap): a live run whose estimate exceeds it is refused before any LLM call (`eval.error`, exit 1, no results file). A non-integer value, or a budget with no estimate available, is refused too. Replays ignore it.
 

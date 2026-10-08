@@ -90,7 +90,7 @@ const DAILY_QUOTA = /\b(tokens|requests) per day \((TPD|RPD)\)/i;
 export function detectQuotaExhaustion(err) {
   const message = String(err?.message ?? err ?? '');
   const daily = message.match(DAILY_QUOTA);
-  const retryAfter = message.match(/try again in ((?:\d+h)?(?:\d+m)?(?:\d+(?:\.\d+)?s)?)/i)?.[1] || null;
+  const retryAfter = message.match(/try again in ((?:\d+h)?(?:\d+m(?!s))?(?:\d+(?:\.\d+)?m?s)?)/i)?.[1] || null;
   if (daily) {
     return {
       provider: /groq/i.test(message) ? 'groq' : 'unknown',
@@ -115,17 +115,21 @@ export function detectQuotaExhaustion(err) {
   return null;
 }
 
-// Expected LLM tokens of a live run: runs × tokens per run, from the newest recorded run of the suite
-// without errors (history entries, oldest first, as appended to EVAL_HISTORY_FILE), else from the
-// suite's static tokensPerRunEst. history tokens_est are chars/4: they undercount real usage.
+// Expected LLM tokens of a live run: runs × tokens per run, the larger of the newest error-free recorded
+// run of the suite (history entries, oldest first, as appended to EVAL_HISTORY_FILE) and the suite's
+// static tokensPerRunEst. history tokens_est are chars/4 (≈ 25% under provider usage): alone, it would
+// let EVAL_TOKEN_BUDGET pass runs up to ≈ 1.34× the cap.
 export function estimateRunTokens({ suite, nRuns, history = [] }) {
+  const hasStatic = Number.isFinite(suite.tokensPerRunEst) && suite.tokensPerRunEst > 0;
   const last = [...history].reverse().find((h) => h?.suite === suite.name && h.summary?.n_runs > 0
     && h.summary.error_rate === 0 && h.summary.tokens_est && !String(h.model ?? '').startsWith('replay:'));
   if (last) {
     const perRun = Math.ceil((last.summary.tokens_est.in + last.summary.tokens_est.out) / last.summary.n_runs);
-    return { tokens: perRun * nRuns, per_run: perRun, source: `history:${last.run_id ?? 'unknown'}` };
+    if (!hasStatic || perRun > suite.tokensPerRunEst) {
+      return { tokens: perRun * nRuns, per_run: perRun, source: `history:${last.run_id ?? 'unknown'}` };
+    }
   }
-  if (Number.isFinite(suite.tokensPerRunEst) && suite.tokensPerRunEst > 0) {
+  if (hasStatic) {
     return { tokens: suite.tokensPerRunEst * nRuns, per_run: suite.tokensPerRunEst, source: 'static' };
   }
   return { tokens: null, per_run: null, source: 'unknown' };
