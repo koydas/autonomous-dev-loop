@@ -12,6 +12,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS } from '../lib/config.mjs';
@@ -455,3 +457,130 @@ for (const name of ['generation-system', 'auto-fix-system']) {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// Generation entrypoint, real prompts and config, LLM and GitHub mocked (ADR-0019)
+// ---------------------------------------------------------------------------
+
+// Runs scripts/generate_issue_change.mjs in a scratch repo against one mock server that answers
+// the Anthropic call with `changes` and records the GitHub calls.
+async function runGeneration(changes, { files = {}, issueBody = 'Add a helper.' } = {}) {
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smoke-gen-'));
+  for (const [rel, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(repoDir, rel)), { recursive: true });
+    await fs.writeFile(path.join(repoDir, rel), content);
+  }
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      requests.push({ method: req.method, url: req.url, body });
+      res.writeHead(req.url === '/v1/messages' ? 200 : 201, { 'Content-Type': 'application/json' });
+      res.end(req.url === '/v1/messages'
+        ? JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({ summary: 'Add a helper', changes }) }] })
+        : '{}');
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const outputFile = path.join(repoDir, '..', `${path.basename(repoDir)}-output.txt`);
+  const metricsFile = path.join(repoDir, '..', `${path.basename(repoDir)}-metrics.jsonl`);
+  try {
+    const result = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [path.join(ROOT_DIR, 'scripts', 'generate_issue_change.mjs')], {
+        cwd: repoDir,
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_TOKEN: 'test-token',
+          GITHUB_REPOSITORY: 'owner/repo',
+          GITHUB_EVENT_PATH: '/dev/null',
+          GITHUB_API_URL: `http://127.0.0.1:${port}`,
+          GITHUB_OUTPUT: outputFile,
+          ANTHROPIC_API_KEY: 'test-key',
+          ANTHROPIC_API_URL: `http://127.0.0.1:${port}/v1/messages`,
+          METRICS_FILE: metricsFile,
+          CHECKPOINT_RUN_ID: 'smoke-gen',
+          ISSUE_NUMBER: '7',
+          ISSUE_TITLE: 'Add helper',
+          ISSUE_BODY: issueBody,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (d) => (stderr += d));
+      child.on('close', (code) => resolve({ code, stderr }));
+    });
+    const read = (file) => fs.readFile(file, 'utf8').catch(() => null);
+    return { result, requests, repoDir, output: await read(outputFile), metrics: await read(metricsFile), readRepo: (rel) => read(path.join(repoDir, rel)) };
+  } finally {
+    server.close();
+  }
+}
+
+test('generation entrypoint: a generated diff adding require( to an .mjs file is rejected without writing', async () => {
+  const run = await runGeneration([
+    { target_path: 'src/helper.mjs', file_content: "const fs = require('node:fs');\nexport const read = (p) => fs.readFileSync(p, 'utf8');\n" },
+    { target_path: 'src/other.mjs', file_content: 'export const ok = 1;\n' },
+  ]);
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.equal(await run.readRepo('src/helper.mjs'), null, 'nothing is written');
+    assert.equal(await run.readRepo('src/other.mjs'), null, 'no partial patch');
+    assert.match(run.output, /^rejected=true$/m);
+    assert.doesNotMatch(run.output, /generated_paths/);
+    const comment = run.requests.find((r) => r.method === 'POST' && /\/issues\/7\/comments$/.test(r.url));
+    assert.match(JSON.parse(comment.body).body, /Code Generation: Patch Rejected[\s\S]*module_system[\s\S]*src\/helper\.mjs`: adds require\(\) to an ES module/);
+    const labels = run.requests.find((r) => r.method === 'POST' && /\/issues\/7\/labels$/.test(r.url));
+    assert.deepEqual(JSON.parse(labels.body).labels, [loadLabelsConfig('autofix').needs_human.name]);
+    const metric = JSON.parse(run.metrics.trim());
+    assert.equal(metric.type, 'codegen_skip');
+    assert.equal(metric.reason, 'guardrail_rejected');
+    assert.deepEqual(metric.rules, ['module_system']);
+    assert.match(run.result.stderr, /"event":"pr_prepare\.skipped"/);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: a protected-path rejection is escalated the same way instead of failing', async () => {
+  const run = await runGeneration([{ target_path: 'README.md', file_content: '# stub\n' }]);
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.deepEqual(JSON.parse(run.metrics.trim()).rules, ['protected_path']);
+    assert.match(run.result.stderr, /"event":"code_gen\.skipped"/);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: a patch that passes every guardrail is written and no GitHub call is made', async () => {
+  const run = await runGeneration(
+    [{ target_path: 'src/helper.mjs', file_content: "import fs from 'node:fs';\nimport { x } from './x.mjs';\nexport function read(p) { return fs.readFileSync(p) + x; }\n" }],
+    { files: { 'src/x.mjs': 'export const x = 1;\n' } },
+  );
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.match(await run.readRepo('src/helper.mjs'), /readFileSync/);
+    assert.match(run.output, /generated_paths<<EOF\nsrc\/helper\.mjs\nEOF/);
+    assert.doesNotMatch(run.output, /rejected=true/);
+    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: an existing file the issue never showed cannot be rewritten (ADR-0029 on generation)', async () => {
+  const run = await runGeneration(
+    [{ target_path: 'src/legacy.js', file_content: 'invented\n' }],
+    { files: { 'src/legacy.js': 'keep me\n' } },
+  );
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.equal(await run.readRepo('src/legacy.js'), 'keep me\n');
+    assert.deepEqual(JSON.parse(run.metrics.trim()).rules, ['unshown_file']);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+

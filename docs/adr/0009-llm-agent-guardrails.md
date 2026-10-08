@@ -1,7 +1,7 @@
 # ADR-0009: LLM Agent Guardrails for Auto-Fix and Code Generation
 
 - **Date:** 2026-05-03
-- **Status:** Accepted
+- **Status:** Accepted — the five guardrails are also enforced in code since [ADR-0029](./0029-autofix-deterministic-write-guard.md) (test count, deletion limit) and [ADR-0019](./0019-static-verification-backstop.md) (module format, signatures, imports; both stages)
 
 ## Context
 

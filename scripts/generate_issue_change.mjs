@@ -1,19 +1,72 @@
 #!/usr/bin/env node
 
-import { buildDeterministicPrompt, loadConfigFromEnv, loadLLMConfig, validateStartup } from './lib/config.mjs';
+import { buildDeterministicPrompt, loadConfigFromEnv, loadLLMConfig, loadLabelsConfig, validateStartup } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles } from './lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, GuardrailError } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { buildFileContentsBlock } from './lib/file_injector.mjs';
+import { buildFileContext } from './lib/file_injector.mjs';
+import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
+import { normalizeRepoPath } from './lib/autofix_guard.mjs';
+import { findGuardrailViolations, guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
-import { estimateTokens } from './lib/metrics.mjs';
+import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { assertInputBudget } from './lib/token_budget.mjs';
+import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 let tracer;
+
+// 429/5xx are retried (ADR-0022); non-retry-safe POSTs (comments) are not replayed after a 5xx.
+async function ghFetch(endpoint, options = {}) {
+  const base = (process.env.GITHUB_API_URL || 'https://api.github.com').trim();
+  const retrySafe = isRetrySafeGitHubRequest(options.method, endpoint);
+  return retryWithBackoff(async () => {
+    const res = await fetch(`${base}${endpoint}`, {
+      ...options,
+      headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}`, 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
+    });
+    const transientErr = transientHttpError(res, `GitHub API (${endpoint})`, { retrySafe });
+    if (transientErr) throw transientErr;
+    return res;
+  });
+}
+
+// A GuardrailError (ADR-0021, ADR-0029, ADR-0019) is escalated like auto-fix does: nothing is
+// written, no PR is opened, the issue gets `needs-human` and the reason, a `codegen_skip` metric
+// records the rules, and the run exits 0 with `rejected=true`.
+async function rejectPatch(rejection, { stage, stageStartMs, issueNumber }) {
+  const rules = guardrailRules(rejection);
+  const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+  const needsHuman = loadLabelsConfig('autofix').needs_human;
+  const createRes = await ghFetch(`/repos/${owner}/${repo}/labels`, { method: 'POST', body: JSON.stringify(needsHuman) });
+  if (!createRes.ok && createRes.status !== 422) throw new Error(`Label create failed for "${needsHuman.name}": ${createRes.status}`);
+  const applyRes = await ghFetch(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`, { method: 'POST', body: JSON.stringify({ labels: [needsHuman.name] }) });
+  if (!applyRes.ok) throw new Error(`Add label "${needsHuman.name}" failed: ${applyRes.status}`);
+  const commentRes = await ghFetch(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
+    method: 'POST',
+    body: JSON.stringify({
+      body: `## \u{1F6E1}\u{FE0F} Code Generation: Patch Rejected\n\nThe generated patch was rejected by the output guardrails, so nothing was written and no pull request was opened. A human needs to decide (\`${needsHuman.name}\`).\n\n**Rules:** ${rules.join(', ')}\n\n**Reason:** ${String(rejection.message).slice(0, 2000)}`,
+    }),
+  });
+  if (!commentRes.ok) throw new Error(`Rejection comment failed: ${commentRes.status}`);
+  await appendMetric({
+    type: 'codegen_skip',
+    run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-codegen-skip` : `local-${Date.now()}`,
+    issue_number: issueNumber,
+    reason: 'guardrail_rejected',
+    rules,
+    ts: new Date().toISOString(),
+  });
+  obsLog({ stage, event: `${stage}.skipped`, level: 'warn', duration_ms: Date.now() - stageStartMs, meta: { reason: 'guardrail_rejected', rules, error: rejection.message } });
+  tracer.endSpan(stage, { outcome: 'skipped', meta: { reason: 'guardrail_rejected', rules } });
+  if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, 'rejected=true\n', 'utf8');
+  log('Generated patch rejected by the guardrails', { rules: rules.join(', '), reason: rejection.message });
+  await tracer.finalize('partial');
+}
 
 process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
@@ -34,10 +87,12 @@ async function main() {
   obsLog({ stage: 'code_gen', event: 'code_gen.start', level: 'info', meta: { issueNumber: config.issueNumber, model: config.model } });
   tracer.startSpan('code_gen', { issueNumber: config.issueNumber, model: config.model });
 
-  let fileContents, prompt, systemPrompt;
+  let fileContext, dependencies, prompt, systemPrompt;
   try {
-    fileContents = await buildFileContentsBlock(config.issueTitle, config.issueBody, process.cwd());
-    prompt = buildDeterministicPrompt({ ...config, fileContents });
+    fileContext = await buildFileContext(config.issueTitle, config.issueBody, process.cwd());
+    // Snapshot before the LLM call: the verified manifest is never one the patch wrote.
+    dependencies = await readPackageJsonDependencies(process.cwd());
+    prompt = buildDeterministicPrompt({ ...config, fileContents: fileContext.block });
     systemPrompt = loadPrompt('generation-system');
   } catch (err) {
     obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
@@ -93,6 +148,7 @@ async function main() {
   try {
     ({ summary, changes } = validateAiOutput(aiOutput));
   } catch (err) {
+    if (err instanceof GuardrailError) return rejectPatch(err, { stage: 'code_gen', stageStartMs: startMs, issueNumber: config.issueNumber });
     obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
     tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: err.message } });
     await tracer.finalize('failed');
@@ -109,8 +165,28 @@ async function main() {
 
   let outputPaths;
   try {
+    const existing = new Map();
+    for (const { targetPath } of changes) {
+      const key = normalizeRepoPath(targetPath);
+      try {
+        existing.set(key, await fs.readFile(key, 'utf8'));
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+        existing.set(key, null);
+      }
+    }
+    const violations = findGuardrailViolations(changes, {
+      existing,
+      shownPaths: fileContext.shownPaths,
+      hiddenPaths: fileContext.hiddenPaths,
+      dependencies,
+      fileExists: (p) => existsSync(p),
+      mentionText: `${config.issueTitle}\n${config.issueBody}`,
+    });
+    if (violations.length) throw guardrailErrorFor(violations);
     outputPaths = await writeGeneratedFiles(changes);
   } catch (err) {
+    if (err instanceof GuardrailError) return rejectPatch(err, { stage: 'pr_prepare', stageStartMs: prPrepareStartMs, issueNumber: config.issueNumber });
     obsLog({ stage: 'pr_prepare', event: 'pr_prepare.error', level: 'error', duration_ms: Date.now() - prPrepareStartMs, meta: { error: err.message } });
     tracer.endSpan('pr_prepare', { outcome: 'failed', meta: { error: err.message } });
     await tracer.finalize('failed');

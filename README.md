@@ -28,18 +28,18 @@ Prompts are advice; an LLM can ignore them. So the loop separates what it *asks*
 | PR code runs in a job holding **no secrets** (`contents: read`, no persisted credentials, credential-like env vars stripped) | [ADR-0024](docs/adr/0024-tool-evidence-for-pr-review.md) |
 | Pipeline scripts, prompts and config always run from the **default branch** — a PR cannot rewrite the code that reviews it | [ADR-0023](docs/adr/0023-trusted-pipeline-execution.md) |
 | Write denylist: the model cannot touch `.github/`, `scripts/`, `prompts/`, `config/`, `docs/`, `README.md`, lockfiles, `.npmrc`, or escape via symlinks | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) |
-| A change that cuts an existing file of 20+ lines to under half its lines or its non-whitespace content rejects the whole patch, before anything is written; auto-fix escalates the rejection to `needs-human` | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) (amendment), [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) |
+| A change that cuts an existing file of 20+ lines to under half its lines or its non-whitespace content rejects the whole patch, before anything is written; both stages escalate the rejection to `needs-human` | [ADR-0021](docs/adr/0021-protected-write-path-denylist.md) (amendment), [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) |
 | Max 6 files per run, no absolute paths, no `..`, 16 000 chars per file | [ADR-0003](docs/adr/0003-safe-output-scope.md) |
+| The AGENTS.md hard guardrails, on generation and auto-fix: never shrink a test file, never mix ESM/CJS, never change an exported signature (name, arity, parameters, sync/async) unless the issue or feedback names it, never add an import that does not resolve (builtin, existing relative path, `package.json`), never delete > 30% of a file, never rewrite a file the model was not shown in full. A violation rejects the whole patch before anything is written and escalates to `needs-human` with the rule | [ADR-0019](docs/adr/0019-static-verification-backstop.md), [ADR-0029](docs/adr/0029-autofix-deterministic-write-guard.md), [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) |
 | Max 3 auto-fix attempts, then escalation to a human; per-PR concurrency | [ADR-0006](docs/adr/0006-label-driven-auto-fix-trigger.md), [ADR-0020](docs/adr/0020-per-pr-workflow-concurrency.md) |
 | Under-specified issues never reach generation (validation gate, `ready-for-dev` label) | [ADR-0001](docs/adr/0001-trigger-policy-and-label-gate.md) |
 | Human merge — the loop never merges: no merge call exists in `scripts/` or the workflows | [`docs/mvp.md`](docs/mvp.md) (human review before merge), [`.github/workflows/`](.github/workflows/) |
 
 | Asked of the model (prompt guardrails) | Where |
 |---|---|
-| Never shrink a test file, never mix ESM/CJS, never change an exported signature, never add an undeclared package, never rewrite > 30% of a file | [ADR-0009](docs/adr/0009-llm-agent-guardrails.md) |
 | Named defect checklist in review (read-only property writes, unauthorized imports, non-persistent refs), disclosure when the diff was truncated | [docs/code-generation.md](docs/code-generation.md#review-and-auto-fix-guardrails) |
 
-Moving more of the second table into the first is the open work — see the proposed [static verification backstop (ADR-0019)](docs/adr/0019-static-verification-backstop.md).
+The second table is what these static checks cannot catch. A type-check pass for read-only property writes is deferred in [ADR-0019](docs/adr/0019-static-verification-backstop.md#deferred-type-check-pass).
 
 ## How it works
 

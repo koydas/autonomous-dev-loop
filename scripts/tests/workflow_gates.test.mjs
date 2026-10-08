@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs'];
 
 // Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
 const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
@@ -52,6 +52,7 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['eval_site.mjs', 'eval_site.test.mjs'],
     ['eval_replay_ci.mjs', 'eval_replay_ci.test.mjs'],
     ['pr_evals.mjs', 'pr_evals.test.mjs'],
+    ['static_verifier.mjs', 'static_verifier.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -156,7 +157,7 @@ test('auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB_OUT
 // branch must come from a file outside it, never from the working-tree metrics/runs.jsonl.
 test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkout', () => {
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
-  assert.deepEqual(committing.map((w) => w.name).sort(), ['auto-fix-pr.yml', 'pr-review.yml', 'validate-issue.yml']);
+  assert.deepEqual(committing.map((w) => w.name).sort(), ['auto-fix-pr.yml', 'code-generation.yml', 'pr-review.yml', 'validate-issue.yml']);
   for (const { name, text } of committing) {
     assert.ok(!/(wc -l|tail|cat)[^\n]*metrics\/runs\.jsonl/.test(text), `${name} must not read the working-tree metrics file`);
     const envLines = text.match(/METRICS_FILE: \$\{\{ runner\.temp \}\}\/pipeline-metrics\.jsonl/g) ?? [];

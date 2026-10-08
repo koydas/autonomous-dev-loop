@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { shouldIncludeFile } from './file_filters.mjs';
+import { normalizeRepoPath } from './autofix_guard.mjs';
 
 const MAX_FILE_SIZE = 8000;
 const MAX_FILES = 10;
@@ -50,7 +51,11 @@ export async function readRelevantFiles(candidates, repoRoot) {
       const stat = await fs.stat(absPath);
       if (!stat.isFile()) continue;
       const raw = await fs.readFile(absPath, 'utf8');
-      files.push({ path: candidate, content: raw.slice(0, MAX_FILE_SIZE) });
+      // Shown in full or withheld, never cut (ADR-0029): the model returns whole files, so a
+      // truncated view would come back as the complete file and delete everything past the cut.
+      files.push(raw.length > MAX_FILE_SIZE
+        ? { path: candidate, content: '', withheld: true }
+        : { path: candidate, content: raw });
     } catch (err) {
       // Ignore expected file-system misses; surface unexpected failures.
       if (!['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EISDIR'].includes(err?.code)) {
@@ -67,7 +72,9 @@ export function formatFileContents(files) {
     return 'No existing files identified as relevant to this issue.';
   }
   return files
-    .map(({ path: p, content }) => `### Current file: ${p}\n\`\`\`\n${content}\n\`\`\``)
+    .map(({ path: p, content, withheld }) => (withheld
+      ? `### File withheld (too large for the context budget): ${p} — do NOT target this file`
+      : `### Current file: ${p}\n\`\`\`\n${content}\n\`\`\``))
     .join('\n\n');
 }
 
@@ -175,7 +182,9 @@ export function formatDependencyAllowlist(deps) {
   );
 }
 
-export async function buildFileContentsBlock(issueTitle, issueBody, repoRoot) {
+// The prompt block plus which files the model saw in full (shownPaths) or only as a withheld
+// marker (hiddenPaths), as normalized repo paths for the write guard (ADR-0029, ADR-0019).
+export async function buildFileContext(issueTitle, issueBody, repoRoot) {
   const candidates = extractFilePaths(issueTitle, issueBody);
   const files = await readRelevantFiles(candidates, repoRoot);
   const filesBlock = formatFileContents(files);
@@ -183,5 +192,14 @@ export async function buildFileContentsBlock(issueTitle, issueBody, repoRoot) {
   const deps = await readPackageJsonDependencies(repoRoot);
   const allowlistBlock = formatDependencyAllowlist(deps);
 
-  return allowlistBlock ? `${allowlistBlock}\n\n${filesBlock}` : filesBlock;
+  const pathsWhere = (withheld) => new Set(files.filter((f) => Boolean(f.withheld) === withheld).map((f) => normalizeRepoPath(f.path)));
+  return {
+    block: allowlistBlock ? `${allowlistBlock}\n\n${filesBlock}` : filesBlock,
+    shownPaths: pathsWhere(false),
+    hiddenPaths: pathsWhere(true),
+  };
+}
+
+export async function buildFileContentsBlock(issueTitle, issueBody, repoRoot) {
+  return (await buildFileContext(issueTitle, issueBody, repoRoot)).block;
 }

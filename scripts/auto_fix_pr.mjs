@@ -12,7 +12,9 @@ import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { findUnsafeChanges, normalizeRepoPath } from './lib/autofix_guard.mjs';
+import { normalizeRepoPath } from './lib/autofix_guard.mjs';
+import { findGuardrailViolations, guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
+import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 
@@ -369,6 +371,8 @@ if (allChangedFiles.includes(SELF_PATH)) {
 const changedFiles = allChangedFiles.filter(shouldIncludeFile);
 
 const repoRoot = path.resolve(process.cwd());
+// Snapshot before the LLM call, for the import check (ADR-0019).
+const dependencies = await readPackageJsonDependencies(repoRoot);
 // A file is either shown in full or withheld with an explicit marker — never cut silently:
 // the model returns whole files, so a truncated view becomes deleted content (ADR-0029).
 const fileContentParts = [];
@@ -453,7 +457,7 @@ if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
 }
 
 // Surface the run to a human and count the attempt so re-triggers stay capped. Exits 0 without a push.
-async function escalateToHuman(reason, heading, explanation, details) {
+async function escalateToHuman(reason, heading, explanation, details, metricExtra = {}) {
   await applyAttemptLabel(nextAttempt);
   const needsHuman = loadLabelsConfig('autofix').needs_human;
   const createNeedsHumanRes = await ghFetch(`/repos/${owner}/${repo}/labels`, { method: 'POST', body: JSON.stringify(needsHuman) });
@@ -475,9 +479,10 @@ async function escalateToHuman(reason, heading, explanation, details) {
     pr_number: prNumber,
     attempt: nextAttempt,
     reason,
+    ...metricExtra,
     ts: new Date().toISOString(),
   });
-  await skipAutofix(reason, {}, 'warn');
+  await skipAutofix(reason, metricExtra, 'warn');
 }
 
 // Reviewer and fixer disagree, or the model declined with a blocked_reason.
@@ -492,8 +497,8 @@ if (hasNoProposedChanges(aiOutput)) {
   );
 }
 
-// The write guard (ADR-0029), the write denylist and the shrink guard (ADR-0021, ADR-0009)
-// reject the patch before any write.
+// The write guard (ADR-0029), the static rules (ADR-0019), the write denylist and the shrink
+// guard (ADR-0021, ADR-0009) reject the patch before any write.
 let summary;
 let outputPaths;
 try {
@@ -509,8 +514,15 @@ try {
       existing.set(key, null);
     }
   }
-  const violations = findUnsafeChanges(validated.changes, { existing, shownPaths, hiddenPaths });
-  if (violations.length) throw new GuardrailError(violations.map((v) => `\`${v.targetPath}\`: ${v.reason}`).join('; '));
+  const violations = findGuardrailViolations(validated.changes, {
+    existing,
+    shownPaths,
+    hiddenPaths,
+    dependencies,
+    fileExists: (p) => fs.existsSync(path.resolve(repoRoot, p)),
+    mentionText: reviewFeedback,
+  });
+  if (violations.length) throw guardrailErrorFor(violations);
   outputPaths = await writeGeneratedFiles(validated.changes);
 } catch (rejection) {
   if (!(rejection instanceof GuardrailError)) throw rejection;
@@ -518,7 +530,8 @@ try {
     'guardrail_rejected',
     '\u{1F6E1}\u{FE0F} Auto-Fix: Patch Rejected',
     'the proposed patch was rejected by the output guardrails, so nothing was written or pushed.',
-    `**Reason:** ${String(rejection.message).slice(0, 2000)}`,
+    `**Rules:** ${guardrailRules(rejection).join(', ')}\n\n**Reason:** ${String(rejection.message).slice(0, 2000)}`,
+    { rules: guardrailRules(rejection) },
   );
 }
 

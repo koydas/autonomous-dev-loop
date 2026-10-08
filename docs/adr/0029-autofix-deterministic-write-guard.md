@@ -1,7 +1,7 @@
 # ADR-0029: Deterministic write guard for auto-fix
 
 - **Date:** 2026-10-05
-- **Status:** Accepted
+- **Status:** Accepted — extended to code generation, and composed with the static rules (module format, exported signatures, imports), by [ADR-0019](./0019-static-verification-backstop.md)
 
 ## Context
 

@@ -43,6 +43,7 @@ Modules with CI-enforced ≥ 80% coverage (`c8 --check-coverage` in `test.yml`):
 - `scripts/lib/config.mjs`
 - `scripts/lib/llm_client.mjs`
 - `scripts/lib/output_writer.mjs`
+- `scripts/lib/static_verifier.mjs`
 - `scripts/lib/review_evidence.mjs`
 - `scripts/lib/eval_harness.mjs`
 - `scripts/lib/eval_scorecard.mjs`

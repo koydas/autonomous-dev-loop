@@ -50,7 +50,7 @@ export function countDeletedLines(before, after) {
  * @param {{ existing: Map<string, string|null>, shownPaths: Set<string>, hiddenPaths: Set<string> }} context
  *   existing: current on-disk content per normalized target path (null when the file does not exist);
  *   shownPaths: files included in full in the prompt; hiddenPaths: files withheld for size/budget.
- * @returns {{ targetPath: string, reason: string }[]}
+ * @returns {{ targetPath: string, rule: string, reason: string }[]}
  */
 export function findUnsafeChanges(changes, { existing, shownPaths, hiddenPaths }) {
   const violations = [];
@@ -60,18 +60,18 @@ export function findUnsafeChanges(changes, { existing, shownPaths, hiddenPaths }
     if (before === null) continue; // new file: nothing to lose
 
     if (hiddenPaths.has(key)) {
-      violations.push({ targetPath, reason: 'file was withheld from the prompt (too large for the context budget)' });
+      violations.push({ targetPath, rule: 'withheld_file', reason: 'file was withheld from the prompt (too large for the context budget)' });
       continue;
     }
     if (!shownPaths.has(key)) {
-      violations.push({ targetPath, reason: 'existing file was not shown to the model' });
+      violations.push({ targetPath, rule: 'unshown_file', reason: 'existing file was not shown to the model' });
       continue;
     }
 
     const { deleted, total } = countDeletedLines(before, fileContent);
     const limit = Math.max(MIN_DELETED_LINES_ALLOWED, Math.floor(total * MAX_DELETED_LINE_RATIO));
     if (deleted > limit) {
-      violations.push({ targetPath, reason: `removes ${deleted} of ${total} non-blank lines (limit ${limit})` });
+      violations.push({ targetPath, rule: 'mass_deletion', reason: `removes ${deleted} of ${total} non-blank lines (limit ${limit})` });
       continue;
     }
 
@@ -79,7 +79,7 @@ export function findUnsafeChanges(changes, { existing, shownPaths, hiddenPaths }
       const beforeTests = countTestCalls(before);
       const afterTests = countTestCalls(fileContent);
       if (afterTests < beforeTests) {
-        violations.push({ targetPath, reason: `test count drops from ${beforeTests} to ${afterTests}` });
+        violations.push({ targetPath, rule: 'test_count_drop', reason: `test count drops from ${beforeTests} to ${afterTests}` });
       }
     }
   }
