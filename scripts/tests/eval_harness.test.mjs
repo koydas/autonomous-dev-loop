@@ -17,6 +17,9 @@ import {
   summarize,
   checkThresholds,
   formatReport,
+  detectQuotaExhaustion,
+  estimateRunTokens,
+  checkTokenBudget,
 } from '../lib/eval_harness.mjs';
 
 // Minimal suite: the LLM returns "yes"/"no", label is that answer.
@@ -279,4 +282,163 @@ test('createReplayLLM rethrows the recorded error once the recorded calls are ex
   const b = llmFor('b#0');
   assert.equal(await b(), 'x');
   await assert.rejects(b(), /Response missing "valid" boolean/);
+});
+
+// ---------------------------------------------------------------------------
+// Circuit breaker / token estimate
+// ---------------------------------------------------------------------------
+
+// Verbatim shape of Evals run 37719923057 (Groq TPD exhausted, Anthropic key invalid).
+const TPD_ERROR = 'All providers failed: groq: Groq API HTTP error 429: {"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 198931, Requested 2984. Please try again in 13m47.28s. Need more tokens?","type":"tokens","code":"rate_limit_exceeded"}}, anthropic: Anthropic API HTTP error 401: {"error":{"message":"Invalid API Key"}}';
+
+test('detectQuotaExhaustion parses a Groq TPD 429 with limit, usage and retry-after', () => {
+  const q = detectQuotaExhaustion(new Error(TPD_ERROR));
+  assert.deepEqual(
+    { provider: q.provider, quota: q.quota, limit: q.limit, used: q.used, retry_after: q.retry_after },
+    { provider: 'groq', quota: 'tokens per day (TPD)', limit: 200000, used: 198931, retry_after: '13m47.28s' },
+  );
+  assert.equal(q.message, TPD_ERROR);
+});
+
+test('detectQuotaExhaustion matches a daily quota from a bare message (replay) without limit or retry hint', () => {
+  const q = detectQuotaExhaustion('quota on requests per day (RPD) reached');
+  assert.deepEqual([q.provider, q.quota, q.limit, q.used, q.retry_after], ['unknown', 'requests per day (RPD)', null, null, null]);
+});
+
+test('detectQuotaExhaustion trips when every provider refused with 401/403/429', () => {
+  const err = Object.assign(new Error('All providers failed: groq: ... Please try again in 2s, anthropic: ...'), {
+    providerErrors: [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: 401 }],
+  });
+  const q = detectQuotaExhaustion(err);
+  assert.equal(q.provider, 'groq+anthropic');
+  assert.equal(q.quota, 'every provider refused (groq 429, anthropic 401)');
+  assert.equal(q.retry_after, '2s');
+});
+
+test('detectQuotaExhaustion does not trip on a TPM 429, a 5xx, an unknown status or a parse error', () => {
+  const tpm = 'Groq API HTTP error 429: Rate limit reached on tokens per minute (TPM). Please try again in 1.2s';
+  assert.equal(detectQuotaExhaustion(new Error(tpm)), null);
+  assert.equal(detectQuotaExhaustion(Object.assign(new Error('x'), { providerErrors: [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: 500 }] })), null);
+  assert.equal(detectQuotaExhaustion(Object.assign(new Error('x'), { providerErrors: [{ provider: 'groq', status: null }] })), null);
+  assert.equal(detectQuotaExhaustion(Object.assign(new Error('x'), { providerErrors: [] })), null);
+  assert.equal(detectQuotaExhaustion(new Error('parse failed')), null);
+  assert.equal(detectQuotaExhaustion(undefined), null);
+});
+
+const tpdSuite = (swallow = false) => ({
+  ...echoSuite,
+  async run(input, { llm }) {
+    try {
+      return { answer: await llm({ prompt: input.q, systemPrompt: 'sys' }) };
+    } catch (err) {
+      if (swallow) return { answer: 'fallback' };
+      throw err;
+    }
+  },
+});
+const quotaAfter = (okCalls) => {
+  let n = 0;
+  return () => async ({ prompt }) => {
+    if (n++ >= okCalls) throw new Error(TPD_ERROR);
+    return prompt;
+  };
+};
+const fiveCases = Array.from({ length: 5 }, (_, i) => ({ id: `c${i}`, tags: [], input: { q: 'yes' }, expected: { answer: 'yes' } }));
+
+test('runSuite opens the circuit on a quota error: no further call, the rest recorded as skipped', async () => {
+  const llmFor = quotaAfter(1);
+  let calls = 0;
+  const results = await runSuite({ suite: tpdSuite(), cases: fiveCases, repeats: 2, llmFor: (k) => { const f = llmFor(k); return async (a) => { calls++; return f(a); }; } });
+  assert.equal(results.length, 10);
+  assert.equal(calls, 2, 'one success, one quota failure, then nothing');
+  assert.equal(results[0].error, null);
+  assert.equal(results[1].circuit_breaker.quota, 'tokens per day (TPD)');
+  assert.ok(results.slice(2).every((r) => r.skipped && r.calls.length === 0 && /circuit breaker open \(groq tokens per day/.test(r.error)));
+
+  const summary = summarize(results);
+  assert.equal(summary.error_rate, 1);
+  assert.deepEqual(summary.circuit_breaker, { provider: 'groq', quota: 'tokens per day (TPD)', limit: 200000, used: 198931, retry_after: '13m47.28s', skipped_runs: 8 });
+  assert.equal(summary.latency_ms.p95, results[1].duration_ms >= results[0].duration_ms ? results[1].duration_ms : results[0].duration_ms);
+  assert.deepEqual(checkThresholds(summary, { error_rate: { max: 0.05 } }).map((f) => f.metric), ['error_rate']);
+
+  const report = formatReport({ suite: 'echo', summary, failures: [], results });
+  assert.match(report, /## ⛔ Circuit breaker: provider quota exhausted/);
+  assert.match(report, /limit 200000, used 198931\); retry after 13m47\.28s\. 8 run\(s\) skipped/);
+});
+
+test('runSuite trips the breaker even when the stage swallows the LLM error, and on the last job', async () => {
+  const results = await runSuite({ suite: tpdSuite(true), cases: fiveCases.slice(0, 2), llmFor: quotaAfter(1) });
+  assert.equal(results[1].error, TPD_ERROR);
+  assert.equal(results.filter((r) => r.skipped).length, 0);
+  assert.equal(summarize(results).error_rate, 1);
+});
+
+test('runSuite stops every worker once the circuit is open (concurrency > 1)', async () => {
+  const results = await runSuite({ suite: tpdSuite(), cases: fiveCases, repeats: 2, concurrency: 2, llmFor: quotaAfter(0) });
+  assert.equal(results.length, 10);
+  assert.equal(results.filter((r) => r.circuit_breaker).length, 2);
+  assert.equal(results.filter((r) => r.skipped).length, 8);
+});
+
+test('runSuite keeps going on errors that are not a quota (no circuit_breaker in the summary)', async () => {
+  const results = await runSuite({ suite: tpdSuite(), cases: fiveCases, llmFor: () => async () => { throw new Error('Groq API HTTP error 500'); } });
+  assert.equal(results.filter((r) => r.skipped).length, 0);
+  const summary = summarize(results);
+  assert.equal(summary.error_rate, 1);
+  assert.equal('circuit_breaker' in summary, false);
+  assert.doesNotMatch(formatReport({ suite: 'echo', summary, failures: [], results }), /Circuit breaker/);
+});
+
+test('formatReport shows an unknown retry-after and no usage when the provider gave none', () => {
+  const summary = { ...summarize([]), circuit_breaker: { provider: 'groq+anthropic', quota: 'every provider refused', limit: null, used: null, retry_after: null, skipped_runs: 3 } };
+  assert.match(formatReport({ suite: 's', summary, failures: [], results: [] }), /`groq\+anthropic` — every provider refused; retry after unknown\. 3 run\(s\) skipped/);
+});
+
+const histLine = (over) => ({ suite: 'validation', run_id: 'r', model: 'groq:m', summary: { n_runs: 10, error_rate: 0, tokens_est: { in: 20000, out: 5001 } }, ...over });
+
+test('estimateRunTokens uses the newest error-free live run of the suite', () => {
+  const history = [
+    histLine({ run_id: 'old', summary: { n_runs: 1, error_rate: 0, tokens_est: { in: 1, out: 0 } } }),
+    histLine({ run_id: 'good' }),
+    histLine({ run_id: 'errored', summary: { n_runs: 10, error_rate: 0.1, tokens_est: { in: 1, out: 1 } } }),
+    histLine({ run_id: 'replayed', model: 'replay:groq:m' }),
+    histLine({ run_id: 'other', suite: 'review' }),
+    null,
+  ];
+  assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 4, history }), { tokens: 10004, per_run: 2501, source: 'history:good' });
+});
+
+test('estimateRunTokens falls back to the static estimate, then to unknown', () => {
+  const noRun = [histLine({ summary: { n_runs: 0, error_rate: 0, tokens_est: { in: 0, out: 0 } } }), histLine({ run_id: undefined, model: undefined, summary: { n_runs: 1, error_rate: 0 } })];
+  assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2700 }, nRuns: 105, history: noRun }), { tokens: 283500, per_run: 2700, source: 'static' });
+  assert.deepEqual(estimateRunTokens({ suite: { name: 'x' }, nRuns: 3 }), { tokens: null, per_run: null, source: 'unknown' });
+  assert.deepEqual(estimateRunTokens({ suite: { name: 'x', tokensPerRunEst: 0 }, nRuns: 3 }).source, 'unknown');
+  assert.equal(estimateRunTokens({ suite: { name: 'validation' }, nRuns: 2, history: [histLine({ run_id: undefined })] }).source, 'history:unknown');
+});
+
+test('checkTokenBudget: no budget, within budget, over budget, invalid budget, unknown estimate', () => {
+  const est = { tokens: 283500, per_run: 2700, source: 'static' };
+  assert.equal(checkTokenBudget(est, undefined), null);
+  assert.equal(checkTokenBudget(est, '  '), null);
+  assert.equal(checkTokenBudget(est, '283500'), null);
+  assert.equal(checkTokenBudget(est, '150000'), 'estimated 283500 tokens (2700/run, static) exceeds EVAL_TOKEN_BUDGET=150000');
+  assert.match(checkTokenBudget(est, '15k'), /EVAL_TOKEN_BUDGET must be a positive integer, got "15k"/);
+  assert.match(checkTokenBudget(est, '0'), /must be a positive integer/);
+  assert.match(checkTokenBudget({ tokens: null }, '1000'), /EVAL_TOKEN_BUDGET=1000 set but no token estimate/);
+});
+
+test('estimateRunTokens keeps the static estimate when the chars/4 history is lower (budget never undercounts)', () => {
+  assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2700 }, nRuns: 4, history: [histLine({ run_id: 'good' })] }), { tokens: 10800, per_run: 2700, source: 'static' });
+  assert.equal(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2501 }, nRuns: 1, history: [histLine({ run_id: 'good' })] }).source, 'static', 'a tie keeps the static estimate');
+});
+
+test('detectQuotaExhaustion reads millisecond and hour retry hints without mistaking ms for minutes', () => {
+  const refused = (hint) => detectQuotaExhaustion(Object.assign(new Error(`groq: Groq API HTTP error 429: Please try again in ${hint}. , anthropic: 401`), {
+    providerErrors: [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: 401 }],
+  })).retry_after;
+  assert.equal(refused('520ms'), '520ms');
+  assert.equal(refused('1.5ms'), '1.5ms');
+  assert.equal(refused('1h2m3s'), '1h2m3s');
+  assert.equal(refused('7m'), '7m');
+  assert.equal(refused('later'), null);
 });

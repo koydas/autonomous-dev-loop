@@ -76,14 +76,94 @@ export function createReplayLLM(recorded) {
 }
 
 // ---------------------------------------------------------------------------
+// Circuit breaker — provider quota
+// ---------------------------------------------------------------------------
+
+// Groq daily quotas (TPD / RPD) do not roll within a run: every further call fails the same way and
+// spends the budget the production pipeline shares. Matched on the provider's message.
+const DAILY_QUOTA = /\b(tokens|requests) per day \((TPD|RPD)\)/i;
+
+// err: what the LLM threw. Returns { provider, quota, limit, used, retry_after, message } when no
+// further call of this run can succeed (a daily quota, or every provider refused with 401/403/429),
+// else null. err.providerErrors (llm_client.mjs) carries per-provider statuses; a bare message
+// (replay) is matched on its text only.
+export function detectQuotaExhaustion(err) {
+  const message = String(err?.message ?? err ?? '');
+  const daily = message.match(DAILY_QUOTA);
+  const retryAfter = message.match(/try again in ((?:\d+h)?(?:\d+m(?!s))?(?:\d+(?:\.\d+)?m?s)?)/i)?.[1] || null;
+  if (daily) {
+    return {
+      provider: /groq/i.test(message) ? 'groq' : 'unknown',
+      quota: `${daily[1].toLowerCase()} per day (${daily[2].toUpperCase()})`,
+      limit: Number(message.match(/Limit (\d+)/)?.[1] ?? NaN) || null,
+      used: Number(message.match(/Used (\d+)/)?.[1] ?? NaN) || null,
+      retry_after: retryAfter,
+      message,
+    };
+  }
+  const providers = Array.isArray(err?.providerErrors) ? err.providerErrors : [];
+  if (providers.length && providers.every((p) => [401, 403, 429].includes(p.status))) {
+    return {
+      provider: providers.map((p) => p.provider).join('+'),
+      quota: `every provider refused (${providers.map((p) => `${p.provider} ${p.status}`).join(', ')})`,
+      limit: null,
+      used: null,
+      retry_after: retryAfter,
+      message,
+    };
+  }
+  return null;
+}
+
+// Expected LLM tokens of a live run: runs × tokens per run, the larger of the newest error-free recorded
+// run of the suite (history entries, oldest first, as appended to EVAL_HISTORY_FILE) and the suite's
+// static tokensPerRunEst. history tokens_est are chars/4 (≈ 25% under provider usage): alone, it would
+// let EVAL_TOKEN_BUDGET pass runs up to ≈ 1.34× the cap.
+export function estimateRunTokens({ suite, nRuns, history = [] }) {
+  const hasStatic = Number.isFinite(suite.tokensPerRunEst) && suite.tokensPerRunEst > 0;
+  const last = [...history].reverse().find((h) => h?.suite === suite.name && h.summary?.n_runs > 0
+    && h.summary.error_rate === 0 && h.summary.tokens_est && !String(h.model ?? '').startsWith('replay:'));
+  if (last) {
+    const perRun = Math.ceil((last.summary.tokens_est.in + last.summary.tokens_est.out) / last.summary.n_runs);
+    if (!hasStatic || perRun > suite.tokensPerRunEst) {
+      return { tokens: perRun * nRuns, per_run: perRun, source: `history:${last.run_id ?? 'unknown'}` };
+    }
+  }
+  if (hasStatic) {
+    return { tokens: suite.tokensPerRunEst * nRuns, per_run: suite.tokensPerRunEst, source: 'static' };
+  }
+  return { tokens: null, per_run: null, source: 'unknown' };
+}
+
+// budget: raw EVAL_TOKEN_BUDGET (unset/empty = no budget). Returns null when the run may start, else
+// the refusal reason. An unknown estimate under a budget is refused: the budget cannot be verified.
+export function checkTokenBudget(estimate, budget) {
+  if (budget == null || String(budget).trim() === '') return null;
+  const max = Number(budget);
+  if (!Number.isInteger(max) || max <= 0) return `EVAL_TOKEN_BUDGET must be a positive integer, got "${budget}"`;
+  if (estimate.tokens == null) return `EVAL_TOKEN_BUDGET=${max} set but no token estimate for this suite`;
+  if (estimate.tokens > max) return `estimated ${estimate.tokens} tokens (${estimate.per_run}/run, ${estimate.source}) exceeds EVAL_TOKEN_BUDGET=${max}`;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
 
-async function runOne(suite, testCase, repeat, llmFor, now) {
+async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) {
   const calls = [];
+  let quota = null;
   const recording = createRecordingLLM(llmFor(`${testCase.id}#${repeat}`), { now });
   const llm = async (args) => {
-    const { raw, latency_ms } = await recording(args);
+    let recorded;
+    try {
+      recorded = await recording(args);
+    } catch (err) {
+      quota = detectQuotaExhaustion(err);
+      if (quota) onQuota(quota);
+      throw err;
+    }
+    const { raw, latency_ms } = recorded;
     calls.push({
       raw,
       latency_ms,
@@ -101,6 +181,8 @@ async function runOne(suite, testCase, repeat, llmFor, now) {
   } catch (err) {
     error = err.message;
   }
+  // A stage that swallows the LLM error (fallback output) still ran without the model.
+  if (quota && !error) error = quota.message;
 
   const scores = {};
   for (const [name, scorer] of Object.entries(suite.scorers)) {
@@ -120,24 +202,43 @@ async function runOne(suite, testCase, repeat, llmFor, now) {
     expected_label: suite.expectedLabel ? suite.expectedLabel(testCase.expected) : null,
     scores,
     calls,
+    ...(quota ? { circuit_breaker: quota } : {}),
   };
 }
 
+const skippedRun = (testCase, repeat, quota) => ({
+  case_id: testCase.id,
+  tags: testCase.tags,
+  repeat,
+  duration_ms: 0,
+  error: `Skipped: circuit breaker open (${quota.provider} ${quota.quota})`,
+  output: null,
+  label: null,
+  expected_label: null,
+  scores: {},
+  calls: [],
+  skipped: true,
+});
+
 // Sequential by default: Groq free-tier TPM (8K) rejects parallel bursts with 413/429.
+// Circuit breaker: once a call fails on an exhausted quota (detectQuotaExhaustion), no further job
+// starts; the rest are recorded as skipped runs (skipped: true, no call) and summarize() marks the run.
 export async function runSuite({ suite, cases, llmFor, repeats = 1, concurrency = 1, now = Date.now, onResult }) {
   const jobs = [];
   for (const c of cases) for (let r = 0; r < repeats; r++) jobs.push([c, r]);
 
   const results = new Array(jobs.length);
   let next = 0;
+  let tripped = null;
   const worker = async () => {
-    while (next < jobs.length) {
+    while (next < jobs.length && !tripped) {
       const i = next++;
-      results[i] = await runOne(suite, jobs[i][0], jobs[i][1], llmFor, now);
+      results[i] = await runOne(suite, jobs[i][0], jobs[i][1], llmFor, now, (q) => { tripped ??= q; });
       onResult?.(results[i]);
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, jobs.length)) }, worker));
+  for (let i = next; i < jobs.length; i++) results[i] = skippedRun(jobs[i][0], jobs[i][1], tripped);
   return results;
 }
 
@@ -207,14 +308,17 @@ export function summarize(results) {
     scores[name] = { mean: round(mean(applicable)), n: applicable.length };
   }
 
-  const latencies = results.map((r) => r.duration_ms);
+  // A run cut short by the circuit breaker measured the provider, not the stage: error_rate 1 by
+  // definition, so the error_rate gate fails and the dashboard skips it (partitionPublishable).
+  const breaker = results.find((r) => r.circuit_breaker)?.circuit_breaker ?? null;
+  const latencies = results.filter((r) => !r.skipped).map((r) => r.duration_ms);
   const calls = results.flatMap((r) => r.calls);
   const confusion = computeConfusion(results);
 
   return {
     n_cases: new Set(results.map((r) => r.case_id)).size,
     n_runs: results.length,
-    error_rate: round(results.length ? results.filter((r) => r.error).length / results.length : 0),
+    error_rate: breaker ? 1 : round(results.length ? results.filter((r) => r.error).length / results.length : 0),
     scores,
     consistency: computeConsistency(results),
     confusion,
@@ -225,6 +329,12 @@ export function summarize(results) {
       in: calls.reduce((s, c) => s + c.tokens_in_est, 0),
       out: calls.reduce((s, c) => s + c.tokens_out_est, 0),
     },
+    ...(breaker ? {
+      circuit_breaker: {
+        provider: breaker.provider, quota: breaker.quota, limit: breaker.limit, used: breaker.used,
+        retry_after: breaker.retry_after, skipped_runs: results.filter((r) => r.skipped).length,
+      },
+    } : {}),
   };
 }
 
@@ -242,6 +352,10 @@ export function checkThresholds(summary, thresholds = {}) {
     } else if (max != null && value > max) {
       failures.push({ metric: metricPath, value, reason: `${value} > max ${max}` });
     }
+  }
+  // A breaker-cut run fails on error_rate even for a suite without that gate: partitionPublishable keys on it.
+  if (summary.circuit_breaker && !failures.some((f) => f.metric === 'error_rate')) {
+    failures.push({ metric: 'error_rate', value: 1, reason: 'circuit breaker: provider quota exhausted' });
   }
   return failures;
 }
@@ -267,6 +381,10 @@ export function formatReport({ suite, summary, failures, results, meta = {} }) {
   lines.push(`| llm calls · tokens in/out (est.) | ${summary.llm_calls} · ${summary.tokens_est.in} / ${summary.tokens_est.out} |`);
   lines.push('');
 
+  const cb = summary.circuit_breaker;
+  if (cb) {
+    lines.push('## ⛔ Circuit breaker: provider quota exhausted', '', `\`${cb.provider}\` — ${cb.quota}${cb.limit ? ` (limit ${cb.limit}, used ${cb.used ?? '?'})` : ''}; retry after ${cb.retry_after ?? 'unknown'}. ${cb.skipped_runs} run(s) skipped. Provider failure, not a model result: error_rate is 1 and the run is not published.`, '');
+  }
   lines.push(failures.length ? '## ❌ Threshold failures' : '## ✅ All thresholds met', '');
   for (const f of failures) lines.push(`- \`${f.metric}\`: ${f.reason}`);
   if (failures.length) lines.push('');
