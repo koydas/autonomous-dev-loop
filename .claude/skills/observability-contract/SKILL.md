@@ -40,10 +40,10 @@ Full event requirements per existing stage (for reference):
 | Stage | Required events |
 |---|---|
 | `issue_validation` | `start`, `pass`, `fail` |
-| `code_gen` | `start`, `llm_request`, `llm_response`, `complete`, `error` |
-| `pr_prepare` | `start`, `complete`, `error` |
+| `code_gen` | `start`, `llm_request`, `llm_response`, `complete`, `skipped`, `error` |
+| `pr_prepare` | `start`, `complete`, `skipped`, `error` |
 | `review` | `start`, `llm_request`, `llm_response`, `verdict`, `error` |
-| `autofix` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `error` |
+| `autofix` | `start`, `llm_request`, `llm_response`, `push`, `max_attempts_reached`, `skipped`, `error` |
 
 `duration_ms` is mandatory on all terminal events (`*.complete`, `*.pass`, `*.fail`, `*.verdict`).
 

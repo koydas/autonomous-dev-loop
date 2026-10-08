@@ -100,7 +100,7 @@ function mask(src, strings) {
 /**
  * Removes comments and replaces each quoted string with `"S<n>"`, so the regexes below only see
  * code. A template literal keeps only its `${…}` expressions (nesting included), masked the same
- * way. Heuristic lexer: a regex literal containing a quote or `//` can mask the rest of its line.
+ * way. Heuristic lexer: a regex literal containing a quote, a backtick or `//` can mask the code after it.
  */
 export function maskSource(source) {
   const strings = [];

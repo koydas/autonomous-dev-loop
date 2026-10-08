@@ -75,7 +75,7 @@ If `meta.file` is absent, the annotation has no file reference.
 | `pr_prepare.start`    | info   | —             | `changes_count`                |
 | `pr_prepare.complete` | info   | ✓             | `paths`                        |
 | `pr_prepare.error`    | error  | ✓             | `error`                        |
-| `pr_prepare.skipped`  | warn   | ✓             | `reason: "guardrail_rejected"`, `rules`, `error` — the write guard, a static rule or the shrink guard rejected the patch before any write; same escalation as `code_gen.skipped` (ADR-0019) |
+| `pr_prepare.skipped`  | warn   | ✓             | `reason: "guardrail_rejected"`, `rules`, `error` — the write guard, a static rule, the shrink guard or a symlink check (`unsafe_path`) rejected the patch before any write; same escalation as `code_gen.skipped` (ADR-0019) |
 
 > Emitted by `generate_issue_change.mjs` when files are written to disk.
 > The actual GitHub PR creation is performed by the `peter-evans/create-pull-request` action in the subsequent CI step.
