@@ -34,15 +34,37 @@ export function requireEnv(name) {
   return value;
 }
 
+export const PROVIDERS = ['groq', 'anthropic'];
+
+const PROVIDER_KEY_ENV = { groq: 'GROQ_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
+
 export function detectProvider() {
   const explicit = process.env.AI_PROVIDER?.trim().toLowerCase();
-  if (explicit) return explicit;
+  if (explicit) {
+    if (!PROVIDERS.includes(explicit)) {
+      throw new Error(`Invalid AI_PROVIDER "${process.env.AI_PROVIDER}" (must be ${PROVIDERS.join(' or ')})`);
+    }
+    return explicit;
+  }
   if (process.env.ANTHROPIC_API_KEY?.trim() && !process.env.GROQ_API_KEY?.trim()) return 'anthropic';
   return 'groq';
 }
 
+// The provider that is not the primary one, when its API key is set; null otherwise (no fallback).
+export function detectFallbackProvider() {
+  const fallback = PROVIDERS.find(p => p !== detectProvider());
+  return process.env[PROVIDER_KEY_ENV[fallback]]?.trim() ? fallback : null;
+}
+
 export function loadLLMConfig(stage = 'generation') {
-  const provider = detectProvider();
+  return loadProviderConfig(detectProvider(), stage);
+}
+
+// Config for one provider, independent of AI_PROVIDER: the fallback call needs its own key, model and budgets.
+export function loadProviderConfig(provider, stage = 'generation') {
+  if (!PROVIDERS.includes(provider)) {
+    throw new Error(`Unknown provider "${provider}" (must be ${PROVIDERS.join(' or ')})`);
+  }
 
   if (provider === 'anthropic') {
     const apiKey = requireEnv('ANTHROPIC_API_KEY');

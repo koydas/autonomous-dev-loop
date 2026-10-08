@@ -1,6 +1,6 @@
 # Code Generation MVP Setup
 
-This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: all four stages (`validation`, `generation`, `review`, `autofix`) use `openai/gpt-oss-120b` with `reasoning_effort: low` (ADR-0025). Anthropic (Claude models) is also supported and can be selected via the `AI_PROVIDER` environment variable when both provider keys are configured. The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
+This repository includes an MVP workflow that converts validated issues into AI-generated draft pull requests. The default AI provider is **Groq** with stage-specific defaults: all four stages (`validation`, `generation`, `review`, `autofix`) use `openai/gpt-oss-120b` with `reasoning_effort: low` (ADR-0025). Anthropic (Claude models) is also supported. With both keys configured, `AI_PROVIDER` picks the primary provider and the other one is the automatic fallback (ADR-0032). The workflow triggers automatically when the validation agent applies the `ready-for-dev` label.
 
 ## Quick Start (Operator)
 
@@ -10,7 +10,7 @@ For a first-time setup, complete these steps in order:
    - `ANTHROPIC_API_KEY` and/or `GROQ_API_KEY`
    - `AI_PR_TOKEN` (recommended for reliable PR/label/review writes)
 2. (Optional) Configure provider variables:
-   - `AI_PROVIDER` — `anthropic` or `groq`. Only needed when both keys are configured; Groq is the default.
+   - `AI_PROVIDER` — `anthropic` or `groq`: the primary provider. Unset: Anthropic when only `ANTHROPIC_API_KEY` is set, Groq otherwise. Any other value fails the job. The other provider is the fallback when its key is set: it is called with its own key, model and stage settings on any primary failure except 401/403 (ADR-0032). Anthropic primary → Groq fallback is best-effort: the prompt is not sized for Groq's input budgets and may get a 413.
    - `ANTHROPIC_MODEL` — Anthropic model name (defaults to `claude-opus-4-7` if unset).
    - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `openai/gpt-oss-120b` for every stage). If you point it at a non-reasoning model, also set `GROQ_REASONING_EFFORT=off`.
    - `GROQ_REASONING_EFFORT` — `low` | `medium` | `high` overrides `<stage>_reasoning_effort` for every stage; `off` stops sending `reasoning_effort` (required for non-reasoning `GROQ_MODEL` overrides). Unset: per-stage values from `config/models.yaml` (ADR-0025).

@@ -123,6 +123,7 @@ async function main() {
     // ADR-0028: an over-budget request can only end in 413, which would be retried until the job timeout.
     assertInputBudget('generation', inputTokensEst, loadLLMConfig('generation').maxInputTokens);
     raw = await callLLM({
+      stage: 'generation',
       prompt,
       systemPrompt,
       apiKey: config.apiKey,

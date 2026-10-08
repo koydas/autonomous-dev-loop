@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { estimateTokens } from '../lib/metrics.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
-import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, loadLLMConfig, GROQ_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
+import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, detectFallbackProvider, loadLLMConfig, loadProviderConfig, GROQ_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
 
 const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL', 'GROQ_REASONING_EFFORT'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
@@ -60,6 +60,52 @@ test('detectProvider AI_PROVIDER is case-insensitive', () => {
 test('detectProvider returns groq when both keys set and AI_PROVIDER=groq', () => {
   setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'groq' });
   assert.equal(detectProvider(), 'groq');
+});
+
+test('detectProvider rejects an unknown AI_PROVIDER instead of silently picking one', () => {
+  setEnv({ AI_PROVIDER: 'openai' });
+  assert.throws(() => detectProvider(), /Invalid AI_PROVIDER "openai" \(must be groq or anthropic\)/);
+});
+
+// detectFallbackProvider
+
+test('detectFallbackProvider returns anthropic when groq is primary and ANTHROPIC_API_KEY is set', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key' });
+  assert.equal(detectFallbackProvider(), 'anthropic');
+});
+
+test('detectFallbackProvider returns groq when anthropic is primary and GROQ_API_KEY is set', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic' });
+  assert.equal(detectFallbackProvider(), 'groq');
+});
+
+test('detectFallbackProvider returns null when the other provider has no key', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key' });
+  assert.equal(detectFallbackProvider(), null);
+});
+
+test('detectFallbackProvider treats a blank key as absent', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', ANTHROPIC_API_KEY: '   ', AI_PROVIDER: 'groq' });
+  assert.equal(detectFallbackProvider(), null);
+});
+
+// loadProviderConfig
+
+test('loadProviderConfig loads the requested provider regardless of AI_PROVIDER', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic' });
+  const cfg = loadProviderConfig('groq', 'review');
+  assert.equal(cfg.provider, 'groq');
+  assert.equal(cfg.apiKey, 'groq-key');
+  assert.equal(cfg.maxTokens, parseInt(GROQ_MODEL_DEFAULTS.review_max_tokens, 10));
+});
+
+test('loadProviderConfig rejects an unknown provider', () => {
+  assert.throws(() => loadProviderConfig('openai', 'review'), /Unknown provider "openai"/);
+});
+
+test('loadProviderConfig requires the provider key', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key' });
+  assert.throws(() => loadProviderConfig('anthropic', 'review'), /Missing required environment variable: ANTHROPIC_API_KEY/);
 });
 
 // requireEnv

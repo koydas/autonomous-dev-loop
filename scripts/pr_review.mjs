@@ -255,6 +255,7 @@ if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the toke
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
 
 const rawReview = await callLLM({
+  stage: 'review',
   prompt: userPrompt,
   systemPrompt,
   apiKey: llmApiKey,

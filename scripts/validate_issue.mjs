@@ -40,7 +40,7 @@ async function main() {
   // ADR-0028: an over-budget request can only end in 413, which would be retried until the job timeout.
   const boundCallGroq = async ({ prompt }) => {
     assertInputBudget('validation', estimateTokens(VALIDATION_SYSTEM_PROMPT + prompt), maxInputTokens);
-    return callLLM({ prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort });
+    return callLLM({ stage: 'validation', prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort });
   };
 
   let result;
