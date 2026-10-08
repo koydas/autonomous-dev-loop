@@ -464,7 +464,7 @@ for (const name of ['generation-system', 'auto-fix-system']) {
 
 // Runs scripts/generate_issue_change.mjs in a scratch repo against one mock server that answers
 // the Anthropic call with `changes` and records the GitHub calls.
-async function runGeneration(changes, { files = {}, issueBody = 'Add a helper.' } = {}) {
+async function runGeneration(changes, { files = {}, issueBody = 'Add a helper.', githubStatus = 201 } = {}) {
   const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smoke-gen-'));
   for (const [rel, content] of Object.entries(files)) {
     await fs.mkdir(path.dirname(path.join(repoDir, rel)), { recursive: true });
@@ -476,7 +476,7 @@ async function runGeneration(changes, { files = {}, issueBody = 'Add a helper.' 
     req.on('data', (d) => (body += d));
     req.on('end', () => {
       requests.push({ method: req.method, url: req.url, body });
-      res.writeHead(req.url === '/v1/messages' ? 200 : 201, { 'Content-Type': 'application/json' });
+      res.writeHead(req.url === '/v1/messages' ? 200 : githubStatus, { 'Content-Type': 'application/json' });
       res.end(req.url === '/v1/messages'
         ? JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({ summary: 'Add a helper', changes }) }] })
         : '{}');
@@ -549,6 +549,21 @@ test('generation entrypoint: a protected-path rejection is escalated the same wa
     assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
     assert.deepEqual(JSON.parse(run.metrics.trim()).rules, ['protected_path']);
     assert.match(run.result.stderr, /"event":"code_gen\.skipped"/);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: a failed escalation still ends the stage with a terminal error event', async () => {
+  const run = await runGeneration(
+    [{ target_path: 'src/helper.mjs', file_content: "const fs = require('node:fs');\n" }],
+    { githubStatus: 403 },
+  );
+  try {
+    assert.equal(run.result.code, 1);
+    assert.match(run.result.stderr, /"event":"pr_prepare\.error".*Label create failed/);
+    assert.equal(await run.readRepo('src/helper.mjs'), null, 'nothing is written');
+    assert.equal(run.metrics, null, 'no metric for an escalation that did not happen');
   } finally {
     await fs.rm(run.repoDir, { recursive: true, force: true });
   }

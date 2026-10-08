@@ -19,25 +19,92 @@ const ESM_ONLY_PATTERN = /\.m[jt]s$/i;
 const CJS_ONLY_PATTERN = /\.c[jt]s$/i;
 const RESOLVE_EXTENSIONS = ['.mjs', '.js', '.cjs', '.json', '.ts', '.mts', '.cts', '.tsx', '.jsx'];
 
-const LEXER = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|'(?:\\[\s\S]|[^'\\\n])*'|"(?:\\[\s\S]|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`/g;
 
 export function isJsFile(p) {
   return JS_FILE_PATTERN.test(String(p ?? ''));
 }
 
+// Index just past the quoted string opening at `start`, or -1 when it is unterminated on its line.
+function stringEnd(src, start) {
+  const quote = src[start];
+  for (let i = start + 1; i < src.length; i += 1) {
+    if (src[i] === '\\') i += 1;
+    else if (src[i] === quote) return i + 1;
+    else if (src[i] === '\n') return -1;
+  }
+  return -1;
+}
+
+// A template literal opening at `start`: index just past it, and its `${…}` expressions, which
+// may themselves hold strings, braces and nested template literals.
+function readTemplate(src, start) {
+  const exprs = [];
+  let i = start + 1;
+  while (i < src.length && src[i] !== '`') {
+    if (src[i] === '\\') {
+      i += 2;
+    } else if (src[i] === '$' && src[i + 1] === '{') {
+      let depth = 0;
+      let j = i + 2;
+      for (; j < src.length; j += 1) {
+        const c = src[j];
+        if (c === '`') j = readTemplate(src, j).end - 1;
+        else if (c === '"' || c === "'") j = (stringEnd(src, j) === -1 ? j + 1 : stringEnd(src, j)) - 1;
+        else if (c === '{') depth += 1;
+        else if (c === '}' && depth-- === 0) break;
+      }
+      exprs.push(src.slice(i + 2, j));
+      i = j + 1;
+    } else {
+      i += 1;
+    }
+  }
+  return { end: Math.min(i + 1, src.length), exprs };
+}
+
+function mask(src, strings) {
+  let out = '';
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (c === '/' && src[i + 1] === '/') {
+      const eol = src.indexOf('\n', i);
+      i = eol === -1 ? src.length : eol;
+    } else if (c === '/' && src[i + 1] === '*') {
+      const close = src.indexOf('*/', i + 2);
+      i = close === -1 ? src.length : close + 2;
+      out += ' ';
+    } else if (c === '"' || c === "'") {
+      const end = stringEnd(src, i);
+      if (end === -1) {
+        out += c;
+        i += 1;
+      } else {
+        strings.push(src.slice(i + 1, end - 1));
+        out += `"S${strings.length - 1}"`;
+        i = end;
+      }
+    } else if (c === '`') {
+      // The literal text is never a specifier, but the code in its `${…}` is.
+      const { end, exprs } = readTemplate(src, i);
+      out += `\`\`${exprs.map((e) => `;${mask(e, strings)};`).join('')}`;
+      i = end;
+    } else {
+      out += c;
+      i += 1;
+    }
+  }
+  return out;
+}
+
 /**
  * Removes comments and replaces each quoted string with `"S<n>"`, so the regexes below only see
- * code. Template literals become an empty `` ` ` `` (never a specifier). Heuristic lexer: a regex
- * literal containing a quote or `//` can mask the rest of its line.
+ * code. A template literal keeps only its `${…}` expressions (nesting included), masked the same
+ * way. Heuristic lexer: a regex literal containing a quote or `//` can mask the rest of its line.
  */
 export function maskSource(source) {
   const strings = [];
-  const code = String(source ?? '').replace(LEXER, (token) => {
-    if (token.startsWith('//') || token.startsWith('/*')) return token.startsWith('/*') ? ' ' : '';
-    if (token.startsWith('`')) return '``';
-    strings.push(token.slice(1, -1));
-    return `"S${strings.length - 1}"`;
-  });
+  const code = mask(String(source ?? ''), strings);
   return { code, strings };
 }
 
@@ -203,7 +270,9 @@ function mentions(text, name) {
 
 /**
  * Rule 2: an exported function keeps its name, arity, parameter names and sync/async return,
- * unless `mentionText` (issue title + body, or review feedback) names it explicitly.
+ * unless `mentionText` (issue title + body, or review feedback) names it explicitly. A mention
+ * unlocks a signature change, never the removal of the export. An anonymous default export has
+ * no name to mention (the word "default" does not count).
  * @returns {string[]} one reason per changed function
  */
 export function findSignatureViolations(targetPath, before, after, mentionText = '') {
@@ -213,12 +282,15 @@ export function findSignatureViolations(targetPath, before, after, mentionText =
   const next = extractExportedSignatures(after);
   const reasons = [];
   for (const [name, old] of prev) {
-    if (mentions(mentionText, name) || mentions(mentionText, old.local)) continue;
     const cur = next.get(name);
     const shown = (sig) => `${name}(${sig.params.join(', ')})`;
     if (!cur) {
       reasons.push(`removes exported function ${shown(old)}`);
-    } else if (cur.params.length !== old.params.length) {
+      continue;
+    }
+    const names = [name, old.local].filter((n) => n !== 'default');
+    if (names.some((n) => mentions(mentionText, n))) continue;
+    if (cur.params.length !== old.params.length) {
       reasons.push(`changes the arity of exported ${shown(old)} to ${shown(cur)}`);
     } else if (cur.params.join(',') !== old.params.join(',')) {
       reasons.push(`changes the parameters of exported ${shown(old)} to ${shown(cur)}`);

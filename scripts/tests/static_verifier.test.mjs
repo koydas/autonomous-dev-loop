@@ -70,6 +70,33 @@ test('extractImportSpecifiers finds static, side-effect, re-export, dynamic and 
   assert.deepEqual(extractImportSpecifiers(src).sort(), ['./lib/a.mjs', './side-effect.js', '@scope/pkg/sub', 'cjs-pkg', 'dyn', 'node:fs', 'pkg']);
 });
 
+test('maskSource keeps the code inside ${…} of a template literal, not its text', () => {
+  const { code } = maskSource("const t = `require('a') ${require('b')} ${ { x: import('c') }.x } \\${require('d')}`;");
+  assert.equal((code.match(/require\s*\(/g) || []).length, 1);
+  assert.match(code, /import\("S\d+"\)/);
+});
+
+test('maskSource follows template literals nested in ${…}, strings and braces inside them', () => {
+  const src = "const html = `<ul>${items.map((i) => `<li>${i.name + '}'}</li>`).join('')}</ul>`;\n// require('x') in a comment\nconst after = require('y');";
+  const { code, strings } = maskSource(src);
+  assert.equal((code.match(/require\s*\(/g) || []).length, 1, 'only the require after the template is code');
+  assert.ok(strings.includes('y'));
+});
+
+test('maskSource leaves an unterminated quote or comment as is', () => {
+  assert.equal(maskSource("const a = 'oops\nconst b = 1;").code, "const a = 'oops\nconst b = 1;");
+  assert.equal(maskSource('const a = 1; /* never closed').code, 'const a = 1;  ');
+  assert.equal(maskSource('const t = `open ${x').code, 'const t = ``;x;');
+});
+
+test('template literal expressions are checked: require( in .mjs and an undeclared dynamic import', () => {
+  assert.match(findModuleSystemViolation('a.mjs', '', "export const v = `${require('fs').sep}`;"), /require\(\)/);
+  assert.equal(findModuleSystemViolation('a.mjs', '', 'export const v = `text require(x) only`;'), null);
+  assert.deepEqual(findUnresolvedImports('a.mjs', null, "export const v = `${await import('left-pad')}`;", imports()), [
+    'imports package "left-pad", which is not declared in package.json',
+  ]);
+});
+
 // ---------------------------------------------------------------------------
 // Rule 1 — module system
 // ---------------------------------------------------------------------------
@@ -187,6 +214,29 @@ test('signature: a change is allowed when the issue or feedback names the functi
   const after = 'export function buildAutomationGateContext(diff, opts) {}\nfunction local(a, b) {}\nexport { local as alias };';
   assert.deepEqual(findSignatureViolations('m.mjs', before, after, 'Please change `buildAutomationGateContext` and `local` to take options.'), []);
   assert.equal(findSignatureViolations('m.mjs', before, after, 'buildAutomationGateContextV2 only').length, 2, 'a longer identifier is not a mention');
+});
+
+test('signature: a mention unlocks a signature change, never the removal of the export', () => {
+  const before = 'export function keep(a) {}\nexport function drop(a) {}';
+  assert.deepEqual(findSignatureViolations('m.mjs', before, 'export function keep(a, b) {}', 'Change keep and drop.'), [
+    'removes exported function drop(a)',
+  ]);
+});
+
+test('signature: the PR #122 replay still rejects the removals when the feedback names every function', () => {
+  const feedback = 'extractChangedFiles misses deleted files; isAutomationScopeFile and buildAutomationGateContext need docs coverage.';
+  const reasons = findSignatureViolations('scripts/lib/coverage_checker.mjs', fixture('coverage_checker.before.txt'), fixture('coverage_checker.after.txt'), feedback);
+  assert.deepEqual(reasons, [
+    'removes exported function extractChangedFiles(rawDiffText)',
+    'removes exported function isAutomationScopeFile(filePath)',
+  ]);
+});
+
+test('signature: the word "default" does not unlock an anonymous default export; a named one unlocks by its name', () => {
+  assert.deepEqual(findSignatureViolations('m.mjs', 'export default function (a) {}', 'export default function (a, b) {}', 'Use the default timeout'), [
+    'changes the arity of exported default(a) to default(a, b)',
+  ]);
+  assert.deepEqual(findSignatureViolations('m.mjs', 'export default function main(a) {}', 'export default function main(a, b) {}', 'main needs an options argument'), []);
 });
 
 test('signature: new files, files without exported functions and non-JS files are not checked', () => {

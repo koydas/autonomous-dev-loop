@@ -38,7 +38,20 @@ async function ghFetch(endpoint, options = {}) {
 // A GuardrailError (ADR-0021, ADR-0029, ADR-0019) is escalated like auto-fix does: nothing is
 // written, no PR is opened, the issue gets `needs-human` and the reason, a `codegen_skip` metric
 // records the rules, and the run exits 0 with `rejected=true`.
-async function rejectPatch(rejection, { stage, stageStartMs, issueNumber }) {
+async function rejectPatch(rejection, context) {
+  try {
+    await escalateRejection(rejection, context);
+  } catch (err) {
+    // The escalation itself failed (GitHub API): still close the stage with a terminal event.
+    const { stage, stageStartMs } = context;
+    obsLog({ stage, event: `${stage}.error`, level: 'error', duration_ms: Date.now() - stageStartMs, meta: { error: err.message, rejection: rejection.message } });
+    tracer.endSpan(stage, { outcome: 'failed', meta: { error: err.message } });
+    await tracer.finalize('failed');
+    throw err;
+  }
+}
+
+async function escalateRejection(rejection, { stage, stageStartMs, issueNumber }) {
   const rules = guardrailRules(rejection);
   const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
   const needsHuman = loadLabelsConfig('autofix').needs_human;

@@ -41,4 +41,4 @@ autofix:
   needs_human:
     name: needs-human
     color: b60205
-    description: Auto-fix proposed no change for the review feedback; a human must decide (ADR-0028)
+    description: Automation stopped (no change proposed or patch rejected by a guardrail); a human must decide
