@@ -59,7 +59,7 @@ Before committing any change to `scripts/` or `prompts/`:
 
 ### Eval Gates (ADR-0031)
 
-A failing eval (`evals.yml`, `pr-evals.yml`, `eval-replay.yml`) is fixed **in the stage**: prompt, parser or production code. Never make it pass by lowering a `min`, raising a `max`, marking a metric `optional`, removing or relabelling the failing cases, or running a filtered subset. `scripts/tests/eval_threshold_floor.test.mjs` enforces it: thresholds only tighten, datasets only grow, and every existing case keeps its id, label and input (pinned). `workflow_gates.test.mjs` forbids `--tags` / `--limit` in `evals.yml` and `pr-evals.yml`. A dataset label may be corrected only when it is wrong on its own merits, in a separate PR; loosening a gate needs a new ADR.
+A failing eval (`evals.yml`, `pr-evals.yml`, `eval-replay.yml`) is fixed **in the stage**: prompt, parser or production code. Never make it pass by lowering a `min`, raising a `max`, marking a metric `optional`, removing or relabelling the failing cases, or running a filtered subset. `scripts/tests/eval_threshold_floor.test.mjs` enforces it: thresholds only tighten, datasets only grow, and every existing case keeps its id, label and input (pinned). `workflow_gates.test.mjs` forbids `--tags` / `--limit` in `evals.yml` and `pr-evals.yml`. Never copy a dataset case's wording into a stage prompt: examples come from another domain (the floor test fails on a 5-word overlap). A dataset label may be corrected only when it is wrong on its own merits, in a separate PR; loosening a gate needs a new ADR.
 
 ### Test Coverage Policy
 

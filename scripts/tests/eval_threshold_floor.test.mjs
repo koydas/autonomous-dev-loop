@@ -1,10 +1,10 @@
 // ADR-0031: eval gates are a ratchet. A failing eval is fixed in the stage, never by
 // loosening the gate. This floor fails when a threshold is relaxed, a gated metric is
 // dropped or made optional, a dataset loses cases, or a pinned case is relabelled, removed or
-// rewritten. Tightening raises the floor here.
+// rewritten, or a suite's prompts quote its dataset. Tightening raises the floor here.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,5 +137,38 @@ for (const [name, floor] of Object.entries(FLOOR)) {
       assert.equal(suite.expectedLabel(c.expected), label, `${name}: pinned case ${id} was relabelled`);
       assert.equal(inputHash(c.input), hash, `${name}: pinned case ${id} input was rewritten`);
     }
+  });
+}
+
+// ADR-0031: a prompt fitted to the eval's own cases greens the gate the way a loosened threshold
+// does. No prompt of a suite may share a run of CONTAMINATION_N words with any of its cases' inputs:
+// prompt examples must come from another domain than the dataset.
+const SUITE_PROMPTS = { validation: 'validation-', review: 'pr-review-' };
+const CONTAMINATION_N = 5;
+const words = (text) => text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+const shingles = (text) => {
+  const w = words(text);
+  const out = new Set();
+  for (let i = 0; i + CONTAMINATION_N <= w.length; i++) out.add(w.slice(i, i + CONTAMINATION_N).join(' '));
+  return out;
+};
+const strings = (value) => (typeof value === 'string' ? [value]
+  : value && typeof value === 'object' ? Object.values(value).flatMap(strings) : []);
+
+test('every registered suite maps to its prompt files', () => {
+  assert.deepEqual(Object.keys(SUITES).sort(), Object.keys(SUITE_PROMPTS).sort());
+});
+
+for (const [name, prefix] of Object.entries(SUITE_PROMPTS)) {
+  test(`${name}: no prompt quotes a dataset case (${CONTAMINATION_N}-word overlap, ADR-0031)`, () => {
+    const files = readdirSync(resolve(ROOT, 'prompts')).filter((f) => f.startsWith(prefix) && f.endsWith('.md'));
+    assert.ok(files.length > 0, `${name}: no prompts/${prefix}*.md`);
+    const prompt = shingles(files.map((f) => readFileSync(resolve(ROOT, 'prompts', f), 'utf8')).join('\n'));
+    const leaks = [];
+    for (const c of readCases(SUITES[name].dataset)) {
+      const shared = [...shingles(strings(c.input).join('\n'))].filter((g) => prompt.has(g));
+      if (shared.length) leaks.push(`${c.id}: "${shared[0]}"`);
+    }
+    assert.deepEqual(leaks, [], `${name}: prompt text copied from dataset cases`);
   });
 }
