@@ -254,12 +254,12 @@ test('callLLM falls back on a permanent error (401/403) and logs it as an error'
   assert.match(event.meta.error, /401/);
 });
 
-test('callLLM logs a transient primary failure as a warn fallback event', async () => {
+test('callLLM logs a non-configuration primary failure (413) as a warn fallback event', async () => {
   process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
   process.env.GROQ_API_KEY = 'groq-key';
   process.env.AI_PROVIDER = 'anthropic';
   globalThis.fetch = async (_url, opts) => {
-    if (opts.headers['x-api-key']) return makeResponse('bad request', 400);
+    if (opts.headers['x-api-key']) return makeResponse('request too large', 413);
     return makeResponse({ choices: [{ message: { content: 'ok' } }] });
   };
   const { lines } = await captureStderr(() => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' }));
@@ -371,4 +371,50 @@ test('callLLM throws descriptive error listing each provider failure when all fa
       return true;
     }
   );
+});
+
+test('callLLM logs a 400 primary failure (misconfiguration) as an error fallback event', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) return makeResponse('effort is not supported on this model', 400);
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  const { result, lines } = await captureStderr(() => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-sonnet-4-5' }));
+  assert.equal(result, 'ok');
+  const event = lines.filter(l => l.includes('"llm_fallback"')).map(l => JSON.parse(l))[0];
+  assert.equal(event.level, 'error');
+  assert.equal(event.meta.error_type, 'UNKNOWN');
+});
+
+test('callLLM skips an over-budget Groq primary and uses the Anthropic fallback', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  let groqCalls = 0;
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) return makeResponse({ content: [{ type: 'text', text: 'from anthropic' }] });
+    groqCalls++;
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  const { result, lines } = await captureStderr(() => callLLM({
+    stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key',
+    model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100,
+  }));
+  assert.equal(result, 'from anthropic');
+  assert.equal(groqCalls, 0);
+  const event = lines.filter(l => l.includes('"llm_fallback"')).map(l => JSON.parse(l))[0];
+  assert.match(event.meta.error, /over validation_max_input_tokens \(100\)/);
+});
+
+test('callLLM fails on an over-budget primary without a request when no fallback key is set', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse({ choices: [{ message: { content: 'ok' } }] }); };
+  await assert.rejects(
+    () => callLLM({ stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100 }),
+    /groq: validation prompt is .* over validation_max_input_tokens \(100\).*anthropic: skipped \(no API key configured\)/,
+  );
+  assert.equal(calls, 0);
 });

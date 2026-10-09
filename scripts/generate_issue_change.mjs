@@ -12,7 +12,6 @@ import { normalizeRepoPath } from './lib/autofix_guard.mjs';
 import { findGuardrailViolations, guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { assertInputBudget } from './lib/token_budget.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -120,8 +119,7 @@ async function main() {
 
   let raw;
   try {
-    // ADR-0028: an over-budget request can only end in 413, which would be retried until the job timeout.
-    assertInputBudget('generation', inputTokensEst, loadLLMConfig('generation').maxInputTokens);
+    // ADR-0028: callLLM skips a provider whose input budget the prompt exceeds and moves on to the fallback.
     raw = await callLLM({
       stage: 'generation',
       prompt,
@@ -131,6 +129,7 @@ async function main() {
       apiUrl: config.apiUrl,
       temperature: config.temperature,
       maxTokens: config.maxTokens,
+      maxInputTokens: loadLLMConfig('generation').maxInputTokens,
       reasoningEffort: config.reasoningEffort,
     });
   } catch (err) {

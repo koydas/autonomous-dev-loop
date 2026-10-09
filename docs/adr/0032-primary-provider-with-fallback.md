@@ -19,13 +19,14 @@ An `AI_PROVIDER` other than `groq`/`anthropic` (typo) silently resolved to Groq 
 
 **Fallback.**
 - The other provider is the **fallback**, active when its API key is set (`detectFallbackProvider()`). No key: the fallback is skipped and the error reads `<provider>: skipped (no API key configured)`.
-- It triggers on **any** primary failure, 401/403 included. Each fallback logs an `llm_fallback` event (`from`, `to`, `error_type`, primary error): `error` level on 401/403 (`PERMANENT`), which also emits a GitHub Actions annotation, since the primary's key is wrong or revoked; `warn` otherwise.
+- It triggers on **any** primary failure, 401/403 included. Each fallback logs an `llm_fallback` event (`from`, `to`, `error_type`, primary error): `error` level, which also emits a GitHub Actions annotation, on a misconfiguration: 401/403 (`PERMANENT`, the primary's key is wrong or revoked) or 400/404 (unknown model, unsupported parameter such as `output_config.effort` on an older model); `warn` otherwise.
+- The primary's input budget is checked too: validation and generation pass their `maxInputTokens` to `callLLM()`, which skips an over-budget Groq primary without a request (it could only end in a 413 retried until the job timeout, ADR-0028) and hands the prompt to the Anthropic fallback (no input budget). Before, `assertInputBudget` failed the job ahead of `callLLM()`, so the one provider able to take the prompt was never tried.
 - The fallback call is built from its own config: `loadProviderConfig(provider, stage)`. Only the call itself is carried over: `prompt`, `systemPrompt`, `responseFormat`. Callers pass `stage` to `callLLM()` (`generation` when absent). `loadLLMConfig(stage)` is `loadProviderConfig(detectProvider(), stage)`.
 
 **Anthropic stage settings** (`config/models.yaml`, `anthropic_*` keys).
 - `anthropic_<stage>` model (default `claude-opus-5-5`; `ANTHROPIC_MODEL` overrides every stage), `anthropic_<stage>_effort` sent as `output_config.effort` (`ANTHROPIC_EFFORT` overrides every stage, `off` sends none), `anthropic_<stage>_max_tokens` (default 16000; requests are not streamed).
 - No temperature is sent unless a caller sets one explicitly.
-- The answer is the first `text` block. `stop_reason: "refusal"` throws with its category and `stop_reason: "max_tokens"` throws as truncated (thinking counts toward the cap), so the provider fallback runs. 529 is retried like 5xx.
+- The answer is the first `text` block. `stop_reason: "refusal"` throws with its category and `stop_reason: "max_tokens"` throws as truncated (thinking counts toward the cap), so the provider fallback runs. 529 is retried like 5xx. A fetch that hits undici's 300 s headers/body timeout is not retried: the request is not streamed and the same long turn would time out again.
 - `output_config.effort` is sent whatever the model: Sonnet 4.5 / Haiku 4.5 reject it and Opus 4.5 has no `xhigh`/`max`. With such an `ANTHROPIC_MODEL`, set `ANTHROPIC_EFFORT=off`.
 - Models that support it (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-fable-5-1`) send `fallbacks: "default"` with beta `server-side-fallback-2026-07-01` when `ANTHROPIC_API_URL` is unset (Claude API only): a classifier refusal is re-run server-side on another Claude model before the provider fallback is needed.
 

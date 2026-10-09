@@ -3,7 +3,6 @@
 import { validateIssue, VALIDATION_SYSTEM_PROMPT, formatGitHubComment } from './lib/issue_validator.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { requireEnv, loadLLMConfig } from './lib/config.mjs';
-import { assertInputBudget } from './lib/token_budget.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
@@ -37,11 +36,10 @@ async function main() {
 
   log('Validating issue', { issueNumber, issueTitle, model });
 
-  // ADR-0028: an over-budget request can only end in 413, which would be retried until the job timeout.
-  const boundCallGroq = async ({ prompt }) => {
-    assertInputBudget('validation', estimateTokens(VALIDATION_SYSTEM_PROMPT + prompt), maxInputTokens);
-    return callLLM({ stage: 'validation', prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens, reasoningEffort });
-  };
+  // ADR-0028: callLLM skips a provider whose input budget the prompt exceeds (413 retried until the job
+  // timeout) and moves on to the fallback (ADR-0032).
+  const boundCallGroq = async ({ prompt }) =>
+    callLLM({ stage: 'validation', prompt, systemPrompt: VALIDATION_SYSTEM_PROMPT, apiKey, model, apiUrl, temperature, maxTokens, maxInputTokens, reasoningEffort });
 
   let result;
   try {

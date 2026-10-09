@@ -247,3 +247,18 @@ test('callAnthropic sends no server-side fallback for other models or a custom A
     assert.equal('anthropic-beta' in headers[i], false);
   }
 });
+
+test('callAnthropic does not retry a request that hit the fetch headers timeout', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error('Headers Timeout Error'), { code: 'UND_ERR_HEADERS_TIMEOUT' }) });
+  };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), /fetch failed/);
+  assert.equal(calls, 1);
+});
+
+test('callAnthropic sets status on HTTP errors', async () => {
+  mockFetch(makeResponse('bad request', 400));
+  await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.status === 400);
+});

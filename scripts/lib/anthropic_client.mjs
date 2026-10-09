@@ -11,6 +11,8 @@ const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
 const SERVER_FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5']);
 const SERVER_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
+const FETCH_TIMEOUT_CODES = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+
 export async function callAnthropic({
   prompt,
   systemPrompt,
@@ -52,12 +54,15 @@ export async function callAnthropic({
         body: JSON.stringify(payload),
       });
     } catch (fetchErr) {
-      fetchErr.retryable = true;
+      // Not streamed: undici gives up after 300 s without response headers. The same long turn would
+      // time out again, so it is not retried (callLLM falls back instead).
+      fetchErr.retryable = !FETCH_TIMEOUT_CODES.has(fetchErr?.cause?.code);
       throw fetchErr;
     }
     const text = await response.text();
     if (!response.ok) {
       const err = new Error(`Anthropic API HTTP error ${response.status}: ${text}`);
+      err.status = response.status;
       err.errorType = classifyError(String(response.status));
       err.retryable = RETRYABLE_STATUS_CODES.has(response.status);
       throw err;
