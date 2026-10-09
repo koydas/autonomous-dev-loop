@@ -192,6 +192,16 @@ test('callAnthropic reports an unspecified refusal category when stop_details is
   await assert.rejects(() => callAnthropic(BASE_ARGS), /category: unspecified/);
 });
 
+test('callAnthropic throws on a response truncated at max_tokens, even with partial text', async () => {
+  mockFetch(makeResponse({ stop_reason: 'max_tokens', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: '{"partial":' }] }));
+  await assert.rejects(() => callAnthropic({ ...BASE_ARGS, maxTokens: 16000 }), /truncated \(stop_reason: max_tokens, max_tokens: 16000\)/);
+});
+
+test('callAnthropic names the stop_reason when no text block comes back', async () => {
+  mockFetch(makeResponse({ stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }] }));
+  await assert.rejects(() => callAnthropic(BASE_ARGS), /expected a non-empty text content block \(stop_reason: end_turn\)/);
+});
+
 test('callAnthropic retries a 529 overloaded response', async () => {
   let calls = 0;
   globalThis.fetch = async () => {
@@ -230,6 +240,7 @@ test('callAnthropic sends no server-side fallback for other models or a custom A
     return makeResponse({ content: [{ type: 'text', text: '{}' }] });
   };
   await callAnthropic({ ...BASE_ARGS, model: 'claude-haiku-5-5' });
+  await callAnthropic({ ...BASE_ARGS, model: 'claude-fable-5' });
   await callAnthropic({ ...BASE_ARGS, model: 'claude-opus-5-5', apiUrl: 'https://proxy.example/v1/messages' });
   for (const [i, body] of bodies.entries()) {
     assert.equal('fallbacks' in body, false);

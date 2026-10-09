@@ -268,6 +268,77 @@ test('callLLM logs a transient primary failure as a warn fallback event', async 
   assert.equal(event.meta.error_type, 'UNKNOWN');
 });
 
+test('callLLM reports both errors when the primary and the fallback fail', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) return makeResponse('bad request', 400);
+    return makeResponse('{"error":{"message":"model not found"}}', 404);
+  };
+  await assert.rejects(
+    () => callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' }),
+    /All providers failed: anthropic: Anthropic API HTTP error 400.*, groq: Groq API HTTP error 404/s,
+  );
+});
+
+test('callLLM reports a fallback config error without calling the fallback', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  process.env.ANTHROPIC_EFFORT = 'extreme';
+  let anthropicCalls = 0;
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) { anthropicCalls++; return makeResponse({ content: [{ type: 'text', text: 'ok' }] }); }
+    return makeResponse('bad request', 400);
+  };
+  try {
+    await assert.rejects(
+      () => callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT }),
+      /All providers failed: groq: .*400.*, anthropic: Invalid anthropic effort for stage "review": extreme/s,
+    );
+  } finally {
+    delete process.env.ANTHROPIC_EFFORT;
+  }
+  assert.equal(anthropicCalls, 0);
+});
+
+test('callLLM skips a Groq fallback when the prompt exceeds its input budget (would 413 until timeout)', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  let groqCalls = 0;
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) return makeResponse('overloaded', 529);
+    groqCalls++;
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  const budget = parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10);
+  const prompt = 'x'.repeat((budget + 100) * 4);
+  await assert.rejects(
+    () => withInstantTimers(() => callLLM({ stage: 'review', prompt, systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })),
+    new RegExp(`groq: skipped \\(prompt ~\\d+ tokens over review_max_input_tokens ${budget}\\)`),
+  );
+  assert.equal(groqCalls, 0);
+});
+
+test('callLLM measures the autofix fallback budget on the user prompt only', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  let groqCalls = 0;
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) return makeResponse('bad request', 400);
+    groqCalls++;
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  const budget = parseInt(GROQ_MODEL_DEFAULTS.autofix_max_input_tokens, 10);
+  // System prompt alone is over the budget: autofix still falls back, its budget excludes the system prompt.
+  const result = await callLLM({ stage: 'autofix', prompt: 'fix it', systemPrompt: 's'.repeat((budget + 100) * 4), apiKey: 'sk-ant-key', model: 'claude-opus-5-5' });
+  assert.equal(result, 'ok');
+  assert.equal(groqCalls, 1);
+});
+
 test('callLLM uses the default provider when AI_PROVIDER is unknown', async () => {
   process.env.AI_PROVIDER = 'openai';
   process.env.GROQ_API_KEY = 'groq-key';

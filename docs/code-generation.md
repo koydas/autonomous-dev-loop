@@ -10,9 +10,9 @@ For a first-time setup, complete these steps in order:
    - `ANTHROPIC_API_KEY` and/or `GROQ_API_KEY`
    - `AI_PR_TOKEN` (recommended for reliable PR/label/review writes)
 2. (Optional) Configure provider variables:
-   - `AI_PROVIDER` — `anthropic` or `groq`: the primary provider. Unset or blank: Anthropic when only `ANTHROPIC_API_KEY` is set, Groq otherwise. An unknown value uses that same default, and a provider whose key is missing yields to the one that has a key; both log a `provider_config_fallback` warn event and never fail the job. The other provider is the fallback when its key is set: it is called with its own key, model and stage settings on any primary failure, 401/403 included, and each fallback logs an `llm_fallback` event (`error` level, with a GitHub annotation, on 401/403; `warn` otherwise) (ADR-0032). Anthropic primary → Groq fallback is best-effort: the prompt is not sized for Groq's input budgets and may get a 413.
+   - `AI_PROVIDER` — `anthropic` or `groq`: the primary provider. Unset or blank: Anthropic when only `ANTHROPIC_API_KEY` is set, Groq otherwise. An unknown value uses that same default, and a provider whose key is missing yields to the one that has a key; both log a `provider_config_fallback` warn event and never fail the job. The other provider is the fallback when its key is set: it is called with its own key, model and stage settings on any primary failure, 401/403 included, and each fallback logs an `llm_fallback` event (`error` level, with a GitHub annotation, on 401/403; `warn` otherwise) (ADR-0032). Anthropic primary → Groq fallback only runs when the prompt fits Groq's `<stage>_max_input_tokens`; otherwise it is skipped (`groq: skipped (prompt ~N tokens over …)`) rather than retried into a 413 until the job timeout.
    - `ANTHROPIC_MODEL` — Anthropic model for every stage (unset: `anthropic_<stage>` in `config/models.yaml`, `claude-opus-5-5`).
-   - `ANTHROPIC_EFFORT` — `low` | `medium` | `high` | `xhigh` | `max` overrides `anthropic_<stage>_effort` for every stage (sent as `output_config.effort`); `off` sends none.
+   - `ANTHROPIC_EFFORT` — `low` | `medium` | `high` | `xhigh` | `max` overrides `anthropic_<stage>_effort` for every stage (sent as `output_config.effort`); `off` sends none. Set `off` when `ANTHROPIC_MODEL` is Sonnet 4.5 or Haiku 4.5 (they reject `effort`, every call would 400), and avoid `xhigh`/`max` on Opus 4.5.
    - `GROQ_MODEL` — Groq model name override for all stages (if unset, stage defaults from `config/models.yaml` are used: `openai/gpt-oss-120b` for every stage). If you point it at a non-reasoning model, also set `GROQ_REASONING_EFFORT=off`.
    - `GROQ_REASONING_EFFORT` — `low` | `medium` | `high` overrides `<stage>_reasoning_effort` for every stage; `off` stops sending `reasoning_effort` (required for non-reasoning `GROQ_MODEL` overrides). Unset: per-stage values from `config/models.yaml` (ADR-0025).
    - `GROQ_API_URL` — Groq endpoint URL (defaults to `https://api.groq.com/openai/v1/chat/completions` if unset).
@@ -292,7 +292,7 @@ Anthropic keys (ADR-0032):
 | `anthropic_<stage>_effort` | `low` (validation), `high` (generation, review, autofix) | `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `off`, sent as `output_config.effort`. `ANTHROPIC_EFFORT` overrides every stage. Without it, `claude-opus-5-5` runs at `medium`. |
 | `anthropic_<stage>_max_tokens` | `16000` | Output cap, thinking included (adaptive thinking is on by default on Opus 5.x). Requests are not streamed: a larger cap risks an HTTP timeout. |
 
-No temperature and no input budget for Anthropic: Opus 4.7+ / 5.x reject sampling parameters (400), and the 8K TPM limit is Groq's. Supported models (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-fable-5`, `claude-fable-5-1`) send `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) when `ANTHROPIC_API_URL` is unset: a safety-classifier refusal is re-run server-side on another Claude model. A refusal that still comes back fails the call, and the Groq fallback takes over.
+No temperature and no input budget for Anthropic: Opus 4.7+ / 5.x reject sampling parameters (400), and the 8K TPM limit is Groq's. Supported models (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-fable-5-1`) send `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) when `ANTHROPIC_API_URL` is unset: a safety-classifier refusal is re-run server-side on another Claude model. A refusal that still comes back fails the call, and the Groq fallback takes over.
 
 ## Auto-Fix Token Budget
 
@@ -371,7 +371,7 @@ Automation scripts must fail before network calls when required startup inputs a
   - PR number: `pull_request.number` or fallback `issue.number`.
   - Branch reference (when needed): `pull_request.head.ref` or fallback `ref`.
 - **Provider payload parsing**: response-shape failures include concrete expected paths:
-  - Anthropic: the first `text` block of `content` (thinking blocks come first on Opus 5.x); `stop_reason: "refusal"` fails with its `stop_details.category`
+  - Anthropic: the first `text` block of `content` (thinking blocks come first on Opus 5.x); `stop_reason: "refusal"` fails with its `stop_details.category`, `stop_reason: "max_tokens"` fails as truncated
   - Groq: `choices[0].message.content`
 
 ## CI Coverage Enforcement

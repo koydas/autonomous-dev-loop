@@ -8,7 +8,7 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
 
 // Models accepting server-side refusal fallback (`fallbacks: "default"`), on the Claude API only.
-const SERVER_FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5-5']);
+const SERVER_FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5']);
 const SERVER_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 export async function callAnthropic({
@@ -78,10 +78,15 @@ export async function callAnthropic({
     throw new Error(`Anthropic API refused the request (stop_reason: refusal, category: ${category})`);
   }
 
+  // Thinking tokens count toward max_tokens: a truncated answer (or none at all) is never a complete one.
+  if (raw?.stop_reason === 'max_tokens') {
+    throw new Error(`Anthropic API response truncated (stop_reason: max_tokens, max_tokens: ${maxTokens}): raise anthropic_<stage>_max_tokens or lower the effort`);
+  }
+
   // Thinking blocks (adaptive thinking is on by default on Opus 5.x) precede the answer: take the first text block.
   const content = Array.isArray(raw?.content) ? raw.content.find(block => block?.type === 'text')?.text : undefined;
   if (typeof content !== 'string' || content.trim() === '') {
-    throw new Error('Unexpected Anthropic API response format: expected a non-empty text content block');
+    throw new Error(`Unexpected Anthropic API response format: expected a non-empty text content block (stop_reason: ${raw?.stop_reason ?? 'none'})`);
   }
 
   return content;

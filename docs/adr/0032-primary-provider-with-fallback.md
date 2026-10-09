@@ -25,8 +25,9 @@ An `AI_PROVIDER` other than `groq`/`anthropic` (typo) silently resolved to Groq 
 **Anthropic stage settings** (`config/models.yaml`, `anthropic_*` keys).
 - `anthropic_<stage>` model (default `claude-opus-5-5`; `ANTHROPIC_MODEL` overrides every stage), `anthropic_<stage>_effort` sent as `output_config.effort` (`ANTHROPIC_EFFORT` overrides every stage, `off` sends none), `anthropic_<stage>_max_tokens` (default 16000; requests are not streamed).
 - No temperature is sent unless a caller sets one explicitly.
-- The answer is the first `text` block. `stop_reason: "refusal"` throws with its category, so the provider fallback runs. 529 is retried like 5xx.
-- Models that support it (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-fable-5`, `claude-fable-5-1`) send `fallbacks: "default"` with beta `server-side-fallback-2026-07-01` when `ANTHROPIC_API_URL` is unset (Claude API only): a classifier refusal is re-run server-side on another Claude model before the provider fallback is needed.
+- The answer is the first `text` block. `stop_reason: "refusal"` throws with its category and `stop_reason: "max_tokens"` throws as truncated (thinking counts toward the cap), so the provider fallback runs. 529 is retried like 5xx.
+- `output_config.effort` is sent whatever the model: Sonnet 4.5 / Haiku 4.5 reject it and Opus 4.5 has no `xhigh`/`max`. With such an `ANTHROPIC_MODEL`, set `ANTHROPIC_EFFORT=off`.
+- Models that support it (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-fable-5-1`) send `fallbacks: "default"` with beta `server-side-fallback-2026-07-01` when `ANTHROPIC_API_URL` is unset (Claude API only): a classifier refusal is re-run server-side on another Claude model before the provider fallback is needed.
 
 ## Alternatives Considered
 
@@ -42,6 +43,6 @@ An `AI_PROVIDER` other than `groq`/`anthropic` (typo) silently resolved to Groq 
 - ✅ A misconfigured `AI_PROVIDER` or missing key degrades to a working provider instead of failing.
 - ✅ The Anthropic path works on current models, with per-stage effort and output caps.
 - ⚠️ A 401/403 no longer fails the job when the fallback succeeds: watch for `llm_fallback` errors (annotations) or the key stays broken unnoticed.
-- ⚠️ The prompt is sized for the primary. Anthropic primary → Groq fallback: the input budgets (`<stage>_max_input_tokens`, ADR-0028) were not applied, so a large prompt can be rejected by Groq (413, not retried). The fallback is best-effort for that direction.
+- ⚠️ The prompt is sized for the primary. Anthropic primary → Groq fallback: the input budgets (`<stage>_max_input_tokens`, ADR-0028) were not applied. Groq would answer a prompt over its budget with 413 `rate_limit_exceeded`, retried as a rate limit until the job timeout, so `callLLM()` checks the fallback's `maxInputTokens` first (estimated system + user prompt; user prompt only for autofix) and skips the call when it is exceeded: `groq: skipped (prompt ~N tokens over <stage>_max_input_tokens M)`. The fallback only covers prompts that fit Groq.
 - ⚠️ Fallback output comes from a different model: evals and reviews of that run are not comparable with the primary's (the `llm_fallback` event identifies them).
 - ⚠️ Anthropic runs are paid, and thinking tokens count as output: `high` effort on three stages costs more than the model default (`medium`).
