@@ -86,7 +86,7 @@ async function buildLLM(suite, replayFile) {
     return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, recorded };
   }
   const config = loadLLMConfig(suite.stage);
-  const live = ({ prompt, systemPrompt }) => callLLM({ ...config, prompt, systemPrompt });
+  const live = ({ prompt, systemPrompt }) => callLLM({ ...config, stage: suite.stage, prompt, systemPrompt });
   return { llmFor: () => live, model: `${config.provider}:${config.model}` };
 }
 

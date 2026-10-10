@@ -387,3 +387,11 @@ test('callGroq omits reasoning_effort when reasoningEffort is not set (non-reaso
   await callGroq(BASE_ARGS);
   assert.equal('reasoning_effort' in capturedBody, false);
 });
+
+test('callGroq sets status on HTTP errors', async () => {
+  globalThis.fetch = async () => makeResponse('model not found', 404);
+  await assert.rejects(
+    () => callGroq({ prompt: 'p', systemPrompt: 's', apiKey: 'k', model: 'm', apiUrl: 'https://api.groq.com/openai/v1/chat/completions' }),
+    (err) => err.status === 404,
+  );
+});
