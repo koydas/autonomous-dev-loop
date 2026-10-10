@@ -55,6 +55,28 @@ jobs:
             --statements 80 \
             node --test scripts/tests/llm_client.test.mjs
 
+      - name: Check anthropic_client coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/anthropic_client.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/anthropic_client.test.mjs
+
+      - name: Check groq_client coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/groq_client.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/groq_client.test.mjs
+
       - name: Check review_evidence coverage (≥80%)
         run: |
           npx --yes c8 \

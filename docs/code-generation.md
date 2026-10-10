@@ -269,6 +269,8 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 
 - **Config** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
+- **Anthropic client** (`scripts/lib/anthropic_client.mjs`)
+- **Groq client** (`scripts/lib/groq_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
 - **Review evidence** (`scripts/lib/review_evidence.mjs`)
 
@@ -381,5 +383,7 @@ The repository enforces a minimum test coverage policy through CI using `c8 --ch
 - **Checkpoint resume** (`scripts/lib/checkpoint.mjs`)
 - **Configuration** (`scripts/lib/config.mjs`)
 - **LLM client** (`scripts/lib/llm_client.mjs`)
+- **Anthropic client** (`scripts/lib/anthropic_client.mjs`)
+- **Groq client** (`scripts/lib/groq_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
 - **Review evidence** (`scripts/lib/review_evidence.mjs`)

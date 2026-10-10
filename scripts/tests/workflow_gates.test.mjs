@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs'];
 
 // Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
 const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
@@ -45,6 +45,8 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['checkpoint.mjs', 'checkpoint.test.mjs'],
     ['config.mjs', 'config.test.mjs'],
     ['llm_client.mjs', 'llm_client.test.mjs'],
+    ['anthropic_client.mjs', 'anthropic_client.test.mjs'],
+    ['groq_client.mjs', 'groq_client.test.mjs'],
     ['output_writer.mjs', 'output_writer.test.mjs'],
     ['review_evidence.mjs', 'review_evidence.test.mjs'],
     ['eval_harness.mjs', 'eval_harness.test.mjs'],
