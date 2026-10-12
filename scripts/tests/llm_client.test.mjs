@@ -418,3 +418,93 @@ test('callLLM fails on an over-budget primary without a request when no fallback
   );
   assert.equal(calls, 0);
 });
+
+test('callLLM attaches the HTTP status of each failed provider (eval circuit breaker)', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  process.env.GROQ_MAX_RETRIES = '0';
+  globalThis.fetch = async (_url, opts) => (!opts.headers['x-api-key']
+    ? makeResponse({ error: { message: 'Rate limit reached on tokens per day (TPD): Limit 200000, Used 199000. Please try again in 13m47.28s.' } }, 429)
+    : makeResponse({ error: { message: 'Invalid API Key' } }, 401));
+  try {
+    await assert.rejects(
+      () => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'k', model: 'm', apiUrl: 'https://api.groq.com/openai/v1/chat/completions' }),
+      (err) => {
+        assert.deepEqual(err.providerErrors, [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: 401 }]);
+        return true;
+      },
+    );
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callLLM records a null status for a provider that failed without an HTTP response', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  process.env.GROQ_MAX_RETRIES = '0';
+  globalThis.fetch = async () => { throw new Error('connection refused'); };
+  const origSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return {}; };
+  try {
+    await assert.rejects(
+      () => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'k', model: 'm', apiUrl: 'https://api.groq.com/openai/v1/chat/completions' }),
+      (err) => {
+        assert.deepEqual(err.providerErrors.map((p) => p.status), [null, null]);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callLLM marks an Anthropic 400 primary and a Groq 429 fallback with their own statuses', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  process.env.GROQ_MAX_RETRIES = '0';
+  globalThis.fetch = async (_url, opts) => (opts.headers['x-api-key']
+    ? makeResponse({ type: 'error', error: { type: 'invalid_request_error', message: 'This API key is not scoped to a workspace' } }, 400)
+    : makeResponse({ error: { message: 'Rate limit reached on tokens per day (TPD): Limit 200000, Used 199000. Please try again in 13m47.28s.' } }, 429));
+  try {
+    const { lines } = await captureStderr(() => assert.rejects(
+      () => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-sonnet-4-5' }),
+      (err) => {
+        assert.deepEqual(err.providerErrors, [{ provider: 'anthropic', status: 400 }, { provider: 'groq', status: 429 }]);
+        assert.match(err.message, /anthropic: .*not scoped to a workspace.*groq: .*tokens per day \(TPD\)/);
+        return true;
+      },
+    ));
+    assert.ok(lines.some((l) => l.includes('"llm_fallback"')));
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callLLM marks a fallback skipped without a key, and an over-budget primary skipped without a request', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.GROQ_MAX_RETRIES = '0';
+  globalThis.fetch = async () => makeResponse({ error: { message: 'Invalid API Key' } }, 401);
+  try {
+    await assert.rejects(
+      () => callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT }),
+      (err) => {
+        assert.deepEqual(err.providerErrors, [{ provider: 'groq', status: 401 }, { provider: 'anthropic', status: null, skipped: 'no_api_key' }]);
+        return true;
+      },
+    );
+    await assert.rejects(
+      () => callLLM({ stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100 }),
+      (err) => {
+        assert.deepEqual(err.providerErrors.map((p) => p.skipped), ['over_input_budget', 'no_api_key']);
+        return true;
+      },
+    );
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});

@@ -10,6 +10,8 @@
  *   label          — output → class label (confusion matrix, consistency)
  *   expectedLabel  — expected → class label
  *   thresholds     — { "<summary dot.path>": { min?, max? } }, exit code 1 when one fails
+ *   tokensPerRunEst — provider tokens (in + out) one case × repeat costs; pre-flight estimate and
+ *                     EVAL_TOKEN_BUDGET when no error-free run of the suite is in EVAL_HISTORY_FILE
  */
 
 import path from 'node:path';
@@ -32,6 +34,8 @@ export const validationSuite = {
   name: 'validation',
   stage: 'validation',
   dataset: 'evals/datasets/validation.jsonl',
+  // Groq-reported usage (incl. reasoning tokens): ≈ 95k per repeat over 35 cases (docs/evals.md).
+  tokensPerRunEst: 2700,
 
   async run(input, { llm }) {
     return validateIssue({
@@ -133,6 +137,8 @@ export const reviewSuite = {
   name: 'review',
   stage: 'review',
   dataset: 'evals/datasets/review.jsonl',
+  // ≈ 2.9k chars/4 input per call × 1.34 (validation's Groq-reported / chars/4 ratio) + output: ≈ 97k per repeat.
+  tokensPerRunEst: 4200,
 
   // input: { title, body, diff, dependencies?, evidence?, head_sha? }. A case without `evidence` is a
   // repository that has not opted in (no config): the evidence is missing and does not withhold approval.
