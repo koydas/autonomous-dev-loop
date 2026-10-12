@@ -90,6 +90,8 @@ If `meta.file` is absent, the annotation has no file reference.
 | `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override` |
 | `review.skipped`   | info   | ✓             | `reason` (`already_reviewed` \| `superseded`), `prNumber`, `headSha` — no LLM call (ADR-0028) |
 | `review.error`     | error  | —             | `error`                                                  |
+| `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0033) |
+| `review.related_adrs_error` | warn | — | `error` — file listing or ADR read failed; the review continues without related ADRs (ADR-0034) |
 
 ### `review_evidence`
 

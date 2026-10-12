@@ -1345,3 +1345,27 @@ test('pr_review (Groq) exits 1 with an explicit error and no LLM call when the p
     await fs.unlink(eventFile).catch(() => {});
   }
 });
+
+// ADR-0033 / ADR-0034: the review searches the PR tree (here: this repo) for stale references and
+// related ADRs. PR #186 removed the old gate (c) rule that ADR-0012 still quotes.
+test('pr_review shows stale references and related ADRs, and a stale reference alone does not change an APPROVE', async () => {
+  const removed = '-* For gate (c), CI enforces coverage only for `scripts/lib/checkpoint.mjs` via c8 in test.yml. For all other changed automation logic, if the diff does not add/maintain an explicit minimum unit-test coverage policy/check for that flow, report HIGH severity.';
+  const diffText = `diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -16,1 +16,1 @@\n${removed}\n+* For gate (c), see test.yml.\n`;
+  const server = await startMockServer(makeHandler({ diffText, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const llm = server.requests.find((r) => r.url === '/v1/messages');
+    const prompt = JSON.parse(llm.body).messages.map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
+    assert.match(prompt, /## Stale references[\s\S]*still referenced in: docs\/adr\/0012-coverage-enforcement-delegation-to-ci\.md:18/);
+    assert.match(prompt, /## Related ADRs[\s\S]*ADR-0012/);
+    const comment = server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments'));
+    assert.match(JSON.parse(comment.body).body, /### 🔗 Stale References[\s\S]*`docs\/adr\/0012-coverage-enforcement-delegation-to-ci\.md:18`/);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});

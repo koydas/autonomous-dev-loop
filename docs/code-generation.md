@@ -97,6 +97,21 @@ Motivated by a benchmark session where a local coding model's generated diff —
 
 The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
 
+### Stale references and related ADRs (ADR-0033, ADR-0034)
+
+Before building the prompt, `pr_review.mjs` runs two deterministic text searches over the PR tree (`git ls-files` in the working directory, read as data per ADR-0023):
+
+- **Stale references** (`scripts/lib/stale_refs.mjs`): text the diff removes that is still quoted in `docs/**/*.md`, `.claude/skills/**/*.md`, `prompts/*.md` or `AGENTS.md`.
+  - Blocks are consecutive `-` lines of a hunk, at least 60 chars once backticks, `*`, `_`, whitespace and case are normalized. A file matches on the whole block or any 60-char window of it.
+  - `CHANGELOG.md`, the file the text was removed from, and files the diff re-adds it to are excluded.
+  - Hits are informational: a `## Stale references` block in the prompt and a `### 🔗 Stale References` section in the comment (at most 5 each). They never change the verdict.
+- **Related ADRs** (`scripts/lib/related_adrs.mjs`): ADRs citing a changed path (exact path, or its basename when unique in the repo; `CHANGELOG.md` ignored).
+  - Superseded or Deprecated ADRs are replaced by the ADR that supersedes them. ADRs the PR itself edits are skipped.
+  - Ranking: changed non-test paths cited, then all changed paths cited, then exact-path citations, then most recent.
+  - The prompt gets a `## Related ADRs` block with each ADR's id, title, status and the first 400 chars of its Decision.
+  - **Budget:** the block is the first thing dropped. Without a token budget (Anthropic) up to 3 ADRs. On Groq (`review_max_input_tokens`) at most 1, and only when the diff and the PR body still fit uncut. Otherwise the block is left out before anything else is shrunk, and the run logs `Related ADRs left out of the review prompt`.
+- A listing or read error in either search logs a warn event (`review.stale_refs_error`, `review.related_adrs_error`) and the review runs without that block.
+
 ## Tool Evidence for Review (ADR-0024)
 
 `pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer. Per ADR-0023, the runner and its config come from the default branch (`$RUNNER_TEMP/pipeline`); the PR tree is only the working directory the checks run in.

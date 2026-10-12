@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
@@ -14,6 +15,8 @@ import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
+import { findStaleReferences, formatStaleRefsContext, formatStaleRefsSection } from './lib/stale_refs.mjs';
+import { findRelatedAdrs } from './lib/related_adrs.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -236,6 +239,15 @@ const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
 
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
+// ADR-0033 / ADR-0034: text searches over the PR tree (the working directory, data only per ADR-0023).
+// A listing or read error is logged as a warn event and yields no result; it never aborts the review.
+const repoFiles = {
+  listFiles: () => execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean),
+  readFile: (p) => fs.readFileSync(path.join(process.cwd(), p), 'utf8'),
+};
+const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
+const relatedAdrs = findRelatedAdrs({ rawDiff, ...repoFiles });
+log('Review context searched', { prNumber, staleRefs: staleRefs.length, relatedAdrs: relatedAdrs.map((a) => a.id) });
 const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
 const evidenceParse = fs.existsSync(evidencePath)
   ? parseEvidence(fs.readFileSync(evidencePath, 'utf8'))
@@ -247,10 +259,13 @@ const evidence = assessEvidence(evidenceParse, {
 log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
-const { userPrompt, diffTruncated, bodyTruncated } = buildReviewPrompt({
+// ADR-0034: the related-ADR block is dropped before the diff or the body is shrunk.
+const { userPrompt, diffTruncated, bodyTruncated, adrCount } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
+  staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs,
 });
 if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens });
+if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
 
@@ -283,7 +298,8 @@ const isWithheld = verdict === 'WITHHELD';
 const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_CHANGES';
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + (isWithheld ? formatWithheldNote(verdictReason) : '');
+// ADR-0033: stale references are informational; they never change the verdict above.
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + (isWithheld ? formatWithheldNote(verdictReason) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
 const body = stripReviewMarkers(evidence.failing.length > 0

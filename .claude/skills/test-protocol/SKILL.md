@@ -54,6 +54,8 @@ Modules with CI-enforced ≥ 80% coverage (`c8 --check-coverage` in `test.yml`):
 - `scripts/lib/review_prompt.mjs`
 - `scripts/lib/eval_replay_ci.mjs`
 - `scripts/lib/issue_validator.mjs`
+- `scripts/lib/stale_refs.mjs`
+- `scripts/lib/related_adrs.mjs`
 - `scripts/build_eval_site.mjs` (entrypoint, measured with `build_eval_site.test.mjs`)
 
 Specific required paths for `scripts/lib/prompts.mjs`:

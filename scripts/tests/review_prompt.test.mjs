@@ -77,3 +77,60 @@ test('buildReviewPrompt does not report diff_truncated when only long context li
   assert.match(userPrompt, /…\[\+2801 chars\]/);
   assert.match(userPrompt, /\+x4/);
 });
+
+// ADR-0033 / ADR-0034: stale references and related ADRs in the review prompt
+
+const ADRS = ['0031', '0030', '0029', '0028'].map((n) => ({ id: `ADR-${n}`, title: `Title ${n}`, status: 'Accepted', decisionExcerpt: `Decision ${n}.` }));
+
+test('buildReviewPrompt adds the stale-reference context before the tool evidence', () => {
+  const { userPrompt } = build({ rawDiff: fileDiff('scripts/a.mjs', '+x'), staleRefsContext: '\n\n## Stale references (deterministic text search)\n- hit' });
+  const order = ['Automation gates context:', '## Stale references', '## Tool evidence'].map((s) => userPrompt.indexOf(s));
+  assert.ok(order.every((i) => i > 0), `missing context: ${order}`);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+});
+
+test('buildReviewPrompt shows up to 3 related ADRs without a token budget (Anthropic)', () => {
+  const { userPrompt, adrCount } = build({ maxInputTokens: null, relatedAdrs: ADRS });
+  assert.equal(adrCount, 3);
+  assert.match(userPrompt, /## Related ADRs[\s\S]*ADR-0031[\s\S]*ADR-0030[\s\S]*ADR-0029/);
+  assert.doesNotMatch(userPrompt, /ADR-0028/);
+  assert.ok(userPrompt.indexOf('## Related ADRs') < userPrompt.indexOf('## Tool evidence'));
+});
+
+test('buildReviewPrompt shows one related ADR on the Groq budget when it fits with the diff uncut', () => {
+  const { userPrompt, adrCount, diffTruncated, bodyTruncated } = build({ relatedAdrs: ADRS });
+  assert.equal(adrCount, 1);
+  assert.match(userPrompt, /ADR-0031: Title 0031 \(Accepted\) — Decision: Decision 0031\./);
+  assert.doesNotMatch(userPrompt, /ADR-0030/);
+  assert.deepEqual([diffTruncated, bodyTruncated], [false, false]);
+});
+
+test('buildReviewPrompt drops the related-ADR block first when the budget is tight, keeping the diff whole', () => {
+  // Without ADRs the prompt fits exactly with the full diff; the ADR block would force a diff cut.
+  const rawDiff = fileDiff('src/a.js', `+${'y'.repeat(4000)}`);
+  const base = build({ rawDiff, maxInputTokens: null });
+  const exact = estimateTokens(SYSTEM + base.userPrompt);
+  const relatedAdrs = [{ ...ADRS[0], decisionExcerpt: 'z'.repeat(400) }];
+  const { userPrompt, adrCount, diffTruncated, bodyTruncated } = build({ rawDiff, maxInputTokens: exact, relatedAdrs });
+  assert.equal(adrCount, 0);
+  assert.doesNotMatch(userPrompt, /## Related ADRs/);
+  assert.match(userPrompt, /y{4000}/);
+  assert.deepEqual([diffTruncated, bodyTruncated], [false, false]);
+});
+
+test('buildReviewPrompt drops the related-ADR block when its fixed part alone would be over budget', () => {
+  const base = build({ maxInputTokens: null });
+  const exact = estimateTokens(SYSTEM + base.userPrompt);
+  const relatedAdrs = [{ ...ADRS[0], decisionExcerpt: 'z'.repeat(exact * 8) }];
+  const { adrCount, userPrompt } = build({ maxInputTokens: exact, relatedAdrs });
+  assert.equal(adrCount, 0);
+  assert.doesNotMatch(userPrompt, /z{100}/);
+});
+
+test('buildReviewPrompt has no related-ADR block when nothing matched', () => {
+  for (const maxInputTokens of [null, 6300]) {
+    const { userPrompt, adrCount } = build({ maxInputTokens });
+    assert.equal(adrCount, 0);
+    assert.doesNotMatch(userPrompt, /## Related ADRs/);
+  }
+});
