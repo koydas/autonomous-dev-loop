@@ -384,13 +384,33 @@ test('evals.yml offers exactly the registered eval suites as a choice', async ()
 const evalsYml = () => readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
 const evalsJobs = () => Object.fromEntries(jobsOf(evalsYml()).map((j) => [j.name, j.text]));
 
-test('evals.yml runs weekly on Monday morning UTC, off the hour', () => {
-  const crons = [...evalsYml().matchAll(/^\s+- cron: '([^']+)'$/gm)].map((m) => m[1]);
-  assert.equal(crons.length, 1);
-  const [minute, hour, dom, month, dow] = crons[0].split(' ');
-  assert.ok(Number(minute) % 15 !== 0, `minute ${minute} must not be round (GitHub delays :00 schedules)`);
-  assert.ok(Number(hour) >= 5 && Number(hour) <= 7, `hour ${hour} must be about 06:00 UTC`);
-  assert.deepEqual([dom, month, dow], ['*', '*', '1']);
+// ADR-0027 amendment (2026-10-12): one cron per suite. Groq's free-tier TPD (200k, shared with
+// production) holds one suite × 3 repeats, not two in a row (run 38271632735).
+const evalsCrons = () => [...evalsYml().matchAll(/^\s+- cron: '([^']+)'(?: #.*)?$/gm)].map((m) => m[1]);
+const evalsCronSuites = () => {
+  const map = evalsJobs().eval.match(/fromJSON\('(\{[^']+\})'\)\[github\.event\.schedule\]/);
+  assert.ok(map, 'matrix: a JSON map from cron string to suite, indexed by github.event.schedule');
+  return JSON.parse(map[1]);
+};
+
+test('evals.yml runs each suite weekly, early morning UTC, off the hour, on days at least 48 h apart', () => {
+  const crons = evalsCrons();
+  assert.ok(crons.length >= 2);
+  const days = [];
+  for (const cron of crons) {
+    const [minute, hour, dom, month, dow] = cron.split(' ');
+    assert.ok(Number(minute) % 15 !== 0, `${cron}: minute ${minute} must not be round (GitHub delays :00 schedules)`);
+    assert.ok(Number(hour) >= 5 && Number(hour) <= 7, `${cron}: hour ${hour} must be about 06:00 UTC`);
+    assert.deepEqual([dom, month], ['*', '*'], `${cron}: weekly only`);
+    assert.match(dow, /^[0-6]$/, `${cron}: one day of the week`);
+    days.push(Number(dow));
+  }
+  // A delayed schedule (hours, run 38271632735) must still start on a TPD the previous suite no longer holds.
+  const sorted = [...days].sort((a, b) => a - b);
+  sorted.forEach((d, i) => {
+    const next = i + 1 < sorted.length ? sorted[i + 1] : sorted[0] + 7;
+    assert.ok(next - d >= 2, `suite days ${d} and ${next % 7} are less than 48 h apart`);
+  });
   assert.match(evalsYml(), /^on:\n  schedule:\n[\s\S]*?\n  workflow_dispatch:\n/m);
 });
 
@@ -413,12 +433,15 @@ test('evals.yml never starts an empty history nor restores a backup on schedule'
   assert.match(evalsJobs().eval, /REPEATS: \$\{\{ inputs\.repeats \|\| '3' \}\}/);
 });
 
-test('evals.yml schedule runs every registered suite, one at a time, each under its own run_id', async () => {
+test('evals.yml schedule runs every registered suite once a week, one suite per cron, each under its own run_id', async () => {
   const { SUITES } = await import('../lib/eval_suites.mjs');
   const job = evalsJobs().eval;
-  const matrix = job.match(/suite: \$\{\{ fromJSON\(github\.event_name == 'schedule' && '(\[[^']+\])' \|\| format\('\["\{0\}"\]', inputs\.suite\)\) \}\}/);
-  assert.ok(matrix, 'matrix: every suite on schedule, the chosen one on dispatch');
-  assert.deepEqual(JSON.parse(matrix[1]), Object.keys(SUITES));
+  assert.match(job, /suite: \$\{\{ fromJSON\(format\('\["\{0\}"\]', github\.event_name == 'schedule' && fromJSON\('[^']+'\)\[github\.event\.schedule\] \|\| inputs\.suite\)\) \}\}/,
+    'matrix: the cron\'s suite on schedule, the chosen one on dispatch');
+  const cronSuites = evalsCronSuites();
+  // Every cron is mapped (an unmapped one would run an empty suite), every suite has exactly one cron.
+  assert.deepEqual(Object.keys(cronSuites).sort(), [...evalsCrons()].sort());
+  assert.deepEqual(Object.values(cronSuites).sort(), Object.keys(SUITES).sort());
   assert.match(job, /max-parallel: 1\n/, 'suites share the 8K TPM: never in parallel');
   assert.match(job, /fail-fast: false\n/, 'a failing suite must not cancel the next one');
   assert.match(job, /SUITE: \$\{\{ matrix\.suite \}\}/);
@@ -427,6 +450,16 @@ test('evals.yml schedule runs every registered suite, one at a time, each under 
   assert.match(job, /name: run-trace-\$\{\{ github\.run_id \}\}-\$\{\{ matrix\.suite \}\}\n/);
   // Every suite, worst case, within the per-suite job timeout.
   assert.ok(Number(job.match(/^    timeout-minutes: (\d+)$/m)[1]) >= 90);
+});
+
+// The pre-flight estimate (tokensPerRunEst × runs) ignores Groq's prompt cache: any budget under the
+// TPD would refuse every weekly run. Gates only tighten (ADR-0031), so the scheduled run keeps repeats 3.
+test('evals.yml scheduled runs keep repeats 3 and ignore EVAL_TOKEN_BUDGET; manual runs keep it', () => {
+  const job = evalsJobs().eval;
+  assert.equal([...evalsYml().matchAll(/EVAL_TOKEN_BUDGET:/g)].length, 1);
+  assert.match(job, /^          EVAL_TOKEN_BUDGET: \$\{\{ github\.event_name != 'schedule' && vars\.EVAL_TOKEN_BUDGET \|\| '' \}\}$/m);
+  assert.match(job, /REPEATS: \$\{\{ inputs\.repeats \|\| '3' \}\}/);
+  assert.doesNotMatch(job, /REPEATS:[^\n]*schedule/, 'no lower repeats on schedule (consistency gate)');
 });
 
 test('evals.yml publishes every suite of the run in one Pages deploy', () => {

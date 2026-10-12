@@ -170,3 +170,37 @@ Consequences:
 - ⚠️ ≈ 410k input tokens of the Groq free-tier quota every Monday morning. A pipeline run or a PR eval overlapping it is slower.
 - ⚠️ New run IDs are `<workflow run>-<suite>`; runs published before keep their bare numeric IDs. Consumers treat `run_id` as opaque.
 - ⚠️ GitHub disables scheduled workflows after 60 days without repository activity; the weekly run stops with it.
+
+## Amendment (2026-10-12): one weekly cron per suite (Groq TPD)
+
+The first weekly run, 38271632735 (head `71b1e76`, before the #184 circuit breaker), ran `validation` × 3 and then `review` × 3 back to back on the Groq free tier. `validation` completed (105 calls, `tokens_est` 283,308 in + 21,321 out, ≈ 18 min). Every `review` call then failed on the TPD: `Limit 200000, Used 199205, Requested 2687`, Anthropic fallback refused with a 400. `review` was never published. Production shares that TPD.
+
+Measured from the run:
+- **Groq counts far less than the estimate.** 304k estimated tokens fit under a strictly enforced 200k TPD: Groq does not count cached prompt tokens against rate limits, and every case of a suite shares its ≈ 1.9k-token system prompt. Counted cost of `validation` × 3 ≤ 199k, i.e. ≤ 0.65 × the estimate (the 199,205 also includes the previous 24 h of production). Cache hits are best-effort.
+- **One suite × 3 ≈ one TPD; two do not fit.** Back to back, the second suite starts on a spent quota.
+- **Refill.** `try again in` equals `(used + requested − 200000) / (200000 / 86400 s)` on every 429 of the run (1892 → 13m37s, 8366 → 1h0m14s): about 8.3k tokens per hour, the whole quota after 24 h.
+- **Delay.** The Monday 06:23 schedule started at 15:37 UTC.
+
+Options evaluated (gates only tighten, ADR-0031; evals stay on the production primary model, so no switch to Anthropic):
+
+| Option | Numbers | Outcome |
+|---|---|---|
+| **One cron per suite, ≥ 48 h apart, `repeats: 3`** | one suite per TPD: validation ≤ 199k counted (measured), review ≈ 130–175k (validation's cache ratio applied to ≈ 200k in + output; assumption) | **Chosen** |
+| Lower `repeats` on schedule | 1: ≈ 95k estimated per suite, but `consistency` is `null` and its `optional` gate is skipped. 2: 189k / 193k estimated (35 × 2 × 2700, 23 × 2 × 4200), no headroom for production; agreement over pairs is more likely than over triples, so `min` 0.9 / 0.8 gets easier | Rejected: loosens the consistency gate on the published reference |
+| `EVAL_TOKEN_BUDGET` per suite (#184) | static estimates 283,500 / 289,800 vs a 200k TPD | Rejected as the fix: any cap under the TPD refuses both runs before the first call, so nothing is published; a cap above 290k protects nothing |
+
+Decision:
+- **Schedule.** `evals.yml` has one cron per registered suite: `validation` `23 6 * * 1` (Mondays), `review` `23 6 * * 3` (Wednesdays). The matrix maps the cron string to its suite: `fromJSON('{"23 6 * * 1":"validation","23 6 * * 3":"review"}')[github.event.schedule]`; dispatch keeps `inputs.suite`. 48 h, not 24 h: a schedule delayed by hours must still start on a TPD the previous suite no longer holds, under a rolling window or a refilling bucket alike.
+- **Unchanged:** `repeats: 3` on schedule, every threshold, `publish` on, `init_site` / `restore_run_id` never set on schedule, per-suite `EVAL_RUN_ID` and artifacts, the `evals-<ref>` concurrency group.
+- **`EVAL_TOKEN_BUDGET` is not read on schedule** (`github.event_name != 'schedule' && vars.EVAL_TOKEN_BUDGET || ''`): the cache-blind estimate would refuse every weekly run under any cap that protects the TPD. Manual and PR runs keep it. The circuit breaker (#184) still stops a scheduled run at its first TPD 429.
+- **Guards** (`workflow_gates.test.mjs`): every cron early morning, off the hour, weekly, on one day; suite days ≥ 48 h apart (circularly); every cron mapped and every registered suite mapped exactly once; `EVAL_TOKEN_BUDGET` defined once, behind the schedule guard; `repeats` default 3 and no schedule-dependent `repeats`.
+
+This revises the 2026-10-07 amendment's rejection of *one workflow run per suite (two crons)*: the deploy race it feared needs two runs reading and redeploying the site at once, which the shared `evals-<ref>` group and 48 h between runs rule out.
+
+Consequences:
+- ✅ Each suite is published weekly, on the free tier, with the same gates and the same consistency measure (3 repeats).
+- ✅ A suite's run no longer starts on a quota the other suite spent.
+- ⚠️ Each suite day spends up to the whole TPD that production shares; production on that day can hit the TPD until the quota refills (≈ 8.3k tokens per hour).
+- ⚠️ `review` × 3 fitting one TPD is an assumption (cache hits are not guaranteed, its counted cost is unmeasured). If it trips the breaker, the run is not published and the reference stays a week older. The next levers that keep the gates: a separate Groq organization for evals (same model, own TPD) or the Groq Dev tier.
+- ⚠️ A new suite needs its own cron day, ≥ 48 h from the others: at most three suites fit in a week (days 0, 2, 4 or similar). The test fails until it has one.
+- ⚠️ Two Pages deploys per week instead of one.
