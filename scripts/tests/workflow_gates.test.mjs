@@ -32,6 +32,16 @@ test('test.yml uses --check-coverage for each gated module', () => {
     `Expected ${GATE_COUNT} --check-coverage flags, found ${gateCount}`);
 });
 
+test('pr-review-system.md lists exactly the files gated by c8 in test.yml (gate (c) must not drift)', () => {
+  const prompt = readFileSync(resolve(ROOT, 'prompts/pr-review-system.md'), 'utf8');
+  const gateLine = prompt.split('\n').find((line) => line.startsWith('* For gate (c),'));
+  assert.ok(gateLine, 'gate (c) rule missing from prompts/pr-review-system.md');
+  const gated = [...workflow.matchAll(/--include '([^']+)'/g)].map((m) => m[1]).sort();
+  const listed = [...gateLine.matchAll(/`(scripts\/[^`]+\.mjs)`/g)].map((m) => m[1]).filter((f) => !f.includes('*')).sort();
+  assert.equal(gated.length, GATE_COUNT);
+  assert.deepEqual(listed, gated);
+});
+
 test('test.yml sets 80% threshold on all four dimensions for each gate', () => {
   for (const flag of ['--lines 80', '--branches 80', '--functions 80', '--statements 80']) {
     const count = (workflow.match(new RegExp(flag.replace(' ', '\\s+'), 'g')) || []).length;
