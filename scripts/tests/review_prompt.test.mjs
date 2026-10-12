@@ -66,3 +66,14 @@ test('parseReviewVerdict returns a null verdict when there is no verdict line', 
   assert.equal(parseReviewVerdict('<think>Verdict: APPROVED</think>').verdict, null);
   assert.deepEqual(parseReviewVerdict(undefined), { cleanReview: '', verdict: null });
 });
+
+test('buildReviewPrompt does not report diff_truncated when only long context lines were shortened', () => {
+  const ctx = ` ${'c'.repeat(3000)}`;
+  const raw = Array.from({ length: 5 }, (_, i) => fileDiff(`docs/f${i}.md`, `${ctx}\n+x${i}`)).join('');
+  assert.ok(raw.length > 12000);
+  const { userPrompt, diffTruncated } = build({ rawDiff: raw, maxInputTokens: null });
+  assert.equal(diffTruncated, false);
+  assert.match(userPrompt, /diff_truncated: false/);
+  assert.match(userPrompt, /…\[\+2801 chars\]/);
+  assert.match(userPrompt, /\+x4/);
+});
