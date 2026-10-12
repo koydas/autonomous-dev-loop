@@ -20,15 +20,15 @@ export const MAX_RELATED_ADRS_ON_BUDGET = 1;
  * Groq (`maxInputTokens` set): the diff is bounded by the token budget. Anthropic (`null`) keeps
  * the 12,000-char cap. `diffTruncated` compares against the uncapped filtered diff, so the reviewer
  * is told when it saw a partial diff. Throws (no LLM call) when the fixed part alone is over budget.
- * Optional `staleRefsContext` (ADR-0033) is fixed context like the dependency manifest;
+ * Optional `staleRefsContext` (ADR-0033) and `promptBudgetContext` (ADR-0035) are fixed context like the dependency manifest;
  * `relatedAdrs` (ADR-0034) is dropped before the PR body or the diff is shrunk.
  * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number }}
  */
-export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext = '', staleRefsContext = '', relatedAdrs = [] }) {
+export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [] }) {
   const fullDiff = filterDiff(rawDiff, Infinity);
   const cappedDiff = maxInputTokens == null ? filterDiff(rawDiff) : fullDiff;
   const fit = (adrCount) => {
-    const reviewContexts = `${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${staleRefsContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
+    const reviewContexts = `${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
     return fitReviewPrompt({
       systemPrompt,
       diff: cappedDiff,

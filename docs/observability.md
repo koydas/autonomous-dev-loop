@@ -92,6 +92,7 @@ If `meta.file` is absent, the annotation has no file reference.
 | `review.error`     | error  | —             | `error`                                                  |
 | `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0033) |
 | `review.related_adrs_error` | warn | — | `error` — file listing or ADR read failed; the review continues without related ADRs (ADR-0034) |
+| `review.prompt_budget_error` | warn | — | `error` — base (`git show`) or head read of a changed prompt failed; the review continues without the prompt budget block (ADR-0035) |
 
 ### `review_evidence`
 

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
+import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
 import { buildReviewPrompt, parseReviewVerdict } from './lib/review_prompt.mjs';
@@ -17,6 +17,8 @@ import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
 import { findStaleReferences, formatStaleRefsContext, formatStaleRefsSection } from './lib/stale_refs.mjs';
 import { findRelatedAdrs } from './lib/related_adrs.mjs';
+import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudgetSection } from './lib/prompt_budget.mjs';
+import { parseFlatYaml } from './lib/yaml.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -248,6 +250,37 @@ const repoFiles = {
 const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
 const relatedAdrs = findRelatedAdrs({ rawDiff, ...repoFiles });
 log('Review context searched', { prNumber, staleRefs: staleRefs.length, relatedAdrs: relatedAdrs.map((a) => a.id) });
+// ADR-0035: token cost of changed prompts/*.md. Base side at the merge base (the .diff is base...head),
+// head side and config/models.yaml from the PR tree (trusted defaults when the PR tree has none).
+const git = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+const baseSha = isCommitSha(prMeta?.base?.sha) ? prMeta.base.sha : null;
+let mergeBase = baseSha;
+if (baseSha && headSha) {
+  try {
+    mergeBase = git(['merge-base', baseSha, headSha]).trim();
+  } catch {
+    mergeBase = baseSha;
+  }
+}
+const readHeadOrNull = (p) => {
+  try {
+    return repoFiles.readFile(p);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+};
+const prModels = readHeadOrNull('config/models.yaml');
+const promptBudget = computePromptBudgetImpact({
+  rawDiff,
+  readBase: (p) => {
+    if (!mergeBase) throw new Error('PR base SHA unknown');
+    return git(['show', `${mergeBase}:${p}`]);
+  },
+  readHead: readHeadOrNull,
+  models: prModels == null ? GROQ_MODEL_DEFAULTS : parseFlatYaml(prModels),
+});
+if (promptBudget.length) log('Prompt budget impact', { prNumber, promptBudget });
 const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
 const evidenceParse = fs.existsSync(evidencePath)
   ? parseEvidence(fs.readFileSync(evidencePath, 'utf8'))
@@ -262,7 +295,7 @@ log('Review evidence assessed', { prNumber, state: evidence.state, reason: evide
 // ADR-0034: the related-ADR block is dropped before the diff or the body is shrunk.
 const { userPrompt, diffTruncated, bodyTruncated, adrCount } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
-  staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs,
+  staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
 });
 if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens });
 if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });
@@ -298,8 +331,8 @@ const isWithheld = verdict === 'WITHHELD';
 const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_CHANGES';
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-// ADR-0033: stale references are informational; they never change the verdict above.
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + (isWithheld ? formatWithheldNote(verdictReason) : '');
+// ADR-0033 / ADR-0035: stale references and prompt budget impact are informational; they never change the verdict above.
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? formatWithheldNote(verdictReason) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
 const body = stripReviewMarkers(evidence.failing.length > 0

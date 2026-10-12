@@ -38,3 +38,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0032: Primary LLM provider with the other as fallback](./0032-primary-provider-with-fallback.md)
 - [ADR-0033: Deterministic stale-reference check as review evidence](./0033-stale-reference-check.md)
 - [ADR-0034: Related ADRs in the review prompt, first to give way on the token budget](./0034-related-adrs-in-review.md)
+- [ADR-0035: Prompt budget impact as review evidence](./0035-prompt-budget-impact.md)

@@ -112,6 +112,19 @@ Before building the prompt, `pr_review.mjs` runs two deterministic text searches
   - **Budget:** the block is the first thing dropped. Without a token budget (Anthropic) up to 3 ADRs. On Groq (`review_max_input_tokens`) at most 1, and only when the diff and the PR body still fit uncut. Otherwise the block is left out before anything else is shrunk, and the run logs `Related ADRs left out of the review prompt`.
 - A listing or read error in either search logs a warn event (`review.stale_refs_error`, `review.related_adrs_error`) and the review runs without that block.
 
+### Prompt budget impact (ADR-0035)
+
+When a PR changes a `prompts/*.md` file, `pr_review.mjs` reports what the change costs in input budget (`scripts/lib/prompt_budget.mjs`). On Groq, every token a stage prompt gains is taken from the stage's variable input (the reviewed diff, the issue, the injected files).
+
+- **Delta:** `estimateTokens` (chars/4, `{{placeholders}}` excluded). The base version comes from the merge base, read with `git show <base>:<path>` (the review job checks out with `fetch-depth: 0`); the head version comes from the PR tree. A new prompt counts in full; a deleted prompt counts as 0 on the head side.
+- **Budget:** the stage(s) that load the prompt, and `<stage>_max_input_tokens` from the PR's `config/models.yaml`.
+  - The system and user prompts of validation, generation and review count inside that budget, as does `auto-fix-user.md`.
+  - `auto-fix-system.md` sits on top of `autofix_max_input_tokens`, so it is measured against the TPM window: `floor((8000 − autofix_max_tokens) / 1.10) − autofix_max_input_tokens`.
+  - `headroomTokens` is the budget minus every prompt of the stage under it. It ignores the contexts injected at runtime, so it is an upper bound.
+- **Output:** a `## Prompt budget impact` block in the prompt and a `### 📏 Prompt Budget Impact` table in the comment. **LOW HEADROOM** (⚠️) marks headroom under 10% of the budget.
+  - A stage without a configured budget shows `—`. A prompt no stage loads is listed with no stage.
+  - Informational only: it never changes the verdict. A read error logs `review.prompt_budget_error` (warn) and the review runs without the block.
+
 ## Tool Evidence for Review (ADR-0024)
 
 `pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer. Per ADR-0023, the runner and its config come from the default branch (`$RUNNER_TEMP/pipeline`); the PR tree is only the working directory the checks run in.
