@@ -426,6 +426,7 @@ const inputTokensEst = estimateTokens(systemPrompt + userPrompt);
 obsLog({ stage: 'autofix', event: 'autofix.llm_request', level: 'info', meta: { model, input_tokens_est: inputTokensEst, attempt: nextAttempt, prNumber } });
 
 const raw = await callLLM({
+  stage: 'autofix',
   prompt: userPrompt,
   systemPrompt,
   apiKey: llmApiKey,

@@ -84,6 +84,7 @@ export async function callGroq({
     const text = await response.text();
     if (!response.ok) {
       const err = new Error(`Groq API HTTP error ${response.status}: ${text}`);
+      err.status = response.status;
       err.errorType = classifyError(String(response.status));
       const tpmRateLimit = isTpmRateLimit(response.status, text);
       err.retryable = tpmRateLimit || RETRYABLE_STATUS_CODES.has(response.status);

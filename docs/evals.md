@@ -150,7 +150,7 @@ The chars/4 `tokens_est` in results files undercounts by ≈ 1.34 (reasoning tok
 
 **Circuit breaker.** The first LLM call that fails on an exhausted quota stops the run (`detectQuotaExhaustion`, `eval_harness.mjs`):
 - a provider message naming a daily quota (`tokens per day (TPD)`, `requests per day (RPD)`), whatever the fallback provider answered; or
-- every provider refused with 401, 403 or 429 (`providerErrors` on the `callLLM` error), e.g. Groq 429 then Anthropic 401 (invalid key).
+- every provider called refused with 401, 403 or 429 (`providerErrors` on the `callLLM` error), e.g. Groq 429 then Anthropic 401 (invalid key). A provider skipped without a call (ADR-0032: fallback without API key, prompt over its input budget) is ignored; at least one provider must have been called. Any other status, e.g. Anthropic 400 `not scoped to a workspace` (a config error), never trips the breaker.
 
 A TPM 429 that outlasts the retries, a 5xx or a network error does not trip it. Once open, no further case starts; the remaining case × repeat are recorded as skipped (`skipped: true`, no call). The run is a **provider failure**: `summary.error_rate = 1` (by definition, not a ratio), `summary.circuit_breaker = { provider, quota, limit, used, retry_after, skipped_runs }`, an `error_rate` threshold failure even for a suite that does not gate it (so `partitionPublishable` never publishes it), a ⛔ section in the report, one `::error::` (`eval/eval.error`, `meta.reason: "provider_quota"`) naming quota, usage and retry-after, exit 1. The results file and trace are still uploaded. Before this, run 37719923057 made 45 calls that all failed (Groq TPD 429, then Anthropic 401).
 

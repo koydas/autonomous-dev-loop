@@ -3,6 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
 import { parseFlatYaml, parseNestedYaml } from './yaml.mjs';
+import { log } from './observability.mjs';
 
 const CONFIG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../config');
 const MODELS_FILE = resolve(CONFIG_DIR, 'models.yaml');
@@ -19,12 +20,14 @@ export function loadLabelsConfig(group) {
 
 export const GROQ_API_URL_DEFAULT = 'https://api.groq.com/openai/v1/chat/completions';
 
-export const ANTHROPIC_MODEL_DEFAULTS = {
-  validation: 'claude-opus-4-7',
-  generation: 'claude-opus-4-7',
-  review: 'claude-opus-4-7',
-  autofix: 'claude-opus-4-7',
-};
+const ANTHROPIC_FALLBACK_MODEL = 'claude-opus-5-5';
+const ANTHROPIC_MAX_TOKENS_DEFAULT = 16000;
+const ANTHROPIC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// anthropic_<stage> in config/models.yaml; ANTHROPIC_MODEL overrides every stage at runtime.
+export const ANTHROPIC_MODEL_DEFAULTS = Object.fromEntries(
+  ['validation', 'generation', 'review', 'autofix'].map(stage => [stage, GROQ_MODEL_DEFAULTS[`anthropic_${stage}`] ?? ANTHROPIC_FALLBACK_MODEL]),
+);
 
 export function requireEnv(name) {
   const value = (process.env[name] || '').trim();
@@ -34,21 +37,79 @@ export function requireEnv(name) {
   return value;
 }
 
+export const PROVIDERS = ['groq', 'anthropic'];
+export const DEFAULT_PROVIDER = 'groq';
+
+const PROVIDER_KEY_ENV = { groq: 'GROQ_API_KEY', anthropic: 'ANTHROPIC_API_KEY' };
+const hasKey = (provider) => Boolean(process.env[PROVIDER_KEY_ENV[provider]]?.trim());
+
+// detectProvider() runs several times per LLM call: report each misconfiguration once per process.
+const reportedConfigWarnings = new Set();
+function warnConfigOnce(message, meta) {
+  if (reportedConfigWarnings.has(message)) return;
+  reportedConfigWarnings.add(message);
+  log({ stage: 'config', event: 'provider_config_fallback', level: 'warn', meta: { message, ...meta } });
+}
+
+// Primary provider (ADR-0032). A bad AI_PROVIDER never fails the job: an unknown value falls back to the
+// key-based default, and a provider whose key is missing yields to the one that has a key. Both are logged.
 export function detectProvider() {
-  const explicit = process.env.AI_PROVIDER?.trim().toLowerCase();
-  if (explicit) return explicit;
-  if (process.env.ANTHROPIC_API_KEY?.trim() && !process.env.GROQ_API_KEY?.trim()) return 'anthropic';
-  return 'groq';
+  const otherThan = (p) => PROVIDERS.find(x => x !== p);
+  const keyBased = hasKey('anthropic') && !hasKey('groq') ? 'anthropic' : DEFAULT_PROVIDER;
+  const raw = process.env.AI_PROVIDER?.trim();
+  if (!raw) return keyBased;
+
+  const explicit = raw.toLowerCase();
+  if (!PROVIDERS.includes(explicit)) {
+    warnConfigOnce(`AI_PROVIDER "${raw}" is not ${PROVIDERS.join(' or ')}: using ${keyBased}`, { ai_provider: raw, provider: keyBased });
+    return keyBased;
+  }
+  if (!hasKey(explicit) && hasKey(otherThan(explicit))) {
+    const other = otherThan(explicit);
+    warnConfigOnce(`AI_PROVIDER=${explicit} but ${PROVIDER_KEY_ENV[explicit]} is not set: using ${other}`, { ai_provider: raw, provider: other });
+    return other;
+  }
+  return explicit;
+}
+
+// The provider that is not the primary one, when its API key is set; null otherwise (no fallback).
+export function detectFallbackProvider() {
+  const fallback = PROVIDERS.find(p => p !== detectProvider());
+  return process.env[PROVIDER_KEY_ENV[fallback]]?.trim() ? fallback : null;
 }
 
 export function loadLLMConfig(stage = 'generation') {
-  const provider = detectProvider();
+  return loadProviderConfig(detectProvider(), stage);
+}
+
+// Config for one provider, independent of AI_PROVIDER: the fallback call needs its own key, model and budgets.
+export function loadProviderConfig(provider, stage = 'generation') {
+  if (!PROVIDERS.includes(provider)) {
+    throw new Error(`Unknown provider "${provider}" (must be ${PROVIDERS.join(' or ')})`);
+  }
 
   if (provider === 'anthropic') {
     const apiKey = requireEnv('ANTHROPIC_API_KEY');
     const model = (process.env.ANTHROPIC_MODEL || ANTHROPIC_MODEL_DEFAULTS[stage] || ANTHROPIC_MODEL_DEFAULTS.generation).trim();
     const apiUrl = process.env.ANTHROPIC_API_URL?.trim() || undefined;
-    return { provider, apiKey, model, apiUrl };
+
+    // Thinking tokens count toward max_tokens: the Groq budgets (8K TPM) do not apply here.
+    const rawMaxTokens = GROQ_MODEL_DEFAULTS[`anthropic_${stage}_max_tokens`] ?? GROQ_MODEL_DEFAULTS.anthropic_max_tokens;
+    const maxTokens = rawMaxTokens === undefined ? ANTHROPIC_MAX_TOKENS_DEFAULT : parseInt(rawMaxTokens, 10);
+    if (isNaN(maxTokens) || maxTokens <= 0) {
+      throw new Error(`Invalid anthropic max_tokens for stage "${stage}": ${rawMaxTokens} (must be a positive integer)`);
+    }
+
+    // Sent as output_config.effort. ANTHROPIC_EFFORT overrides every stage; `off` sends none (model default).
+    let effort = process.env.ANTHROPIC_EFFORT?.trim().toLowerCase()
+      || (GROQ_MODEL_DEFAULTS[`anthropic_${stage}_effort`] ?? GROQ_MODEL_DEFAULTS.anthropic_effort);
+    if (effort === 'off') effort = undefined;
+    if (effort !== undefined && !ANTHROPIC_EFFORTS.includes(effort)) {
+      throw new Error(`Invalid anthropic effort for stage "${stage}": ${effort} (must be ${ANTHROPIC_EFFORTS.join(', ')} or off)`);
+    }
+
+    // No temperature: sampling parameters are rejected (400) by Opus 4.7+ and Opus 5.x.
+    return { provider, apiKey, model, apiUrl, maxTokens, reasoningEffort: effort };
   }
 
   const apiKey = requireEnv('GROQ_API_KEY');

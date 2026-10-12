@@ -84,16 +84,19 @@ export function createReplayLLM(recorded) {
 const DAILY_QUOTA = /\b(tokens|requests) per day \((TPD|RPD)\)/i;
 
 // err: what the LLM threw. Returns { provider, quota, limit, used, retry_after, message } when no
-// further call of this run can succeed (a daily quota, or every provider refused with 401/403/429),
-// else null. err.providerErrors (llm_client.mjs) carries per-provider statuses; a bare message
+// further call of this run can succeed (a daily quota, or every provider called refused with 401/403/429),
+// else null. err.providerErrors (llm_client.mjs) carries per-provider statuses; a provider skipped without
+// a call (no API key, over its input budget) is neither evidence for nor against a quota. Any other status
+// (e.g. Anthropic 400 "not scoped to a workspace", a config error) is not a quota. A bare message
 // (replay) is matched on its text only.
 export function detectQuotaExhaustion(err) {
   const message = String(err?.message ?? err ?? '');
   const daily = message.match(DAILY_QUOTA);
+  const providers = (Array.isArray(err?.providerErrors) ? err.providerErrors : []).filter((p) => !p?.skipped);
   const retryAfter = message.match(/try again in ((?:\d+h)?(?:\d+m(?!s))?(?:\d+(?:\.\d+)?m?s)?)/i)?.[1] || null;
   if (daily) {
     return {
-      provider: /groq/i.test(message) ? 'groq' : 'unknown',
+      provider: providers.find((p) => p.status === 429)?.provider ?? (/groq/i.test(message) ? 'groq' : 'unknown'),
       quota: `${daily[1].toLowerCase()} per day (${daily[2].toUpperCase()})`,
       limit: Number(message.match(/Limit (\d+)/)?.[1] ?? NaN) || null,
       used: Number(message.match(/Used (\d+)/)?.[1] ?? NaN) || null,
@@ -101,7 +104,6 @@ export function detectQuotaExhaustion(err) {
       message,
     };
   }
-  const providers = Array.isArray(err?.providerErrors) ? err.providerErrors : [];
   if (providers.length && providers.every((p) => [401, 403, 429].includes(p.status))) {
     return {
       provider: providers.map((p) => p.provider).join('+'),

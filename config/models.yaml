@@ -1,6 +1,7 @@
 # Default Groq model per pipeline.
 # Override at runtime with the GROQ_MODEL environment variable.
-# For Anthropic, set AI_PROVIDER=anthropic and optionally ANTHROPIC_MODEL.
+# AI_PROVIDER (groq | anthropic) picks the primary provider; the other one is the fallback when its key
+# is set (ADR-0032). Anthropic settings are the anthropic_* keys at the end of this file.
 #
 # openai/gpt-oss-120b replaces qwen/qwen3-32b (retired 2026-07-17) and
 # llama-3.3-70b-versatile (retired 2026-08-16) (ADR-0025).
@@ -56,3 +57,23 @@ autofix_max_input_tokens: 2600
 # and cannot be targeted (ADR-0029); the diff already repeats most of the shown files.
 autofix_diff_ratio:     0.15
 autofix_feedback_ratio: 0.25
+
+# ── Anthropic (ADR-0032) ─────────────────────────────────────────────────────
+# anthropic_<stage>: model (ANTHROPIC_MODEL overrides every stage).
+# anthropic_<stage>_effort: output_config.effort — low | medium | high | xhigh | max | off
+#   (ANTHROPIC_EFFORT overrides every stage). claude-opus-5-5 defaults to medium when none is sent.
+# anthropic_<stage>_max_tokens: output cap, thinking included. No input budget: 1M context, no TPM cap.
+#   Kept at 16000: requests are not streamed, a larger cap risks an HTTP timeout on long turns.
+# No temperature: Opus 4.7+ / 5.x reject sampling parameters (400).
+anthropic_validation:            claude-opus-5-5
+anthropic_validation_effort:     low
+anthropic_validation_max_tokens: 16000
+anthropic_generation:            claude-opus-5-5
+anthropic_generation_effort:     high
+anthropic_generation_max_tokens: 16000
+anthropic_review:                claude-opus-5-5
+anthropic_review_effort:         high
+anthropic_review_max_tokens:     16000
+anthropic_autofix:               claude-opus-5-5
+anthropic_autofix_effort:        high
+anthropic_autofix_max_tokens:    16000

@@ -325,6 +325,40 @@ test('detectQuotaExhaustion does not trip on a TPM 429, a 5xx, an unknown status
   assert.equal(detectQuotaExhaustion(undefined), null);
 });
 
+// ADR-0032 shapes: primary=anthropic / fallback=groq, a fallback skipped without a call (llm_client.mjs).
+const WORKSPACE_400 = 'anthropic: Anthropic API HTTP error 400: {"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace"}}';
+
+test('detectQuotaExhaustion never counts an Anthropic 400 (config error) as a quota, in either order', () => {
+  const failed = (providerErrors, tail) => Object.assign(new Error(`All providers failed: ${WORKSPACE_400}, ${tail}`), { providerErrors });
+  assert.equal(detectQuotaExhaustion(failed([{ provider: 'anthropic', status: 400 }, { provider: 'groq', status: 429 }],
+    'groq: Groq API HTTP error 429: Rate limit reached on tokens per minute (TPM). Please try again in 1.2s')), null);
+  assert.equal(detectQuotaExhaustion(failed([{ provider: 'anthropic', status: 400 }, { provider: 'groq', status: null, skipped: 'no_api_key' }],
+    'groq: skipped (no API key configured)')), null);
+  assert.equal(detectQuotaExhaustion(Object.assign(new Error('x'), {
+    providerErrors: [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: 400 }],
+  })), null);
+});
+
+test('detectQuotaExhaustion attributes a Groq TPD fallback behind an Anthropic 400 primary to groq', () => {
+  const tpd = TPD_ERROR.slice(TPD_ERROR.indexOf('groq: '), TPD_ERROR.indexOf(', anthropic: '));
+  const err = Object.assign(new Error(`All providers failed: ${WORKSPACE_400}, ${tpd}`), {
+    providerErrors: [{ provider: 'anthropic', status: 400 }, { provider: 'groq', status: 429 }],
+  });
+  const q = detectQuotaExhaustion(err);
+  assert.deepEqual([q.provider, q.quota, q.limit, q.retry_after], ['groq', 'tokens per day (TPD)', 200000, '13m47.28s']);
+});
+
+test('detectQuotaExhaustion ignores skipped providers: trips on the only provider called, never on none', () => {
+  const q = detectQuotaExhaustion(Object.assign(new Error('All providers failed: groq: ... 401, anthropic: skipped (no API key configured)'), {
+    providerErrors: [{ provider: 'groq', status: 401 }, { provider: 'anthropic', status: null, skipped: 'no_api_key' }],
+  }));
+  assert.equal(q.provider, 'groq');
+  assert.equal(q.quota, 'every provider refused (groq 401)');
+  assert.equal(detectQuotaExhaustion(Object.assign(new Error('x'), {
+    providerErrors: [{ provider: 'groq', status: null, skipped: 'over_input_budget' }, { provider: 'anthropic', status: null, skipped: 'no_api_key' }],
+  })), null);
+});
+
 const tpdSuite = (swallow = false) => ({
   ...echoSuite,
   async run(input, { llm }) {
