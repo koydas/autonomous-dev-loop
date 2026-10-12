@@ -1403,7 +1403,8 @@ test('pr_review continues without the prompt budget block when the base SHA is u
     const result = await runPrReview(server.address().port, eventFile);
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
     assert.match(result.stderr, /"event":"review\.prompt_budget_error".*"level":"warn"/);
-    assert.doesNotMatch(server.requests.find((r) => r.url === '/v1/messages').body, /Prompt budget impact/);
+    // Match the block header: ADR-0035 (titled "Prompt budget impact …") can appear among the related ADRs.
+    assert.doesNotMatch(server.requests.find((r) => r.url === '/v1/messages').body, /## Prompt budget impact/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
