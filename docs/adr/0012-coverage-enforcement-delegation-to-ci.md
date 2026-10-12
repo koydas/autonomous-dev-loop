@@ -1,7 +1,7 @@
 # ADR-0012: Scoped coverage enforcement — CI for checkpoint, reviewer policy for the rest
 
 - **Date:** 2026-05-25
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0033](./0033-review-coverage-gate-reads-ci-gates.md)
 
 ## Context
 
