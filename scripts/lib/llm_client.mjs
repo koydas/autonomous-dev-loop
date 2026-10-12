@@ -24,22 +24,34 @@ export async function callLLM(args) {
   const stage = args.stage ?? 'generation';
 
   const errors = [];
+  // Per-provider outcome on the thrown error (err.providerErrors), for callers that must tell an exhausted
+  // quota from a bad response (eval circuit breaker): { provider, status } for a provider that was called
+  // (status null without an HTTP response), { provider, status: null, skipped } for one that was not.
+  const providerErrors = [];
+  const fail = () => Object.assign(new Error(`All providers failed: ${errors.join(', ')}`), { providerErrors });
+  const httpStatus = (error) => (Number.isInteger(error.status) ? error.status : null);
   let errorType;
   let status;
+  let called = false;
   try {
     // An over-budget Groq primary can only end in a 413 retried until the job timeout (ADR-0028): skip it
     // without a request, so the fallback (Anthropic: no input budget) gets the prompt instead.
     assertInputBudget(stage, estimateTokens(args.systemPrompt + args.prompt), args.maxInputTokens);
+    called = true;
     return await PROVIDER_CALLS[primary](args);
   } catch (error) {
     errorType = error.errorType ?? classifyError(String(error.status ?? ''));
     status = error.status;
     errors.push(`${primary}: ${error.message}`);
+    providerErrors.push(called
+      ? { provider: primary, status: httpStatus(error) }
+      : { provider: primary, status: null, skipped: 'over_input_budget' });
   }
 
   if (detectFallbackProvider() !== fallback) {
     errors.push(`${fallback}: skipped (no API key configured)`);
-    throw new Error(`All providers failed: ${errors.join(', ')}`);
+    providerErrors.push({ provider: fallback, status: null, skipped: 'no_api_key' });
+    throw fail();
   }
 
   let fallbackConfig;
@@ -47,7 +59,8 @@ export async function callLLM(args) {
     fallbackConfig = loadProviderConfig(fallback, stage);
   } catch (error) {
     errors.push(`${fallback}: ${error.message}`);
-    throw new Error(`All providers failed: ${errors.join(', ')}`);
+    providerErrors.push({ provider: fallback, status: null, skipped: 'config_error' });
+    throw fail();
   }
 
   // The prompt was sized for the primary. A prompt over the fallback's input budget (Groq: 8K TPM) can only
@@ -56,7 +69,8 @@ export async function callLLM(args) {
   const inputTokens = estimateTokens(stage === 'autofix' ? args.prompt : args.systemPrompt + args.prompt);
   if (fallbackConfig.maxInputTokens != null && inputTokens > fallbackConfig.maxInputTokens) {
     errors.push(`${fallback}: skipped (prompt ~${inputTokens} tokens over ${stage}_max_input_tokens ${fallbackConfig.maxInputTokens})`);
-    throw new Error(`All providers failed: ${errors.join(', ')}`);
+    providerErrors.push({ provider: fallback, status: null, skipped: 'over_input_budget' });
+    throw fail();
   }
 
   // Any primary failure falls back. 401/403 means the primary's key is wrong: logged as an error
@@ -69,6 +83,7 @@ export async function callLLM(args) {
     return await PROVIDER_CALLS[fallback]({ ...fallbackConfig, ...call });
   } catch (error) {
     errors.push(`${fallback}: ${error.message}`);
+    providerErrors.push({ provider: fallback, status: httpStatus(error) });
   }
-  throw new Error(`All providers failed: ${errors.join(', ')}`);
+  throw fail();
 }
