@@ -171,6 +171,14 @@ Emitted by `llm_client.mjs` and `config.mjs` (ADR-0032). `stage` is the calling 
 | `llm_fallback_disabled`    | warn          | —             | `from`, `error_type`, `error` — the primary failed and the caller passed `fallback: false` (live evals) |
 | `provider_config_fallback` | warn          | —             | `message`, `ai_provider`, `provider` — `AI_PROVIDER` is unknown or names a provider without a key; logged once per process |
 
+### `dependency_manifest`
+
+Emitted by `dependency_manifest.mjs` (#195, ADR-0023) in the review, code generation and auto-fix stages. The stage continues with no manifest.
+
+| Event                                     | Level | `duration_ms` | Key `meta` fields |
+|-------------------------------------------|-------|---------------|-------------------|
+| `dependency_manifest.package_json_ignored` | warn  | —             | `path`, `reason` (`not_regular_file` or an error code) — `package.json` in the working tree is not a regular file (symlink, directory, FIFO, …; never followed) or cannot be read; it is treated as missing |
+
 ### `observability`
 
 Emitted by `observability.mjs` itself when a trace operation fails. The business logic continues.
