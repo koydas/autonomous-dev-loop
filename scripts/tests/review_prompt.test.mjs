@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReviewPrompt, orderDiffForReview, parseReviewVerdict } from '../lib/review_prompt.mjs';
+import { buildReviewPrompt, findUnreviewedCodeFiles, formatUnreviewedCodeNote, orderDiffForReview, parseReviewVerdict, withholdOnUnreviewedCode } from '../lib/review_prompt.mjs';
 import { assessEvidence } from '../lib/review_evidence.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
 
@@ -176,4 +176,63 @@ test('buildReviewPrompt cut to the budget drops the docs before the code and its
   assert.match(userPrompt, /\+test/);
   assert.ok(userPrompt.indexOf('scripts/a.mjs') < userPrompt.indexOf('scripts/tests/a.test.mjs'));
   assert.ok(userPrompt.indexOf('scripts/tests/a.test.mjs') < userPrompt.indexOf('docs/evals.md'));
+});
+
+// --- ADR-0038: code the reviewer did not see withholds an approval ---
+
+test('findUnreviewedCodeFiles lists the code files cut in part or in full, not the tests or docs', () => {
+  const full = fileDiff('scripts/a.mjs', '+a') + fileDiff('scripts/b.mjs', '+b') + fileDiff('scripts/tests/a.test.mjs', '+t') + fileDiff('docs/x.md', '+d');
+  const bStart = full.indexOf('diff --git a/scripts/b.mjs');
+  assert.deepEqual(findUnreviewedCodeFiles(full, full.slice(0, bStart + 20)), ['scripts/b.mjs']);
+  assert.deepEqual(findUnreviewedCodeFiles(full, full.slice(0, 10)), ['scripts/a.mjs', 'scripts/b.mjs']);
+  assert.deepEqual(findUnreviewedCodeFiles(full, full.slice(0, bStart - 1)), ['scripts/b.mjs'], 'a.mjs is complete without its separator newline');
+});
+
+test('findUnreviewedCodeFiles returns [] when only tests or docs were cut, nothing was cut, or there is no diff', () => {
+  const full = fileDiff('scripts/a.mjs', '+a') + fileDiff('scripts/tests/a.test.mjs', '+t') + fileDiff('docs/x.md', '+d');
+  assert.deepEqual(findUnreviewedCodeFiles(full, full.slice(0, full.indexOf('diff --git a/scripts/tests') + 5)), []);
+  assert.deepEqual(findUnreviewedCodeFiles(full, full), []);
+  assert.deepEqual(findUnreviewedCodeFiles(full, full.replace(/\n$/, '')), [], 'a missing trailing newline is not a cut');
+  assert.deepEqual(findUnreviewedCodeFiles('', ''), []);
+  assert.deepEqual(findUnreviewedCodeFiles(undefined, undefined), []);
+  assert.deepEqual(findUnreviewedCodeFiles('preamble without a file header', ''), [], 'a chunk without a header is not a file');
+});
+
+test('withholdOnUnreviewedCode withholds an APPROVE when code was cut, naming the files', () => {
+  assert.deepEqual(
+    withholdOnUnreviewedCode({ verdict: 'APPROVE', reason: null }, ['scripts/a.mjs', 'scripts/b.mjs']),
+    { verdict: 'WITHHELD', reason: 'code cut from the reviewed diff: scripts/a.mjs, scripts/b.mjs' },
+  );
+});
+
+test('withholdOnUnreviewedCode passes any other decision, or an approval of a complete diff, through unchanged', () => {
+  const approve = { verdict: 'APPROVE', reason: null };
+  assert.equal(withholdOnUnreviewedCode(approve, []), approve);
+  assert.equal(withholdOnUnreviewedCode(approve), approve);
+  const changes = { verdict: 'REQUEST_CHANGES', reason: 'failing checks: tests' };
+  assert.equal(withholdOnUnreviewedCode(changes, ['scripts/a.mjs']), changes);
+  const withheld = { verdict: 'WITHHELD', reason: 'evidence stale: head moved' };
+  assert.equal(withholdOnUnreviewedCode(withheld, ['scripts/a.mjs']), withheld, 'the evidence reason is kept');
+});
+
+test('formatUnreviewedCodeNote names each file and says auto-fix is not triggered', () => {
+  const note = formatUnreviewedCodeNote(['scripts/a.mjs', 'config/models.yaml']);
+  assert.match(note, /^\n> \*\*Approval withheld\*\* — the diff was cut to the token budget/);
+  assert.match(note, /`scripts\/a\.mjs`, `config\/models\.yaml`/);
+  assert.match(note, /auto-fix is not triggered/);
+});
+
+test('buildReviewPrompt reports the code files cut to the Groq budget, and none when only docs were cut', () => {
+  const codeCut = build({ rawDiff: fileDiff('scripts/a.mjs', '+'.padEnd(40000, 'x')) + fileDiff('scripts/b.mjs', '+b'), maxInputTokens: 3000 });
+  assert.deepEqual(codeCut.unreviewedCodeFiles, ['scripts/a.mjs', 'scripts/b.mjs']);
+  const docsCut = build({ rawDiff: fileDiff('docs/evals.md', '+'.padEnd(40000, 'd')) + fileDiff('scripts/a.mjs', '+code'), maxInputTokens: 3000 });
+  assert.equal(docsCut.diffTruncated, true);
+  assert.deepEqual(docsCut.unreviewedCodeFiles, []);
+  assert.deepEqual(build().unreviewedCodeFiles, []);
+});
+
+test('buildReviewPrompt without a budget (Anthropic) reports the code files past the 12,000-char cap', () => {
+  const { diffTruncated, unreviewedCodeFiles } = build({ rawDiff: fileDiff('scripts/a.mjs', '+'.padEnd(20000, 'y')), maxInputTokens: null });
+  assert.equal(diffTruncated, true);
+  assert.deepEqual(unreviewedCodeFiles, ['scripts/a.mjs']);
 });
