@@ -37,3 +37,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0031: Eval gates are a ratchet — fix the stage, never loosen the gate](./0031-eval-gates-are-a-ratchet.md)
 - [ADR-0032: Primary LLM provider with the other as fallback](./0032-primary-provider-with-fallback.md)
 - [ADR-0033: Review coverage gate (c) reads the CI coverage gates; ungated files are judged on their tests](./0033-review-coverage-gate-reads-ci-gates.md)
+- [ADR-0034: The review → auto-fix loop converges — visible findings, code-first diff, APPROVE resets the loop](./0034-review-fix-loop-converges.md)

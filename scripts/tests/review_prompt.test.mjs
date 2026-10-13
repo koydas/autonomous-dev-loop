@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReviewPrompt, parseReviewVerdict } from '../lib/review_prompt.mjs';
+import { buildReviewPrompt, orderDiffForReview, parseReviewVerdict } from '../lib/review_prompt.mjs';
 import { assessEvidence } from '../lib/review_evidence.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
 
@@ -65,4 +65,47 @@ test('parseReviewVerdict returns a null verdict when there is no verdict line', 
   assert.equal(parseReviewVerdict('### ⚠️ Issues Found\nNone.\n\n### 🚀').verdict, null);
   assert.equal(parseReviewVerdict('<think>Verdict: APPROVED</think>').verdict, null);
   assert.deepEqual(parseReviewVerdict(undefined), { cleanReview: '', verdict: null });
+});
+
+// --- Diff order for review (ADR-0034) ---
+
+const filesOf = (diff) => [...diff.matchAll(/^diff --git a\/(.+?) b\//gm)].map((m) => m[1]);
+
+test('orderDiffForReview puts code first, then tests, then docs, keeping git order within each tier', () => {
+  const raw = ['CHANGELOG.md', 'scripts/tests/b.test.mjs', 'scripts/b.mjs', 'docs/evals.md', '.github/workflows/x.yml', 'scripts/tests/a.test.mjs']
+    .map((f) => fileDiff(f, `+${f}`)).join('');
+  assert.deepEqual(filesOf(orderDiffForReview(raw)), [
+    'scripts/b.mjs', '.github/workflows/x.yml', 'scripts/tests/b.test.mjs', 'scripts/tests/a.test.mjs', 'CHANGELOG.md', 'docs/evals.md',
+  ]);
+});
+
+test('orderDiffForReview keeps prompts and docs/code-generation.md with the code (automation scope)', () => {
+  const raw = ['README.md', 'docs/code-generation.md', 'prompts/pr-review-system.md'].map((f) => fileDiff(f, '+x')).join('');
+  assert.deepEqual(filesOf(orderDiffForReview(raw)), ['docs/code-generation.md', 'prompts/pr-review-system.md', 'README.md']);
+});
+
+test('orderDiffForReview keeps every hunk, a leading preamble, and the trailing newline (or its absence)', () => {
+  const raw = `preamble\n${fileDiff('docs/a.md', '+doc')}${fileDiff('src/a.js', '+code')}`;
+  const ordered = orderDiffForReview(raw);
+  assert.ok(ordered.startsWith('preamble\ndiff --git a/src/a.js'));
+  assert.equal(ordered.length, raw.length);
+  assert.ok(ordered.endsWith('+doc\n'));
+  assert.equal(orderDiffForReview(raw.trimEnd()).endsWith('+doc'), true);
+});
+
+test('orderDiffForReview returns the input unchanged for one file, an empty diff and a nullish one', () => {
+  const one = fileDiff('src/a.js', '+x');
+  assert.equal(orderDiffForReview(one), one);
+  assert.equal(orderDiffForReview(''), '');
+  assert.equal(orderDiffForReview(undefined), '');
+});
+
+test('buildReviewPrompt cut to the budget drops the docs before the code and its tests', () => {
+  const raw = fileDiff('docs/evals.md', '+'.padEnd(12000, 'd')) + fileDiff('scripts/a.mjs', '+code') + fileDiff('scripts/tests/a.test.mjs', '+test');
+  const { userPrompt, diffTruncated } = build({ rawDiff: raw, maxInputTokens: 2000 });
+  assert.equal(diffTruncated, true);
+  assert.match(userPrompt, /\+code/);
+  assert.match(userPrompt, /\+test/);
+  assert.ok(userPrompt.indexOf('scripts/a.mjs') < userPrompt.indexOf('scripts/tests/a.test.mjs'));
+  assert.ok(userPrompt.indexOf('scripts/tests/a.test.mjs') < userPrompt.indexOf('docs/evals.md'));
 });
