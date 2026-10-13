@@ -204,3 +204,7 @@ Consequences:
 - ⚠️ `review` × 3 fitting one TPD is an assumption (cache hits are not guaranteed, its counted cost is unmeasured). If it trips the breaker, the run is not published and the reference stays a week older. The next levers that keep the gates: a separate Groq organization for evals (same model, own TPD) or the Groq Dev tier.
 - ⚠️ A new suite needs its own cron day, ≥ 48 h from the others: at most three suites fit in a week (days 0, 2, 4 or similar). The test fails until it has one.
 - ⚠️ Two Pages deploys per week instead of one.
+
+## Amendment (2026-10-13): `invalid-role-two-admin-roles` rewritten (ADR-0031 §4)
+
+The case was labelled `invalid` / `B3` for an open category, but its text closed it: "The app has two admin roles today: `org_admin` and `project_admin`" lists the members of "Admins", which the validation prompt's own NOT BLOCKED rule accepts. It was missed on every repeat of runs 37681381162 and 38271632735. The ambiguity it is tagged for is now in the text: the export covers the whole organization, and `project_admin` administers one project, so whether it counts as an admin for that export can go either way. Label `invalid` and expected blocker `B3` are unchanged, no other case changes. Pinned input hash `099c1a9fea48` → `87cf4380707c`; `validation.jsonl` sha256 `c5608e3a…` → `ec41af4f…`, so runs before and after are not directly comparable on this case.
