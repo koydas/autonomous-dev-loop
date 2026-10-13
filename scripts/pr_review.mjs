@@ -241,16 +241,28 @@ const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
 
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
-// ADR-0033 / ADR-0034: text searches over the PR tree (the working directory, data only per ADR-0023).
+// ADR-0034 / ADR-0035: text searches over the PR tree (the working directory, data only per ADR-0023).
 // A listing or read error is logged as a warn event and yields no result; it never aborts the review.
+// The PR tree is untrusted: a symlink (to /dev/zero, or out of the tree) is never listed nor followed.
+const isRegularFile = (p) => {
+  try {
+    return fs.lstatSync(path.join(process.cwd(), p)).isFile();
+  } catch {
+    return false;
+  }
+};
 const repoFiles = {
-  listFiles: () => execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter(Boolean),
-  readFile: (p) => fs.readFileSync(path.join(process.cwd(), p), 'utf8'),
+  listFiles: () => execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter((p) => p && isRegularFile(p)),
+  readFile: (p) => {
+    const full = path.join(process.cwd(), p);
+    if (!fs.lstatSync(full).isFile()) throw new Error(`${p} is not a regular file`);
+    return fs.readFileSync(full, 'utf8');
+  },
 };
 const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
 const relatedAdrs = findRelatedAdrs({ rawDiff, ...repoFiles });
 log('Review context searched', { prNumber, staleRefs: staleRefs.length, relatedAdrs: relatedAdrs.map((a) => a.id) });
-// ADR-0035: token cost of changed prompts/*.md. Base side at the merge base (the .diff is base...head),
+// ADR-0036: token cost of changed prompts/*.md. Base side at the merge base (the .diff is base...head),
 // head side and config/models.yaml from the PR tree (trusted defaults when the PR tree has none).
 const git = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 const baseSha = isCommitSha(prMeta?.base?.sha) ? prMeta.base.sha : null;
@@ -292,7 +304,7 @@ const evidence = assessEvidence(evidenceParse, {
 log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
-// ADR-0034: the related-ADR block is dropped before the diff or the body is shrunk.
+// ADR-0035: the related-ADR block is dropped before the diff or the body is shrunk.
 const { userPrompt, diffTruncated, bodyTruncated, adrCount } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
   staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
@@ -331,7 +343,7 @@ const isWithheld = verdict === 'WITHHELD';
 const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_CHANGES';
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-// ADR-0033 / ADR-0035: stale references and prompt budget impact are informational; they never change the verdict above.
+// ADR-0034 / ADR-0036: stale references and prompt budget impact are informational; they never change the verdict above.
 const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? formatWithheldNote(verdictReason) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';

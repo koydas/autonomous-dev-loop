@@ -6,7 +6,7 @@ import { formatEvidenceContext } from './review_evidence.mjs';
 import { fitReviewPrompt } from './token_budget.mjs';
 import { formatRelatedAdrsContext } from './related_adrs.mjs';
 
-// ADR-0034: related ADRs shown to the reviewer. Groq gets one at most, and only when it fits
+// ADR-0035: related ADRs shown to the reviewer. Groq gets one at most, and only when it fits
 // with the diff and the PR body uncut: the block is the first thing dropped.
 export const MAX_RELATED_ADRS = 3;
 export const MAX_RELATED_ADRS_ON_BUDGET = 1;
@@ -20,8 +20,8 @@ export const MAX_RELATED_ADRS_ON_BUDGET = 1;
  * Groq (`maxInputTokens` set): the diff is bounded by the token budget. Anthropic (`null`) keeps
  * the 12,000-char cap. `diffTruncated` compares against the uncapped filtered diff, so the reviewer
  * is told when it saw a partial diff. Throws (no LLM call) when the fixed part alone is over budget.
- * Optional `staleRefsContext` (ADR-0033) and `promptBudgetContext` (ADR-0035) are fixed context like the dependency manifest;
- * `relatedAdrs` (ADR-0034) is dropped before the PR body or the diff is shrunk.
+ * Optional `staleRefsContext` (ADR-0034) and `promptBudgetContext` (ADR-0036) are fixed context like the dependency manifest;
+ * `relatedAdrs` (ADR-0035) is dropped before the PR body or the diff is shrunk.
  * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number }}
  */
 export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [] }) {

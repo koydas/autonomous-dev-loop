@@ -78,7 +78,7 @@ test('buildReviewPrompt does not report diff_truncated when only long context li
   assert.match(userPrompt, /\+x4/);
 });
 
-// ADR-0033 / ADR-0034: stale references and related ADRs in the review prompt
+// ADR-0034 / ADR-0035: stale references and related ADRs in the review prompt
 
 const ADRS = ['0031', '0030', '0029', '0028'].map((n) => ({ id: `ADR-${n}`, title: `Title ${n}`, status: 'Accepted', decisionExcerpt: `Decision ${n}.` }));
 

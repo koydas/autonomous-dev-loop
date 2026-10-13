@@ -1,4 +1,4 @@
-# ADR-0034: Related ADRs in the review prompt, first to give way on the token budget
+# ADR-0035: Related ADRs in the review prompt, first to give way on the token budget
 
 - **Date:** 2026-10-12
 - **Status:** Accepted
@@ -19,9 +19,9 @@ New pure module `scripts/lib/related_adrs.mjs`. `findRelatedAdrs({ rawDiff, list
   3. number of those cited by exact path (stronger than a basename);
   4. most recent ADR.
 
-  The first rule and the test/exact-path refinements go beyond "most paths cited, then most recent". On #186, the plain rule ranks ADR-0012 last of ten: nine other ADRs cite the test file `workflow_gates.test.mjs` or `CHANGELOG.md`. With the refinements it ranks second, behind ADR-0027, which cites both the prompt and the test file.
+  The first rule and the test/exact-path refinements go beyond "most paths cited, then most recent". On #186's diff, measured against the tree before #186 merged, the plain rule ranks ADR-0012 last of ten: nine other ADRs cite the test file `workflow_gates.test.mjs` or `CHANGELOG.md`. With the refinements it ranks second, behind ADR-0027, which cites both the prompt and the test file.
 - **Excerpt:** the start of the `## Decision` section, whitespace collapsed, cut to 400 chars with `…`.
-- **Prompt:** `buildReviewPrompt` takes an optional `relatedAdrs` array (and an optional `staleRefsContext` string, ADR-0033). It renders a `## Related ADRs` block after the other contexts and before the tool evidence, following the `dependencyManifestContext` pattern. No new placeholder in `prompts/pr-review-user.md`.
+- **Prompt:** `buildReviewPrompt` takes an optional `relatedAdrs` array (and an optional `staleRefsContext` string, ADR-0034). It renders a `## Related ADRs` block after the other contexts and before the tool evidence, following the `dependencyManifestContext` pattern. No new placeholder in `prompts/pr-review-user.md`.
 - **Budget:** the block is the first thing dropped.
   - Without a budget (Anthropic): up to 3 ADRs.
   - With a budget (Groq): at most 1 ADR, and only when the prompt fits with the diff and the PR body uncut. Otherwise the prompt is fitted without the block, so the PR body and the diff are only shrunk once no ADR is left.
@@ -40,6 +40,7 @@ New pure module `scripts/lib/related_adrs.mjs`. `findRelatedAdrs({ rawDiff, list
 
 - ✅ The reviewer sees the decision behind the files a PR changes, at no Groq diff cost: the block never displaces diff or PR body.
 - ✅ Deterministic and testable, with no new dependency.
-- ⚠️ On Groq only the top-ranked ADR is shown. For #186 that is ADR-0027, not ADR-0012. The stale-reference check (ADR-0033) covers that case without spending input budget.
+- ⚠️ On Groq only the top-ranked ADR is shown. For #186 (pre-merge tree) that was ADR-0027, not ADR-0012; the stale-reference check (ADR-0034) covers that case without spending input budget. Since #186, ADR-0012 is Superseded and resolves to ADR-0033.
+- ⚠️ Ranking dilutes as more ADRs cite the same file: ADR-0034–0036 cite `prompts/pr-review-system.md` too.
 - ⚠️ An ADR that governs a file without naming it, or names it only by a non-unique basename, is not found.
 - ⚠️ The `review` eval suite builds the prompt without related ADRs, so evals do not measure the block's effect.

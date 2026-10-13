@@ -2,7 +2,7 @@ import { log } from './observability.mjs';
 import { estimateTokens } from './metrics.mjs';
 import { GROQ_TPM_LIMIT, TOKEN_ESTIMATE_MARGIN } from './token_budget.mjs';
 
-// Prompt budget impact (ADR-0035): token cost of a PR's prompts/*.md changes against each stage's
+// Prompt budget impact (ADR-0036): token cost of a PR's prompts/*.md changes against each stage's
 // input budget in config/models.yaml. Informational review evidence; never a verdict input.
 
 export const LOW_HEADROOM_RATIO = 0.1;
@@ -47,13 +47,16 @@ export function stageBudget(models, stage, budget) {
   return { maxInputTokens: Math.floor((GROQ_TPM_LIMIT - maxTokens) / TOKEN_ESTIMATE_MARGIN), reserved: maxInput };
 }
 
-/** Top-level prompts/*.md files the diff changes, with `added` / `deleted` from the git headers. */
+/**
+ * Top-level prompts/*.md files the diff changes, with `added` / `deleted` from the git headers.
+ * `basePath` is where the base version lives: the `a/` path, which differs for a renamed file.
+ */
 export function changedPrompts(rawDiff) {
   return String(rawDiff ?? '')
     .split(/^(?=diff --git )/m)
     .map((chunk) => {
-      const path = chunk.match(/^diff --git a\/.+? b\/(.+)$/m)?.[1];
-      return { path, added: /^new file mode /m.test(chunk), deleted: /^deleted file mode /m.test(chunk) };
+      const [, basePath, path] = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m) ?? [];
+      return { path, basePath, added: /^new file mode /m.test(chunk), deleted: /^deleted file mode /m.test(chunk) };
     })
     .filter((p) => p.path && PROMPT_PATH.test(p.path));
 }
@@ -80,9 +83,9 @@ export function computePromptBudgetImpact({
     return headCache.get(p);
   };
   try {
-    return changed.flatMap(({ path, added, deleted }) => {
+    return changed.flatMap(({ path, basePath, added }) => {
       const headTokens = head(path);
-      const deltaTokens = headTokens - (added ? 0 : promptTokens(readBase(path)));
+      const deltaTokens = headTokens - (added ? 0 : promptTokens(readBase(basePath)));
       const stages = promptStages[path] ?? [{ stage: null, budget: null }];
       return stages.map(({ stage, budget }) => {
         const { maxInputTokens, reserved } = stage ? stageBudget(models, stage, budget) : { maxInputTokens: null, reserved: 0 };

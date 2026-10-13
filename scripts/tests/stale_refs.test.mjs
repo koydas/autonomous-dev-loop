@@ -137,17 +137,31 @@ test('findStaleReferences logs through observability by default (stderr JSON, no
 });
 
 // Regression: PR #186 removed the old gate (c) rule from prompts/pr-review-system.md; ADR-0012
-// (Decision, line 18) still quotes it. The reviewer missed it (only the diff was shown).
+// (Decision, line 18) still quoted it and the reviewer missed it (only the diff was shown).
+// #186 then marked ADR-0012 Superseded: the fixture restores the status it had during that review.
+const GATE_C_REMOVED = '-* For gate (c), CI enforces coverage only for `scripts/lib/checkpoint.mjs` via c8 in test.yml. For all other changed automation logic, if the diff does not add/maintain an explicit minimum unit-test coverage policy/check for that flow, report HIGH severity.';
+const GATE_C_ADDED = '+* For gate (c), CI enforces a minimum of 80% unit-test coverage with a dedicated step for each listed file.';
+const ADR_0012 = 'docs/adr/0012-coverage-enforcement-delegation-to-ci.md';
+
 test('findStaleReferences flags ADR-0012 for the gate (c) rule removed by PR #186', () => {
-  const removedLine = '-* For gate (c), CI enforces coverage only for `scripts/lib/checkpoint.mjs` via c8 in test.yml. For all other changed automation logic, if the diff does not add/maintain an explicit minimum unit-test coverage policy/check for that flow, report HIGH severity.';
-  const added = '+* For gate (c), CI enforces a minimum of 80% unit-test coverage with a dedicated step for each listed file.';
-  const adrPath = 'docs/adr/0012-coverage-enforcement-delegation-to-ci.md';
-  const adr = readFileSync(resolve(ROOT, adrPath), 'utf8');
-  const hits = run(fileDiff('prompts/pr-review-system.md', `${removedLine}\n${added}`, 16), { [adrPath]: adr, 'CHANGELOG.md': removedLine });
+  const adr = readFileSync(resolve(ROOT, ADR_0012), 'utf8').replace(/^- \*\*Status:\*\*.*$/m, '- **Status:** Accepted');
+  const hits = run(fileDiff('prompts/pr-review-system.md', `${GATE_C_REMOVED}\n${GATE_C_ADDED}`, 16), { [ADR_0012]: adr, 'CHANGELOG.md': GATE_C_REMOVED });
   assert.equal(hits.length, 1);
   assert.equal(hits[0].file, 'prompts/pr-review-system.md');
   assert.equal(hits[0].line, 16);
-  assert.deepEqual(hits[0].foundIn, [{ path: adrPath, line: 18 }]);
+  assert.deepEqual(hits[0].foundIn, [{ path: ADR_0012, line: 18 }]);
+});
+
+test('findStaleReferences skips Superseded and Deprecated ADRs (they quote the replaced rule on purpose)', () => {
+  const current = readFileSync(resolve(ROOT, ADR_0012), 'utf8');
+  assert.match(current, /^- \*\*Status:\*\* Superseded/m);
+  const diff = fileDiff('prompts/pr-review-system.md', GATE_C_REMOVED, 16);
+  assert.deepEqual(run(diff, { [ADR_0012]: current }), []);
+  const deprecated = `# ADR-0009: X\n\n- **Status:** Deprecated\n\n> ${GATE_C_REMOVED.slice(1)}`;
+  assert.deepEqual(run(diff, { 'docs/adr/0009-x.md': deprecated }), []);
+  // The status line only counts in an ADR: a guide mentioning "Superseded" is still searched.
+  const guide = `- **Status:** Superseded by nothing, this is a guide.\n\n${GATE_C_REMOVED.slice(1)}`;
+  assert.deepEqual(run(diff, { 'docs/guide.md': guide }).map((h) => h.foundIn), [[{ path: 'docs/guide.md', line: 3 }]]);
 });
 
 // formatting

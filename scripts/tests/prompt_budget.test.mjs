@@ -52,14 +52,26 @@ test('changedPrompts keeps top-level prompts/*.md only, with added and deleted f
   const diff = diffFor('prompts/a.md') + diffFor('prompts/new.md', 'new file mode 100644\n') + diffFor('prompts/old.md', 'deleted file mode 100644\n')
     + diffFor('prompts/sub/x.md') + diffFor('docs/prompts/y.md') + diffFor('scripts/a.mjs');
   assert.deepEqual(changedPrompts(diff), [
-    { path: 'prompts/a.md', added: false, deleted: false },
-    { path: 'prompts/new.md', added: true, deleted: false },
-    { path: 'prompts/old.md', added: false, deleted: true },
+    { path: 'prompts/a.md', basePath: 'prompts/a.md', added: false, deleted: false },
+    { path: 'prompts/new.md', basePath: 'prompts/new.md', added: true, deleted: false },
+    { path: 'prompts/old.md', basePath: 'prompts/old.md', added: false, deleted: true },
   ]);
   assert.deepEqual(changedPrompts(undefined), []);
 });
 
 // computePromptBudgetImpact
+
+test('a renamed prompt is read from the base at its old path, without failing the other prompts', () => {
+  const rename = 'diff --git a/prompts/old-review.md b/prompts/pr-review-user.md\nsimilarity index 90%\nrename from prompts/old-review.md\nrename to prompts/pr-review-user.md\n--- a/prompts/old-review.md\n+++ b/prompts/pr-review-user.md\n@@ -1 +1 @@\n-a\n+b\n';
+  const base = { 'prompts/old-review.md': chars(200), 'prompts/pr-review-system.md': chars(2000) };
+  const head = { 'prompts/pr-review-user.md': chars(250), 'prompts/pr-review-system.md': chars(2100) };
+  const readBase = (p) => {
+    if (!(p in base)) throw new Error(`fatal: path '${p}' does not exist in base`);
+    return base[p];
+  };
+  const r = run({ rawDiff: rename + diffFor('prompts/pr-review-system.md'), head, readBase });
+  assert.deepEqual(r.map((x) => [x.prompt, x.deltaTokens]), [['prompts/pr-review-user.md', 50], ['prompts/pr-review-system.md', 100]]);
+});
 
 test('a prompt that grows reports a positive delta and the headroom left by all the stage prompts', () => {
   const head = { 'prompts/pr-review-system.md': chars(2173), 'prompts/pr-review-user.md': chars(238) };

@@ -1,6 +1,6 @@
 import { log } from './observability.mjs';
 
-// Stale-reference check (ADR-0033): text a PR removes that is still quoted, near-verbatim, in the
+// Stale-reference check (ADR-0034): text a PR removes that is still quoted, near-verbatim, in the
 // repo's docs, skills, prompts or AGENTS.md. Deterministic (text search, no LLM); the result is
 // informational evidence for the reviewer and never changes the verdict on its own.
 
@@ -10,6 +10,9 @@ export const MAX_QUOTED_CHARS = 160;
 
 const SEARCHED_PATHS = [/^docs\/.+\.md$/, /^\.claude\/skills\/.+\.md$/, /^prompts\/[^/]+\.md$/, /^AGENTS\.md$/];
 const HISTORICAL = /(^|\/)CHANGELOG\.md$/;
+// A Superseded or Deprecated ADR quotes the replaced rule on purpose, like CHANGELOG.md.
+const INACTIVE_ADR = /^- \*\*Status:\*\*\s*(superseded|deprecated)\b/im;
+const ADR_PATH = /^docs\/adr\/\d{4}-[^/]+\.md$/;
 
 /** Markdown-insensitive form used on both sides of the search: no backticks, `*`, `_`; one space; lowercase. */
 export function normalizeText(text) {
@@ -127,8 +130,9 @@ function scan(norm, index) {
 
 /**
  * Finds removed text (blocks of ≥ 60 normalized chars) still present in docs/**\/*.md,
- * .claude/skills/**\/*.md, prompts/*.md and AGENTS.md of the PR tree. Excluded: CHANGELOG.md
- * (historical by design), the file the text was removed from, and any file the diff re-adds it to.
+ * .claude/skills/**\/*.md, prompts/*.md and AGENTS.md of the PR tree. Excluded: CHANGELOG.md and
+ * Superseded / Deprecated ADRs (historical by design), the file the text was removed from, and any
+ * file the diff re-adds it to.
  * `listFiles()` returns repo-relative paths, `readFile(path)` their content (both injected).
  * A listing or read error must not abort the review: it logs a `review.stale_refs_error` warn
  * event and returns [].
@@ -151,7 +155,9 @@ export function findStaleReferences({ rawDiff, listFiles, readFile, logFn = log 
   const results = blocks.map((b) => ({ removedText: b.text, file: b.file, line: b.line, foundIn: [] }));
   try {
     for (const p of listFiles().filter(isSearchedPath).sort()) {
-      const { norm, lineAt } = normalizeLines(readFile(p));
+      const content = readFile(p);
+      if (ADR_PATH.test(p) && INACTIVE_ADR.test(content)) continue;
+      const { norm, lineAt } = normalizeLines(content);
       for (const [i, at] of scan(norm, index)) {
         if (p === blocks[i].file || reAdded[i].has(p)) continue;
         results[i].foundIn.push({ path: p, line: lineAt(at) });

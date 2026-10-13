@@ -1,4 +1,4 @@
-# ADR-0035: Prompt budget impact as review evidence
+# ADR-0036: Prompt budget impact as review evidence
 
 - **Date:** 2026-10-12
 - **Status:** Accepted
@@ -13,7 +13,7 @@ New pure module `scripts/lib/prompt_budget.mjs`. `computePromptBudgetImpact({ ra
 
 `{ prompt, stage, budget, deltaTokens, headTokens, maxInputTokens, headroomTokens, lowHeadroom }`
 
-- **Tokens:** `estimateTokens` (`scripts/lib/metrics.mjs`) of the content without `{{placeholders}}`, which are replaced at runtime. `deltaTokens = head − base`. A new file (`new file mode`) has no base and readBase is not called; a deleted file counts 0 on the head side.
+- **Tokens:** `estimateTokens` (`scripts/lib/metrics.mjs`) of the content without `{{placeholders}}`, which are replaced at runtime. `deltaTokens = head − base`. A new file (`new file mode`) has no base and readBase is not called; a deleted file counts 0 on the head side; a renamed file is read from the base at its old (`a/`) path.
 - **Mapping** (`PROMPT_STAGES`, from the `loadPrompt` calls in `scripts/`):
 
   | Stage | Prompts | Budget |
