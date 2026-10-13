@@ -231,6 +231,22 @@ describe('buildFileContentsBlock', () => {
     assert.equal(context.block, await buildFileContentsBlock('Fix ./widget.js and huge.js', '', tmpDir));
   });
 
+  test('buildFileContext leaves out the allowlist instead of throwing or following a symlinked package.json', async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-ctx-link-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-ctx-outside-'));
+    await fs.writeFile(path.join(tree, 'widget.js'), 'export function widget() {}\n', 'utf8');
+    await fs.writeFile(path.join(outside, 'package.json'), JSON.stringify({ dependencies: { 'leaked-outside-dep': '1' } }), 'utf8');
+    for (const target of [outside, path.join(outside, 'package.json')]) {
+      await fs.rm(path.join(tree, 'package.json'), { force: true });
+      await fs.symlink(target, path.join(tree, 'package.json'));
+      const context = await buildFileContext('Fix widget.js', '', tree);
+      assert.ok(context.block.includes('### Current file: widget.js'), target);
+      assert.ok(!context.block.includes('### Allowed npm dependencies'), target);
+      assert.ok(!context.block.includes('leaked-outside-dep'), target);
+    }
+    await Promise.all([tree, outside].map((d) => fs.rm(d, { recursive: true, force: true })));
+  });
+
   test('returns the fallback message when no identified files exist', async () => {
     const block = await buildFileContentsBlock(
       'Fix login bug',
@@ -344,15 +360,27 @@ describe('readPackageJsonDependencies', () => {
     await fs.rm(emptyDir, { recursive: true, force: true });
   });
 
-  test('rethrows unexpected non-ENOENT read errors instead of swallowing them', async () => {
+  // #195 (ADR-0023): was "rethrows EISDIR"; the shared dependency_manifest.mjs reader treats a
+  // non-regular package.json as "no allowlist", so code generation never aborts on it.
+  test('returns null instead of throwing when package.json is a directory', async () => {
     const dirDir = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-direrr-'));
-    // Make package.json a directory instead of a file: reading it throws EISDIR, not ENOENT.
     await fs.mkdir(path.join(dirDir, 'package.json'));
-    await assert.rejects(
-      () => readPackageJsonDependencies(dirDir),
-      (err) => err.code === 'EISDIR',
-    );
+    assert.equal(await readPackageJsonDependencies(dirDir), null);
     await fs.rm(dirDir, { recursive: true, force: true });
+  });
+
+  test('returns null without following a symlink to a package.json outside the tree', async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-link-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'file-injector-pkg-outside-'));
+    await fs.writeFile(path.join(outside, 'package.json'), JSON.stringify({ dependencies: { leak: '1' } }), 'utf8');
+    await fs.symlink(path.join(outside, 'package.json'), path.join(tree, 'package.json'));
+    assert.equal(await readPackageJsonDependencies(tree), null);
+    await Promise.all([tree, outside].map((d) => fs.rm(d, { recursive: true, force: true })));
+  });
+
+  test('is the dependency_manifest.mjs implementation (one reader for every stage)', async () => {
+    const manifest = await import('../lib/dependency_manifest.mjs');
+    assert.equal(readPackageJsonDependencies, manifest.readPackageJsonDependencies);
   });
 });
 

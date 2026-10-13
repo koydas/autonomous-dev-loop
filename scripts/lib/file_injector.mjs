@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { shouldIncludeFile } from './file_filters.mjs';
 import { normalizeRepoPath } from './autofix_guard.mjs';
+import { readPackageJsonDependencies } from './dependency_manifest.mjs';
 
 const MAX_FILE_SIZE = 8000;
 const MAX_FILES = 10;
@@ -78,49 +79,9 @@ export function formatFileContents(files) {
     .join('\n\n');
 }
 
-// Reads dependencies + devDependencies from the target repo's package.json, if present.
-// Returns null when there is no package.json or it isn't valid JSON — callers should treat
-// that as "no allowlist available" rather than an error, since not every repo is Node.js-based.
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-// Returns `field` only if it's a plain object (a valid package.json dependency map);
-// otherwise an empty object, so a malformed shape (array, string, null) is silently
-// ignored rather than corrupting the merged result (e.g. spreading an array would add
-// numeric-index keys like "0" as if they were package names).
-function asDependencyMap(field) {
-  return isPlainObject(field) ? field : {};
-}
-
-export async function readPackageJsonDependencies(repoRoot) {
-  const absRepoRoot = path.resolve(repoRoot);
-  let raw;
-  try {
-    raw = await fs.readFile(path.join(absRepoRoot, 'package.json'), 'utf8');
-  } catch (err) {
-    if (err?.code === 'ENOENT') return null;
-    throw err;
-  }
-
-  let pkg;
-  try {
-    pkg = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-
-  // JSON.parse succeeds for any valid JSON value, not just objects (e.g. `null`, `"x"`,
-  // `[1,2]`) — package.json must be a top-level object for any of this to be meaningful.
-  if (!isPlainObject(pkg)) return null;
-
-  return {
-    ...asDependencyMap(pkg.dependencies),
-    ...asDependencyMap(pkg.devDependencies),
-    ...asDependencyMap(pkg.peerDependencies),
-    ...asDependencyMap(pkg.optionalDependencies),
-  };
-}
+// One implementation for every stage (#195, ADR-0023): a package.json that is not a regular file
+// (symlink, directory, FIFO, …) is never followed and reads as "no allowlist available" (null).
+export { readPackageJsonDependencies };
 
 export function formatDependencyAllowlist(deps) {
   // `deps === null` means no manifest was readable at all (missing/malformed package.json) —
