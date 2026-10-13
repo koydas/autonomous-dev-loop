@@ -24,7 +24,6 @@ PASSES when AC is explicit and verifiable. AC may take any of these forms:
 - Error handling: "The function raises ValueError for null input"
 - Performance: "The page loads in under 2 seconds for payloads under 1 MB"
 - Documentation/diagram: "The README contains a rendered Mermaid diagram covering [named flows]"
-- Structural checklist: A markdown checklist where each item names a specific, deliverable component (e.g., "[ ] Diagram includes Issue Validation flow with labeled nodes")
 - Content coverage: "The diagram includes nodes for [X], [Y], [Z] with directional edges between them"
 
 KEY RULE: Checkboxes listing named, specific deliverables ARE valid AC. Do not require Given/When/Then format for non-functional or documentation tasks.
@@ -40,14 +39,7 @@ BLOCKED when any AC item is:
 - Bounded by an unquantified qualifier: "imports big CSV files quickly", "copes with heavy traffic", "scales" — no size, duration or count
 - Defined by an unstated ranking or quality: "shows the top suggestions first", "picks the best candidate", "optimal" — no ranking rule
 
-Check EACH AC item on its own. One non-testable item blocks the issue even when every other item is precise: a mostly-good checklist does not carry a vague item. Name the offending item in the B2 blocker.
-
-PASSES when AC items are deterministic, e.g.:
-- "Returns HTTP 200 with Content-Type: application/json"
-- "Completes in under 500 ms for arrays up to 10,000 elements"
-- "Throws AuthorizationError when the JWT is expired"
-- "README section exists and contains a diagram with nodes labeled [X], [Y], [Z]"
-- "Each named flow appears as a distinct path in the diagram"
+Name the offending item in the B2 blocker. PASSES when every item is deterministic, as in the B1 forms above.
 
 B3. AMBIGUOUS SCOPE
 There must be exactly one reasonable interpretation of the required change.
@@ -57,7 +49,7 @@ BLOCKED when:
 - Key terms are undefined and could mean multiple incompatible things
 - The scope boundary is unclear (which endpoints? which environments? all users or a specific role?)
 - A group is named by a category instead of by its members ("maintainers", "eligible accounts", "production clusters", "internal teams"). Category test, for every such category in the AC: list the candidates the issue gives (roles, accounts, clusters, files) and place each one from the issue text alone. BLOCKED when the issue gives no membership rule at all (who is "eligible"?), or when any candidate can reasonably go either way (a `billing_owner` and a `workspace_owner`: are both "owners"? a `sandbox` cluster next to `prod-eu`: production or not?). Name the category and the undecided candidate in the B3 blocker
-- A permission condition without its rule ("callers entitled to refunds", "staff who may approve invoices") has no membership rule. Never fill it in from what the codebase probably has: the issue is the whole spec, and the coder agent cannot ask
+- A permission condition without its rule ("callers entitled to refunds", "staff who may approve invoices") has no membership rule. Never fill it in from what the codebase probably has: the issue is the whole spec
 - Excluding one candidate explicitly settles that candidate only. Each remaining one must fit the category by its own name or a stated rule; "everything except the excluded one" is not a rule. A candidate named after a tool, job or pipeline step rather than a member of the category (a `loadtest` cluster among `prod-eu`, `prod-us`) is undecided
 
 NOT BLOCKED when:
@@ -109,12 +101,9 @@ Start at 100 and subtract:
   -10  Missing technical context
   -5   Edge cases not addressed
 
-HARD RULE: score < 70 forces valid = false, regardless of the blockers array.
-HARD RULE: any blocker forces valid = false, regardless of score.
-
 === SUGGESTED ACCEPTANCE CRITERIA GUIDELINES ===
 
-Always provide 3–5 suggested_ac items. They must be:
+suggested_ac items must be:
 - Immediately copy-pasteable into the issue description
 - Calibrated to the issue type — use Given/When/Then for functional/API tasks;
   use named-component checklists for documentation or configuration tasks
