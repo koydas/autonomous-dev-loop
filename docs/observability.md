@@ -47,6 +47,8 @@ If `meta.file` is absent, the annotation has no file reference.
 
 ## Events by Stage
 
+Every literal event name emitted under `scripts/` (tests excluded) must have a row in one of the tables below: `scripts/check_event_docs.mjs` fails CI otherwise (#198). Dynamic names (`` `${stage}.error` `` in `generate_issue_change.mjs`) are not checked.
+
 ### `issue_validation`
 
 | Event                       | Level  | `duration_ms` | Key `meta` fields                               |
@@ -117,6 +119,67 @@ The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trac
 | `autofix.max_attempts_reached` | warn   | —             | `attempt`, `prNumber`                     |
 | `autofix.skipped`              | info / warn | ✓        | `reason` (`approved`, info: no LLM call \| `no_changes`, warn: attempt consumed, `needs-human` applied, summary commented, `autofix_skip` metric \| `guardrail_rejected`, warn: same, with the rejection reason commented — write denylist, shrink guard, ADR-0029 write guard or ADR-0019 static rules; `rules` lists them), `attempt`, `prNumber`, `headSha` (approved only) — exit 0, nothing pushed (ADR-0028) |
 | `autofix.error`                | error  | ✓             | `error`, `attempt`, `prNumber`            |
+
+### `eval`
+
+Emitted by `run_evals.mjs` (ADR-0027).
+
+| Event           | Level | `duration_ms` | Key `meta` fields |
+|-----------------|-------|---------------|-------------------|
+| `eval.start`    | info  | —             | `suite`, `repeats`, `replay`; once the dataset is loaded also `cases`, `tokens_est`, `tokens_est_per_run`, `tokens_est_source` |
+| `eval.complete` | info  | ✓             | `suite`, `passed`, `resultsFile` |
+| `eval.error`    | error | ✓             | `error`; on a circuit-breaker abort also `reason: "provider_quota"`, the breaker fields and `resultsFile` |
+
+### `eval_replay`
+
+Emitted by `replay_evals_ci.mjs`.
+
+| Event                  | Level | `duration_ms` | Key `meta` fields |
+|------------------------|-------|---------------|-------------------|
+| `eval_replay.start`    | info  | —             | `suites`, `source` (site URL or directory) |
+| `eval_replay.complete` | info  | ✓             | `status`, `suites` (map of suite → status) |
+| `eval_replay.error`    | error | ✓             | `error` |
+
+### `pr_evals`
+
+Emitted by `plan_pr_evals.mjs` (ADR-0030).
+
+| Event               | Level | `duration_ms` | Key `meta` fields |
+|---------------------|-------|---------------|-------------------|
+| `pr_evals.start`    | info  | —             | `mode` (`plan` \| `apply`), `pr` |
+| `pr_evals.complete` | info  | ✓             | `mode`; plan: `status`, `suites`, `prompts`; apply: `applied` |
+| `pr_evals.error`    | error | ✓             | `mode`, `error` |
+
+### `pr_evals_report`
+
+Emitted by `report_pr_evals.mjs` (ADR-0030).
+
+| Event                      | Level | `duration_ms` | Key `meta` fields |
+|----------------------------|-------|---------------|-------------------|
+| `pr_evals_report.start`    | info  | —             | `source` (site URL or directory) |
+| `pr_evals_report.complete` | info  | ✓             | `status`, `suites` |
+| `pr_evals_report.error`    | error | ✓             | `error` |
+
+### LLM provider
+
+Emitted by `llm_client.mjs` and `config.mjs` (ADR-0032). `stage` is the calling stage for the LLM events and `config` for `provider_config_fallback`.
+
+| Event                      | Level         | `duration_ms` | Key `meta` fields |
+|----------------------------|---------------|---------------|-------------------|
+| `llm_fallback`             | warn / error  | —             | `from`, `to`, `error_type`, `error` — the primary failed and the call goes to the other provider; `error` level when the primary's key or config is wrong (`PERMANENT`, 401/403) |
+| `llm_fallback_disabled`    | warn          | —             | `from`, `error_type`, `error` — the primary failed and the caller passed `fallback: false` (live evals) |
+| `provider_config_fallback` | warn          | —             | `message`, `ai_provider`, `provider` — `AI_PROVIDER` is unknown or names a provider without a key; logged once per process |
+
+### `observability`
+
+Emitted by `observability.mjs` itself when a trace operation fails. The business logic continues.
+
+| Event                   | Level | `duration_ms` | Key `meta` fields |
+|-------------------------|-------|---------------|-------------------|
+| `trace_write_failed`    | warn  | —             | `error` |
+| `start_span_failed`     | warn  | —             | `error`, `stage` |
+| `end_span_failed`       | warn  | —             | `error`, `stage` |
+| `trace_finalize_failed` | warn  | —             | `error` |
 
 ---
 
