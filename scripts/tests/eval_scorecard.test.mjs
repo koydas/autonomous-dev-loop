@@ -260,3 +260,34 @@ test('formatScorecard keeps Δ when the dataset hash is unchanged', () => {
   assert.match(md, /\| verdict_match \| 0\.9 \(▲ 0\.1\) \|/);
   assert.doesNotMatch(md, /dataset changed/);
 });
+
+// Pinned live evals (ADR-0032 amendment): every call must have been answered by meta.model.
+const withCalls = (r, calls) => ({ ...r, results: [{ case_id: 'a', repeat: 0, calls }] });
+
+test('partitionPublishable refuses a run whose calls were answered by another model than meta.model', () => {
+  const mixed = withCalls(results({ runId: 'mixed', model: 'groq:m' }), [
+    { raw: 'x', provider: 'groq', model: 'm' },
+    { raw: 'y', provider: 'anthropic', model: 'claude-opus-5-5' },
+  ]);
+  const { publishable, skipped } = partitionPublishable([mixed]);
+  assert.equal(publishable.length, 0);
+  assert.equal(skipped[0].run_id, 'mixed');
+  assert.match(skipped[0].reason, /answered by anthropic:claude-opus-5-5, not meta\.model groq:m/);
+});
+
+test('partitionPublishable publishes a pinned run, a replay of it, and results recorded without provider evidence', () => {
+  const pinned = withCalls(results({ runId: 'pinned', model: 'groq:m' }), [{ raw: 'x', provider: 'groq', model: 'm' }]);
+  const replay = withCalls(results({ runId: 'replay', model: 'replay:groq:m' }), [{ raw: 'x', provider: 'groq', model: 'm' }]);
+  const legacy = withCalls(results({ runId: 'legacy', model: 'groq:m' }), [{ raw: 'x' }]);
+  const { publishable, skipped } = partitionPublishable([pinned, replay, legacy, results({ runId: 'no-results' })]);
+  assert.deepEqual(publishable.map((r) => r.meta.run_id), ['pinned', 'replay', 'legacy', 'no-results']);
+  assert.deepEqual(skipped, []);
+});
+
+test('partitionPublishable refuses provider evidence when meta.model is missing', () => {
+  const run = { ...withCalls(results({ runId: 'x' }), [{ raw: 'x', provider: 'groq', model: 'm' }]), meta: undefined };
+  const { publishable, skipped } = partitionPublishable([run]);
+  assert.equal(publishable.length, 0);
+  assert.equal(skipped[0].run_id, null);
+  assert.match(skipped[0].reason, /not meta\.model unset/);
+});
