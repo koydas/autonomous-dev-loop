@@ -134,7 +134,7 @@ Key steps to expand per workflow:
 - **Verify CHANGELOG.md updated for entrypoint or ADR changes** — exits 0 (skipped) when no entrypoints or ADRs changed; exits 1 with a plain-text error message describing which trigger files were found and what is missing
 
 ### `evals` (`evals.yml`)
-- **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly run (Mondays 06:23 UTC): every suite, repeats 3, one at a time; a failed suite does not cancel the next
+- **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly runs, one suite each, repeats 3: `validation` Mondays, `review` Wednesdays, 06:23 UTC (one suite × 3 fills most of the Groq TPD); a manual run's failed suite does not cancel the next
 - **publish → Build eval dashboard** — history read back from the site, the runs added (`<run_id>-<suite>`), runs skipped on `error_rate` as warnings; `eval-site-<run_id>` backup, then one Pages deploy. A 404 on `scorecard.json` fails a weekly run: it never sets `init_site`; re-run manually with `init_site` (first deploy) or `restore_run_id`
 
 ### `eval-replay` (`eval-replay.yml`)
