@@ -22,6 +22,10 @@ jobs:
           node-version: "24"
       - run: node --test scripts/tests/*.test.mjs
 
+      # #198: every literal event name emitted under scripts/ has a row in docs/observability.md.
+      - name: Check observability event docs
+        run: node scripts/check_event_docs.mjs
+
       - name: Check checkpoint coverage (≥80%)
         run: |
           npx --yes c8 \
@@ -230,6 +234,17 @@ jobs:
             --functions 80 \
             --statements 80 \
             node --test scripts/tests/prompt_budget.test.mjs
+
+      - name: Check event_docs coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/event_docs.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/event_docs.test.mjs
 
       # Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build).
       - name: Check build_eval_site coverage (≥80%)
