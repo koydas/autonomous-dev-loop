@@ -87,7 +87,7 @@ If `meta.file` is absent, the annotation has no file reference.
 | `review.start`     | info   | —             | `prNumber`, `model`                                      |
 | `review.llm_request` | info | —             | `model`, `input_tokens_est`, `prNumber`                  |
 | `review.llm_response`| info | —             | `output_tokens_est`, `prNumber`                          |
-| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override` |
+| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override`, `unreviewed_code_files` (count of code files cut from the reviewed diff; > 0 turns an approval into `WITHHELD`, ADR-0038) |
 | `review.skipped`   | info   | ✓             | `reason` (`already_reviewed` \| `superseded`), `prNumber`, `headSha` — no LLM call (ADR-0028) |
 | `review.error`     | error  | —             | `error`                                                  |
 | `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0035) |
