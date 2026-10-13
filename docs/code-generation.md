@@ -88,7 +88,7 @@ The write denylist and the shrink guard (ADR-0021) still run inside `validateAiO
 - **Coverage gate (c) reads the c8 gates, not the diff (ADR-0033):** `pr-review-system.md` lists every file with a `c8 --check-coverage` step in `.github/workflows/test.yml` (80% lines, branches, functions, statements). A changed file on that list satisfies the coverage gate even though `test.yml` is not in the diff. The reviewer reports HIGH only when the diff removes one of those steps or lowers its threshold, and MEDIUM when the diff adds a `scripts/lib/*.mjs` module without a step. Other automation files are judged on their tests (gate (a)). Before this, the prompt named only `checkpoint.mjs` and reported a false HIGH "missing coverage policy" on any other gated module (PR #184). `workflow_gates.test.mjs` fails when the prompt's list and `test.yml` drift apart.
 - **Named defect checklist:** the reviewer explicitly checks every new/changed file for three specific patterns rather than relying on open-ended "look for bugs" judgment: read-only/getter-only property assignment (e.g. `AbortController.prototype.signal`), unauthorized dependency imports, and non-persistent "ref" patterns (state meant to survive across calls/renders stored in a re-initialized local variable instead of `useRef`/module state).
 - **Verdict parsing:** `pr_review.mjs` reads the verdict after the word `Verdict` in any of these forms: `### 🚀 Verdict` on its own line, `Verdict: APPROVED`, a bold verdict (`**APPROVED**`), a bold heading (`**🚀 Verdict**`) or a bold heading with colon (`**Verdict:** APPROVED`). Anything else — the template placeholder, prose, or no verdict — is treated as `REQUEST_CHANGES`. Unit-test coverage: 100% of these forms, both verdicts where they apply (AGENTS.md, Test Coverage Policy).
-- **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`); when this actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
+- **Truncated-diff disclosure:** `pr_review.mjs` truncates the diff shown to the model to 12,000 characters (`filterDiff`). Before that cap, unchanged context lines inside hunks are cut to 200 characters with a visible ` …[+N chars]` marker, so long context (e.g. a 1–2k-char CHANGELOG entry) does not use up the budget. `+`/`-` lines and file/hunk headers are never cut, and this context cut alone never sets `diff_truncated`. When the 12,000-char cap actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`.
 - **Findings the fixer can act on (ADR-0034):** every finding must cite a file and lines in the diff shown, and its fix must not require editing an existing file whose hunks the reviewer did not see (the auto-fixer only edits files it is shown, ADR-0029). With `diff_truncated: true`, a concern about unseen content is listed once as "Not verified (diff truncated): …", without severity, and never makes the verdict REQUEST_CHANGES.
 - **Code-first diff (ADR-0034):** `orderDiffForReview` (`scripts/lib/review_prompt.mjs`) orders the diff shown to the reviewer code → tests → docs (git order within each tier; prompts and `docs/code-generation.md` count as code), so the token-budget cut drops docs first. The classification and automation-gate contexts still read the raw diff.
 - **APPROVE resets the fix loop (ADR-0034):** on APPROVE, `pr_review.mjs` removes `needs-human` and every `auto-fix-attempt-N` label, so a later REQUEST_CHANGES starts at attempt 1. A withheld approval or REQUEST_CHANGES leaves them.
@@ -99,6 +99,34 @@ The write denylist and the shrink guard (ADR-0021) still run inside `validateAiO
 Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See [ADR-0019](adr/0019-static-verification-backstop.md) for the writeup and the static checks that now back these rules.
 
 The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
+
+### Stale references and related ADRs (ADR-0035, ADR-0036)
+
+Before building the prompt, `pr_review.mjs` runs two deterministic text searches over the PR tree (`git ls-files` in the working directory, read as data per ADR-0023; regular files only, symlinks are never followed):
+
+- **Stale references** (`scripts/lib/stale_refs.mjs`): text the diff removes that is still quoted in `docs/**/*.md`, `.claude/skills/**/*.md`, `prompts/*.md` or `AGENTS.md`.
+  - Blocks are consecutive `-` lines of a hunk, at least 60 chars once backticks, `*`, `_`, whitespace and case are normalized. A file matches on the whole block or any 60-char window of it.
+  - `CHANGELOG.md`, Superseded or Deprecated ADRs, the file the text was removed from, and files the diff re-adds it to are excluded.
+  - Hits are informational: a `## Stale references` block in the prompt and a `### 🔗 Stale References` section in the comment (at most 5 each). They never change the verdict.
+- **Related ADRs** (`scripts/lib/related_adrs.mjs`): ADRs citing a changed path (exact path, or its basename when unique in the repo; `CHANGELOG.md` ignored).
+  - Superseded or Deprecated ADRs are replaced by the ADR that supersedes them. ADRs the PR itself edits are skipped.
+  - Ranking: changed non-test paths cited, then all changed paths cited, then exact-path citations, then most recent.
+  - The prompt gets a `## Related ADRs` block with each ADR's id, title, status and the first 400 chars of its Decision.
+  - **Budget:** the block is the first thing dropped. Without a token budget (Anthropic) up to 3 ADRs. On Groq (`review_max_input_tokens`) at most 1, and only when the diff and the PR body still fit uncut. Otherwise the block is left out before anything else is shrunk, and the run logs `Related ADRs left out of the review prompt`.
+- A listing or read error in either search logs a warn event (`review.stale_refs_error`, `review.related_adrs_error`) and the review runs without that block.
+
+### Prompt budget impact (ADR-0037)
+
+When a PR changes a `prompts/*.md` file, `pr_review.mjs` reports what the change costs in input budget (`scripts/lib/prompt_budget.mjs`). On Groq, every token a stage prompt gains is taken from the stage's variable input (the reviewed diff, the issue, the injected files).
+
+- **Delta:** `estimateTokens` (chars/4, `{{placeholders}}` excluded). The base version comes from the merge base, read with `git show <base>:<path>` (the review job checks out with `fetch-depth: 0`); the head version comes from the PR tree. A new prompt counts in full; a deleted prompt counts as 0 on the head side; a renamed prompt is read from the base at its old path.
+- **Budget:** the stage(s) that load the prompt, and `<stage>_max_input_tokens` from the PR's `config/models.yaml`.
+  - The system and user prompts of validation, generation and review count inside that budget, as does `auto-fix-user.md`.
+  - `auto-fix-system.md` sits on top of `autofix_max_input_tokens`, so it is measured against the TPM window: `floor((8000 − autofix_max_tokens) / 1.10) − autofix_max_input_tokens`.
+  - `headroomTokens` is the budget minus every prompt of the stage under it. It ignores the contexts injected at runtime, so it is an upper bound.
+- **Output:** a `## Prompt budget impact` block in the prompt and a `### 📏 Prompt Budget Impact` table in the comment. **LOW HEADROOM** (⚠️) marks headroom under 10% of the budget.
+  - A stage without a configured budget shows `—`. A prompt no stage loads is listed with no stage.
+  - Informational only: it never changes the verdict. A read error logs `review.prompt_budget_error` (warn) and the review runs without the block.
 
 ## Tool Evidence for Review (ADR-0024)
 

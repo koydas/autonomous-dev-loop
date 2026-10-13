@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -57,6 +57,7 @@ function makeHandler({
   autoFixRunsPending = [],
   prHeadRef = 'feature/test',
   prHeadSha = 'a'.repeat(40),
+  prBaseSha = undefined,
   autoFixRunsStatus = 200,
   diffText = SAMPLE_DIFF,
   prTitle = 'Test PR',
@@ -81,7 +82,7 @@ function makeHandler({
         return res.end(diffStatus < 300 ? diffText : 'Forbidden');
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ title: prTitle, body: prBody, head: { ref: prHeadRef, sha: prHeadSha } }));
+      return res.end(JSON.stringify({ title: prTitle, body: prBody, head: { ref: prHeadRef, sha: prHeadSha }, base: { sha: prBaseSha } }));
     }
 
     if (method === 'GET' && url.includes('/issues/') && url.includes('/comments')) {
@@ -1390,6 +1391,75 @@ test('pr_review (Groq) exits 1 with an explicit error and no LLM call when the p
     assert.equal(groqRequests(server).length, 0, 'no request Groq would reject with 413');
     assert.ok(!server.requests.some((r) => r.url === '/v1/messages'), 'no fallback LLM call either');
     assert.ok(!server.requests.some((r) => r.method === 'POST' && r.url.includes('/comments')), 'no review comment posted');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+// ADR-0035 / ADR-0036: the review searches the PR tree (here: this repo) for stale references and
+// related ADRs. The removed text is a long line of AGENTS.md, picked at run time so the test does
+// not depend on what the docs say.
+test('pr_review shows stale references and related ADRs, and a stale reference alone does not change an APPROVE', async () => {
+  const agents = readFileSync(path.join(ROOT_DIR, 'AGENTS.md'), 'utf8').split('\n');
+  const quotedLine = agents.findIndex((l) => l.length > 120) + 1;
+  assert.ok(quotedLine > 0, 'AGENTS.md has no line over 120 chars to quote');
+  const removed = `-${agents[quotedLine - 1]}`;
+  const diffText = `diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -16,1 +16,1 @@\n${removed}\n+* For gate (c), see test.yml.\n`;
+  const server = await startMockServer(makeHandler({ diffText, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const llm = server.requests.find((r) => r.url === '/v1/messages');
+    const prompt = JSON.parse(llm.body).messages.map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
+    assert.match(prompt, new RegExp(`## Stale references[\\s\\S]*still referenced in: AGENTS\\.md:${quotedLine}\\b`));
+    // Which ADRs rank first depends on the repo's current ADRs; the block itself must be there.
+    assert.match(prompt, /## Related ADRs\n[^\n]*\n- ADR-\d{4}: /);
+    const comment = server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments'));
+    assert.ok(JSON.parse(comment.body).body.includes(`→ \`AGENTS.md:${quotedLine}\``), 'comment section must list AGENTS.md');
+    assert.match(JSON.parse(comment.body).body, /### 🔗 Stale References/);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+// ADR-0037: base side through `git show <base>:<path>`. The base is this checkout's HEAD (present
+// even in a shallow clone); the mocked head SHA is unknown to git, so merge-base falls back to it.
+test('pr_review reports the prompt budget impact of a changed prompt, without changing the verdict', async () => {
+  const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
+  const diffText = 'diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -1,1 +1,1 @@\n-old\n+new\n';
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: baseSha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /prompt_budget_error/);
+    const prompt = server.requests.find((r) => r.url === '/v1/messages').body;
+    assert.match(prompt, /## Prompt budget impact[\s\S]*prompts\/pr-review-system\.md: [+-]?\d+ tokens \(now \d+\) — stage `review`, review_max_input_tokens 6300/);
+    const comment = server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments'));
+    assert.match(JSON.parse(comment.body).body, /### 📏 Prompt Budget Impact[\s\S]*\| `prompts\/pr-review-system\.md` \| review \|/);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review continues without the prompt budget block when the base SHA is unknown', async () => {
+  const diffText = 'diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -1,1 +1,1 @@\n-old\n+new\n';
+  const server = await startMockServer(makeHandler({ diffText }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr, /"event":"review\.prompt_budget_error".*"level":"warn"/);
+    // Match the block header: ADR-0037 (titled "Prompt budget impact …") can appear among the related ADRs.
+    assert.doesNotMatch(server.requests.find((r) => r.url === '/v1/messages').body, /## Prompt budget impact/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

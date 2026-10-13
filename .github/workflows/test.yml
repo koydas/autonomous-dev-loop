@@ -198,6 +198,39 @@ jobs:
             --statements 80 \
             node --test scripts/tests/issue_validator.test.mjs
 
+      - name: Check stale_refs coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/stale_refs.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/stale_refs.test.mjs
+
+      - name: Check related_adrs coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/related_adrs.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/related_adrs.test.mjs
+
+      - name: Check prompt_budget coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/prompt_budget.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/prompt_budget.test.mjs
+
       # Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build).
       - name: Check build_eval_site coverage (≥80%)
         run: |

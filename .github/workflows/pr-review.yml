@@ -83,6 +83,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Full history: pr_review.mjs reads changed prompts at the merge base (`git show`, ADR-0037).
+          fetch-depth: 0
       # ADR-0023: pipeline code runs from the default branch; the branch above is data only.
       - name: Checkout trusted pipeline (default branch)
         uses: actions/checkout@v4
