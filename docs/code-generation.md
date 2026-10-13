@@ -120,7 +120,7 @@ Before building the prompt, `pr_review.mjs` runs two deterministic text searches
 When a PR changes a `prompts/*.md` file, `pr_review.mjs` reports what the change costs in input budget (`scripts/lib/prompt_budget.mjs`). On Groq, every token a stage prompt gains is taken from the stage's variable input (the reviewed diff, the issue, the injected files).
 
 - **Delta:** `estimateTokens` (chars/4, `{{placeholders}}` excluded). The base version comes from the merge base, read with `git show <base>:<path>` (the review job checks out with `fetch-depth: 0`); the head version comes from the PR tree. A new prompt counts in full; a deleted prompt counts as 0 on the head side; a renamed prompt is read from the base at its old path.
-- **Budget:** the stage(s) that load the prompt, and `<stage>_max_input_tokens` from the PR's `config/models.yaml`.
+- **Budget:** the stage(s) that load the prompt, and `<stage>_max_input_tokens` from the PR's `config/models.yaml`. When that file is missing, is not a regular file (a symlink is never followed, ADR-0023) or cannot be read, the trusted `config/models.yaml` of the pipeline is used instead; the non-regular / unreadable case logs a `review.models_config_ignored` warn event.
   - The system and user prompts of validation, generation and review count inside that budget, as does `auto-fix-user.md`.
   - `auto-fix-system.md` sits on top of `autofix_max_input_tokens`, so it is measured against the TPM window: `floor((8000 − autofix_max_tokens) / 1.10) − autofix_max_input_tokens`.
   - `headroomTokens` is the budget minus every prompt of the stage under it. It ignores the contexts injected at runtime, so it is an upper bound.

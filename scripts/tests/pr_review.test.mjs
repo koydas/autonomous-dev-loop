@@ -1494,6 +1494,9 @@ async function makePrTree({ files = {}, outsideFiles = {}, links = {} }) {
   };
 }
 
+const llmPrompt = (server) => JSON.parse(server.requests.find((r) => r.url === '/v1/messages').body).messages
+  .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
+
 test('pr_review falls back to the default model budgets when config/models.yaml is not a regular file (symlink, symlinked parent)', async () => {
   const diffText = 'diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -1,1 +1,1 @@\n-old\n+new\n';
   const followed = 'review_max_input_tokens: 1234\n';
@@ -1513,7 +1516,7 @@ test('pr_review falls back to the default model budgets when config/models.yaml 
       assert.equal(warns.length, 1, `${name}: exactly one warn event`);
       assert.match(warns[0], /"level":"warn"/);
       assert.match(result.stderr, /"event":"review\.llm_request"/, `${name}: the review reaches the LLM call`);
-      const prompt = server.requests.find((r) => r.url === '/v1/messages').body;
+      const prompt = llmPrompt(server);
       assert.match(prompt, new RegExp(`## Prompt budget impact[\\s\\S]*review_max_input_tokens ${REVIEW_MAX_INPUT_TOKENS}\\b`), `${name}: default budgets`);
       assert.ok(!prompt.includes('review_max_input_tokens 1234'), `${name}: the symlink target is never read`);
       const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
@@ -1523,6 +1526,27 @@ test('pr_review falls back to the default model budgets when config/models.yaml 
       await fs.unlink(eventFile).catch(() => {});
       await fixture.cleanup();
     }
+  }
+
+  // A symlinked changed prompt is a read error (prompt_budget_error, no block), never a 0-token prompt.
+  const fixture = await makePrTree({ files: { 'prompts/pr-review-system.md': 'old\n' } });
+  await fs.rm(path.join(fixture.tree, 'prompts/pr-review-system.md'));
+  const target = path.join(fixture.tree, '..', `${path.basename(fixture.tree)}-prompt.md`);
+  await fs.writeFile(target, `${'followed '.repeat(400)}\n`);
+  await fs.symlink(target, path.join(fixture.tree, 'prompts/pr-review-system.md'));
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `symlinked prompt: expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr, /"event":"review\.prompt_budget_error".*"level":"warn".*is not a regular file/);
+    assert.doesNotMatch(result.stderr, /review\.models_config_ignored/);
+    assert.doesNotMatch(llmPrompt(server), /## Prompt budget impact/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(target).catch(() => {});
+    await fixture.cleanup();
   }
 });
 
@@ -1545,8 +1569,7 @@ test('pr_review skips symlinked docs and ADRs in the stale-reference and related
     const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
     assert.doesNotMatch(result.stderr, /stale_refs_error|related_adrs_error/, 'a symlink does not wipe either search');
-    const prompt = JSON.parse(server.requests.find((r) => r.url === '/v1/messages').body).messages
-      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
+    const prompt = llmPrompt(server);
     assert.match(prompt, /## Stale references[\s\S]*still referenced in: docs\/regular\.md:\d+/);
     assert.ok(!prompt.includes('docs/linked.md') && !prompt.includes('docs/linked-dir'), 'symlinked docs are not reported');
     assert.match(prompt, /## Related ADRs\n[^\n]*\n- ADR-0001: Regular ADR/);
