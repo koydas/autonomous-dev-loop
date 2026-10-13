@@ -181,6 +181,19 @@ test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkou
   }
 });
 
+// ADR-0013 amendment: main only takes changes through a pull request, so every metrics read and
+// write targets the `metrics` branch; a Contents API call without it would hit main and fail (409).
+test('workflows that commit metrics read and write the metrics branch, never the default branch', () => {
+  const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
+  assert.equal(committing.length, 4);
+  for (const { name, text } of committing) {
+    const calls = text.match(/gh api "repos\/\$GITHUB_REPOSITORY\/contents\/metrics\/runs\.jsonl[^"]*"/g) ?? [];
+    assert.equal(calls.length, 2, `${name}: one read and one write of metrics/runs.jsonl`);
+    assert.ok(calls.some((c) => c.endsWith('?ref=metrics"')), `${name}: the read targets ?ref=metrics`);
+    assert.match(text, /'\{message:\$m,content:\$c,branch:"metrics"\}/, `${name}: the PUT body names branch "metrics"`);
+  }
+});
+
 // ADR-0023: workflows triggered by branch/PR activity hold LLM secrets and AI_PR_TOKEN;
 // they must execute pipeline code from the default branch, never from the checked-out branch.
 const BRANCH_TRIGGERED_SECRET_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml'];

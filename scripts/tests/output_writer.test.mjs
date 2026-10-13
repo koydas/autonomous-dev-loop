@@ -363,7 +363,7 @@ test('validateAiOutput rejects the whole batch when one change targets a protect
 });
 
 // Pipeline state lives in the same working tree the model writes to: checkpoints are
-// uploaded as artifacts and metrics/runs.jsonl is PUT to the default branch by
+// uploaded as artifacts and metrics/runs.jsonl is PUT to the metrics branch by
 // "Commit metrics"; npm/yarn rc files redirect the registry used by `npx` in CI.
 for (const target of [
   'checkpoints/pr-55/review.json',
