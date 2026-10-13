@@ -1126,6 +1126,56 @@ test('pr_review clears review-withheld when a later review approves or requests 
   }
 });
 
+// --- APPROVE closes the fix loop (ADR-0034) ---
+
+const AUTOFIX_LABEL_NAMES = Object.values(LABELS.autofix).map((label) => label.name);
+
+test('pr_review clears needs-human and every auto-fix-attempt label on APPROVED', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Fine.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const labels = reviewLabelCalls(server);
+    assert.ok(labels.added.includes('review-approved'));
+    for (const name of AUTOFIX_LABEL_NAMES) assert.ok(labels.removed.includes(name), `expected ${name} to be removed`);
+    assert.ok(labels.removed.includes('needs-human'));
+    assert.match(result.stdout + result.stderr, /"cleared":\[/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review keeps needs-human and auto-fix-attempt labels on REQUEST_CHANGES and on a withheld approval', async () => {
+  const cases = [
+    { groqContent: 'Broken.\n\nVerdict: REQUEST_CHANGES', env: {} },
+    { groqContent: 'Fine.\n\nVerdict: APPROVED', env: { REVIEW_EVIDENCE_PATH: NO_EVIDENCE_PATH } },
+  ];
+  for (const { groqContent, env } of cases) {
+    const server = await startMockServer(makeHandler({ groqContent }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile, env);
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      const labels = reviewLabelCalls(server);
+      for (const name of AUTOFIX_LABEL_NAMES) assert.ok(!labels.removed.includes(name), `${name} must survive ${groqContent}`);
+      assert.doesNotMatch(result.stdout + result.stderr, /"cleared":/);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+    }
+  }
+});
+
+test('config/labels.yaml autofix labels cover every attempt label auto_fix_pr.mjs counts, plus needs-human', () => {
+  const source = readFileSync(path.join(SCRIPTS_DIR, 'auto_fix_pr.mjs'), 'utf8');
+  const maxAttempts = Number(source.match(/const MAX_ATTEMPTS = (\d+);/)[1]);
+  const prefix = source.match(/const ATTEMPT_LABEL_PREFIX = '([^']+)';/)[1];
+  const expected = [...Array.from({ length: maxAttempts }, (_, i) => `${prefix}${i + 1}`), 'needs-human'];
+  assert.deepEqual([...AUTOFIX_LABEL_NAMES].sort(), expected.sort());
+});
+
 // --- One LLM review per head SHA (ADR-0028) ---
 
 const HEAD_SHA = 'a'.repeat(40);

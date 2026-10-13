@@ -64,6 +64,9 @@ const githubHeaders = {
 
 const reviewLabels = loadLabelsConfig('review');
 const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes, reviewLabels.withheld];
+// ADR-0034: an APPROVE closes the fix loop, so the auto-fix state it leaves behind (needs-human,
+// auto-fix-attempt-N) is cleared and the next red head starts with the full attempt budget.
+const AUTOFIX_LABELS_CLEARED_ON_APPROVE = Object.values(loadLabelsConfig('autofix')).map((label) => label.name);
 const HEADING = '## 🔍 Automated Code Review';
 
 let prNumber = event.pull_request?.number;
@@ -386,7 +389,10 @@ if (isWithheld) {
   await addLabel(apply);
   await removeLabel(remove);
   await removeLabel(reviewLabels.withheld.name);
-  log('PR review labels applied', { prNumber, added: apply, removed: remove });
+  if (isApproved) {
+    for (const name of AUTOFIX_LABELS_CLEARED_ON_APPROVE) await removeLabel(name);
+  }
+  log('PR review labels applied', { prNumber, added: apply, removed: remove, ...(isApproved ? { cleared: AUTOFIX_LABELS_CLEARED_ON_APPROVE } : {}) });
 }
 
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
