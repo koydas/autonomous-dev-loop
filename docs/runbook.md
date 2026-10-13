@@ -134,7 +134,7 @@ Key steps to expand per workflow:
 - **Verify CHANGELOG.md updated for entrypoint or ADR changes** — exits 0 (skipped) when no entrypoints or ADRs changed; exits 1 with a plain-text error message describing which trigger files were found and what is missing
 
 ### `evals` (`evals.yml`)
-- **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly run (Mondays 06:23 UTC): every suite, repeats 3, one at a time; a failed suite does not cancel the next
+- **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly runs, one suite each, repeats 3: `validation` Mondays, `review` Wednesdays, 06:23 UTC (one suite × 3 fills most of the Groq TPD); a manual run's failed suite does not cancel the next
 - **publish → Build eval dashboard** — history read back from the site, the runs added (`<run_id>-<suite>`), runs skipped on `error_rate` as warnings; `eval-site-<run_id>` backup, then one Pages deploy. A 404 on `scorecard.json` fails a weekly run: it never sets `init_site`; re-run manually with `init_site` (first deploy) or `restore_run_id`
 
 ### `eval-replay` (`eval-replay.yml`)
@@ -227,7 +227,7 @@ Key steps to expand per workflow:
 | `auto-fix-attempt-N` label missing | Labels are auto-created on first use; if creation fails (403), grant `issues: write` to the token used |
 | Auto-fix skipped on a PR that modifies `auto_fix_pr.mjs` | Expected — self-modification guard is active. Fix the script manually and push directly. |
 | Workflow re-run completes immediately with no commit | No files changed by the model output for that run (`autofix.skipped`, `reason: "no_changes"`), or the head is already approved (`reason: "approved"`); inspect logs and review feedback context. |
-| PR gets `needs-human` and a "No Changes Proposed" comment | The fixer found nothing to change for the `REQUEST_CHANGES` feedback (ADR-0028). Read the model summary in the comment: either the review is wrong (approve/fix by hand, remove `changes-requested` and `needs-human`) or the fixer missed it (apply the fix or re-trigger via the checkbox; the attempt was counted) |
+| PR gets `needs-human` and a "No Changes Proposed" comment | The fixer found nothing to change for the `REQUEST_CHANGES` feedback (ADR-0028). Read the model summary in the comment: either the review is wrong (fix by hand or push; the next APPROVE removes `needs-human` and the attempt labels, ADR-0034) or the fixer missed it (apply the fix or re-trigger via the checkbox; the attempt was counted) |
 | Auto-fix ran although the PR is approved | Expected when a trusted member ticked "Relancer Auto Fixer": a manual rerun overrides the bot's approval (ADR-0028) |
 | `AI response missing non-empty changes array` | The model's JSON has no `changes` array at all (malformed answer, still an error). An explicit `changes: []` is a no-op since ADR-0028; re-trigger via the checkbox if the review feedback is actionable |
 | Need to restart auto-fix from attempt 1 | Post or edit a PR comment with `- [x] Relancer Auto Fixer`; this clears existing `auto-fix-attempt-N` labels and the `checkpoints/pr-<N>/autofix.json` checkpoint automatically before rerun (`review.json` is kept: it is the auto-fix prerequisite). |

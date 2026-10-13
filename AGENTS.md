@@ -87,7 +87,7 @@ Any PR that adds a new exported function to `scripts/lib/` must include tests fo
 ## Auto-Fix Rules _(pipeline only)_
 
 - The auto-fix workflow (`auto-fix-pr.yml`) is label-driven: it triggers on `pull_request` `labeled` events and runs when the applied label matches `review.changes.name` from `config/labels.yaml` (default `changes-requested`).
-- The maximum number of auto-fix attempts per PR is **3**, tracked via `auto-fix-attempt-N` labels on the PR.
+- The maximum number of auto-fix attempts per fix round is **3**, tracked via `auto-fix-attempt-N` labels on the PR. An APPROVE ends the round: `pr_review.mjs` removes the `auto-fix-attempt-N` labels and `needs-human`, so the next REQUEST_CHANGES starts at attempt 1 (ADR-0034).
 - When the attempt limit is reached, the workflow posts a comment and exits without making any changes.
 - Auto-fix commits use the message format `fix(ai): auto-fix attempt N`.
 - Auto-fix only addresses issues explicitly named in the review feedback. It does not make speculative improvements.

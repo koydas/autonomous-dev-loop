@@ -1,12 +1,12 @@
 import { filterDiff } from './file_filters.mjs';
 import { interpolatePrompt } from './prompts.mjs';
 import { buildAutomationGateContext } from './coverage_checker.mjs';
-import { buildChangeClassificationContext } from './change_classifier.mjs';
+import { buildChangeClassificationContext, isDocumentationFile, isTestFile } from './change_classifier.mjs';
 import { formatEvidenceContext } from './review_evidence.mjs';
 import { fitReviewPrompt } from './token_budget.mjs';
 import { formatRelatedAdrsContext } from './related_adrs.mjs';
 
-// ADR-0035: related ADRs shown to the reviewer. Groq gets one at most, and only when it fits
+// ADR-0036: related ADRs shown to the reviewer. Groq gets one at most, and only when it fits
 // with the diff and the PR body uncut: the block is the first thing dropped.
 export const MAX_RELATED_ADRS = 3;
 export const MAX_RELATED_ADRS_ON_BUDGET = 1;
@@ -15,18 +15,46 @@ export const MAX_RELATED_ADRS_ON_BUDGET = 1;
 // `review` eval suite (ADR-0027) so the eval measures the production code path, not a copy.
 
 /**
+ * Reorders a unified diff by file for review (ADR-0034): changed code first (scripts, workflows,
+ * prompts, config), then tests, then documentation. A diff cut to the token budget then loses
+ * prose before it loses the code under review or its tests. Git order is kept within each tier;
+ * a leading chunk with no `diff --git` header stays first.
+ * @returns {string}
+ */
+export function orderDiffForReview(rawDiff) {
+  const text = String(rawDiff ?? '');
+  const trailingNewline = text.endsWith('\n');
+  const tier = (chunk) => {
+    const file = chunk.match(/^diff --git a\/(.+?) b\//)?.[1];
+    if (!file) return -1;
+    if (isTestFile(file)) return 1;
+    if (isDocumentationFile(file)) return 2;
+    return 0;
+  };
+  const ordered = text
+    .split('\ndiff --git ')
+    .map((chunk, index) => ({ chunk: (index ? `diff --git ${chunk}` : chunk).replace(/\n+$/, ''), index }))
+    .map((entry) => ({ ...entry, tier: tier(entry.chunk) }))
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map(({ chunk }) => chunk)
+    .join('\n');
+  return trailingNewline ? `${ordered}\n` : ordered;
+}
+
+/**
  * Renders the review user prompt: diff + PR title/body + classification, automation-gate,
  * dependency-manifest and tool-evidence contexts, fitted to `maxInputTokens` (ADR-0028).
  * Groq (`maxInputTokens` set): the diff is bounded by the token budget. Anthropic (`null`) keeps
  * the 12,000-char cap. `diffTruncated` compares against the uncapped filtered diff, so the reviewer
  * is told when it saw a partial diff. Throws (no LLM call) when the fixed part alone is over budget.
- * Optional `staleRefsContext` (ADR-0034) and `promptBudgetContext` (ADR-0036) are fixed context like the dependency manifest;
- * `relatedAdrs` (ADR-0035) is dropped before the PR body or the diff is shrunk.
+ * Optional `staleRefsContext` (ADR-0035) and `promptBudgetContext` (ADR-0037) are fixed context like the dependency manifest;
+ * `relatedAdrs` (ADR-0036) is dropped before the PR body or the diff is shrunk.
  * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number }}
  */
 export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [] }) {
-  const fullDiff = filterDiff(rawDiff, Infinity);
-  const cappedDiff = maxInputTokens == null ? filterDiff(rawDiff) : fullDiff;
+  const orderedDiff = orderDiffForReview(rawDiff);
+  const fullDiff = filterDiff(orderedDiff, Infinity);
+  const cappedDiff = maxInputTokens == null ? filterDiff(orderedDiff) : fullDiff;
   const fit = (adrCount) => {
     const reviewContexts = `${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
     return fitReviewPrompt({

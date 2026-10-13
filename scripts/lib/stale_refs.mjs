@@ -1,6 +1,6 @@
 import { log } from './observability.mjs';
 
-// Stale-reference check (ADR-0034): text a PR removes that is still quoted, near-verbatim, in the
+// Stale-reference check (ADR-0035): text a PR removes that is still quoted, near-verbatim, in the
 // repo's docs, skills, prompts or AGENTS.md. Deterministic (text search, no LLM); the result is
 // informational evidence for the reviewer and never changes the verdict on its own.
 

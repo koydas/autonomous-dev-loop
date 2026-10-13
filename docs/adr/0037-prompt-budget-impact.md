@@ -1,4 +1,4 @@
-# ADR-0036: Prompt budget impact as review evidence
+# ADR-0037: Prompt budget impact as review evidence
 
 - **Date:** 2026-10-12
 - **Status:** Accepted

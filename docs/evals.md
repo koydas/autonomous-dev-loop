@@ -111,14 +111,15 @@ Rules:
 
 ### Weekly run
 
-`evals.yml` also runs on `schedule`, **Mondays 06:23 UTC** (`23 6 * * 1`, off the hour: GitHub delays `:00` schedules). The [replay gate](#pr-replay-gate) and the [live PR eval](#live-pr-eval-run-evals-label) compare with the last published run; without a regular run that reference goes stale.
+`evals.yml` also runs on `schedule`, **one cron per suite: `validation` Mondays 06:23 UTC (`23 6 * * 1`), `review` Wednesdays 06:23 UTC (`23 6 * * 3`)**, off the hour (GitHub delays `:00` schedules). The [replay gate](#pr-replay-gate) and the [live PR eval](#live-pr-eval-run-evals-label) compare with the last published run; without a regular run that reference goes stale.
 
-- **What runs:** every suite of the registry (`validation`, `review`), `repeats: 3`, on the default branch, published. On `schedule` the workflow inputs are empty, so the defaults are explicit: `publish` on, `repeats` 3, **`init_site` off and no `restore_run_id`**. An unattended run never starts an empty history nor restores a backup; a 404 on the deployed scorecard fails the run instead. `workflow_gates.test.mjs` pins this.
-- **One suite at a time:** a matrix job per suite with `max-parallel: 1` (they share the 8K TPM) and `fail-fast: false`: a threshold miss, a crash or a timeout in one suite never cancels the next. Each suite job has its own 120 min timeout.
-- **One deploy:** the `publish` job downloads every `eval-results-<runId>-<suite>` artifact (`pattern` + `merge-multiple`) and passes all results files to `build_eval_site.mjs` in one build, then deploys once. A suite that failed on `error_rate` (provider outage) is skipped with a warning; the other suites are published. A suite whose job produced no results is simply absent.
+- **What runs:** each scheduled run evaluates **one** suite, `repeats: 3`, on the default branch, published. The matrix maps the cron string (`github.event.schedule`) to its suite through a JSON literal; `workflow_gates.test.mjs` checks that every cron is mapped and every registered suite has exactly one cron (a new suite needs its own cron day). On `schedule` the workflow inputs are empty, so the defaults are explicit: `publish` on, `repeats` 3, **`init_site` off and no `restore_run_id`**, **no `EVAL_TOKEN_BUDGET`** ([why](#token-budget)). An unattended run never starts an empty history nor restores a backup; a 404 on the deployed scorecard fails the run instead. `workflow_gates.test.mjs` pins this.
+- **Why one suite per run:** one suite × 3 repeats fills most of Groq's free-tier 200k TPD; two in a row do not fit ([Token budget](#token-budget), run 38271632735). The two days are 48 h apart: GitHub can delay a schedule by hours (that run started 15:37 UTC), and the next suite must start on a TPD the previous one no longer holds, whether Groq's window is a rolling 24 h or a bucket refilling over 24 h. `workflow_gates.test.mjs` fails on two suite days less than 48 h apart.
+- **One suite at a time:** the matrix keeps `max-parallel: 1` (manual runs) and `fail-fast: false`. Each suite job has its own 120 min timeout.
+- **One deploy per run:** the `publish` job downloads every `eval-results-<runId>-<suite>` artifact (`pattern` + `merge-multiple`) and passes all results files to `build_eval_site.mjs` in one build, then deploys once. A weekly run publishes its one suite; the two runs of a week are two deploys, 48 h apart and serialized by the `evals-<ref>` concurrency group, so they never race on the site. A suite that failed on `error_rate` (provider outage, circuit breaker) is skipped with a warning. A suite whose job produced no results is simply absent.
 - **Run IDs:** every run of `evals.yml` (weekly or manual) records `meta.run_id = <workflow run ID>-<suite>` (`EVAL_RUN_ID`) and `meta.workflow_run_id = <workflow run ID>`. The dashboard keys `runs/<id>.json` by `run_id` alone, so two suites of one workflow run must not share it; `build_eval_site.mjs` refuses a build where two suites use the same `run_id`. Runs published before this change keep their bare numeric IDs. The run page links the workflow run through `workflow_run_id`.
-- **Duration:** validation ≈ 4–6 min per repeat, review ≈ 11–12 min per repeat: **≈ 50–60 min end to end** (≈ 15 + 35 min of evals, plus runner setup and the deploy). Worst case: each suite up to its 120 min timeout.
-- **Tokens per week** (chars/4 estimate, the harness's `tokens_est`): validation ≈ 71k input per repeat (35 calls × ≈ 1.9k system prompt + the issue), review ≈ 66k (23 calls × ≈ 2.9k); × 3 repeats ≈ **410k input tokens per week**, plus at most ≈ 180k output tokens (`max_tokens` × calls; actual output is far lower). ⚠️ That is ≈ 575k Groq-reported tokens against a 200k/day quota shared with production: see [Token budget](#token-budget).
+- **Duration:** validation ≈ 18 min (3 repeats, run 38271632735), review ≈ 11–12 min per repeat, ≈ 35–40 min. Worst case: the 120 min timeout.
+- **Tokens per week:** see [Token budget](#token-budget). Each suite day spends up to the whole TPD, shared with production.
 
 **Concurrency with other eval runs:**
 
@@ -136,17 +137,19 @@ There is deliberately no global group serializing LLM workflows: GitHub would ca
 
 > **The Groq free tier caps `openai/gpt-oss-120b` at 200k tokens per day (TPD) per organization, shared with the production pipeline** (validation, generation, review, auto-fix use the same `GROQ_API_KEY`). The 8K TPM is waited out (ADR-0028); the TPD is not: once spent, every call fails until tokens age out of the window.
 
-| Run | Groq-reported cost (assumption: ≈ per repeat) | Source |
-|---|---|---|
-| `validation`, 1 repeat (35 cases) | ≈ 95k | observed; `tokensPerRunEst: 2700` in `eval_suites.mjs` |
-| `review`, 1 repeat (23 cases) | ≈ 97k | derived: chars/4 input × 1.34 (validation's measured ratio) + output; `tokensPerRunEst: 4200` |
-| weekly matrix (both suites × 3) | **≈ 575k ≈ 2.9 × the daily quota** | |
+Groq does not count cached prompt tokens against its rate limits ([Groq rate limits](https://console.groq.com/docs/rate-limits), [prompt caching](https://console.groq.com/docs/prompt-caching)); cache hits are best-effort. Every case of a suite shares its system prompt (≈ 1.9k of ≈ 2.7–2.9k estimated input tokens), so the counted cost of a run is well under its chars/4 estimate.
 
-The chars/4 `tokens_est` in results files undercounts by ≈ 1.34 (reasoning tokens, tokenizer).
+| Run | Estimate (`tokens_est`, chars/4) | Groq-counted | Source |
+|---|---|---|---|
+| `validation` × 3 (105 calls) | 283k in + 21k out | **≤ 199k**: the run completed under the TPD, and the next job found `Used 199205` (that figure also holds the previous 24 h of production) | run 38271632735 |
+| `review` × 3 (69 calls) | ≈ 200k in (≈ 66k per repeat) + ≤ 70k out (`max_tokens`) | not measured. If the cache discount is the same as validation's (≤ 0.65 × estimate): ≈ 130–175k | assumption |
+| both suites × 3, back to back | ≈ 575k | > 200k: review hit the TPD on every call (`Used 199205`, `Requested 2687`) | run 38271632735 |
 
-**Pre-flight estimate.** `eval.start` logs `meta.cases`, `meta.tokens_est`, `meta.tokens_est_per_run` and `meta.tokens_est_source`: runs (cases × repeats) × tokens per run, the larger of the newest error-free live run of the suite in `EVAL_HISTORY_FILE` (`history:<run_id>`; local only, a CI runner starts with no history) and the suite's static `tokensPerRunEst` (`static`): history is chars/4 and would undercount, so it only wins when it is higher. A replay costs nothing (`replay`, 0). `eval.start` is logged once the dataset is loaded; a failure before that still logs a bare `eval.start` before `eval.error`.
+`try again in` on a TPD 429 is exactly `(used + requested − 200000) / (200000 / 86400 s)` (e.g. 1892 tokens → 13m37s, 8366 → 1h0m14s): about 8.3k tokens come back per hour, the whole quota in 24 h.
 
-**`EVAL_TOKEN_BUDGET`** (env; repository variable `EVAL_TOKEN_BUDGET` in `evals.yml` and `pr-evals.yml`, unset = no cap): a live run whose estimate exceeds it is refused before any LLM call (`eval.error`, exit 1, no results file). A non-integer value, or a budget with no estimate available, is refused too. Replays ignore it.
+**Pre-flight estimate.** `eval.start` logs `meta.cases`, `meta.tokens_est`, `meta.tokens_est_per_run` and `meta.tokens_est_source`: runs (cases × repeats) × tokens per run, the larger of the newest error-free live run of the suite in `EVAL_HISTORY_FILE` (`history:<run_id>`; local only, a CI runner starts with no history) and the suite's static `tokensPerRunEst` (`static`). A replay costs nothing (`replay`, 0). `eval.start` is logged once the dataset is loaded; a failure before that still logs a bare `eval.start` before `eval.error`. The estimate is cache-blind, so it overstates a Groq run: validation × 3 = 35 × 3 × 2700 = **283,500**, review × 3 = 23 × 3 × 4200 = **289,800**.
+
+**`EVAL_TOKEN_BUDGET`** (env; repository variable `EVAL_TOKEN_BUDGET` in `evals.yml` and `pr-evals.yml`, unset = no cap): a live run whose estimate exceeds it is refused before any LLM call (`eval.error`, exit 1, no results file). A non-integer value, or a budget with no estimate available, is refused too. Replays ignore it. **Scheduled runs never read it** (`evals.yml` passes `''` on `schedule`): any cap under the TPD would refuse both weekly suites before their first call, and a cap above 290k protects nothing. Manual and PR runs keep it.
 
 **Circuit breaker.** The first LLM call that fails on an exhausted quota stops the run (`detectQuotaExhaustion`, `eval_harness.mjs`):
 - a provider message naming a daily quota (`tokens per day (TPD)`, `requests per day (RPD)`), whatever the fallback provider answered; or
@@ -154,10 +157,16 @@ The chars/4 `tokens_est` in results files undercounts by ≈ 1.34 (reasoning tok
 
 A TPM 429 that outlasts the retries, a 5xx or a network error does not trip it. Once open, no further case starts; the remaining case × repeat are recorded as skipped (`skipped: true`, no call). The run is a **provider failure**: `summary.error_rate = 1` (by definition, not a ratio), `summary.circuit_breaker = { provider, quota, limit, used, retry_after, skipped_runs }`, an `error_rate` threshold failure even for a suite that does not gate it (so `partitionPublishable` never publishes it), a ⛔ section in the report, one `::error::` (`eval/eval.error`, `meta.reason: "provider_quota"`) naming quota, usage and retry-after, exit 1. The results file and trace are still uploaded. Before this, run 37719923057 made 45 calls that all failed (Groq TPD 429, then Anthropic 401).
 
-**Schedule vs production traffic** — proposal, not applied:
-- The 06:23 UTC start does not hit production directly: 100 `pr-review` runs (2026-10-01 → 10-08) cluster at 19–20h and 02–03h UTC, none at 06h; Tuesday is the quietest day (4/100).
-- The collision is the volume, not the hour. Assuming Groq's TPD is a rolling 24 h window (a `try again in 13m47s` at `Used 198931` points that way), a Monday 06:23 run that spends the quota starves production until about Tuesday 06:23, i.e. through the Monday evening and Tuesday 02–03h peaks. The breaker caps the waste at one failed call; it does not give back what the run already spent.
-- `repeats: 3` makes one suite alone (≈ 285k) exceed the quota, so a weekly run cannot complete on the shared free tier at any hour. Options, best first: (1) a separate Groq organization (own key, own TPD) for evals — removes the coupling; (2) weekly `repeats: 1` with one suite per day (≈ 95k each, half the quota), plus `EVAL_TOKEN_BUDGET ≈ 110000`; (3) the Groq Dev tier. Moving the cron alone fixes nothing.
+**Weekly schedule vs the TPD** (ADR-0027 amendment 2026-10-12). Options evaluated on run 38271632735:
+
+| Option | Numbers | Verdict |
+|---|---|---|
+| One cron per suite, ≥ 48 h apart, `repeats: 3` | validation ≤ 199k counted (measured); review ≈ 130–175k (assumed cache ratio); one suite per TPD | **Applied.** No gate change |
+| Lower `repeats` on schedule | 1 repeat: ≈ 95k estimated per suite, but `consistency` is `null` and its `optional` gate is skipped. 2 repeats: 189k / 193k estimated (no headroom for production), and agreement over pairs passes `min` 0.9 / 0.8 more easily than over triples | Rejected: loosens the consistency gate on the published reference (ADR-0031) |
+| `EVAL_TOKEN_BUDGET` per suite | estimates 283.5k / 289.8k against a 200k TPD | Rejected as the fix: refuses the run, publishes nothing. Not read on schedule |
+| Evals on Anthropic | — | Excluded: evals measure the production primary model (Groq `openai/gpt-oss-120b`) |
+
+Residual risk: a suite day spends up to the whole TPD that production shares (≈ 8.3k tokens back per hour), and cache hits are not guaranteed. A run that hits the TPD anyway is stopped by the circuit breaker at the first 429 and not published; the following week retries. If review × 3 trips it, the remaining levers keep the gates: a separate Groq organization for evals (same model, own TPD) or the Groq Dev tier.
 
 ## Gates only tighten (ADR-0031)
 
@@ -232,7 +241,7 @@ export const autofixSuite = {
 - `scripts/lib/review_prompt.mjs` (review prompt builder and verdict parser, shared with `pr_review.mjs`) is under the same c8 gate, measured with `review_prompt.test.mjs`; `pr_review.test.mjs` and `entrypoints.test.mjs` still exercise it end to end through the script.
 - `scripts/lib/eval_replay_ci.mjs` (PR replay gate) is under the same c8 gate, measured with `eval_replay_ci.test.mjs`, which also runs `scripts/replay_evals_ci.mjs` end to end against a local copy of the site.
 - **Weekly run / per-suite `run_id` (minimum coverage policy):** `scripts/lib/eval_site.mjs` stays under the CI-enforced 80% c8 gate (lines, branches, functions, statements) in `test.yml`, including the `workflow_run_id` link. `scripts/build_eval_site.mjs` joins the same CI-enforced 80% c8 gate (`test.yml`, measured with `build_eval_site.test.mjs`: 100% lines, 93% branches), which covers its `run_id` collision guard (same batch, against the history, same-suite re-run, skipped outage, missing `run_id`) and the multi-suite build. `EVAL_RUN_ID` and its fallback are exercised end to end by `eval_suites.test.mjs`.
-- The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR. For the weekly run: the cron (Monday, off the hour), the suite matrix against the registry, `max-parallel: 1` / `fail-fast: false`, the per-suite `EVAL_RUN_ID` and artifact names, the merged download, a single deploy, the disjoint `evals` / `pr-evals` concurrency groups, and that `init_site` and `restore_run_id` are read only behind the `schedule` guard. For `eval-replay.yml`, it pins `pull_request` only, the read-only token, no secret, the paths filter (docs-only changes do not trigger it), the per-PR concurrency group and the trace upload.
+- The workflow is YAML, which c8 cannot measure. `workflow_gates.test.mjs` pins its shape instead: the job split, the default-branch condition, the Pages permissions and actions, and that it never pushes, commits or opens a PR. For the weekly run: one cron per suite (early morning, off the hour, suite days ≥ 48 h apart), the cron → suite map against the registry (every cron mapped, every suite once), `repeats` 3 and no `EVAL_TOKEN_BUDGET` on schedule, `max-parallel: 1` / `fail-fast: false`, the per-suite `EVAL_RUN_ID` and artifact names, the merged download, a single deploy, the disjoint `evals` / `pr-evals` concurrency groups, and that `init_site` and `restore_run_id` are read only behind the `schedule` guard. For `eval-replay.yml`, it pins `pull_request` only, the read-only token, no secret, the paths filter (docs-only changes do not trigger it), the per-PR concurrency group and the trace upload.
 
 ## Results file
 

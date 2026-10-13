@@ -2,7 +2,7 @@ import { log } from './observability.mjs';
 import { estimateTokens } from './metrics.mjs';
 import { GROQ_TPM_LIMIT, TOKEN_ESTIMATE_MARGIN } from './token_budget.mjs';
 
-// Prompt budget impact (ADR-0036): token cost of a PR's prompts/*.md changes against each stage's
+// Prompt budget impact (ADR-0037): token cost of a PR's prompts/*.md changes against each stage's
 // input budget in config/models.yaml. Informational review evidence; never a verdict input.
 
 export const LOW_HEADROOM_RATIO = 0.1;

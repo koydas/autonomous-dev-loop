@@ -1,4 +1,4 @@
-# ADR-0034: Deterministic stale-reference check as review evidence
+# ADR-0035: Deterministic stale-reference check as review evidence
 
 - **Date:** 2026-10-12
 - **Status:** Accepted

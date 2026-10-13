@@ -1127,6 +1127,56 @@ test('pr_review clears review-withheld when a later review approves or requests 
   }
 });
 
+// --- APPROVE closes the fix loop (ADR-0034) ---
+
+const AUTOFIX_LABEL_NAMES = Object.values(LABELS.autofix).map((label) => label.name);
+
+test('pr_review clears needs-human and every auto-fix-attempt label on APPROVED', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'Fine.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const labels = reviewLabelCalls(server);
+    assert.ok(labels.added.includes('review-approved'));
+    for (const name of AUTOFIX_LABEL_NAMES) assert.ok(labels.removed.includes(name), `expected ${name} to be removed`);
+    assert.ok(labels.removed.includes('needs-human'));
+    assert.match(result.stdout + result.stderr, /"cleared":\[/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review keeps needs-human and auto-fix-attempt labels on REQUEST_CHANGES and on a withheld approval', async () => {
+  const cases = [
+    { groqContent: 'Broken.\n\nVerdict: REQUEST_CHANGES', env: {} },
+    { groqContent: 'Fine.\n\nVerdict: APPROVED', env: { REVIEW_EVIDENCE_PATH: NO_EVIDENCE_PATH } },
+  ];
+  for (const { groqContent, env } of cases) {
+    const server = await startMockServer(makeHandler({ groqContent }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile, env);
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      const labels = reviewLabelCalls(server);
+      for (const name of AUTOFIX_LABEL_NAMES) assert.ok(!labels.removed.includes(name), `${name} must survive ${groqContent}`);
+      assert.doesNotMatch(result.stdout + result.stderr, /"cleared":/);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+    }
+  }
+});
+
+test('config/labels.yaml autofix labels cover every attempt label auto_fix_pr.mjs counts, plus needs-human', () => {
+  const source = readFileSync(path.join(SCRIPTS_DIR, 'auto_fix_pr.mjs'), 'utf8');
+  const maxAttempts = Number(source.match(/const MAX_ATTEMPTS = (\d+);/)[1]);
+  const prefix = source.match(/const ATTEMPT_LABEL_PREFIX = '([^']+)';/)[1];
+  const expected = [...Array.from({ length: maxAttempts }, (_, i) => `${prefix}${i + 1}`), 'needs-human'];
+  assert.deepEqual([...AUTOFIX_LABEL_NAMES].sort(), expected.sort());
+});
+
 // --- One LLM review per head SHA (ADR-0028) ---
 
 const HEAD_SHA = 'a'.repeat(40);
@@ -1347,7 +1397,7 @@ test('pr_review (Groq) exits 1 with an explicit error and no LLM call when the p
   }
 });
 
-// ADR-0034 / ADR-0035: the review searches the PR tree (here: this repo) for stale references and
+// ADR-0035 / ADR-0036: the review searches the PR tree (here: this repo) for stale references and
 // related ADRs. The removed text is a long line of AGENTS.md, picked at run time so the test does
 // not depend on what the docs say.
 test('pr_review shows stale references and related ADRs, and a stale reference alone does not change an APPROVE', async () => {
@@ -1377,7 +1427,7 @@ test('pr_review shows stale references and related ADRs, and a stale reference a
   }
 });
 
-// ADR-0036: base side through `git show <base>:<path>`. The base is this checkout's HEAD (present
+// ADR-0037: base side through `git show <base>:<path>`. The base is this checkout's HEAD (present
 // even in a shallow clone); the mocked head SHA is unknown to git, so merge-base falls back to it.
 test('pr_review reports the prompt budget impact of a changed prompt, without changing the verdict', async () => {
   const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
@@ -1408,7 +1458,7 @@ test('pr_review continues without the prompt budget block when the base SHA is u
     const result = await runPrReview(server.address().port, eventFile);
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
     assert.match(result.stderr, /"event":"review\.prompt_budget_error".*"level":"warn"/);
-    // Match the block header: ADR-0036 (titled "Prompt budget impact …") can appear among the related ADRs.
+    // Match the block header: ADR-0037 (titled "Prompt budget impact …") can appear among the related ADRs.
     assert.doesNotMatch(server.requests.find((r) => r.url === '/v1/messages').body, /## Prompt budget impact/);
   } finally {
     server.close();

@@ -69,6 +69,9 @@ const githubHeaders = {
 
 const reviewLabels = loadLabelsConfig('review');
 const PR_REVIEW_LABELS = [reviewLabels.approved, reviewLabels.changes, reviewLabels.withheld];
+// ADR-0034: an APPROVE closes the fix loop, so the auto-fix state it leaves behind (needs-human,
+// auto-fix-attempt-N) is cleared and the next red head starts with the full attempt budget.
+const AUTOFIX_LABELS_CLEARED_ON_APPROVE = Object.values(loadLabelsConfig('autofix')).map((label) => label.name);
 const HEADING = '## 🔍 Automated Code Review';
 
 let prNumber = event.pull_request?.number;
@@ -241,7 +244,7 @@ const prTitle = prMeta.title || '';
 const prBody = prMeta.body || '(no description provided)';
 
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
-// ADR-0034 / ADR-0035: text searches over the PR tree (the working directory, data only per ADR-0023).
+// ADR-0035 / ADR-0036: text searches over the PR tree (the working directory, data only per ADR-0023).
 // A listing or read error is logged as a warn event and yields no result; it never aborts the review.
 // The PR tree is untrusted: a symlink (to /dev/zero, or out of the tree) is never listed nor followed.
 const isRegularFile = (p) => {
@@ -262,7 +265,7 @@ const repoFiles = {
 const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
 const relatedAdrs = findRelatedAdrs({ rawDiff, ...repoFiles });
 log('Review context searched', { prNumber, staleRefs: staleRefs.length, relatedAdrs: relatedAdrs.map((a) => a.id) });
-// ADR-0036: token cost of changed prompts/*.md. Base side at the merge base (the .diff is base...head),
+// ADR-0037: token cost of changed prompts/*.md. Base side at the merge base (the .diff is base...head),
 // head side and config/models.yaml from the PR tree (trusted defaults when the PR tree has none).
 const git = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 const baseSha = isCommitSha(prMeta?.base?.sha) ? prMeta.base.sha : null;
@@ -304,7 +307,7 @@ const evidence = assessEvidence(evidenceParse, {
 log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
-// ADR-0035: the related-ADR block is dropped before the diff or the body is shrunk.
+// ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
 const { userPrompt, diffTruncated, bodyTruncated, adrCount } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
   staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
@@ -343,7 +346,7 @@ const isWithheld = verdict === 'WITHHELD';
 const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_CHANGES';
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
-// ADR-0034 / ADR-0036: stale references and prompt budget impact are informational; they never change the verdict above.
+// ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
 const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? formatWithheldNote(verdictReason) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
@@ -447,7 +450,10 @@ if (isWithheld) {
   await addLabel(apply);
   await removeLabel(remove);
   await removeLabel(reviewLabels.withheld.name);
-  log('PR review labels applied', { prNumber, added: apply, removed: remove });
+  if (isApproved) {
+    for (const name of AUTOFIX_LABELS_CLEARED_ON_APPROVE) await removeLabel(name);
+  }
+  log('PR review labels applied', { prNumber, added: apply, removed: remove, ...(isApproved ? { cleared: AUTOFIX_LABELS_CLEARED_ON_APPROVE } : {}) });
 }
 
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;

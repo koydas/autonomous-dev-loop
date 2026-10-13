@@ -2,7 +2,7 @@ import { log } from './observability.mjs';
 import { parseDiffBlocks } from './stale_refs.mjs';
 import { isTestFile } from './change_classifier.mjs';
 
-// Related ADRs for the review (ADR-0035): the docs/adr/NNNN-*.md files that cite a path the PR
+// Related ADRs for the review (ADR-0036): the docs/adr/NNNN-*.md files that cite a path the PR
 // changes, so the reviewer knows which recorded decision governs the change. Pure apart from the
 // injected `listFiles` / `readFile`.
 

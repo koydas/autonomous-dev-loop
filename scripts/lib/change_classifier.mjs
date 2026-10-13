@@ -48,7 +48,7 @@ const TEST_PATTERNS = [
 // Per-file helpers
 // ---------------------------------------------------------------------------
 
-function isDocumentationFile(filePath) {
+export function isDocumentationFile(filePath) {
   // Automation-scope files (scripts/, prompts/, docs/code-generation.md) change
   // runtime behaviour even when they carry a .md extension — don't classify them
   // as documentation.

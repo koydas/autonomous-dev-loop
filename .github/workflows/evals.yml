@@ -1,19 +1,23 @@
 name: Evals
 
-# Manual, plus one weekly run: each run spends real LLM tokens (Groq free tier: 8K TPM).
+# Manual, plus a weekly run of each suite: each run spends real LLM tokens (Groq free tier: 8K TPM).
 # With `publish`, a run on the default branch is added to the eval dashboard on
 # GitHub Pages (ADR-0027 amendment): the `publish` job reads the history back from the
 # deployed site, adds the run and redeploys. Nothing is committed. Runs on other refs
 # stay artifact-only.
 #
-# Weekly (ADR-0027 amendment): eval-replay.yml and pr-evals.yml compare with the last published
-# run, which goes stale without a regular one. Every registered suite, repeats 3, one suite at a
-# time, one Pages deploy at the end. On `schedule` every input is empty: the defaults below are
-# explicit (publish on, init_site off, no restore); workflow_gates.test.mjs pins them.
+# Weekly (ADR-0027 amendments): eval-replay.yml and pr-evals.yml compare with the last published
+# run, which goes stale without a regular one. Every registered suite once a week, repeats 3, one
+# suite per scheduled run: one suite × 3 fills most of the Groq free-tier 200k TPD, two in a row do
+# not fit (run 38271632735). On `schedule` every input is empty: the defaults below are explicit
+# (publish on, init_site off, no restore); workflow_gates.test.mjs pins them.
 on:
   schedule:
-    # Mondays 06:23 UTC: off the hour (GitHub delays :00 schedules). ≈ 50-60 min end to end.
-    - cron: '23 6 * * 1'
+    # 06:23 UTC, off the hour (GitHub delays :00 schedules). One cron per suite, 48 h apart so a
+    # delayed schedule still starts on a TPD the previous suite no longer holds. The `suite` matrix
+    # maps each cron string to its suite.
+    - cron: '23 6 * * 1' # validation, ≈ 18 min
+    - cron: '23 6 * * 3' # review, ≈ 35-40 min
   workflow_dispatch:
     inputs:
       suite:
@@ -62,12 +66,13 @@ jobs:
     timeout-minutes: 120
     strategy:
       # One suite at a time (they share the TPM); a threshold miss or a timeout in one suite never
-      # cancels the next, and publish still gets the others.
+      # cancels the next, and publish still gets the others. A scheduled run has one suite.
       max-parallel: 1
       fail-fast: false
       matrix:
-        # schedule: every suite in the registry (scripts/lib/eval_suites.mjs, checked by workflow_gates.test.mjs).
-        suite: ${{ fromJSON(github.event_name == 'schedule' && '["validation","review"]' || format('["{0}"]', inputs.suite)) }}
+        # schedule: the cron's suite; the crons cover the registry once (scripts/lib/eval_suites.mjs,
+        # checked by workflow_gates.test.mjs). An unmapped cron yields an empty suite: run_evals.mjs fails.
+        suite: ${{ fromJSON(format('["{0}"]', github.event_name == 'schedule' && fromJSON('{"23 6 * * 1":"validation","23 6 * * 3":"review"}')[github.event.schedule] || inputs.suite)) }}
     steps:
       # The eval step handles LLM output and API keys: no push credential on disk.
       - uses: actions/checkout@v4
@@ -89,7 +94,10 @@ jobs:
           LLM_MAX_RETRY_WAIT_MS: '60000'
           GROQ_MAX_RETRIES: '20'
           # Optional pre-flight cap (docs/evals.md#token-budget): unset repository variable = no cap.
-          EVAL_TOKEN_BUDGET: ${{ vars.EVAL_TOKEN_BUDGET }}
+          # Not on schedule: the static estimate ignores Groq's prompt cache (one suite × 3 ≈ 285k
+          # estimated, ≤ 200k counted), so any cap under the TPD would refuse every weekly run. The
+          # circuit breaker still stops a weekly run at the first TPD 429.
+          EVAL_TOKEN_BUDGET: ${{ github.event_name != 'schedule' && vars.EVAL_TOKEN_BUDGET || '' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
