@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import {
   readPackageJsonDependencies,
   formatDependencyManifestContext,
@@ -12,6 +13,24 @@ import {
 // ---------------------------------------------------------------------------
 // readPackageJsonDependencies
 // ---------------------------------------------------------------------------
+
+// Captures the dependency_manifest warn events observability.mjs writes to stderr during `fn`.
+async function withWarnEvents(fn) {
+  const write = process.stderr.write;
+  const lines = [];
+  process.stderr.write = (chunk, ...rest) => {
+    lines.push(String(chunk));
+    return write.call(process.stderr, chunk, ...rest);
+  };
+  try {
+    const result = await fn();
+    const events = lines.join('').split('\n').filter((l) => l.includes('"event":"dependency_manifest.package_json_ignored"')).map((l) => JSON.parse(l));
+    assert.ok(events.every((e) => e.level === 'warn'));
+    return { result, events };
+  } finally {
+    process.stderr.write = write;
+  }
+}
 
 describe('readPackageJsonDependencies', () => {
   let tmpDir;
@@ -92,14 +111,63 @@ describe('readPackageJsonDependencies', () => {
     await fs.rm(depDir, { recursive: true, force: true });
   });
 
-  test('rethrows unexpected non-ENOENT read errors instead of swallowing them', async () => {
+  // #195 (ADR-0023): was "rethrows EISDIR"; a non-regular package.json is now "no manifest", never an abort.
+  test('returns null with one warn event instead of throwing when package.json is a directory', async () => {
     const dirDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-direrr-'));
     await fs.mkdir(path.join(dirDir, 'package.json'));
-    await assert.rejects(
-      () => readPackageJsonDependencies(dirDir),
-      (err) => err.code === 'EISDIR',
-    );
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(dirDir));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
     await fs.rm(dirDir, { recursive: true, force: true });
+  });
+
+  test('returns null without following a symlink to a package.json outside the tree', async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-link-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-outside-'));
+    await fs.writeFile(path.join(outside, 'package.json'), JSON.stringify({ dependencies: { leak: '1' } }), 'utf8');
+    await fs.symlink(path.join(outside, 'package.json'), path.join(tree, 'package.json'));
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(tree));
+    assert.equal(result, null, 'the symlink target is never read');
+    assert.equal(events.length, 1);
+    assert.equal(events[0].stage, 'dependency_manifest');
+    assert.deepEqual(events[0].meta, { path: 'package.json', reason: 'not_regular_file' });
+    await Promise.all([tree, outside].map((d) => fs.rm(d, { recursive: true, force: true })));
+  });
+
+  test('returns null instead of throwing when package.json is a symlink to a directory', async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-linkdir-'));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-outside-dir-'));
+    await fs.symlink(outside, path.join(tree, 'package.json'));
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(tree));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    await Promise.all([tree, outside].map((d) => fs.rm(d, { recursive: true, force: true })));
+  });
+
+  test('returns null without hanging when package.json is a FIFO', { skip: process.platform === 'win32', timeout: 5000 }, async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-fifo-'));
+    execFileSync('mkfifo', [path.join(tree, 'package.json')]);
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(tree));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    await fs.rm(tree, { recursive: true, force: true });
+  });
+
+  test('a missing package.json returns null without a warn event', async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-missing-'));
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(tree));
+    assert.equal(result, null);
+    assert.equal(events.length, 0);
+    await fs.rm(tree, { recursive: true, force: true });
+  });
+
+  test('a regular package.json is read as before, without a warn event', async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-regular-'));
+    await fs.writeFile(path.join(tree, 'package.json'), JSON.stringify({ dependencies: { a: '1' } }), 'utf8');
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(tree));
+    assert.deepEqual(result, { a: '1' });
+    assert.equal(events.length, 0);
+    await fs.rm(tree, { recursive: true, force: true });
   });
 });
 

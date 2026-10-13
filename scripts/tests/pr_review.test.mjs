@@ -1590,6 +1590,36 @@ test('pr_review falls back to the default model budgets when config/models.yaml 
   }
 });
 
+// Issue #195 / ADR-0023: a symlinked package.json is "no manifest" (one warn event), never an abort
+// (EISDIR on a directory target) nor an out-of-tree read (a file target).
+test('pr_review completes when package.json is a symlink (to a directory, to a file outside the tree)', async () => {
+  const followed = JSON.stringify({ dependencies: { 'leaked-outside-dep': '1.0.0' } });
+  const layouts = {
+    'symlink to a directory': { outsideFiles: { 'pkg/package.json': followed }, links: { 'package.json': 'pkg' } },
+    'symlink to an outside file': { outsideFiles: { 'pkg/package.json': followed }, links: { 'package.json': 'pkg/package.json' } },
+  };
+  for (const [name, layout] of Object.entries(layouts)) {
+    const fixture = await makePrTree({ files: { 'foo.js': 'line\n' }, ...layout });
+    const server = await startMockServer(makeHandler({ groqContent: 'All good.\n\nVerdict: APPROVED' }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+      assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+      const warns = result.stderr.split('\n').filter((l) => l.includes('"event":"dependency_manifest.package_json_ignored"'));
+      assert.equal(warns.length, 1, `${name}: exactly one warn event`);
+      assert.match(warns[0], /"level":"warn"/);
+      assert.match(result.stderr, /"event":"review\.llm_request"/, `${name}: the review reaches the LLM call`);
+      assert.ok(!llmPrompt(server).includes('leaked-outside-dep'), `${name}: the symlink target is never read`);
+      const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+      assert.equal(JSON.parse(review.body).event, 'APPROVE');
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fixture.cleanup();
+    }
+  }
+});
+
 test('pr_review skips symlinked docs and ADRs in the stale-reference and related-ADR searches, and still reports regular files', async () => {
   const removedLine = 'The review stage posts exactly one comment per head commit and edits it in place on a re-run.';
   const adr = (n, title) => `# ADR-${n}: ${title}\n\n- **Status:** Accepted\n\n## Decision\n\nscripts/review_stage.mjs posts one comment per head.\n`;
