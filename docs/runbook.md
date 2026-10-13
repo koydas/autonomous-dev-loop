@@ -2,7 +2,7 @@
 
 ## Metrics System
 
-Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the default branch via the GitHub Contents API by the respective workflow step. Scripts write the run's records to `$RUNNER_TEMP/pipeline-metrics.jsonl` (`METRICS_FILE`), outside the checkout, and "Commit metrics" appends only those lines, so a `metrics/runs.jsonl` in the checked-out branch is never uploaded (ADR-0021).
+Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the `metrics` branch (not the default branch: `main` only takes changes through a pull request) via the GitHub Contents API by the respective workflow step (ADR-0013 amendment). Scripts write the run's records to `$RUNNER_TEMP/pipeline-metrics.jsonl` (`METRICS_FILE`), outside the checkout, and "Commit metrics" appends only those lines, so a `metrics/runs.jsonl` in the checked-out branch is never uploaded (ADR-0021).
 
 **Record types:**
 
@@ -20,14 +20,17 @@ Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one
 
 **Generate a markdown summary report:**
 ```bash
-node scripts/metrics-report.mjs
+git fetch origin metrics
+git show origin/metrics:metrics/runs.jsonl > /tmp/runs.jsonl
+METRICS_FILE=/tmp/runs.jsonl node scripts/metrics-report.mjs
 ```
+`metrics/runs.jsonl` on `main` is not the store and stays empty.
 
 **Metrics troubleshooting:**
 
 | Symptom | Probable Cause |
 |---------|----------------|
-| `metrics/runs.jsonl` not updating after runs | Workflow `contents: write` permission missing; or the GitHub Contents API call failed (check "Commit metrics" step logs) |
+| `metrics/runs.jsonl` not updating after runs | Read it on the `metrics` branch, not on `main`. Otherwise: the `metrics` branch is missing or covered by a ruleset (the step logs a `404` / `409` and the `Failed to commit metrics` warning; create it from `main` in the UI); workflow `contents: write` permission missing; or the GitHub Contents API call failed (check "Commit metrics" step logs) |
 | Cost/token totals seem too low | PR records use `total_input_tokens_est` / `total_output_tokens_est`; verify the report script is picking up both field names |
 | MANUAL verdict recorded but PR was actually approved | Auto-fix exhaustion ran in the same session as a later manual approval — the MANUAL record is correct for that snapshot; future APPROVE records will appear separately |
 | `metrics/runs.jsonl` has duplicate lines | Two concurrent workflow runs both succeeded in pushing. Because each run has a distinct `GITHUB_RUN_ID`, the in-process deduplication in `metrics-report.mjs` does not catch cross-run duplicates — safe to remove manually: identify lines with identical content (same `type`, `issue_number`/`pr_number`, `verdict`/`final_verdict`) and delete the extras directly in the file. |
