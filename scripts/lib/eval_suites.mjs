@@ -18,7 +18,7 @@ import path from 'node:path';
 import { validateIssue, VALIDATION_SYSTEM_PROMPT } from './issue_validator.mjs';
 import { loadPrompt } from './prompts.mjs';
 import { detectProvider, GROQ_MODEL_DEFAULTS } from './config.mjs';
-import { buildReviewPrompt, parseReviewVerdict } from './review_prompt.mjs';
+import { buildReviewPrompt, parseReviewVerdict, withholdOnUnreviewedCode } from './review_prompt.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, decideVerdict } from './review_evidence.mjs';
 
@@ -148,7 +148,7 @@ export const reviewSuite = {
       input.evidence === undefined ? { ok: false, reason: `no evidence file at ${path.join('evidence', 'review-evidence.json')}` } : parseEvidence(JSON.stringify(input.evidence)),
       { prHeadSha: input.head_sha ?? null, touchedPaths: findTouchedEvidencePaths(input.diff) },
     );
-    const { userPrompt, diffTruncated, bodyTruncated } = buildReviewPrompt({
+    const { userPrompt, diffTruncated, bodyTruncated, unreviewedCodeFiles } = buildReviewPrompt({
       systemPrompt: system,
       userPromptTemplate: user,
       rawDiff: input.diff,
@@ -162,8 +162,11 @@ export const reviewSuite = {
     // Production fails closed on a missing verdict line; the eval counts it as an errored run instead,
     // so a format regression shows in error_rate rather than inflating request_changes recall.
     if (!llmVerdict) throw new Error('No verdict line in the review (expected APPROVED or REQUEST_CHANGES)');
-    const { verdict, reason } = decideVerdict(llmVerdict === 'APPROVED', evidence, { evidenceRequired: input.evidence !== undefined });
-    return { verdict, llm_verdict: llmVerdict, reason, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, review: cleanReview };
+    const { verdict, reason } = withholdOnUnreviewedCode(
+      decideVerdict(llmVerdict === 'APPROVED', evidence, { evidenceRequired: input.evidence !== undefined }),
+      unreviewedCodeFiles,
+    );
+    return { verdict, llm_verdict: llmVerdict, reason, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview };
   },
 
   scorers: {

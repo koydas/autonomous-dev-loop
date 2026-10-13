@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
-import { buildReviewPrompt, parseReviewVerdict } from './lib/review_prompt.mjs';
+import { buildReviewPrompt, formatUnreviewedCodeNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
@@ -247,9 +247,27 @@ const dependencyManifestContext = await buildDependencyManifestContext(process.c
 // ADR-0035 / ADR-0036: text searches over the PR tree (the working directory, data only per ADR-0023).
 // A listing or read error is logged as a warn event and yields no result; it never aborts the review.
 // The PR tree is untrusted: a symlink (to /dev/zero, or out of the tree) is never listed nor followed.
+// Every component is lstat'ed: a single lstat of the full path would follow a symlinked parent (config -> /etc).
+const pathKind = (p) => {
+  const parts = path.normalize(p).split(path.sep);
+  if (path.isAbsolute(p) || parts.includes('..')) return 'other';
+  let full = process.cwd();
+  for (const [i, part] of parts.entries()) {
+    full = path.join(full, part);
+    let st;
+    try {
+      st = fs.lstatSync(full);
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return 'missing';
+      throw err;
+    }
+    if (i < parts.length - 1 ? !st.isDirectory() : !st.isFile()) return 'other';
+  }
+  return 'file';
+};
 const isRegularFile = (p) => {
   try {
-    return fs.lstatSync(path.join(process.cwd(), p)).isFile();
+    return pathKind(p) === 'file';
   } catch {
     return false;
   }
@@ -257,9 +275,10 @@ const isRegularFile = (p) => {
 const repoFiles = {
   listFiles: () => execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter((p) => p && isRegularFile(p)),
   readFile: (p) => {
-    const full = path.join(process.cwd(), p);
-    if (!fs.lstatSync(full).isFile()) throw new Error(`${p} is not a regular file`);
-    return fs.readFileSync(full, 'utf8');
+    const kind = pathKind(p);
+    if (kind === 'missing') throw Object.assign(new Error(`${p} does not exist`), { code: 'ENOENT' });
+    if (kind === 'other') throw Object.assign(new Error(`${p} is not a regular file`), { code: 'ENOTREG' });
+    return fs.readFileSync(path.join(process.cwd(), p), 'utf8');
   },
 };
 const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
@@ -285,7 +304,17 @@ const readHeadOrNull = (p) => {
     throw err;
   }
 };
-const prModels = readHeadOrNull('config/models.yaml');
+// A non-regular or unreadable config/models.yaml (symlink, FIFO, …) is treated as missing: trusted
+// defaults, one warn event, never followed and never an abort.
+const readPrModels = () => {
+  try {
+    return readHeadOrNull('config/models.yaml');
+  } catch (err) {
+    obsLog({ stage: 'review', event: 'review.models_config_ignored', level: 'warn', meta: { path: 'config/models.yaml', error: err.message } });
+    return null;
+  }
+};
+const prModels = readPrModels();
 const promptBudget = computePromptBudgetImpact({
   rawDiff,
   readBase: (p) => {
@@ -308,11 +337,11 @@ log('Review evidence assessed', { prNumber, state: evidence.state, reason: evide
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
 // ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
-const { userPrompt, diffTruncated, bodyTruncated, adrCount } = buildReviewPrompt({
+const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
   staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
 });
-if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens });
+if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, unreviewedCodeFiles });
 if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
@@ -339,7 +368,10 @@ const llmApproved = llmVerdict === 'APPROVED';
 // ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.
 // Same resolution as run_review_evidence.mjs: without a config the repo has not opted in to evidence.
 const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
-const { verdict, reason: verdictReason } = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
+const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
+// ADR-0038: an approval of a diff whose code was cut to the budget is withheld; a human reviews the rest.
+const { verdict, reason: verdictReason } = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles);
+const withheldForUnreviewedCode = evidenceDecision.verdict === 'APPROVE' && verdict === 'WITHHELD';
 const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES';
 const isApproved = verdict === 'APPROVE';
 const isWithheld = verdict === 'WITHHELD';
@@ -347,7 +379,7 @@ const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_C
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 // ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? formatWithheldNote(verdictReason) : '');
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : formatWithheldNote(verdictReason)) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
 const body = stripReviewMarkers(evidence.failing.length > 0
@@ -370,7 +402,9 @@ log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
 const shortReviewBody = isApproved
   ? 'Automated review passed. See the review comment for details.'
   : isWithheld
-    ? 'Approval withheld: the tool evidence is unverified. See the review comment for details.'
+    ? (withheldForUnreviewedCode
+      ? 'Approval withheld: code was cut from the reviewed diff. See the review comment for details.'
+      : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
     : 'Changes required. See the automated review comment above for details.';
 
 function isOwnPullRequestApprovalFailure(status, detail) {
@@ -489,7 +523,7 @@ obsLog({
   event: 'review.verdict',
   level: 'info',
   duration_ms: reviewDurationMs,
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride },
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, unreviewed_code_files: unreviewedCodeFiles.length },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');
