@@ -151,7 +151,7 @@ await fs.writeFile(DEFAULT_EVIDENCE_PATH, JSON.stringify({
 }));
 const NO_EVIDENCE_PATH = path.join(os.tmpdir(), 'pr-review-no-evidence.json');
 
-async function runPrReview(port, eventFile, extraEnv = {}) {
+async function runPrReview(port, eventFile, extraEnv = {}, { cwd } = {}) {
   const env = {
     PATH: process.env.PATH,
     GITHUB_TOKEN: 'test-token',
@@ -168,6 +168,7 @@ async function runPrReview(port, eventFile, extraEnv = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [path.join(SCRIPTS_DIR, 'pr_review.mjs')], {
       env,
+      cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -1503,5 +1504,122 @@ test('pr_review continues without the prompt budget block when the base SHA is u
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+// Issue #190 / ADR-0023: the PR tree is data only, a symlink in it is never followed. The fixture is
+// a git repo used as the working directory; each symlink points outside it, at content that would
+// change the result if it were read.
+async function makePrTree({ files = {}, outsideFiles = {}, links = {} }) {
+  const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-review-tree-'));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-review-outside-'));
+  const write = async (root, p, content) => {
+    await fs.mkdir(path.dirname(path.join(root, p)), { recursive: true });
+    await fs.writeFile(path.join(root, p), content);
+  };
+  for (const [p, content] of Object.entries(files)) await write(tree, p, content);
+  for (const [p, content] of Object.entries(outsideFiles)) await write(outside, p, content);
+  for (const [p, target] of Object.entries(links)) {
+    await fs.mkdir(path.dirname(path.join(tree, p)), { recursive: true });
+    await fs.symlink(path.join(outside, target), path.join(tree, p));
+  }
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: tree, encoding: 'utf8' });
+  git('init', '-q');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  return {
+    tree,
+    sha: git('rev-parse', 'HEAD').trim(),
+    cleanup: () => Promise.all([tree, outside].map((d) => fs.rm(d, { recursive: true, force: true }))),
+  };
+}
+
+const llmPrompt = (server) => JSON.parse(server.requests.find((r) => r.url === '/v1/messages').body).messages
+  .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
+
+test('pr_review falls back to the default model budgets when config/models.yaml is not a regular file (symlink, symlinked parent)', async () => {
+  const diffText = 'diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -1,1 +1,1 @@\n-old\n+new\n';
+  const followed = 'review_max_input_tokens: 1234\n';
+  const layouts = {
+    'symlinked file': { outsideFiles: { 'models.yaml': followed }, links: { 'config/models.yaml': 'models.yaml' } },
+    'symlinked parent directory': { outsideFiles: { 'config/models.yaml': followed }, links: { config: 'config' } },
+  };
+  for (const [name, layout] of Object.entries(layouts)) {
+    const fixture = await makePrTree({ files: { 'prompts/pr-review-system.md': 'old\n' }, ...layout });
+    await fs.writeFile(path.join(fixture.tree, 'prompts/pr-review-system.md'), 'new prompt text\n');
+    const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+      assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+      const warns = result.stderr.split('\n').filter((l) => l.includes('"event":"review.models_config_ignored"'));
+      assert.equal(warns.length, 1, `${name}: exactly one warn event`);
+      assert.match(warns[0], /"level":"warn"/);
+      assert.match(result.stderr, /"event":"review\.llm_request"/, `${name}: the review reaches the LLM call`);
+      const prompt = llmPrompt(server);
+      assert.match(prompt, new RegExp(`## Prompt budget impact[\\s\\S]*review_max_input_tokens ${REVIEW_MAX_INPUT_TOKENS}\\b`), `${name}: default budgets`);
+      assert.ok(!prompt.includes('review_max_input_tokens 1234'), `${name}: the symlink target is never read`);
+      const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+      assert.equal(JSON.parse(review.body).event, 'APPROVE');
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fixture.cleanup();
+    }
+  }
+
+  // A symlinked changed prompt is a read error (prompt_budget_error, no block), never a 0-token prompt.
+  const fixture = await makePrTree({ files: { 'prompts/pr-review-system.md': 'old\n' } });
+  await fs.rm(path.join(fixture.tree, 'prompts/pr-review-system.md'));
+  const target = path.join(fixture.tree, '..', `${path.basename(fixture.tree)}-prompt.md`);
+  await fs.writeFile(target, `${'followed '.repeat(400)}\n`);
+  await fs.symlink(target, path.join(fixture.tree, 'prompts/pr-review-system.md'));
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `symlinked prompt: expected exit 0, stderr: ${result.stderr}`);
+    assert.match(result.stderr, /"event":"review\.prompt_budget_error".*"level":"warn".*is not a regular file/);
+    assert.doesNotMatch(result.stderr, /review\.models_config_ignored/);
+    assert.doesNotMatch(llmPrompt(server), /## Prompt budget impact/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(target).catch(() => {});
+    await fixture.cleanup();
+  }
+});
+
+test('pr_review skips symlinked docs and ADRs in the stale-reference and related-ADR searches, and still reports regular files', async () => {
+  const removedLine = 'The review stage posts exactly one comment per head commit and edits it in place on a re-run.';
+  const adr = (n, title) => `# ADR-${n}: ${title}\n\n- **Status:** Accepted\n\n## Decision\n\nscripts/review_stage.mjs posts one comment per head.\n`;
+  const fixture = await makePrTree({
+    files: {
+      'scripts/review_stage.mjs': `// ${removedLine}\n`,
+      'docs/regular.md': `# Regular\n\n${removedLine}\n`,
+      'docs/adr/0001-regular-adr.md': adr('0001', 'Regular ADR'),
+    },
+    outsideFiles: { 'linked.md': `# Linked\n\n${removedLine}\n`, 'adr.md': adr('0099', 'Linked ADR'), 'dir/inner.md': `${removedLine}\n` },
+    links: { 'docs/linked.md': 'linked.md', 'docs/adr/0099-linked-adr.md': 'adr.md', 'docs/linked-dir': 'dir' },
+  });
+  const diffText = `diff --git a/scripts/review_stage.mjs b/scripts/review_stage.mjs\n--- a/scripts/review_stage.mjs\n+++ b/scripts/review_stage.mjs\n@@ -1,1 +1,1 @@\n-// ${removedLine}\n+// One comment per head.\n`;
+  const server = await startMockServer(makeHandler({ diffText, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /stale_refs_error|related_adrs_error/, 'a symlink does not wipe either search');
+    const prompt = llmPrompt(server);
+    assert.match(prompt, /## Stale references[\s\S]*still referenced in: docs\/regular\.md:\d+/);
+    assert.ok(!prompt.includes('docs/linked.md') && !prompt.includes('docs/linked-dir'), 'symlinked docs are not reported');
+    assert.match(prompt, /## Related ADRs\n[^\n]*\n- ADR-0001: Regular ADR/);
+    assert.ok(!prompt.includes('ADR-0099'), 'a symlinked ADR is not read');
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    assert.ok(/→ `docs\/regular\.md:\d+`/.test(comment));
+    assert.ok(!comment.includes('docs/linked'));
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
   }
 });

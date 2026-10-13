@@ -247,9 +247,27 @@ const dependencyManifestContext = await buildDependencyManifestContext(process.c
 // ADR-0035 / ADR-0036: text searches over the PR tree (the working directory, data only per ADR-0023).
 // A listing or read error is logged as a warn event and yields no result; it never aborts the review.
 // The PR tree is untrusted: a symlink (to /dev/zero, or out of the tree) is never listed nor followed.
+// Every component is lstat'ed: a single lstat of the full path would follow a symlinked parent (config -> /etc).
+const pathKind = (p) => {
+  const parts = path.normalize(p).split(path.sep);
+  if (path.isAbsolute(p) || parts.includes('..')) return 'other';
+  let full = process.cwd();
+  for (const [i, part] of parts.entries()) {
+    full = path.join(full, part);
+    let st;
+    try {
+      st = fs.lstatSync(full);
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return 'missing';
+      throw err;
+    }
+    if (i < parts.length - 1 ? !st.isDirectory() : !st.isFile()) return 'other';
+  }
+  return 'file';
+};
 const isRegularFile = (p) => {
   try {
-    return fs.lstatSync(path.join(process.cwd(), p)).isFile();
+    return pathKind(p) === 'file';
   } catch {
     return false;
   }
@@ -257,9 +275,10 @@ const isRegularFile = (p) => {
 const repoFiles = {
   listFiles: () => execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter((p) => p && isRegularFile(p)),
   readFile: (p) => {
-    const full = path.join(process.cwd(), p);
-    if (!fs.lstatSync(full).isFile()) throw new Error(`${p} is not a regular file`);
-    return fs.readFileSync(full, 'utf8');
+    const kind = pathKind(p);
+    if (kind === 'missing') throw Object.assign(new Error(`${p} does not exist`), { code: 'ENOENT' });
+    if (kind === 'other') throw Object.assign(new Error(`${p} is not a regular file`), { code: 'ENOTREG' });
+    return fs.readFileSync(path.join(process.cwd(), p), 'utf8');
   },
 };
 const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
@@ -285,7 +304,17 @@ const readHeadOrNull = (p) => {
     throw err;
   }
 };
-const prModels = readHeadOrNull('config/models.yaml');
+// A non-regular or unreadable config/models.yaml (symlink, FIFO, …) is treated as missing: trusted
+// defaults, one warn event, never followed and never an abort.
+const readPrModels = () => {
+  try {
+    return readHeadOrNull('config/models.yaml');
+  } catch (err) {
+    obsLog({ stage: 'review', event: 'review.models_config_ignored', level: 'warn', meta: { path: 'config/models.yaml', error: err.message } });
+    return null;
+  }
+};
+const prModels = readPrModels();
 const promptBudget = computePromptBudgetImpact({
   rawDiff,
   readBase: (p) => {
