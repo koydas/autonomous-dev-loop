@@ -98,7 +98,7 @@ The write denylist and the shrink guard (ADR-0021) still run inside `validateAiO
 
 Motivated by a benchmark session where a local coding model's generated diff — containing an unauthorized dependency import and a guaranteed-crash read-only-property assignment — was reviewed by this same prompt and returned `APPROVED` with no findings. See [ADR-0019](adr/0019-static-verification-backstop.md) for the writeup and the static checks that now back these rules.
 
-The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks.
+The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_manifest.mjs`: `pr_review.mjs` reads the PR branch's local `package.json` (merging `dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`) and appends a "Declared npm dependencies" context block to the review prompt, so the reviewer can actually verify an import against the manifest instead of only what's visible in the diff hunks. A `package.json` that is not a regular file (symlink, directory, FIFO) or cannot be read is treated as missing and logs a `package_json_ignored` warn event: it is never followed (ADR-0023), and the review continues without the block.
 
 ### Stale references and related ADRs (ADR-0035, ADR-0036)
 

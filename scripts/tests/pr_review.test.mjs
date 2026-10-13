@@ -1590,6 +1590,38 @@ test('pr_review falls back to the default model budgets when config/models.yaml 
   }
 });
 
+// Issue #195 / ADR-0023: a non-regular package.json in the PR tree used to abort the review
+// (EISDIR, top-level await outside any try), hang it (FIFO, /dev/zero) or leak an out-of-tree file.
+test('pr_review completes without the dependency manifest when package.json is a symlink (to a directory or to a file)', async () => {
+  const diffText = 'diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\n';
+  const layouts = {
+    'symlink to a directory': { outsideFiles: { 'dir/x': '' }, links: { 'package.json': 'dir' } },
+    'symlink to a file': { outsideFiles: { 'package.json': JSON.stringify({ dependencies: { 'leaked-outside-dep': '1' } }) }, links: { 'package.json': 'package.json' } },
+  };
+  for (const [name, layout] of Object.entries(layouts)) {
+    const fixture = await makePrTree({ files: { 'src/a.mjs': 'old\n' }, ...layout });
+    const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+      assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+      const warns = result.stderr.split('\n').filter((l) => l.includes('"event":"package_json_ignored"'));
+      assert.equal(warns.length, 1, `${name}: exactly one warn event`);
+      assert.match(warns[0], /"level":"warn".*"reason":"symlink"/);
+      assert.match(result.stderr, /"event":"review\.llm_request"/, `${name}: the review reaches the LLM call`);
+      const prompt = llmPrompt(server);
+      assert.doesNotMatch(prompt, /Declared npm dependencies/, `${name}: no manifest block`);
+      assert.ok(!prompt.includes('leaked-outside-dep'), `${name}: the symlink target is never read`);
+      const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+      assert.equal(JSON.parse(review.body).event, 'APPROVE');
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fixture.cleanup();
+    }
+  }
+});
+
 test('pr_review skips symlinked docs and ADRs in the stale-reference and related-ADR searches, and still reports regular files', async () => {
   const removedLine = 'The review stage posts exactly one comment per head commit and edits it in place on a re-run.';
   const adr = (n, title) => `# ADR-${n}: ${title}\n\n- **Status:** Accepted\n\n## Decision\n\nscripts/review_stage.mjs posts one comment per head.\n`;

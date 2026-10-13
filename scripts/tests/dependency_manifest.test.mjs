@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import {
   readPackageJsonDependencies,
   formatDependencyManifestContext,
@@ -92,13 +93,14 @@ describe('readPackageJsonDependencies', () => {
     await fs.rm(depDir, { recursive: true, force: true });
   });
 
-  test('rethrows unexpected non-ENOENT read errors instead of swallowing them', async () => {
+  // Issue #195: a directory used to be rethrown as EISDIR and aborted pr_review before the LLM
+  // call. It is now "no manifest" (the warn event is checked in the non-regular describe below).
+  test('returns null instead of rethrowing EISDIR when package.json is a directory', async () => {
     const dirDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-direrr-'));
     await fs.mkdir(path.join(dirDir, 'package.json'));
-    await assert.rejects(
-      () => readPackageJsonDependencies(dirDir),
-      (err) => err.code === 'EISDIR',
-    );
+    await assert.doesNotReject(async () => {
+      assert.equal(await readPackageJsonDependencies(dirDir), null);
+    });
     await fs.rm(dirDir, { recursive: true, force: true });
   });
 });
@@ -154,5 +156,120 @@ describe('buildDependencyManifestContext', () => {
     const ctx = await buildDependencyManifestContext(tmpDir);
     assert.ok(ctx.includes('- react'));
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// Issue #195 / ADR-0023: the PR tree's package.json is data only. A symlink, directory or FIFO
+// is treated as missing with one warn event: never followed, never an abort, never a hang.
+describe('readPackageJsonDependencies on a non-regular package.json', () => {
+  let tree;
+  let outside;
+
+  before(async () => {
+    outside = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-outside-'));
+    await fs.writeFile(path.join(outside, 'package.json'), JSON.stringify({ dependencies: { leak: '1' } }), 'utf8');
+  });
+
+  after(async () => {
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  const freshTree = async () => {
+    if (tree) await fs.rm(tree, { recursive: true, force: true });
+    tree = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-tree-'));
+    return tree;
+  };
+
+  // Warn events written by observability.mjs while `fn` runs.
+  const captureWarns = async (fn) => {
+    const writes = [];
+    const original = process.stderr.write;
+    process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+    let result;
+    try {
+      result = await fn();
+    } finally {
+      process.stderr.write = original;
+    }
+    const events = writes.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.event === 'package_json_ignored');
+    return { result, events };
+  };
+
+  after(async () => {
+    if (tree) await fs.rm(tree, { recursive: true, force: true });
+  });
+
+  test('reads a regular package.json as before, without a warn event', async () => {
+    const dir = await freshTree();
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { a: '1' } }), 'utf8');
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(dir));
+    assert.deepEqual(result, { a: '1' });
+    assert.equal(events.length, 0);
+  });
+
+  test('returns null for a symlink to a package.json outside the tree, without reading it', async () => {
+    const dir = await freshTree();
+    await fs.symlink(path.join(outside, 'package.json'), path.join(dir, 'package.json'));
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(dir));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].level, 'warn');
+    assert.deepEqual(events[0].meta, { path: 'package.json', reason: 'symlink' });
+    assert.ok(!(await buildDependencyManifestContext(dir)).includes('leak'));
+  });
+
+  test('returns null instead of throwing EISDIR for a symlink to a directory', async () => {
+    const dir = await freshTree();
+    await fs.symlink(outside, path.join(dir, 'package.json'));
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(dir));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].meta.reason, 'symlink');
+  });
+
+  test('returns null for a directory named package.json', async () => {
+    const dir = await freshTree();
+    await fs.mkdir(path.join(dir, 'package.json'));
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(dir));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].meta.reason, 'not_regular_file');
+  });
+
+  test('returns null without hanging for a FIFO package.json', { skip: process.platform === 'win32', timeout: 5000 }, async () => {
+    const dir = await freshTree();
+    execFileSync('mkfifo', [path.join(dir, 'package.json')]);
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(dir));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].meta.reason, 'not_regular_file');
+  });
+
+  test('returns null without hanging for a symlink to /dev/zero', { skip: process.platform === 'win32', timeout: 5000 }, async () => {
+    const dir = await freshTree();
+    await fs.symlink('/dev/zero', path.join(dir, 'package.json'));
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(dir));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+  });
+
+  test('returns null with a warn event when package.json cannot be read', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async () => {
+    const dir = await freshTree();
+    const pkg = path.join(dir, 'package.json');
+    await fs.writeFile(pkg, '{}', 'utf8');
+    await fs.chmod(pkg, 0o000);
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(dir));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].meta.reason, 'EACCES');
+  });
+
+  test('returns null without a warn event when the repo root is a file (ENOTDIR)', async () => {
+    const dir = await freshTree();
+    const file = path.join(dir, 'not-a-dir');
+    await fs.writeFile(file, '', 'utf8');
+    const { result, events } = await captureWarns(() => readPackageJsonDependencies(file));
+    assert.equal(result, null);
+    assert.equal(events.length, 0);
   });
 });
