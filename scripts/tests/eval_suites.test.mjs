@@ -600,6 +600,19 @@ test('reviewSuite.run follows the provider budget: Groq truncates to review_max_
   });
 });
 
+test('reviewSuite.run withholds an approval when code was cut from the reviewed diff, like production (ADR-0038)', async () => {
+  const big = `diff --git a/src/big.js b/src/big.js\n--- /dev/null\n+++ b/src/big.js\n@@ -0,0 +1,900 @@\n${Array.from({ length: 900 }, (_, i) => `+export const value${i} = ${i} * 2; // padding line`).join('\n')}\n`;
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
+    const { output } = await runReview({ title: 'T', body: 'B', diff: big });
+    assert.equal(output.llm_verdict, 'APPROVED');
+    assert.equal(output.verdict, 'WITHHELD');
+    assert.deepEqual(output.unreviewed_code_files, ['src/big.js']);
+    assert.match(output.reason, /code cut from the reviewed diff: src\/big\.js/);
+    const small = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF });
+    assert.deepEqual(small.output.unreviewed_code_files, []);
+  });
+});
+
 test('findingSeverities reads finding bullets from the Issues Found section only', () => {
   const review = [
     '### 🏷️ Change Classification', '- [High] not a finding (wrong section)',

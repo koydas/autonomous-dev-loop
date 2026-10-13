@@ -1340,6 +1340,46 @@ function bigDiff(chars) {
   return `diff --git a/src/big.js b/src/big.js\n--- a/src/big.js\n+++ b/src/big.js\n@@ -0,0 +1 @@\n${line.repeat(Math.ceil(chars / line.length))}`;
 }
 
+test('pr_review (Groq) withholds an approval when code was cut from the reviewed diff, naming the file (ADR-0038)', async () => {
+  const server = await startMockServer(makeHandler({ diffText: bigDiff(60000), groqContent: 'Fine.\n\n### Verdict\nAPPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReviewOnGroq(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.match(JSON.parse(review.body).body, /code was cut from the reviewed diff/);
+    const comment = server.requests.find((r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url));
+    assert.match(JSON.parse(comment.body).body, /Approval withheld\*\* — the diff was cut to the token budget, and these code files were not shown to the reviewer in full: `src\/big\.js`/);
+    assert.doesNotMatch(JSON.parse(comment.body).body, /tool evidence cannot confirm it/);
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
+    assert.match(result.stderr, /"verdict":"WITHHELD"/);
+    assert.match(result.stderr, /"unreviewed_code_files":1/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review (Groq) still approves when the cut only removed documentation', async () => {
+  const docs = `diff --git a/docs/big.md b/docs/big.md\n--- a/docs/big.md\n+++ b/docs/big.md\n@@ -0,0 +1 @@\n${'+prose line for the token budget\n'.repeat(2000)}`;
+  const code = 'diff --git a/src/small.js b/src/small.js\n--- a/src/small.js\n+++ b/src/small.js\n@@ -1 +1 @@\n-a\n+b\n';
+  const server = await startMockServer(makeHandler({ diffText: docs + code, groqContent: 'Fine.\n\n### Verdict\nAPPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReviewOnGroq(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const [payload] = groqRequests(server);
+    assert.match(payload.messages[1].content, /diff_truncated: true/);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+    assert.match(result.stderr, /"unreviewed_code_files":0/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 test('pr_review (Groq) truncates a diff beyond the budget, keeps the prompt under it and flags diff_truncated', async () => {
   // ~2K-token body + the old 12,000-char diff cap ≈ the 7,283-token prompt of run 37174238930.
   const server = await startMockServer(makeHandler({ diffText: bigDiff(60000), prBody: `Test PR body ${'context '.repeat(1000)}`, groqContent: 'Fine.\n\n### Verdict\nAPPROVED' }));

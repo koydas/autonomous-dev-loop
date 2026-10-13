@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
-import { buildReviewPrompt, parseReviewVerdict } from './lib/review_prompt.mjs';
+import { buildReviewPrompt, formatUnreviewedCodeNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
@@ -308,11 +308,11 @@ log('Review evidence assessed', { prNumber, state: evidence.state, reason: evide
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
 // ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
-const { userPrompt, diffTruncated, bodyTruncated, adrCount } = buildReviewPrompt({
+const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
   staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
 });
-if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens });
+if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, unreviewedCodeFiles });
 if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
@@ -339,7 +339,10 @@ const llmApproved = llmVerdict === 'APPROVED';
 // ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.
 // Same resolution as run_review_evidence.mjs: without a config the repo has not opted in to evidence.
 const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
-const { verdict, reason: verdictReason } = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
+const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
+// ADR-0038: an approval of a diff whose code was cut to the budget is withheld; a human reviews the rest.
+const { verdict, reason: verdictReason } = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles);
+const withheldForUnreviewedCode = evidenceDecision.verdict === 'APPROVE' && verdict === 'WITHHELD';
 const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES';
 const isApproved = verdict === 'APPROVE';
 const isWithheld = verdict === 'WITHHELD';
@@ -347,7 +350,7 @@ const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_C
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 // ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? formatWithheldNote(verdictReason) : '');
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : formatWithheldNote(verdictReason)) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
 const body = stripReviewMarkers(evidence.failing.length > 0
@@ -370,7 +373,9 @@ log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
 const shortReviewBody = isApproved
   ? 'Automated review passed. See the review comment for details.'
   : isWithheld
-    ? 'Approval withheld: the tool evidence is unverified. See the review comment for details.'
+    ? (withheldForUnreviewedCode
+      ? 'Approval withheld: code was cut from the reviewed diff. See the review comment for details.'
+      : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
     : 'Changes required. See the automated review comment above for details.';
 
 function isOwnPullRequestApprovalFailure(status, detail) {
@@ -489,7 +494,7 @@ obsLog({
   event: 'review.verdict',
   level: 'info',
   duration_ms: reviewDurationMs,
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride },
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, unreviewed_code_files: unreviewedCodeFiles.length },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');
