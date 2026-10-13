@@ -130,6 +130,11 @@ function findProtectedPathEntry(targetPath) {
   });
 }
 
+/** The PROTECTED_WRITE_PATHS entry a repo path falls under, or null (ADR-0021). */
+export function protectedPathEntry(targetPath) {
+  return findProtectedPathEntry(String(targetPath ?? '')) ?? null;
+}
+
 function validateSingleChange(change, index) {
   if (!change || typeof change !== 'object' || Array.isArray(change)) {
     throw new Error(`AI response changes[${index}] must be an object`);

@@ -1,7 +1,7 @@
 # ADR-0029: Deterministic write guard for auto-fix
 
 - **Date:** 2026-10-05
-- **Status:** Accepted — extended to code generation, and composed with the static rules (module format, exported signatures, imports), by [ADR-0019](./0019-static-verification-backstop.md)
+- **Status:** Accepted — extended to code generation, and composed with the static rules (module format, exported signatures, imports), by [ADR-0019](./0019-static-verification-backstop.md); amended 2026-10-13: a blocked issue opens no PR on generation
 
 ## Context
 
@@ -43,3 +43,30 @@ ADR-0009 added prompt guardrails (no test removal, ≤ 30% rewrite) and rejected
 - ⚠️ A legitimate fix that deletes a lot of code, such as dead-code removal asked for by the review, is blocked and must be done by hand.
 - ⚠️ On the Groq free tier, files above roughly 6.5 KB (or several medium-sized files) are withheld, so auto-fix blocks more often. That is the honest outcome for that budget. Raising `autofix_max_input_tokens` or switching to Anthropic removes it.
 - ⚠️ A rewrite that keeps most lines textually but changes their meaning is not detected. The guard limits deletion, not correctness.
+
+## Amendment (2026-10-13): a blocked issue opens no PR on generation
+
+Decision 3 gave auto-fix an explicit "blocked" outcome; ADR-0019 extended the write guard, not that outcome, to code generation. Generation still had to return 1 to 6 changes, so when it could not implement an issue it wrote a Markdown handoff note: #191 (issue #190, every target under `scripts/` / `config/`, and the issue declared itself blocked by unmerged #188) added `notes/issue-190-blocked.md`; #196 (issue #195) added `patches/issue-195-dependency-manifest.md`. The review bot approved both, and merging either would have closed its issue.
+
+Decision: `scripts/lib/generation_blocked.mjs`, called by `generate_issue_change.mjs` after the JSON parse and before `validateAiOutput()`. First match wins:
+
+1. **Deterministic, from the issue (`source: "denylist"`).** Every path the issue needs is protected (`PROTECTED_WRITE_PATHS`, ADR-0021) or withheld from the prompt (decision 1). Needed paths come from `extractFilePaths` with URLs removed; a bare file name counts only when it exists at the repository root and is not the base name of a named path; the root `CHANGELOG.md` is a companion of the change, never the change. No named path, or one writable path → not blocked here.
+2. **Model signal (`source: "model"`).** `"blocked": true` — the JSON boolean — with `blocked_reason` and `planned_fix`, `changes: []`. `summary` text is never read as a signal; any other `blocked` value is malformed output and fails the run.
+3. **Deterministic, on the output (`source: "notes_only"`).** For an issue labelled `bug` or `feature` (`ISSUE_LABELS`), a patch whose only files are new `.md` files outside `docs/` is refused.
+
+**Precedence.** Facts about the repository win over the model: `blocked: false`, or a note, cannot override check 1, and an injected issue body cannot talk its way past it. The model is trusted only to *add* a blocker the code cannot see (an unmerged PR dependency); blocking is the fail-safe direction, so trusting it there costs one human look at worst. Check 3 runs last because it is a backstop on the output for the cases checks 1–2 missed. The cost asymmetry decides: a false "blocked" is visible and undone by re-labelling; a missed one is an approved PR that closes the issue on merge.
+
+**Outcome.** No file written, no branch pushed, no PR (`blocked=true`, the PR step is skipped). The issue gets a `Code Generation: Blocked` comment with the source, the reason and the planned fix (`planned_fix`, else the content of the note the model wrote, else its summary), `ready-for-dev` is replaced by `needs-human`, a `codegen_skip` metric records `reason: "blocked"` and `source`, and `code_gen.skipped` is logged with `reason: "blocked"` and `duration_ms`. A failed GitHub call ends the stage with `code_gen.error` (`reason: "blocked"`), exit 1. The LLM is still called when check 1 fires: the comment needs the model's planned fix.
+
+Alternatives considered:
+- **Model signal only.** Cheap, but a model that writes a note anyway (#191, #196) is the failure mode; it does not hold alone.
+- **Skip the LLM call when check 1 fires.** Saves a call, but the comment would carry no planned fix, which is what the human needs to pick the issue up.
+- **Detect "blocked" from the summary or note text.** Rejected: free text is not a contract, and an issue body can put any wording in it.
+- **Refuse every notes-only patch, whatever the label.** Would break documentation issues outside `docs/` (e.g. `guides/*.md`). Scoped to `bug` / `feature`.
+
+Consequences:
+- ✅ A blocked issue costs one comment instead of a PR the review approves.
+- ✅ The planned fix is kept on the issue, where the human implementing it looks.
+- ⚠️ False positive of check 1: an issue that names only protected paths but whose fix belongs elsewhere (e.g. "implement what `README.md` describes" with no other path) is blocked. Visible, and fixed by naming the target file.
+- ⚠️ The review side is unchanged: a notes-only PR opened another way would still be approved. Follow-up proposed on the review stage.
+- ⚠️ `bug` / `feature` are matched by name (`CODE_CHANGE_LABELS`); a repository using other labels gets only checks 1 and 2.

@@ -80,6 +80,22 @@ The prompt rules above are backed by `scripts/lib/static_verifier.mjs` (ADR-0019
 
 The write denylist and the shrink guard (ADR-0021) still run inside `validateAiOutput()` / `writeGeneratedFiles()`. Any rejection is one `GuardrailError`: nothing is written. On auto-fix it follows the `Auto-Fix: Patch Rejected` path below. On generation, the issue gets a `Code Generation: Patch Rejected` comment (rules + reason per file) and `needs-human`, a `codegen_skip` metric records `rules`, the run exits 0 with `rejected=true` and `code-generation.yml` opens no PR. Fix the issue text (name the function whose signature must change, the file to edit) or implement by hand, then remove `needs-human` and re-apply `ready-for-dev`.
 
+## Blocked Outcome (ADR-0029 amendment)
+
+When generation cannot implement an issue it opens **no PR**. Before this, it wrote a Markdown handoff note instead (#191 for issue #190: `notes/issue-190-blocked.md`; #196 for #195: `patches/issue-195-dependency-manifest.md`), the review bot approved it, and merging it would have closed the issue. `scripts/lib/generation_blocked.mjs` decides, in this order (first match wins):
+
+| `source` | Check | When |
+|---|---|---|
+| `denylist` | deterministic, from the issue text before the LLM call | every path the issue needs is protected (ADR-0021) or withheld from the prompt (ADR-0029). Needed paths: the paths the issue names, URLs removed; a bare file name only when it exists at the repository root and is not the base name of a path also named; the root `CHANGELOG.md` is a companion and never counts. An issue that names no path, or any writable one, is not blocked here |
+| `model` | structured signal in the generation output | `"blocked": true` (the JSON boolean), with `blocked_reason` and `planned_fix`, `changes: []`. Text in `summary` is never read as a signal; any other `blocked` value is a malformed response and fails the run |
+| `notes_only` | deterministic, on the model output | the issue is labelled `bug` or `feature` and every changed file is a **new** `.md` file outside `docs/` |
+
+Precedence: the repository facts win, so a model answering `blocked: false` (or writing a note) cannot override the deterministic check, and an injected issue body cannot argue its way past it. The model is only trusted to *add* a blocker the code cannot see (an issue declaring itself blocked by an unmerged PR). The LLM is still called when the deterministic check fires, because the comment needs the model's planned fix.
+
+On blocked: nothing is written, the issue gets a `Code Generation: Blocked` comment (source, reason, and the planned fix: `planned_fix`, else the content of the note the model wrote, else its summary, capped at 4,000 chars), `ready-for-dev` is replaced by `needs-human`, a `codegen_skip` metric records `reason: "blocked"` and `source`, `code_gen.skipped` is logged with `reason: "blocked"` and `duration_ms`, and the run exits 0 with `blocked=true`. `code-generation.yml` skips **Create pull request**, so no branch is pushed. The workflow passes the issue's labels as `ISSUE_LABELS` (JSON array). If a GitHub call of the escalation fails, the run ends with `code_gen.error` (`reason: "blocked"`) and exits 1.
+
+To resume: merge the dependency or implement the protected part by hand, then remove `needs-human` and re-apply `ready-for-dev`.
+
 ## Review and Auto-Fix Guardrails
 
 `prompts/pr-review-system.md` and `prompts/auto-fix-system.md` enforce the following beyond the base rubric:

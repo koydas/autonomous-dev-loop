@@ -67,8 +67,8 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `code_gen.llm_request` | info   | —             | `model`, `input_tokens_est`               |
 | `code_gen.llm_response`| info   | —             | `output_tokens_est`                       |
 | `code_gen.complete`    | info   | ✓             | `changes_count`                           |
-| `code_gen.error`       | error  | ✓             | `error`                                   |
-| `code_gen.skipped`     | warn   | ✓             | `reason: "guardrail_rejected"`, `rules`, `error` — `validateAiOutput()` rejected the patch (protected or unsafe path): issue commented, `needs-human`, `codegen_skip` metric, exit 0 with `rejected=true` (ADR-0019) |
+| `code_gen.error`       | error  | ✓             | `error`; `reason: "blocked"`, `source` when the blocked escalation's GitHub calls failed (exit 1) |
+| `code_gen.skipped`     | warn   | ✓             | `reason: "guardrail_rejected"`, `rules`, `error` — `validateAiOutput()` rejected the patch (protected or unsafe path): issue commented, `needs-human`, `codegen_skip` metric, exit 0 with `rejected=true` (ADR-0019). `reason: "blocked"`, `source` (`denylist` \| `model` \| `notes_only`), `detail` — the issue cannot be implemented: no write, no PR, `ready-for-dev` → `needs-human`, issue commented with the reason and planned fix, `codegen_skip` metric (`reason: "blocked"`, `source`), exit 0 with `blocked=true` (ADR-0029 amendment) |
 
 ### `pr_prepare`
 
