@@ -47,3 +47,20 @@ An `AI_PROVIDER` other than `groq`/`anthropic` (typo) silently resolved to Groq 
 - ⚠️ The prompt is sized for the primary. Anthropic primary → Groq fallback: the input budgets (`<stage>_max_input_tokens`, ADR-0028) were not applied. Groq would answer a prompt over its budget with 413 `rate_limit_exceeded`, retried as a rate limit until the job timeout, so `callLLM()` checks the fallback's `maxInputTokens` first (estimated system + user prompt; user prompt only for autofix) and skips the call when it is exceeded: `groq: skipped (prompt ~N tokens over <stage>_max_input_tokens M)`. The fallback only covers prompts that fit Groq.
 - ⚠️ Fallback output comes from a different model: evals and reviews of that run are not comparable with the primary's (the `llm_fallback` event identifies them).
 - ⚠️ Anthropic runs are paid, and thinking tokens count as output: `high` effort on three stages costs more than the model default (`medium`).
+
+## Amendment (2026-10-13): live evals are pinned to the primary provider
+
+**Context.** A live eval run stamps `meta.model = "<primary provider>:<model>"` once (`run_evals.mjs`), but every `callLLM()` fell back per call. With both keys set, a Groq TPD 429 (one suite ≈ 285k tokens against the 200k TPD) moved the rest of the run to Anthropic: the circuit breaker did not trip (it needs every provider called to refuse), `error_rate` stayed 0, and the dashboard published a Groq/Anthropic mix as a Groq measurement — Δ, trend and the ADR-0031 gates then compared models, not prompts.
+
+**Decision.**
+- `callLLM()` takes an optional `fallback: false` in its args object: a primary failure throws without calling the fallback, `providerErrors` records it as `{ provider, status: null, skipped: 'disabled' }`, the error reads `<provider>: skipped (fallback disabled)`, and a `llm_fallback_disabled` warn event is logged instead of `llm_fallback`. Absent or any other value: the fallback above, unchanged. Production stages do not pass it.
+- `callLLM()` takes an optional `onAnswer({ provider, model })`, called once with the provider and model that actually answered (the primary's, or the fallback's own config).
+- Live evals (`run_evals.mjs`) pass `fallback: false`. A primary failure is a run error. A Groq TPD 429 is now the only provider called, so the circuit breaker trips on it (`detectQuotaExhaustion` ignores the `disabled` entry like any skipped provider); the run is not published.
+- Evidence: every live call records `calls[].provider` / `calls[].model` (from `onAnswer`); a replay serves them back. `partitionPublishable` refuses a run with any call answered by another `provider:model` than `meta.model` (`replay:` prefix ignored). Results recorded before this change carry no provider and are judged on `error_rate` only.
+
+**Why not keep the fallback and stamp the mix.** A run is a measurement of one model: a per-call mix has no scorecard row it can be compared with, and re-labelling `meta.model` would only hide it. Losing a weekly run to a quota is cheaper than publishing a wrong one; the next scheduled run retries.
+
+**Consequences.**
+- ✅ A published run was answered by `meta.model` on every call, checked twice (pinning, then `partitionPublishable`).
+- ✅ Groq TPD exhaustion during an eval trips the breaker at the first 429 instead of spending the Anthropic budget.
+- ⚠️ With both keys set, an eval no longer survives a transient primary outage that outlasts the retries: those runs error instead of being published.

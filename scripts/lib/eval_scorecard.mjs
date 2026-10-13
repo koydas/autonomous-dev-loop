@@ -53,14 +53,26 @@ export function toScorecardRun({ meta, summary, failures }) {
   };
 }
 
+// Calls answered by another provider:model than meta.model (`replay:` prefix ignored). A call without a
+// recorded provider (results before ADR-0032's eval pinning) is no evidence either way.
+function foreignModels(results) {
+  const pinned = String(results.meta?.model ?? '').replace(/^replay:/, '');
+  const answered = (results.results ?? []).flatMap((r) => r?.calls ?? []).filter((c) => c?.provider);
+  return [...new Set(answered.map((c) => `${c.provider}:${c.model}`))].filter((m) => m !== pinned);
+}
+
 // A run that missed the error_rate threshold measured the provider (429, 401, outage),
 // not the model: it is left off the scorecard so it cannot evict real history.
+// A run whose calls were not all answered by meta.model mixed models (ADR-0032): never published.
 export function partitionPublishable(resultsList) {
   const publishable = [];
   const skipped = [];
   for (const results of resultsList) {
+    const foreign = foreignModels(results);
     if ((results.failures ?? []).some((f) => f.metric === 'error_rate')) {
       skipped.push({ run_id: results.meta?.run_id ?? null, reason: `error_rate ${results.summary?.error_rate} above threshold` });
+    } else if (foreign.length) {
+      skipped.push({ run_id: results.meta?.run_id ?? null, reason: `calls answered by ${foreign.join(', ')}, not meta.model ${results.meta?.model ?? 'unset'}` });
     } else {
       publishable.push(results);
     }

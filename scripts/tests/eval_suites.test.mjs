@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag, reviewInputBudget } from '../lib/eval_suites.mjs';
 import { filterCases, loadDataset, runSuite, summarize, checkThresholds } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
@@ -852,4 +852,61 @@ test('run_evals still logs eval.start before eval.error when the dataset cannot 
   assert.deepEqual(events.map((e) => e.event), ['eval.start', 'eval.error']);
   assert.deepEqual(events[0].meta, { suite: 'validation', repeats: 1, replay: false });
   assert.match(events[1].meta.error, /ENOENT/);
+});
+
+// ---------------------------------------------------------------------------
+// run_evals.mjs — live runs are pinned to the primary provider (ADR-0032 amendment)
+// ---------------------------------------------------------------------------
+
+// Preloaded into the run_evals child: Groq answers `groqStatus`, Anthropic always answers; every
+// Anthropic request is appended to anthropic-calls.log so the test can prove it never happened.
+async function writeFetchMock(dir, groqStatus) {
+  const file = path.join(dir, 'fetch-mock.mjs');
+  const log = JSON.stringify(path.join(dir, 'anthropic-calls.log'));
+  await fs.writeFile(file, `
+import fs from 'node:fs';
+const response = (status, body) => ({ ok: status < 300, status, text: async () => JSON.stringify(body) });
+globalThis.fetch = async (url) => {
+  if (String(url).includes('anthropic')) {
+    fs.appendFileSync(${log}, 'call\\n');
+    return response(200, { content: [{ type: 'text', text: ${JSON.stringify(llmResponse({ valid: true }))} }] });
+  }
+  return ${groqStatus} === 200
+    ? response(200, { choices: [{ message: { content: ${JSON.stringify(llmResponse({ valid: true }))} } }] })
+    : response(${groqStatus}, { error: { message: 'Rate limit reached for model on tokens per day (TPD): Limit 200000, Used 199900, Requested 2984. Please try again in 13m47.28s.' } });
+};
+`);
+  return file;
+}
+
+const liveEnv = (dir, mock) => ({
+  GROQ_API_KEY: 'groq-key', ANTHROPIC_API_KEY: 'sk-ant-key', AI_PROVIDER: 'groq', GROQ_MAX_RETRIES: '0',
+  EVAL_TOKEN_BUDGET: '', NODE_OPTIONS: `--import ${pathToFileURL(mock).href}`,
+});
+
+test('run_evals live: a Groq TPD 429 trips the circuit breaker instead of falling back to Anthropic', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const mock = await writeFetchMock(dir, 429);
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--limit', '3', '--out-dir', dir], dir, liveEnv(dir, mock));
+  assert.equal(code, 1);
+  await assert.rejects(fs.readFile(path.join(dir, 'anthropic-calls.log')), { code: 'ENOENT' }, 'the fallback provider is never called');
+  const events = eventsOf(stderr);
+  assert.ok(events.some((e) => e.event === 'llm_fallback_disabled'));
+  assert.ok(!events.some((e) => e.event === 'llm_fallback'));
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.equal(saved.summary.error_rate, 1);
+  assert.equal(saved.summary.circuit_breaker.provider, 'groq');
+  assert.equal(saved.summary.circuit_breaker.skipped_runs, 2);
+});
+
+test('run_evals live: every call records the provider and model that answered, matching meta.model', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const mock = await writeFetchMock(dir, 200);
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--limit', '2', '--out-dir', dir], dir, liveEnv(dir, mock));
+  assert.equal(code, 0, stderr);
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.equal(saved.meta.model, `groq:${GROQ_MODEL_DEFAULTS.validation}`);
+  const calls = saved.results.flatMap((r) => r.calls);
+  assert.ok(calls.length >= 2);
+  assert.ok(calls.every((c) => `${c.provider}:${c.model}` === saved.meta.model));
 });

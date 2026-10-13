@@ -18,6 +18,8 @@ const CONFIG_ERROR_STATUSES = new Set([400, 404]);
 // args: the primary provider's config (loadLLMConfig) + the call itself (prompt, systemPrompt, responseFormat)
 // + stage, and optionally the primary's maxInputTokens (validation, generation). The fallback never reuses
 // the primary's config: it loads its own key, model and budgets.
+// Optional: fallback: false pins the call to the primary (live evals: a fallback answer would be published
+// as the primary model's); onAnswer({ provider, model }) is told which provider answered.
 export async function callLLM(args) {
   const primary = detectProvider();
   const fallback = PROVIDERS.find(p => p !== primary);
@@ -33,12 +35,15 @@ export async function callLLM(args) {
   let errorType;
   let status;
   let called = false;
+  let answered = false;
+  let text;
   try {
     // An over-budget Groq primary can only end in a 413 retried until the job timeout (ADR-0028): skip it
     // without a request, so the fallback (Anthropic: no input budget) gets the prompt instead.
     assertInputBudget(stage, estimateTokens(args.systemPrompt + args.prompt), args.maxInputTokens);
     called = true;
-    return await PROVIDER_CALLS[primary](args);
+    text = await PROVIDER_CALLS[primary](args);
+    answered = true;
   } catch (error) {
     errorType = error.errorType ?? classifyError(String(error.status ?? ''));
     status = error.status;
@@ -46,6 +51,17 @@ export async function callLLM(args) {
     providerErrors.push(called
       ? { provider: primary, status: httpStatus(error) }
       : { provider: primary, status: null, skipped: 'over_input_budget' });
+  }
+  if (answered) {
+    args.onAnswer?.({ provider: primary, model: args.model ?? null });
+    return text;
+  }
+
+  if (args.fallback === false) {
+    errors.push(`${fallback}: skipped (fallback disabled)`);
+    providerErrors.push({ provider: fallback, status: null, skipped: 'disabled' });
+    log({ stage, event: 'llm_fallback_disabled', level: 'warn', meta: { from: primary, error_type: errorType, error: errors[0] } });
+    throw fail();
   }
 
   if (detectFallbackProvider() !== fallback) {
@@ -80,10 +96,12 @@ export async function callLLM(args) {
   try {
     const call = { prompt: args.prompt, systemPrompt: args.systemPrompt };
     if ('responseFormat' in args) call.responseFormat = args.responseFormat;
-    return await PROVIDER_CALLS[fallback]({ ...fallbackConfig, ...call });
+    text = await PROVIDER_CALLS[fallback]({ ...fallbackConfig, ...call });
   } catch (error) {
     errors.push(`${fallback}: ${error.message}`);
     providerErrors.push({ provider: fallback, status: httpStatus(error) });
+    throw fail();
   }
-  throw fail();
+  args.onAnswer?.({ provider: fallback, model: fallbackConfig.model ?? null });
+  return text;
 }

@@ -476,3 +476,81 @@ test('detectQuotaExhaustion reads millisecond and hour retry hints without mista
   assert.equal(refused('7m'), '7m');
   assert.equal(refused('later'), null);
 });
+
+// ---------------------------------------------------------------------------
+// Pinned live evals (ADR-0032 amendment): provider evidence and breaker on a disabled fallback
+// ---------------------------------------------------------------------------
+
+test('createRecordingLLM records the provider and model of a structured answer', async () => {
+  const rec = createRecordingLLM(async () => ({ text: 'out', provider: 'groq', model: 'm' }), { now: fixedClock() });
+  assert.deepEqual(await rec({}), { raw: 'out', latency_ms: 10, provider: 'groq', model: 'm' });
+});
+
+test('createRecordingLLM records no provider for a structured answer without one, and a null model when absent', async () => {
+  const bare = createRecordingLLM(async () => ({ text: 'out' }), { now: fixedClock() });
+  assert.deepEqual(await bare({}), { raw: 'out', latency_ms: 10 });
+  const noModel = createRecordingLLM(async () => ({ text: 'out', provider: 'groq' }), { now: fixedClock() });
+  assert.deepEqual(await noModel({}), { raw: 'out', latency_ms: 10, provider: 'groq', model: null });
+  const nil = createRecordingLLM(async () => null, { now: fixedClock() });
+  assert.deepEqual(await nil({}), { raw: null, latency_ms: 10 });
+});
+
+test('runSuite records calls[].provider and calls[].model; the suite still sees the raw text', async () => {
+  const cases = [{ id: 'a', tags: [], input: { q: 'q' }, expected: { answer: 'yes' } }];
+  const [r] = await runSuite({ suite: echoSuite, cases, llmFor: () => async () => ({ text: 'yes', provider: 'groq', model: 'm' }), now: fixedClock() });
+  assert.equal(r.output.answer, 'yes');
+  assert.equal(r.calls[0].provider, 'groq');
+  assert.equal(r.calls[0].model, 'm');
+  const [legacy] = await runSuite({ suite: echoSuite, cases, llmFor: () => async () => 'yes', now: fixedClock() });
+  assert.ok(!('provider' in legacy.calls[0]));
+});
+
+test('createReplayLLM serves a recorded provider back, and a bare raw without one', async () => {
+  const llmFor = createReplayLLM([{ case_id: 'a', repeat: 0, calls: [{ raw: 'one', provider: 'groq', model: 'm' }, { raw: 'two' }, { raw: 'three', provider: 'groq' }] }]);
+  const llm = llmFor('a#0');
+  assert.deepEqual(await llm(), { text: 'one', provider: 'groq', model: 'm' });
+  assert.equal(await llm(), 'two');
+  assert.deepEqual(await llm(), { text: 'three', provider: 'groq', model: null });
+});
+
+// Shape of a pinned live eval call (callLLM fallback: false) after a Groq TPD 429.
+const pinnedError = (message, status) => Object.assign(new Error(message), {
+  providerErrors: [{ provider: 'groq', status }, { provider: 'anthropic', status: null, skipped: 'disabled' }],
+});
+
+test('detectQuotaExhaustion trips on a Groq TPD 429 when the fallback is disabled (pinned eval)', () => {
+  const q = detectQuotaExhaustion(pinnedError('All providers failed: groq: Groq API HTTP error 429: on tokens per day (TPD): Limit 200000, Used 199500. Please try again in 5m0s., anthropic: skipped (fallback disabled)', 429));
+  assert.equal(q.provider, 'groq');
+  assert.equal(q.quota, 'tokens per day (TPD)');
+  assert.equal(q.limit, 200000);
+});
+
+test('detectQuotaExhaustion trips on a non-daily 429 from the only provider called (fallback disabled)', () => {
+  const q = detectQuotaExhaustion(pinnedError('All providers failed: groq: HTTP 429 rate limited, anthropic: skipped (fallback disabled)', 429));
+  assert.equal(q.provider, 'groq');
+  assert.match(q.quota, /every provider refused \(groq 429\)/);
+});
+
+test('detectQuotaExhaustion does not trip on a 5xx or a skipped-only error when the fallback is disabled', () => {
+  assert.equal(detectQuotaExhaustion(pinnedError('All providers failed: groq: 503, anthropic: skipped (fallback disabled)', 503)), null);
+  const skippedOnly = Object.assign(new Error('All providers failed'), {
+    providerErrors: [{ provider: 'groq', status: null, skipped: 'over_input_budget' }, { provider: 'anthropic', status: null, skipped: 'disabled' }],
+  });
+  assert.equal(detectQuotaExhaustion(skippedOnly), null);
+});
+
+test('runSuite trips the circuit breaker on a pinned TPD 429 and records the run as an error', async () => {
+  const cases = ['a', 'b', 'c'].map((id) => ({ id, tags: [], input: { q: id }, expected: { answer: 'yes' } }));
+  let calls = 0;
+  const llmFor = () => async () => {
+    calls++;
+    throw pinnedError('All providers failed: groq: 429 tokens per day (TPD): Limit 200000, Used 200000, anthropic: skipped (fallback disabled)', 429);
+  };
+  const results = await runSuite({ suite: echoSuite, cases, llmFor, now: fixedClock() });
+  assert.equal(calls, 1);
+  assert.ok(results[0].error);
+  assert.deepEqual(results.slice(1).map((r) => r.skipped), [true, true]);
+  const summary = summarize(results);
+  assert.equal(summary.error_rate, 1);
+  assert.equal(summary.circuit_breaker.provider, 'groq');
+});
