@@ -6,7 +6,8 @@
  *
  * A scorer is (expected, output, { error, calls }) → number in [0,1] | boolean | null (not applicable).
  *
- * The LLM is injected as `llm({ prompt, systemPrompt }) → string`. The harness wraps
+ * The LLM is injected as `llm({ prompt, systemPrompt }) → string`, or `→ { text, provider, model }` to
+ * record which provider answered (calls[].provider / calls[].model, ADR-0032). The harness wraps
  * it to record every call (latency, estimated tokens, raw response), which makes a
  * run replayable: re-scoring a recorded run costs no LLM call (createReplayLLM).
  */
@@ -56,22 +57,28 @@ export function filterCases(cases, { tags = [], limit } = {}) {
 export function createRecordingLLM(llm, { now = Date.now } = {}) {
   return async (args) => {
     const startedAt = now();
-    const raw = await llm(args);
-    return { raw, latency_ms: now() - startedAt };
+    const out = await llm(args);
+    const latency_ms = now() - startedAt;
+    if (out && typeof out === 'object' && 'text' in out) {
+      return { raw: out.text, latency_ms, ...(out.provider ? { provider: out.provider, model: out.model ?? null } : {}) };
+    }
+    return { raw: out, latency_ms };
   };
 }
 
 // recorded: results[] of a previous run. Calls are served per (case_id, repeat) in order.
 // Once a run's calls are exhausted, its recorded error (e.g. a provider 429) is rethrown.
+// A recorded provider is served again, so a replay keeps the evidence of who answered.
 export function createReplayLLM(recorded) {
   const queues = new Map();
   for (const r of recorded) {
-    queues.set(`${r.case_id}#${r.repeat}`, { raws: (r.calls ?? []).map((c) => c.raw), error: r.error ?? null });
+    queues.set(`${r.case_id}#${r.repeat}`, { calls: [...(r.calls ?? [])], error: r.error ?? null });
   }
   return (key) => async () => {
     const entry = queues.get(key);
-    if (!entry || entry.raws.length === 0) throw new Error(entry?.error ?? `Replay: no recorded call left for ${key}`);
-    return entry.raws.shift();
+    if (!entry || entry.calls.length === 0) throw new Error(entry?.error ?? `Replay: no recorded call left for ${key}`);
+    const call = entry.calls.shift();
+    return call.provider ? { text: call.raw, provider: call.provider, model: call.model ?? null } : call.raw;
   };
 }
 
@@ -86,8 +93,9 @@ const DAILY_QUOTA = /\b(tokens|requests) per day \((TPD|RPD)\)/i;
 // err: what the LLM threw. Returns { provider, quota, limit, used, retry_after, message } when no
 // further call of this run can succeed (a daily quota, or every provider called refused with 401/403/429),
 // else null. err.providerErrors (llm_client.mjs) carries per-provider statuses; a provider skipped without
-// a call (no API key, over its input budget) is neither evidence for nor against a quota. Any other status
-// (e.g. Anthropic 400 "not scoped to a workspace", a config error) is not a quota. A bare message
+// a call (no API key, over its input budget, fallback disabled for a pinned eval) is neither evidence for
+// nor against a quota. Any other status (e.g. Anthropic 400 "not scoped to a workspace", a config error)
+// is not a quota. A bare message
 // (replay) is matched on its text only.
 export function detectQuotaExhaustion(err) {
   const message = String(err?.message ?? err ?? '');
@@ -165,10 +173,11 @@ async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) 
       if (quota) onQuota(quota);
       throw err;
     }
-    const { raw, latency_ms } = recorded;
+    const { raw, latency_ms, provider, model } = recorded;
     calls.push({
       raw,
       latency_ms,
+      ...(provider ? { provider, model } : {}),
       tokens_in_est: estimateTokens(`${args.systemPrompt ?? ''}${args.prompt ?? ''}`),
       tokens_out_est: estimateTokens(raw),
     });

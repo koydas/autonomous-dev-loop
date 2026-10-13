@@ -508,3 +508,93 @@ test('callLLM marks a fallback skipped without a key, and an over-budget primary
     delete process.env.GROQ_MAX_RETRIES;
   }
 });
+
+// Live evals pin the primary (ADR-0032 amendment): a fallback answer would be published as the primary's.
+const GROQ_TPD_429 = { error: { message: 'Rate limit reached on tokens per day (TPD): Limit 200000, Used 199000. Please try again in 13m47.28s.' } };
+
+test('callLLM with fallback: false never calls the fallback and marks it skipped: disabled', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  process.env.GROQ_MAX_RETRIES = '0';
+  let anthropicCalls = 0;
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) { anthropicCalls++; return makeResponse({ content: [{ type: 'text', text: 'other-model' }] }); }
+    return makeResponse(GROQ_TPD_429, 429);
+  };
+  let answered = null;
+  try {
+    const { lines } = await captureStderr(() => assert.rejects(
+      () => callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT, fallback: false, onAnswer: (a) => { answered = a; } }),
+      (err) => {
+        assert.deepEqual(err.providerErrors, [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: null, skipped: 'disabled' }]);
+        assert.match(err.message, /groq: .*tokens per day \(TPD\).*anthropic: skipped \(fallback disabled\)/);
+        return true;
+      },
+    ));
+    assert.equal(anthropicCalls, 0);
+    assert.equal(answered, null, 'onAnswer is not called on failure');
+    const events = lines.filter((l) => l.trim().startsWith('{')).map((l) => JSON.parse(l));
+    const disabled = events.find((e) => e.event === 'llm_fallback_disabled');
+    assert.equal(disabled.level, 'warn');
+    assert.equal(disabled.meta.from, 'groq');
+    assert.ok(!events.some((e) => e.event === 'llm_fallback'));
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callLLM with fallback: false still answers from the primary and reports it to onAnswer', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async () => makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  let answered = null;
+  const result = await callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'gpt-x', apiUrl: GROQ_API_URL_DEFAULT, fallback: false, onAnswer: (a) => { answered = a; } });
+  assert.equal(result, 'ok');
+  assert.deepEqual(answered, { provider: 'groq', model: 'gpt-x' });
+});
+
+test('callLLM with fallback: false marks an over-budget primary and the disabled fallback, without any request', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse({ content: [{ type: 'text', text: 'x' }] }); };
+  await assert.rejects(
+    () => callLLM({ stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100, fallback: false }),
+    (err) => {
+      assert.deepEqual(err.providerErrors.map((p) => p.skipped), ['over_input_budget', 'disabled']);
+      return true;
+    },
+  );
+  assert.equal(calls, 0);
+});
+
+test('callLLM without fallback: false keeps the ADR-0032 fallback and reports the fallback provider to onAnswer', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  process.env.GROQ_MAX_RETRIES = '0';
+  globalThis.fetch = async (_url, opts) => (opts.headers['x-api-key']
+    ? makeResponse({ content: [{ type: 'text', text: 'fallback-ok' }] })
+    : makeResponse(GROQ_TPD_429, 429));
+  let answered = null;
+  try {
+    const { result } = await captureStderr(() => callLLM({
+      stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT, onAnswer: (a) => { answered = a; },
+    }));
+    assert.equal(result, 'fallback-ok');
+    assert.deepEqual(answered, { provider: 'anthropic', model: ANTHROPIC_MODEL_DEFAULTS.review });
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
+
+test('callLLM reports a null model to onAnswer when the primary config carries none', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  globalThis.fetch = async () => makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  let answered = null;
+  await callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', apiUrl: GROQ_API_URL_DEFAULT, onAnswer: (a) => { answered = a; } });
+  assert.deepEqual(answered, { provider: 'groq', model: null });
+});

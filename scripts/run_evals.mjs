@@ -87,7 +87,15 @@ async function buildLLM(suite, replayFile) {
     return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, recorded };
   }
   const config = loadLLMConfig(suite.stage);
-  const live = ({ prompt, systemPrompt }) => callLLM({ ...config, stage: suite.stage, prompt, systemPrompt });
+  // Pinned to the primary (ADR-0032 amendment): a fallback answer would be published as meta.model's.
+  // A primary failure is a run error; a quota one trips the circuit breaker.
+  const live = async ({ prompt, systemPrompt }) => {
+    let answer = {};
+    const text = await callLLM({
+      ...config, stage: suite.stage, prompt, systemPrompt, fallback: false, onAnswer: (a) => { answer = a; },
+    });
+    return { text, ...answer };
+  };
   return { llmFor: () => live, model: `${config.provider}:${config.model}` };
 }
 
