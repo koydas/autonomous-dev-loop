@@ -60,7 +60,7 @@ const PINNED = {
     "invalid-partial-ac-relevance": ["invalid", "09612067495b"],
     "invalid-fr-partial-ac": ["invalid", "fc61316b6dbf"],
     "invalid-role-ambiguous": ["invalid", "f7fd306bd2f8"],
-    "invalid-role-two-admin-roles": ["invalid", "099c1a9fea48"],
+    "invalid-role-two-admin-roles": ["invalid", "87cf4380707c"],
     "valid-scope-environment-closed": ["valid", "8f9f1a7aa07a"],
     "invalid-scope-environment-open": ["invalid", "0e3b87b65aa2"],
     "invalid-b4-pair-none": ["invalid", "0fd77c433b5f"],
