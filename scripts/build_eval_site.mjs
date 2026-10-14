@@ -3,7 +3,7 @@
 /**
  * Build the eval dashboard (GitHub Pages) from live eval results.
  *
- *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [results.json ...]
+ *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [--fail-on-model-change] [results.json ...]
  *   node scripts/build_eval_site.mjs --report [--site-url <deployed site>] results.json ...
  *
  * History is read back from the deployed site (--site-url: scorecard.json + runs/<id>.json) or
@@ -120,7 +120,10 @@ export async function writeSite(files, outDir) {
   }
 }
 
-export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles, fetchImpl, allowEmpty = false, log = console.log }) {
+// failOnModelChange: the run used the repo's configured provider (schedule, provider repo-variable), so a
+// model mismatch is drift (GROQ_MODEL bump, model retirement), not a measurement: fail instead of freezing
+// the history behind a notice. Re-baselining is #209.
+export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles, fetchImpl, allowEmpty = false, failOnModelChange = false, log = console.log }) {
   const previous = siteUrl
     ? await fetchPreviousSite(siteUrl, fetchImpl, { allowEmpty, log })
     : previousDir ? await readPreviousSiteDir(previousDir) : { scorecard: emptyScorecard(), details: {} };
@@ -130,11 +133,16 @@ export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles,
   for (const s of skipped) {
     if (s.kind === 'model_mismatch') {
       const msg = `run ${s.run_id} not recorded: ${s.reason}`;
-      log(actions ? `::notice::${msg}` : `Notice: ${msg}`);
+      if (failOnModelChange) log(actions ? `::error::${msg}` : `Error: ${msg}`);
+      else log(actions ? `::notice::${msg}` : `Notice: ${msg}`);
       continue;
     }
     const msg = `run ${s.run_id} not recorded (${s.reason}): provider failure, not a model result`;
     log(actions ? `::warning::${msg}` : `Warning: ${msg}`);
+  }
+  const drift = failOnModelChange ? skipped.filter((s) => s.kind === 'model_mismatch') : [];
+  if (drift.length) {
+    throw new Error(`model changed on the configured provider (${drift.map((s) => s.run_id).join(', ')}): the history is per suite and model, so nothing is published. Re-baseline the suite (#209) or restore the previous model`);
   }
   await writeSite(files, outDir);
   for (const [suite, { runs }] of Object.entries(scorecard.suites)) {
@@ -189,9 +197,10 @@ export async function buildRunReport({ resultFiles, siteUrl, fetchImpl }) {
   const entries = [];
   for (const file of resultFiles) {
     const results = JSON.parse(await fs.readFile(file, 'utf8'));
-    const suite = results.meta?.suite;
+    const run = toScorecardRun(results); // throws on a malformed file before any request
+    const suite = results.meta.suite;
     const baseline = siteUrl ? await fetchPublishedBaseline(siteUrl, suite, fetchImpl) : undefined;
-    entries.push({ suite, run: toScorecardRun(results), baseline });
+    entries.push({ suite, run, baseline });
   }
   return formatRunReport(entries);
 }
@@ -206,6 +215,7 @@ async function main() {
       'previous-dir': { type: 'string' },
       'allow-empty': { type: 'boolean', default: false },
       report: { type: 'boolean', default: false },
+      'fail-on-model-change': { type: 'boolean', default: false },
     },
   });
   if (values.report) {
@@ -220,6 +230,7 @@ async function main() {
     siteUrl: values['previous-dir'] ? undefined : values['site-url'],
     previousDir: values['previous-dir'],
     allowEmpty: values['allow-empty'],
+    failOnModelChange: values['fail-on-model-change'],
     resultFiles: positionals,
   });
 }

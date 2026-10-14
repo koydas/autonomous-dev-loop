@@ -55,8 +55,8 @@ export function toScorecardRun({ meta, summary, failures, results }) {
   };
 }
 
-// USD per million tokens, list price (2026-10). A model without an entry gets no cost line; Groq runs on
-// the free tier. anthropic_client.mjs does not return the API's usage, so cost is priced on the harness's
+// USD per million tokens, list price (2026-10). Groq runs on the free tier: no cost line. Any other model
+// without an entry is reported as unpriced, never as free. anthropic_client.mjs does not return the API's usage, so cost is priced on the harness's
 // chars/4 estimate: input ignores the prompt cache (system prompt cached: over), output ignores thinking
 // tokens (effort high: under). Read it as an order of magnitude, never as the bill.
 export const PRICES_USD_PER_MTOK = {
@@ -64,9 +64,11 @@ export const PRICES_USD_PER_MTOK = {
 };
 
 export function runCost({ meta, summary }) {
-  const price = PRICES_USD_PER_MTOK[String(meta?.model ?? '')];
+  const model = String(meta?.model ?? '');
+  const price = PRICES_USD_PER_MTOK[model];
   const tokens = summary?.tokens_est;
-  if (!price || !tokens) return null;
+  if (!tokens || model.startsWith('groq:')) return null;
+  if (!price) return { usd: null, per_call_usd: null, unpriced: model, source: 'chars/4 estimate' };
   const usd = (tokens.in * price.in + tokens.out * price.out) / 1e6;
   const calls = summary.llm_calls ?? 0;
   return { usd: Number(usd.toFixed(4)), per_call_usd: calls ? Number((usd / calls).toFixed(4)) : null, source: 'chars/4 estimate' };
@@ -160,7 +162,11 @@ export function formatDelta(current, previous) {
   return d > 0 ? ` (▲ ${d})` : ` (▼ ${Math.abs(d)})`;
 }
 
-export const formatCost = (c) => (c ? `$${c.usd} ($${fmt(c.per_call_usd)} per call)` : '—');
+export const formatCost = (c) => {
+  if (!c) return '—';
+  if (c.unpriced) return `unpriced (\`${c.unpriced}\` not in PRICES_USD_PER_MTOK)`;
+  return c.per_call_usd == null ? `$${c.usd}` : `$${c.usd} ($${c.per_call_usd} per call)`;
+};
 const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
 export const formatCoverage = (c) => (c ? `${pct(c.diff_truncated)} / ${pct(c.code_cut)} / ${pct(c.withheld)} (n=${c.n})` : '—');
 

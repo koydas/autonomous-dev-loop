@@ -364,3 +364,47 @@ test('buildRunReport reads results files; the CLI --report needs no --out and bu
   assert.match(await fs.readFile(summary, 'utf8'), /Eval run vs published baseline/);
   assert.deepEqual((await fs.readdir(dir)).sort(), ['review-anth.json', 'summary.md']);
 });
+
+test('buildEvalSite failOnModelChange: a model change is an ::error:: and nothing is written', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const backup = path.join(dir, 'backup');
+  await writeSite(assembleSite({ previous: empty(), resultsList: [groqReview()] }).files, backup);
+  const drifted = groqReview('g2');
+  drifted.meta = { ...drifted.meta, model: 'groq:new-model', ts: '2026-10-15T00:00:00Z' };
+  const file = path.join(dir, 'g2.json');
+  await fs.writeFile(file, JSON.stringify(drifted));
+  const logs = [];
+  const out = path.join(dir, 'out');
+  await assert.rejects(
+    buildEvalSite({ outDir: out, previousDir: backup, resultFiles: [file], failOnModelChange: true, log: (m) => logs.push(m) }),
+    /model changed on the configured provider \(g2\).*#209/,
+  );
+  assert.match(logs[0], /^(::error::|Error: )run g2 not recorded: model groq:new-model is not the review history's model groq:m/);
+  await assert.rejects(fs.access(out));
+  // Same model: unaffected by the flag.
+  const same = path.join(dir, 'g3.json');
+  await fs.writeFile(same, JSON.stringify({ ...groqReview('g3'), meta: { ...groqReview('g3').meta, ts: '2026-10-16T00:00:00Z' } }));
+  await buildEvalSite({ outDir: out, previousDir: backup, resultFiles: [same], failOnModelChange: true, log: () => {} });
+  await fs.access(path.join(out, 'runs', 'g3.json'));
+});
+
+test('build_eval_site CLI --fail-on-model-change exits 1 on drift', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const backup = path.join(dir, 'backup');
+  await writeSite(assembleSite({ previous: empty(), resultsList: [groqReview()] }).files, backup);
+  const file = path.join(dir, 'anth.json');
+  await fs.writeFile(file, JSON.stringify(anthropicRun()));
+  await assert.rejects(
+    promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(dir, 'out'), '--previous-dir', backup, '--fail-on-model-change', file]),
+    (err) => err.code === 1 && /model changed on the configured provider/.test(err.stderr),
+  );
+});
+
+test('buildRunReport fails fast on a results file without meta.suite, before any request', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'report-'));
+  const file = path.join(dir, 'bad.json');
+  await fs.writeFile(file, JSON.stringify({ meta: { run_id: 'x' }, summary: {} }));
+  const { impl, calls } = stubFetch({});
+  await assert.rejects(buildRunReport({ resultFiles: [file], siteUrl: 'https://x.io', fetchImpl: impl }), /missing meta\.suite/);
+  assert.deepEqual(calls, []);
+});

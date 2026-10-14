@@ -176,6 +176,10 @@ jobs:
     env:
       INIT_SITE: ${{ github.event_name != 'schedule' && inputs.init_site }}
       RESTORE_RUN_ID: ${{ github.event_name != 'schedule' && inputs.restore_run_id || '' }}
+      # A run on the repo's configured provider whose model is not the suite's published one is drift
+      # (GROQ_MODEL bump, model retirement): fail rather than freeze the history behind a notice (#209).
+      # A dispatch with an explicit provider is a measurement: notice only.
+      MODEL_CHANGE_FAILS: ${{ github.event_name == 'schedule' || inputs.provider == 'repo-variable' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -232,6 +236,7 @@ jobs:
             args+=(--site-url "$SITE_URL")
             if [ "$INIT_SITE" = "true" ]; then args+=(--allow-empty); fi
           fi
+          if [ "$MODEL_CHANGE_FAILS" = "true" ]; then args+=(--fail-on-model-change); fi
           node scripts/build_eval_site.mjs "${args[@]}" "${results[@]}"
           echo "built=true" >> "$GITHUB_OUTPUT"
 

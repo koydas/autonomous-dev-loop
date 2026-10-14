@@ -512,10 +512,19 @@ test('evals.yml passes the provider input as AI_PROVIDER to the eval step only, 
   const text = evalsYml();
   const expr = "AI_PROVIDER: ${{ github.event_name != 'schedule' && inputs.provider != 'repo-variable' && inputs.provider || vars.AI_PROVIDER }}";
   assert.equal([...text.matchAll(/^\s+AI_PROVIDER:/gm)].length, 1, 'one AI_PROVIDER, on the eval step');
-  assert.equal([...text.matchAll(/inputs\.provider\b/g)].length, 2, 'inputs.provider is read in the AI_PROVIDER expression only');
+  assert.equal([...text.matchAll(/inputs\.provider\b/g)].length, 3, 'inputs.provider: the AI_PROVIDER expression and MODEL_CHANGE_FAILS only');
   const step = evalsJobs().eval.split(/\n(?=      - )/).find((st) => st.includes('- name: Run eval suite'));
   assert.ok(step.includes(expr));
-  assert.doesNotMatch(evalsJobs().publish, /AI_PROVIDER|inputs\.provider/);
+  assert.doesNotMatch(evalsJobs().publish, /AI_PROVIDER/);
+});
+
+// Review of #208: a model change on the repo's configured provider is drift, never a silent notice (#209).
+test('evals.yml fails the publish on a model change for schedule and repo-variable runs only', () => {
+  const publish = evalsJobs().publish;
+  assert.match(publish, /^      MODEL_CHANGE_FAILS: \$\{\{ github\.event_name == 'schedule' \|\| inputs\.provider == 'repo-variable' \}\}$/m);
+  assert.equal([...evalsYml().matchAll(/^\s+MODEL_CHANGE_FAILS:/gm)].length, 1, 'no step may redefine MODEL_CHANGE_FAILS');
+  assert.match(publish, /if \[ "\$MODEL_CHANGE_FAILS" = "true" \]; then args\+=\(--fail-on-model-change\); fi/);
+  assert.equal([...evalsYml().matchAll(/--fail-on-model-change/g)].length, 1);
 });
 
 test('evals.yml reports the run against the published baseline without API keys, never deciding the job', () => {

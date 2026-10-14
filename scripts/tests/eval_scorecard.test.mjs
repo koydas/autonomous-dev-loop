@@ -335,7 +335,7 @@ test('runCost prices a known model on the chars/4 estimate, per run and per call
   assert.deepEqual(cost, { usd: 6, per_call_usd: 1.5, source: 'chars/4 estimate' });
 });
 
-test('runCost is null for an unpriced model (Groq free tier) or a summary without tokens; per call null without calls', () => {
+test('runCost is null on the Groq free tier or a summary without tokens; per call null without calls', () => {
   assert.equal(runCost({ meta: { model: 'groq:openai/gpt-oss-120b' }, summary: { tokens_est: { in: 1, out: 1 }, llm_calls: 1 } }), null);
   assert.equal(runCost({ meta: { model: 'anthropic:claude-opus-5-5' }, summary: {} }), null);
   assert.equal(runCost({}), null);
@@ -378,4 +378,15 @@ test('formatCost and formatCoverage render a dash for null', () => {
   assert.equal(formatCost(null), '—');
   assert.equal(formatCoverage(null), '—');
   assert.equal(formatCoverage({ n: 3, diff_truncated: null, code_cut: 0, withheld: 1 }), '— / 0% / 100% (n=3)');
+});
+
+test('runCost marks a model missing from the price table as unpriced, never as free', () => {
+  const cost = runCost({ meta: { model: 'anthropic:claude-opus-5-5-snapshot' }, summary: { tokens_est: { in: 1, out: 1 }, llm_calls: 1 } });
+  assert.deepEqual(cost, { usd: null, per_call_usd: null, unpriced: 'anthropic:claude-opus-5-5-snapshot', source: 'chars/4 estimate' });
+  assert.equal(formatCost(cost), 'unpriced (`anthropic:claude-opus-5-5-snapshot` not in PRICES_USD_PER_MTOK)');
+});
+
+test('formatCost omits the per-call part when there is no call', () => {
+  assert.equal(formatCost({ usd: 0, per_call_usd: null, source: 'chars/4 estimate' }), '$0');
+  assert.equal(formatCost({ usd: 2, per_call_usd: 1, source: 'chars/4 estimate' }), '$2 ($1 per call)');
 });
