@@ -42,3 +42,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0036: Related ADRs in the review prompt, first to give way on the token budget](./0036-related-adrs-in-review.md)
 - [ADR-0037: Prompt budget impact as review evidence](./0037-prompt-budget-impact.md)
 - [ADR-0038: Withhold approval when code was cut from the reviewed diff](./0038-withhold-approval-on-unreviewed-code.md)
+- [ADR-0039: LangGraph prototype of the bounded auto-fix loop](./0039-langgraph-bounded-autofix-prototype.md)
