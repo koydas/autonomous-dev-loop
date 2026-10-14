@@ -331,7 +331,7 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 | `<stage>` | `openai/gpt-oss-120b` | Groq model. `GROQ_MODEL` overrides every stage. |
 | `<stage>_temperature` | per stage | `0`–`2`. |
 | `<stage>_max_tokens` | `1024` (validation, review), `4096` (generation, autofix) | Output cap, reasoning tokens included. Prompt + this value must stay under the Groq TPM per request (8K on the free tier), or Groq returns 413. |
-| `<stage>_max_input_tokens` | `6300` (validation, review), `3500` (generation), `2600` (autofix, user prompt only) | Estimated input budget (chars/4). Rule: input × 1.10 + `<stage>_max_tokens` ≤ 8000 (the estimate runs ~3% low; `workflow_gates.test.mjs` enforces it). Review shrinks the diff, then the PR body, to fit; when the prompt still does not fit, Groq is skipped without a request (it would reject it): the Anthropic fallback takes the prompt if `ANTHROPIC_API_KEY` is set, otherwise the stage fails before any LLM call (ADR-0028 amendment, ADR-0032). |
+| `<stage>_max_input_tokens` | `6300` (validation, review), `3500` (generation), `2500` (autofix, user prompt only) | Estimated input budget (chars/4). Rule: input × 1.10 + `<stage>_max_tokens` ≤ 8000 (the estimate runs ~3% low; `workflow_gates.test.mjs` enforces it). Review shrinks the diff, then the PR body, to fit; when the prompt still does not fit, Groq is skipped without a request (it would reject it): the Anthropic fallback takes the prompt if `ANTHROPIC_API_KEY` is set, otherwise the stage fails before any LLM call (ADR-0028 amendment, ADR-0032). |
 | `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0025). |
 
 Anthropic keys (ADR-0032):
@@ -352,7 +352,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Key | Default | Description |
 |---|---|---|
-| `autofix_max_input_tokens` | `2600` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set so that `(system_tokens + autofix_max_input_tokens) × 1.10 + max_output_tokens ≤ 8000` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025, ADR-0028 amendment): (890 + 2600) × 1.10 + 4096 = 7935. The static wrapper text of `auto-fix-user.md` (~192 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
+| `autofix_max_input_tokens` | `2500` | Hard ceiling on the total user-prompt tokens (wrapper + diff + feedback + files). Set so that `(system_tokens + autofix_max_input_tokens) × 1.10 + max_output_tokens ≤ 8000` (Groq free-tier TPM for `openai/gpt-oss-120b`, ADR-0025, ADR-0028 amendment): (583 + 2500) × 1.10 + 4096 = 7488; `autofix_prompt_budget.test.mjs` keeps ≥ 10% of the TPM-bounded input (3549) as headroom for the system prompt. The static wrapper text of `auto-fix-user.md` (~192 tokens) is deducted first; the remainder is divided among the three sections. Remove the key to use the full model context window (e.g. after upgrading to Groq Dev Tier or switching to Anthropic). |
 | `autofix_diff_ratio` | `0.15` | Fraction of the section budget (after wrapper deduction) allocated to the PR diff. Kept low because the diff mostly repeats the shown files, and only files shown in full can be edited (ADR-0029). |
 | `autofix_feedback_ratio` | `0.25` | Fraction of the section budget allocated to review feedback. The remainder goes to file contents; a file that does not fit whole is withheld, never truncated. |
 
@@ -360,7 +360,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 
 | Provider / Tier | Recommended `autofix_max_input_tokens` |
 |---|---|
-| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `2600` (default) |
+| Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `2500` (default) |
 | Groq Developer plan | Raise or remove the key (TPM is far above a single request) |
 | Anthropic (`claude-opus-5-5`) | Not applied: Anthropic configs carry no input budget (200k budget from `MODEL_CONTEXT_WINDOW`; no per-request TPM limit) |
 
