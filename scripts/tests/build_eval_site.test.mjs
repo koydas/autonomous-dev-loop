@@ -6,7 +6,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fetchPreviousSite, readPreviousSiteDir, assembleSite, writeSite, buildEvalSite } from '../build_eval_site.mjs';
+import {
+  fetchPreviousSite, readPreviousSiteDir, assembleSite, writeSite, buildEvalSite, fetchPublishedBaseline, formatRunReport, buildRunReport,
+} from '../build_eval_site.mjs';
 import { emptyScorecard, addRun, toScorecardRun, MAX_RUNS } from '../lib/eval_scorecard.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'build_eval_site.mjs');
@@ -256,4 +258,153 @@ test('assembleSite publishes runs of several suites with each suite\'s registry 
   assert.match(files['index.html'], /<code>per_class\.invalid\.recall<\/code>/);
   assert.match(files['index.html'], /<code>per_class\.request_changes\.recall<\/code>/);
   assert.match(files['index.html'], /<code>per_class\.approve\.recall<\/code>/);
+});
+
+// ---------------------------------------------------------------------------
+// Issue #199: history per suite and model, --report
+// ---------------------------------------------------------------------------
+
+const anthropicRun = (runId = 'anth') => {
+  const r = results({ runId, ts: '2026-10-14T00:00:00Z' });
+  r.meta = { ...r.meta, suite: 'review', model: 'anthropic:claude-opus-5-5' };
+  r.summary = { ...r.summary, llm_calls: 1, tokens_est: { in: 10_000, out: 2_000 } };
+  r.results = [{ output: { verdict: 'APPROVE', diff_truncated: false, unreviewed_code_files: [] } }];
+  return r;
+};
+const groqReview = (runId = 'groq') => {
+  const r = results({ runId, ts: '2026-10-08T00:00:00Z' });
+  r.meta = { ...r.meta, suite: 'review' };
+  r.results = [{ output: { verdict: 'WITHHELD', diff_truncated: true, unreviewed_code_files: ['a.mjs'] } }];
+  return r;
+};
+
+test('assembleSite never appends a run whose model is not the suite\'s published model; history stays intact', () => {
+  const previous = { scorecard: addRun(emptyScorecard(), 'review', toScorecardRun(groqReview())), details: { groq: groqReview() } };
+  const { scorecard, skipped, files } = assembleSite({ previous, resultsList: [anthropicRun()] });
+  assert.deepEqual(scorecard.suites.review.runs.map((r) => r.run_id), ['groq']);
+  assert.equal(skipped[0].kind, 'model_mismatch');
+  assert.equal(files['runs/anth.json'], undefined);
+  assert.ok(files['runs/groq.json']);
+});
+
+test('buildEvalSite reports a model mismatch as a notice, not a provider-failure warning', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const backup = path.join(dir, 'backup');
+  await writeSite(assembleSite({ previous: empty(), resultsList: [groqReview()] }).files, backup);
+  const file = path.join(dir, 'anth.json');
+  await fs.writeFile(file, JSON.stringify(anthropicRun()));
+  for (const [actions, prefix] of [['true', '::notice::'], ['', 'Notice: ']]) {
+    const logs = [];
+    const saved = process.env.GITHUB_ACTIONS;
+    process.env.GITHUB_ACTIONS = actions;
+    try {
+      await buildEvalSite({ outDir: path.join(dir, `out${actions}`), previousDir: backup, resultFiles: [file], log: (m) => logs.push(m) });
+    } finally {
+      if (saved === undefined) delete process.env.GITHUB_ACTIONS; else process.env.GITHUB_ACTIONS = saved;
+    }
+    assert.ok(logs[0].startsWith(`${prefix}run anth not recorded: model anthropic:claude-opus-5-5 is not the review history's model groq:m`), logs[0]);
+    assert.doesNotMatch(logs[0], /provider failure/);
+  }
+});
+
+test('fetchPublishedBaseline returns the latest published run, its coverage recomputed from the detail when absent', async () => {
+  const sc = addRun(emptyScorecard(), 'review', { ...toScorecardRun(groqReview()), coverage: undefined });
+  delete sc.suites.review.runs[0].coverage;
+  const { impl, calls } = stubFetch({ 'https://x.io/scorecard.json': json(200, sc), 'https://x.io/runs/groq.json': json(200, groqReview()) });
+  const { run } = await fetchPublishedBaseline('https://x.io/', 'review', impl);
+  assert.deepEqual(run.coverage, { n: 1, diff_truncated: 1, code_cut: 1, withheld: 1 });
+  assert.deepEqual(calls, ['https://x.io/scorecard.json', 'https://x.io/runs/groq.json']);
+});
+
+test('fetchPublishedBaseline uses the row as is when it has coverage, and keeps it when the detail is gone', async () => {
+  const withCoverage = addRun(emptyScorecard(), 'review', toScorecardRun(groqReview()));
+  const a = stubFetch({ 'https://x.io/scorecard.json': json(200, withCoverage) });
+  assert.equal((await fetchPublishedBaseline('https://x.io', 'review', a.impl)).run.run_id, 'groq');
+  assert.deepEqual(a.calls, ['https://x.io/scorecard.json']);
+  const old = structuredClone(withCoverage);
+  delete old.suites.review.runs[0].coverage;
+  const b = stubFetch({ 'https://x.io/scorecard.json': json(200, old) });
+  assert.equal((await fetchPublishedBaseline('https://x.io', 'review', b.impl)).run.coverage, undefined);
+});
+
+test('fetchPublishedBaseline never throws: HTTP error, unknown suite or network failure become a reason', async () => {
+  assert.deepEqual(await fetchPublishedBaseline('https://x.io', 'review', stubFetch({}).impl), { missing: 'scorecard.json: HTTP 404' });
+  const sc = stubFetch({ 'https://x.io/scorecard.json': json(200, emptyScorecard()) });
+  assert.deepEqual(await fetchPublishedBaseline('https://x.io', 'review', sc.impl), { missing: 'no published review run' });
+  assert.deepEqual(await fetchPublishedBaseline('https://x.io', 'review', async () => { throw new Error('ECONNREFUSED'); }), { missing: 'ECONNREFUSED' });
+});
+
+test('formatRunReport puts the run next to the published baseline, with cost, coverage and the model-mismatch note', () => {
+  const md = formatRunReport([{ suite: 'review', run: toScorecardRun(anthropicRun()), baseline: { run: toScorecardRun(groqReview()) } }]);
+  assert.match(md, /chars\/4 token estimate/);
+  assert.match(md, /\| this run \| `anthropic:claude-opus-5-5` \| `anth` \| verdict_match 1 \| 0 \| \$0\.08 \(\$0\.08 per call\) \| 0% \/ 0% \/ 0% \(n=1\) \|/);
+  assert.match(md, /\| published \| `groq:m` \| `groq` \| verdict_match 1 \| 0 \| — \| 100% \/ 100% \/ 100% \(n=1\) \|/);
+  assert.match(md, /Different models: this run is not appended to the `review` history/);
+  const withClass = toScorecardRun({ ...anthropicRun(), summary: { ...anthropicRun().summary, per_class: { request_changes: { recall: 0.75 } } } });
+  assert.match(formatRunReport([{ suite: 'review', run: withClass }]), /verdict_match 1 · request_changes recall 0\.75 \|/);
+});
+
+test('formatRunReport: no baseline row without --site-url, a reason when unavailable, no note for the same model', () => {
+  const run = toScorecardRun(groqReview());
+  const none = formatRunReport([{ suite: 'review', run }]);
+  assert.doesNotMatch(none, /\| published|unavailable/);
+  assert.match(formatRunReport([{ suite: 'review', run, baseline: { missing: 'HTTP 503' } }]), /> Published baseline unavailable: HTTP 503/);
+  assert.doesNotMatch(formatRunReport([{ suite: 'review', run, baseline: { run } }]), /Different models/);
+});
+
+test('buildRunReport reads results files; the CLI --report needs no --out and builds no site', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'report-'));
+  const file = path.join(dir, 'review-anth.json');
+  await fs.writeFile(file, JSON.stringify(anthropicRun()));
+  const { impl } = stubFetch({ 'https://x.io/scorecard.json': json(200, addRun(emptyScorecard(), 'review', toScorecardRun(groqReview()))) });
+  assert.match(await buildRunReport({ resultFiles: [file], siteUrl: 'https://x.io', fetchImpl: impl }), /\| published \| `groq:m`/);
+  const summary = path.join(dir, 'summary.md');
+  const { stdout } = await promisify(execFile)(process.execPath, [SCRIPT, '--report', file], { cwd: dir, env: { ...process.env, GITHUB_STEP_SUMMARY: summary } });
+  assert.match(stdout, /\| this run \| `anthropic:claude-opus-5-5`/);
+  assert.match(await fs.readFile(summary, 'utf8'), /Eval run vs published baseline/);
+  assert.deepEqual((await fs.readdir(dir)).sort(), ['review-anth.json', 'summary.md']);
+});
+
+test('buildEvalSite failOnModelChange: a model change is an ::error:: and nothing is written', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const backup = path.join(dir, 'backup');
+  await writeSite(assembleSite({ previous: empty(), resultsList: [groqReview()] }).files, backup);
+  const drifted = groqReview('g2');
+  drifted.meta = { ...drifted.meta, model: 'groq:new-model', ts: '2026-10-15T00:00:00Z' };
+  const file = path.join(dir, 'g2.json');
+  await fs.writeFile(file, JSON.stringify(drifted));
+  const logs = [];
+  const out = path.join(dir, 'out');
+  await assert.rejects(
+    buildEvalSite({ outDir: out, previousDir: backup, resultFiles: [file], failOnModelChange: true, log: (m) => logs.push(m) }),
+    /model changed on the configured provider \(g2\).*#209/,
+  );
+  assert.match(logs[0], /^(::error::|Error: )run g2 not recorded: model groq:new-model is not the review history's model groq:m/);
+  await assert.rejects(fs.access(out));
+  // Same model: unaffected by the flag.
+  const same = path.join(dir, 'g3.json');
+  await fs.writeFile(same, JSON.stringify({ ...groqReview('g3'), meta: { ...groqReview('g3').meta, ts: '2026-10-16T00:00:00Z' } }));
+  await buildEvalSite({ outDir: out, previousDir: backup, resultFiles: [same], failOnModelChange: true, log: () => {} });
+  await fs.access(path.join(out, 'runs', 'g3.json'));
+});
+
+test('build_eval_site CLI --fail-on-model-change exits 1 on drift', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const backup = path.join(dir, 'backup');
+  await writeSite(assembleSite({ previous: empty(), resultsList: [groqReview()] }).files, backup);
+  const file = path.join(dir, 'anth.json');
+  await fs.writeFile(file, JSON.stringify(anthropicRun()));
+  await assert.rejects(
+    promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(dir, 'out'), '--previous-dir', backup, '--fail-on-model-change', file]),
+    (err) => err.code === 1 && /model changed on the configured provider/.test(err.stderr),
+  );
+});
+
+test('buildRunReport fails fast on a results file without meta.suite, before any request', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'report-'));
+  const file = path.join(dir, 'bad.json');
+  await fs.writeFile(file, JSON.stringify({ meta: { run_id: 'x' }, summary: {} }));
+  const { impl, calls } = stubFetch({});
+  await assert.rejects(buildRunReport({ resultFiles: [file], siteUrl: 'https://x.io', fetchImpl: impl }), /missing meta\.suite/);
+  assert.deepEqual(calls, []);
 });

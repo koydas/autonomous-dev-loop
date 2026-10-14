@@ -3,20 +3,26 @@
 /**
  * Build the eval dashboard (GitHub Pages) from live eval results.
  *
- *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [results.json ...]
+ *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [--fail-on-model-change] [results.json ...]
+ *   node scripts/build_eval_site.mjs --report [--site-url <deployed site>] results.json ...
  *
  * History is read back from the deployed site (--site-url: scorecard.json + runs/<id>.json) or
  * from a local build or a backup artifact (--previous-dir). A 404 on the deployed scorecard aborts
  * unless --allow-empty is passed (first deploy only), and so does any other read error: a
  * transient failure or a wrong URL never deploys a site without its history.
- * Runs that failed on error_rate (provider outage) and replays are left out.
+ * Runs that failed on error_rate (provider outage) and replays are left out, and so is a run whose model
+ * is not the suite's published model (history per suite and model, ADR-0032 amendment).
+ * --report builds nothing: it prints, per results file, model, scores, cost and review coverage next to
+ * the suite's latest published run (best effort), and appends it to GITHUB_STEP_SUMMARY.
  */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { emptyScorecard, toScorecardRun, addRun, partitionPublishable } from './lib/eval_scorecard.mjs';
+import {
+  emptyScorecard, toScorecardRun, addRun, partitionPublishable, partitionByPublishedModel, formatCost, formatCoverage,
+} from './lib/eval_scorecard.mjs';
 import { buildSite } from './lib/eval_site.mjs';
 import { SUITES } from './lib/eval_suites.mjs';
 
@@ -90,7 +96,9 @@ function assertRunIdsPerSuite(scorecard, publishable) {
 
 // Pure: previous site state + new results → files to deploy.
 export function assembleSite({ previous, resultsList, generatedAt = new Date().toISOString() }) {
-  const { publishable, skipped } = partitionPublishable(resultsList);
+  const valid = partitionPublishable(resultsList);
+  const { publishable, skipped: foreignModel } = partitionByPublishedModel(previous.scorecard, valid.publishable);
+  const skipped = [...valid.skipped, ...foreignModel];
   assertRunIdsPerSuite(previous.scorecard, publishable);
   let scorecard = previous.scorecard;
   const details = { ...previous.details };
@@ -112,15 +120,29 @@ export async function writeSite(files, outDir) {
   }
 }
 
-export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles, fetchImpl, allowEmpty = false, log = console.log }) {
+// failOnModelChange: the run used the repo's configured provider (schedule, provider repo-variable), so a
+// model mismatch is drift (GROQ_MODEL bump, model retirement), not a measurement: fail instead of freezing
+// the history behind a notice. Re-baselining is #209.
+export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles, fetchImpl, allowEmpty = false, failOnModelChange = false, log = console.log }) {
   const previous = siteUrl
     ? await fetchPreviousSite(siteUrl, fetchImpl, { allowEmpty, log })
     : previousDir ? await readPreviousSiteDir(previousDir) : { scorecard: emptyScorecard(), details: {} };
   const resultsList = await Promise.all(resultFiles.map(async (f) => JSON.parse(await fs.readFile(f, 'utf8'))));
   const { files, scorecard, skipped } = assembleSite({ previous, resultsList });
+  const actions = process.env.GITHUB_ACTIONS === 'true';
   for (const s of skipped) {
+    if (s.kind === 'model_mismatch') {
+      const msg = `run ${s.run_id} not recorded: ${s.reason}`;
+      if (failOnModelChange) log(actions ? `::error::${msg}` : `Error: ${msg}`);
+      else log(actions ? `::notice::${msg}` : `Notice: ${msg}`);
+      continue;
+    }
     const msg = `run ${s.run_id} not recorded (${s.reason}): provider failure, not a model result`;
-    log(process.env.GITHUB_ACTIONS === 'true' ? `::warning::${msg}` : `Warning: ${msg}`);
+    log(actions ? `::warning::${msg}` : `Warning: ${msg}`);
+  }
+  const drift = failOnModelChange ? skipped.filter((s) => s.kind === 'model_mismatch') : [];
+  if (drift.length) {
+    throw new Error(`model changed on the configured provider (${drift.map((s) => s.run_id).join(', ')}): the history is per suite and model, so nothing is published. Re-baseline the suite (#209) or restore the previous model`);
   }
   await writeSite(files, outDir);
   for (const [suite, { runs }] of Object.entries(scorecard.suites)) {
@@ -128,6 +150,59 @@ export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles,
   }
   log(`Eval dashboard written to ${outDir} (${Object.keys(files).length} files)`);
   return { files, scorecard, skipped };
+}
+
+// ---------------------------------------------------------------------------
+// --report: one run against the suite's published baseline (issue #199)
+// ---------------------------------------------------------------------------
+
+// The suite's latest published run, as a scorecard row (coverage recomputed from its detail when the row
+// predates the field). Best effort: the report is informational, an unreachable site only drops the row.
+export async function fetchPublishedBaseline(siteUrl, suite, fetchImpl = fetch, { cacheBust = Date.now() } = {}) {
+  const base = siteUrl.replace(/\/+$/, '');
+  const get = (rel) => fetchImpl(`${base}/${rel}?v=${cacheBust}`, { cache: 'no-store' });
+  try {
+    const res = await get('scorecard.json');
+    if (!res.ok) return { missing: `scorecard.json: HTTP ${res.status}` };
+    const run = (await res.json())?.suites?.[suite]?.runs?.[0];
+    if (!run) return { missing: `no published ${suite} run` };
+    if (run.coverage !== undefined) return { run };
+    const detail = await get(`runs/${encodeURIComponent(run.run_id)}.json`);
+    return { run: detail.ok ? toScorecardRun(await detail.json()) : run };
+  } catch (err) {
+    return { missing: err.message };
+  }
+}
+
+const row = (label, r) => `| ${label} | \`${r.model}\` | \`${r.run_id}\` | ${[...Object.entries(r.scores ?? {}).map(([k, v]) => `${k} ${v}`), ...Object.entries(r.per_class ?? {}).map(([cls, m]) => `${cls} recall ${m.recall}`)].join(' · ')} | ${r.error_rate ?? '—'} | ${formatCost(r.cost_est)} | ${formatCoverage(r.coverage)} |`;
+
+// Pure: scorecard rows → Markdown. baseline: { run } | { missing } | undefined (no --site-url).
+export function formatRunReport(entries) {
+  const lines = [
+    '## Eval run vs published baseline', '',
+    'Cost is priced on the chars/4 token estimate (prompt cache and thinking tokens not counted), not measured usage. Coverage: share of review runs whose diff was cut / with code files cut / WITHHELD (ADR-0038).', '',
+  ];
+  for (const { run, suite, baseline } of entries) {
+    lines.push(`### \`${suite}\``, '', '| | Model | Run | Scores | error_rate | Cost | Diff cut / code cut / withheld |', '|---|---|---|---|---|---|---|');
+    lines.push(row('this run', run));
+    if (baseline?.run) lines.push(row('published', baseline.run));
+    lines.push('');
+    if (baseline?.missing) lines.push(`> Published baseline unavailable: ${baseline.missing}`, '');
+    if (baseline?.run && baseline.run.model !== run.model) lines.push(`> Different models: this run is not appended to the \`${suite}\` history (results artifact only).`, '');
+  }
+  return lines.join('\n');
+}
+
+export async function buildRunReport({ resultFiles, siteUrl, fetchImpl }) {
+  const entries = [];
+  for (const file of resultFiles) {
+    const results = JSON.parse(await fs.readFile(file, 'utf8'));
+    const run = toScorecardRun(results); // throws on a malformed file before any request
+    const suite = results.meta.suite;
+    const baseline = siteUrl ? await fetchPublishedBaseline(siteUrl, suite, fetchImpl) : undefined;
+    entries.push({ suite, run, baseline });
+  }
+  return formatRunReport(entries);
 }
 
 async function main() {
@@ -139,14 +214,23 @@ async function main() {
       'site-url': { type: 'string' },
       'previous-dir': { type: 'string' },
       'allow-empty': { type: 'boolean', default: false },
+      report: { type: 'boolean', default: false },
+      'fail-on-model-change': { type: 'boolean', default: false },
     },
   });
+  if (values.report) {
+    const markdown = await buildRunReport({ resultFiles: positionals, siteUrl: values['site-url'] });
+    console.log(markdown);
+    if (process.env.GITHUB_STEP_SUMMARY) await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, markdown + '\n');
+    return;
+  }
   if (!values.out) throw new Error('--out <dir> is required');
   await buildEvalSite({
     outDir: values.out,
     siteUrl: values['previous-dir'] ? undefined : values['site-url'],
     previousDir: values['previous-dir'],
     allowEmpty: values['allow-empty'],
+    failOnModelChange: values['fail-on-model-change'],
     resultFiles: positionals,
   });
 }

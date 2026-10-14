@@ -64,3 +64,23 @@ An `AI_PROVIDER` other than `groq`/`anthropic` (typo) silently resolved to Groq 
 - ✅ A published run was answered by `meta.model` on every call, checked twice (pinning, then `partitionPublishable`).
 - ✅ Groq TPD exhaustion during an eval trips the breaker at the first 429 instead of spending the Anthropic budget.
 - ⚠️ With both keys set, an eval no longer survives a transient primary outage that outlasts the retries: those runs error instead of being published.
+
+## Amendment (2026-10-14): eval history is per suite and model; a manual run can pick its provider
+
+**Context.** Issue #199 step 1: measure the `review` stage on Anthropic (`anthropic_review`, `claude-opus-5-5`) against the Groq baseline. Since ADR-0038 the Groq input budget (`review_max_input_tokens` 6300) leaves ≈ 3k tokens for the diff, so most non-trivial PRs get WITHHELD (#206: 7 code files unseen). `evals.yml` took the provider from `vars.AI_PROVIDER`, which also drives production. The amendment above keeps one run from mixing models, but a pure Anthropic run would still be appended to the Groq history: Δ, trend, the replay gate's baseline and the ADR-0031 ratchet would then compare models.
+
+**Decision.**
+- `evals.yml` has a `workflow_dispatch` input `provider` (`repo-variable` | `groq` | `anthropic`, default `repo-variable`), passed as `AI_PROVIDER` to the eval step only. `schedule` ignores it. `repo-variable` stands for "empty": a choice input with an empty option is not reliable.
+- `partitionByPublishedModel(scorecard, resultsList)` (`eval_scorecard.mjs`), applied by `assembleSite` after `partitionPublishable`: a run whose `meta.model` differs from the model of the suite's latest published run is not appended (`kind: 'model_mismatch'`, `::notice::`, not the provider-failure `::warning::`). The first run of an empty suite sets its model. The results artifact is always uploaded.
+- `meta.model` is `<provider>:<model>`, so a mismatch is also a model change on the same provider (`vars.GROQ_MODEL`, `vars.ANTHROPIC_MODEL`, a `config/models.yaml` default, a Groq retirement). On a run that uses the repo's configured provider (`schedule`, or `provider: repo-variable`), that is drift, not a measurement: the `publish` job passes `--fail-on-model-change`, the mismatch is an `::error::`, and nothing is deployed. Only a dispatch with an explicit `provider` gets the `::notice::`. Accepting a new model (re-baseline) is #209.
+- Every run records `cost_est` (`PRICES_USD_PER_MTOK`, list price; `null` for Groq's free tier) and `coverage` (`n`, `diff_truncated`, `code_cut` = `unreviewed_code_files` non-empty, `withheld` shares; `null` for a suite without `diff_truncated`) in its scorecard row, shown in `scorecard.md`. `anthropic_client.mjs` does not return the API's `usage`, so the cost is priced on the harness's chars/4 estimate and labelled `chars/4 estimate`.
+- A new eval-job step runs `build_eval_site.mjs --report` (no API key, `continue-on-error`): model, scores, cost and coverage next to the suite's latest published run, in the step summary. The published baseline is best effort.
+
+**Why skip, not key the history by suite + model.** `scorecard.json` v1 is keyed by suite name, and so are its readers: `eval_replay_ci.mjs` and `pr_evals.mjs` read `suites[name].runs[0]` as the baseline, `badges/<suite>.json` and the dashboard tiles show `runs[0]`, `SUITES[name].thresholds` are per suite. A `suite@model` key would be a v2 format that each reader must learn, plus a rule for which model is "the" suite's. A second model's history has no consumer until the stage actually moves (#199 step 2). Skipping keeps v1 and every reader unchanged, and the run is still fully kept (artifact + step summary).
+
+**Consequences.**
+- ✅ Δ, trend, the replay/PR-eval baseline and the ADR-0031 ratchet only ever compare runs of one model.
+- ✅ The comparison covers coverage (diff cut, WITHHELD) and cost, not only accuracy.
+- ⚠️ The cost line ignores the prompt cache (input over-estimated: the system prompt is cached) and thinking tokens (output under-estimated at effort `high`). An order of magnitude, not the bill; measured usage needs `anthropic_client.mjs` to return it.
+- ⚠️ On Anthropic the review prompt has no input budget but keeps the 12,000-char diff cap (`reviewInputBudget`), so `diff_truncated` can still be non-zero there.
+- ⚠️ Until #209 adds a re-baseline input, any model change on the configured provider (including #199 step 2) keeps that suite's weekly publish red: loud by design, but with no remedy except restoring the previous model.

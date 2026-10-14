@@ -496,6 +496,51 @@ test('evals.yml publishes every suite of the run in one Pages deploy', () => {
   assert.match(publish, /^    timeout-minutes: \d+$/m);
 });
 
+// Issue #199: a manual run can measure another provider; production's vars.AI_PROVIDER is never overridden
+// outside the eval step, and a scheduled run always uses it.
+test('evals.yml provider input: a choice of the providers, defaulting to the repository variable', async () => {
+  const { PROVIDERS } = await import('../lib/config.mjs');
+  const text = evalsYml();
+  const input = text.slice(text.indexOf('      provider:'), text.indexOf('      publish:'));
+  assert.match(input, /type: choice/);
+  assert.match(input, /default: repo-variable/);
+  const options = [...input.slice(input.indexOf('options:')).matchAll(/^\s+- (\S+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(options, ['repo-variable', ...PROVIDERS]);
+});
+
+test('evals.yml passes the provider input as AI_PROVIDER to the eval step only, never on schedule', () => {
+  const text = evalsYml();
+  const expr = "AI_PROVIDER: ${{ github.event_name != 'schedule' && inputs.provider != 'repo-variable' && inputs.provider || vars.AI_PROVIDER }}";
+  assert.equal([...text.matchAll(/^\s+AI_PROVIDER:/gm)].length, 1, 'one AI_PROVIDER, on the eval step');
+  assert.equal([...text.matchAll(/inputs\.provider\b/g)].length, 3, 'inputs.provider: the AI_PROVIDER expression and MODEL_CHANGE_FAILS only');
+  const step = evalsJobs().eval.split(/\n(?=      - )/).find((st) => st.includes('- name: Run eval suite'));
+  assert.ok(step.includes(expr));
+  assert.doesNotMatch(evalsJobs().publish, /AI_PROVIDER/);
+});
+
+// Review of #208: a model change on the repo's configured provider is drift, never a silent notice (#209).
+test('evals.yml fails the publish on a model change for schedule and repo-variable runs only', () => {
+  const publish = evalsJobs().publish;
+  assert.match(publish, /^      MODEL_CHANGE_FAILS: \$\{\{ github\.event_name == 'schedule' \|\| inputs\.provider == 'repo-variable' \}\}$/m);
+  assert.equal([...evalsYml().matchAll(/^\s+MODEL_CHANGE_FAILS:/gm)].length, 1, 'no step may redefine MODEL_CHANGE_FAILS');
+  assert.match(publish, /if \[ "\$MODEL_CHANGE_FAILS" = "true" \]; then args\+=\(--fail-on-model-change\); fi/);
+  assert.equal([...evalsYml().matchAll(/--fail-on-model-change/g)].length, 1);
+});
+
+test('evals.yml reports the run against the published baseline without API keys, never deciding the job', () => {
+  const job = evalsJobs().eval;
+  const step = job.split(/\n(?=      - )/).find((st) => st.includes('- name: Report run vs published baseline'));
+  assert.ok(step, 'report step missing');
+  assert.match(step, /if: always\(\)/);
+  assert.match(step, /continue-on-error: true/);
+  assert.match(step, /node scripts\/build_eval_site\.mjs --report --site-url "\$EVAL_SITE_URL" "\$\{files\[@\]\}"/);
+  assert.doesNotMatch(step, /secrets\./);
+  // After the eval step, before the artifact upload (which stays unconditional).
+  assert.ok(job.indexOf('- name: Run eval suite') < job.indexOf('- name: Report run vs published baseline'));
+  assert.ok(job.indexOf('- name: Report run vs published baseline') < job.indexOf('- name: Upload eval results'));
+  assert.match(job, /- name: Upload eval results\n\s+if: always\(\)/);
+});
+
 // evals.yml and pr-evals.yml share the Groq quota but must never queue behind (or cancel) each other.
 test('evals.yml and pr-evals.yml use disjoint concurrency groups that never cancel a running eval', () => {
   const groupOf = (text) => text.match(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/m)[1].trim();
