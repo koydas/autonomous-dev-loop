@@ -676,3 +676,37 @@ test('scorers see answered calls only: a failed call does not make the LLM count
   await runSuite({ suite, cases: [yesCase('a')], llmFor: () => async () => { throw new Error('Groq API HTTP error 500'); } });
   assert.deepEqual(seen, [0]);
 });
+
+test('a swallowed LLM error with an empty message still errors the run, and replays as an error', async () => {
+  const live = await runSuite({ suite: swallowingSuite, cases: [yesCase('a')], llmFor: () => async () => { throw new Error(''); } });
+  assert.equal(live[0].error, 'LLM call failed');
+  assert.deepEqual(live[0].scores, { exact: 0, only_yes: 0 });
+  assert.equal(live[0].calls[0].error, 'LLM call failed');
+  assert.equal(summarize(live).error_rate, 1);
+  const replayed = await runSuite({ suite: swallowingSuite, cases: [yesCase('a')], llmFor: createReplayLLM(live) });
+  assert.equal(replayed[0].error, 'LLM call failed');
+  assert.equal(summarize(replayed).llm_calls, 0, 'the failed call is not served as an answer');
+});
+
+test('a quota error followed by a non-quota error in the same run keeps circuit_breaker and the quota message', async () => {
+  const retryAll = {
+    ...echoSuite,
+    async run(input, { llm }) {
+      for (let i = 0; i < 2; i++) {
+        try { return { answer: await llm({ prompt: input.q }) }; } catch { /* swallowed, retried */ }
+      }
+      return { answer: 'yes' };
+    },
+  };
+  let n = 0;
+  const results = await runSuite({ suite: retryAll, cases: [yesCase('a'), yesCase('b')], llmFor: () => async () => {
+    throw new Error(n++ === 0 ? TPD_ERROR : 'Groq API HTTP error 500');
+  } });
+  assert.equal(results[0].error, TPD_ERROR);
+  assert.equal(results[0].circuit_breaker.quota, 'tokens per day (TPD)');
+  assert.deepEqual(results[0].calls.map((c) => c.error), [TPD_ERROR, 'Groq API HTTP error 500']);
+  assert.equal(results[1].skipped, true);
+  const summary = summarize(results);
+  assert.equal(summary.circuit_breaker.quota, 'tokens per day (TPD)');
+  assert.match(formatReport({ suite: 'echo', summary, failures: checkThresholds(summary), results }), /## ⛔ Circuit breaker/);
+});

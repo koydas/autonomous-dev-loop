@@ -164,6 +164,9 @@ export function checkTokenBudget(estimate, budget) {
 // Runner
 // ---------------------------------------------------------------------------
 
+// A failed call's message, never empty: an empty one would read as "no error" (run scored, replay served).
+const llmErrorMessage = (err) => String(err?.message ?? err) || 'LLM call failed';
+
 async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) {
   const calls = [];
   let quota = null;
@@ -174,12 +177,16 @@ async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) 
     try {
       recorded = await recording(args);
     } catch (err) {
-      quota = detectQuotaExhaustion(err);
-      if (quota) onQuota(quota);
+      // The first quota error is kept: a later non-quota error (stage retry) must not drop circuit_breaker.
+      const q = detectQuotaExhaustion(err);
+      if (q) {
+        quota ??= q;
+        onQuota(q);
+      }
       llmError ??= err;
       calls.push({
         raw: null,
-        error: String(err?.message ?? err),
+        error: llmErrorMessage(err),
         latency_ms: null,
         tokens_in_est: estimateTokens(`${args.systemPrompt ?? ''}${args.prompt ?? ''}`),
         tokens_out_est: 0,
@@ -207,7 +214,7 @@ async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) 
   }
   // A stage that swallows the LLM error (fallback output) still ran without the model: whatever it
   // returned, the run is errored. A quota error keeps its message (circuit breaker).
-  if (llmError && !error) error = quota?.message ?? String(llmError.message ?? llmError);
+  if (llmError && !error) error = quota?.message ?? llmErrorMessage(llmError);
   const answered = calls.filter((c) => !c.error);
 
   const scores = {};
