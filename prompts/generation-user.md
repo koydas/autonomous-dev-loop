@@ -13,7 +13,7 @@ You MUST use these as the base for any modifications — do not reconstruct file
 Requirements:
 1. Preserve all existing content not targeted by the issue. Never delete sections, headings, or content unless explicitly requested in the issue.
 2. Modify existing files when possible. Only create new files if strictly necessary.
-3. Propose 1 to 6 file creations/updates (never more than 6 files).
+3. Propose 1 to 6 file creations/updates (never more than 6 files), or none with `blocked: true` (system rules).
 4. Changes must directly address the issue. No speculative improvements.
 5. Prefer focused, coherent changes over broad refactors.
 6. Generated code must be syntactically valid and consistent. No unresolved imports or references.

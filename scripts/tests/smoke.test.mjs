@@ -464,7 +464,7 @@ for (const name of ['generation-system', 'auto-fix-system']) {
 
 // Runs scripts/generate_issue_change.mjs in a scratch repo against one mock server that answers
 // the Anthropic call with `changes` and records the GitHub calls.
-async function runGeneration(changes, { files = {}, issueBody = 'Add a helper.', githubStatus = 201 } = {}) {
+async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', issueBody = 'Add a helper.', issueLabels, aiOutput, githubStatus = 201 } = {}) {
   const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smoke-gen-'));
   for (const [rel, content] of Object.entries(files)) {
     await fs.mkdir(path.dirname(path.join(repoDir, rel)), { recursive: true });
@@ -478,7 +478,7 @@ async function runGeneration(changes, { files = {}, issueBody = 'Add a helper.',
       requests.push({ method: req.method, url: req.url, body });
       res.writeHead(req.url === '/v1/messages' ? 200 : githubStatus, { 'Content-Type': 'application/json' });
       res.end(req.url === '/v1/messages'
-        ? JSON.stringify({ content: [{ type: 'text', text: JSON.stringify({ summary: 'Add a helper', changes }) }] })
+        ? JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(aiOutput ?? { summary: 'Add a helper', changes }) }] })
         : '{}');
     });
   });
@@ -502,8 +502,9 @@ async function runGeneration(changes, { files = {}, issueBody = 'Add a helper.',
           METRICS_FILE: metricsFile,
           CHECKPOINT_RUN_ID: 'smoke-gen',
           ISSUE_NUMBER: '7',
-          ISSUE_TITLE: 'Add helper',
+          ISSUE_TITLE: issueTitle,
           ISSUE_BODY: issueBody,
+          ...(issueLabels === undefined ? {} : { ISSUE_LABELS: issueLabels }),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -599,3 +600,129 @@ test('generation entrypoint: an existing file the issue never showed cannot be r
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// Blocked outcome (ADR-0029 amendment): no write, no PR, issue back to a human
+// ---------------------------------------------------------------------------
+
+// The GitHub side of a blocked run: needs-human applied, ready-for-dev removed, one comment.
+function assertBlockedEscalation(run, { source, comment }) {
+  assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+  assert.match(run.output, /^blocked=true$/m);
+  assert.doesNotMatch(run.output, /generated_paths|rejected=true/);
+  const labels = run.requests.find((r) => r.method === 'POST' && /\/issues\/7\/labels$/.test(r.url));
+  assert.deepEqual(JSON.parse(labels.body).labels, [loadLabelsConfig('autofix').needs_human.name]);
+  const readyForDev = loadLabelsConfig('issue').valid.name;
+  assert.ok(run.requests.some((r) => r.method === 'DELETE' && r.url === `/repos/owner/repo/issues/7/labels/${readyForDev}`), 'ready-for-dev removed');
+  const comments = run.requests.filter((r) => r.method === 'POST' && /\/issues\/7\/comments$/.test(r.url));
+  assert.equal(comments.length, 1);
+  assert.match(JSON.parse(comments[0].body).body, comment);
+  const metric = JSON.parse(run.metrics.trim());
+  assert.equal(metric.type, 'codegen_skip');
+  assert.equal(metric.reason, 'blocked');
+  assert.equal(metric.source, source);
+  const skipped = run.result.stderr.split('\n').filter((l) => l.includes('"event":"code_gen.skipped"')).map((l) => JSON.parse(l));
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].meta.reason, 'blocked');
+  assert.equal(skipped[0].meta.source, source);
+  assert.equal(typeof skipped[0].duration_ms, 'number');
+  assert.doesNotMatch(run.result.stderr, /"event":"(code_gen\.complete|pr_prepare\.start)"/);
+}
+
+test('generation entrypoint: an issue whose every needed file is protected is blocked, and its note is never written', async () => {
+  const run = await runGeneration(null, {
+    issueTitle: '[BUG] pr_review: a symlinked config/models.yaml aborts the review',
+    issueBody: 'Fix `scripts/pr_review.mjs` and add tests in `scripts/tests/pr_review.test.mjs`, plus a `CHANGELOG.md` entry. See https://github.com/o/r/pull/188.',
+    files: { 'CHANGELOG.md': '# Changelog\n' },
+    issueLabels: '["bug","ready-for-dev"]',
+    aiOutput: { summary: 'Handoff note', changes: [{ target_path: 'notes/issue-190-blocked.md', file_content: '## Planned fix\nTreat a non-regular models.yaml as missing.\n' }] },
+  });
+  try {
+    assertBlockedEscalation(run, { source: 'denylist', comment: /Code Generation: Blocked[\s\S]*protected or withheld files[\s\S]*`scripts\/pr_review\.mjs` \(protected path \(scripts\/[\s\S]*### Planned fix\n\n## Planned fix\nTreat a non-regular models\.yaml as missing\./ });
+    assert.equal(await run.readRepo('notes/issue-190-blocked.md'), null, 'the note is not written');
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: the model signal blocked: true opens no PR and comments its reason and planned fix', async () => {
+  const run = await runGeneration(null, {
+    issueBody: 'Blocked by #188: implement src/review_guard.js once it merges.',
+    aiOutput: { summary: 'Blocked', changes: [], blocked: true, blocked_reason: 'Blocked by unmerged PR #188.', planned_fix: 'Add a guard in src/review_guard.js.' },
+  });
+  try {
+    assertBlockedEscalation(run, { source: 'model', comment: /\*\*Reason:\*\* Blocked by unmerged PR #188\.[\s\S]*### Planned fix\n\nAdd a guard in src\/review_guard\.js\./ });
+    assert.equal(await run.readRepo('src/review_guard.js'), null);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: a notes-only patch for a bug issue is refused deterministically', async () => {
+  const run = await runGeneration([{ target_path: 'patches/issue-195-dependency-manifest.md', file_content: 'Use lstat before reading package.json.\n' }], {
+    issueBody: 'Make src/manifest.js skip a symlinked manifest.',
+    issueLabels: '["bug","ready-for-dev"]',
+  });
+  try {
+    assertBlockedEscalation(run, { source: 'notes_only', comment: /notes-only patch[\s\S]*`patches\/issue-195-dependency-manifest\.md`[\s\S]*labelled `bug`[\s\S]*Use lstat before reading package\.json\./ });
+    assert.equal(await run.readRepo('patches/issue-195-dependency-manifest.md'), null);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: not blocked — a Markdown note without a bug/feature label, and blocked: false, still produce a patch', async () => {
+  const run = await runGeneration(null, {
+    issueBody: 'Add guides/setup.md describing the setup.',
+    issueLabels: '["documentation","ready-for-dev"]',
+    aiOutput: { summary: 'This is not blocked', blocked: false, changes: [{ target_path: 'guides/setup.md', file_content: '# Setup\n' }] },
+  });
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.equal(await run.readRepo('guides/setup.md'), '# Setup\n');
+    assert.match(run.output, /generated_paths<<EOF\nguides\/setup\.md\nEOF/);
+    assert.doesNotMatch(run.output, /blocked=true/);
+    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: a non-boolean blocked value fails the run as malformed output', async () => {
+  const run = await runGeneration(null, { aiOutput: { summary: 's', changes: [], blocked: 'true' } });
+  try {
+    assert.equal(run.result.code, 1);
+    assert.match(run.result.stderr, /"event":"code_gen\.error".*blocked must be a boolean/);
+    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: a failed blocked escalation ends code_gen with an error event carrying reason: blocked', async () => {
+  const run = await runGeneration(null, {
+    aiOutput: { summary: 'Blocked', changes: [], blocked: true, blocked_reason: 'Blocked by #188.' },
+    githubStatus: 403,
+  });
+  try {
+    assert.equal(run.result.code, 1);
+    const errors = run.result.stderr.split('\n').filter((l) => l.includes('"event":"code_gen.error"')).map((l) => JSON.parse(l));
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].meta.reason, 'blocked');
+    assert.match(errors[0].meta.error, /Label create failed/);
+    assert.equal(typeof errors[0].duration_ms, 'number');
+    assert.equal(run.metrics, null);
+    assert.doesNotMatch(run.output ?? '', /blocked=true/);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+// ADR-0037: the generation prompts keep at least 10% of generation_max_input_tokens free.
+test('generation prompts keep >= 10% headroom on the generation input budget', async () => {
+  const { promptTokens, LOW_HEADROOM_RATIO } = await import('../lib/prompt_budget.mjs');
+  const budget = Number(GROQ_MODEL_DEFAULTS.generation_max_input_tokens);
+  const used = promptTokens(loadPrompt('generation-system')) + promptTokens(loadPrompt('generation-user'));
+  assert.ok(budget > 0);
+  assert.ok(budget - used >= budget * LOW_HEADROOM_RATIO, `headroom ${budget - used} of ${budget}`);
+});

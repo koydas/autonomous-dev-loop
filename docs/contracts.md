@@ -69,6 +69,7 @@ This document specifies the interface contract for each entrypoint script: requi
 | Variable | Default | Description |
 |---|---|---|
 | `ISSUE_BODY` | `""` | Issue body text |
+| `ISSUE_LABELS` | `[]` | Issue label names (JSON array, or comma-separated); `bug` / `feature` enable the notes-only refusal (ADR-0029 amendment) |
 | `GROQ_MODEL` | provider default | LLM model identifier |
 | `GROQ_API_URL` | provider default | LLM API base URL |
 | `GITHUB_OUTPUT` | — | Path to GitHub Actions output file; outputs are skipped if absent |
@@ -79,6 +80,7 @@ This document specifies the interface contract for each entrypoint script: requi
 - Writes generated source files to disk (paths determined by LLM output).
 - Writes `observability/traces/<GITHUB_RUN_ID>.json` with spans for both `code_gen` and `pr_prepare` stages.
 - On a guardrail rejection (ADR-0019, any `GuardrailError`): writes **no** file, posts a `Code Generation: Patch Rejected` comment on the issue (rules + reason per file), applies the `needs-human` label (created if missing) and appends a `codegen_skip` metric (`reason: "guardrail_rejected"`, `rules`).
+- On a blocked issue (ADR-0029 amendment: every needed file protected or withheld, model `blocked: true`, or a notes-only patch for a `bug`/`feature` issue): writes **no** file, applies `needs-human`, removes `ready-for-dev`, posts a `Code Generation: Blocked` comment (source, reason, planned fix) and appends a `codegen_skip` metric (`reason: "blocked"`, `source`).
 
 ### Workflow outputs
 
@@ -87,6 +89,7 @@ This document specifies the interface contract for each entrypoint script: requi
 | `summary` | multiline string | AI-generated PR description |
 | `generated_paths` | multiline string | Newline-separated list of file paths to include in the PR via `add-paths` (absent on a rejection) |
 | `rejected` | `true` | Present only when a guardrail rejected the patch; `code-generation.yml` then skips the PR step |
+| `blocked` | `true` | Present only when the issue is blocked; `code-generation.yml` then skips the PR step (no branch push) |
 
 ### Exit codes
 

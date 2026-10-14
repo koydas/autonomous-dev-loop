@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS, isDestructiveShrink, SHRINK_GUARD_MIN_LINES, GuardrailError } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS, isDestructiveShrink, SHRINK_GUARD_MIN_LINES, GuardrailError, protectedPathEntry } from '../lib/output_writer.mjs';
 
 // parseJsonResponse tests
 
@@ -520,4 +520,13 @@ test('writeGeneratedFiles accepts a moderate edit of a large file and a rewrite 
     assert.deepEqual(paths, ['big.mjs', 'small.mjs']);
     assert.equal(await fs.readFile(path.join(dir, 'small.mjs'), 'utf8'), 'x');
   });
+});
+
+// Exposed for the generation "blocked" check (ADR-0029 amendment): same matching as validateAiOutput.
+test('protectedPathEntry returns the matching denylist entry, or null for a writable path', () => {
+  assert.equal(protectedPathEntry('.\\scripts\\a.mjs'), 'scripts/');
+  assert.equal(protectedPathEntry('nested/.git/config'), '.git/');
+  assert.equal(protectedPathEntry('packages/app/Package.json'), 'package.json');
+  assert.equal(protectedPathEntry('src/a.js'), null);
+  assert.equal(protectedPathEntry(null), null);
 });

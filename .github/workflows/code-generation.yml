@@ -73,6 +73,7 @@ jobs:
             NUMBER="${{ github.event.issue.number }}"
           fi
           TITLE=$(gh issue view "$NUMBER" --repo "${{ github.repository }}" --json title -q '.title')
+          LABELS=$(gh issue view "$NUMBER" --repo "${{ github.repository }}" --json labels -q '.labels | map(.name) | tojson')
           {
             echo 'body<<__DELIM__'
             gh issue view "$NUMBER" --repo "${{ github.repository }}" --json body -q '.body'
@@ -80,6 +81,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
           echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          echo "labels=$LABELS" >> "$GITHUB_OUTPUT"
 
       - name: Download checkpoint artifact
         if: inputs.validate_run_id != ''
@@ -116,6 +118,7 @@ jobs:
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
           ISSUE_TITLE: ${{ steps.issue.outputs.title }}
           ISSUE_BODY: ${{ steps.issue.outputs.body }}
+          ISSUE_LABELS: ${{ steps.issue.outputs.labels }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
@@ -126,9 +129,10 @@ jobs:
           GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
         run: node scripts/generate_issue_change.mjs
 
-      # A guardrail rejection (ADR-0019) exits 0 with rejected=true: nothing was written.
+      # A guardrail rejection (ADR-0019) exits 0 with rejected=true, a blocked issue (ADR-0029
+      # amendment) with blocked=true: nothing was written, no branch is pushed, no PR is opened.
       - name: Create pull request
-        if: steps.generate.outputs.rejected != 'true'
+        if: steps.generate.outputs.rejected != 'true' && steps.generate.outputs.blocked != 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}

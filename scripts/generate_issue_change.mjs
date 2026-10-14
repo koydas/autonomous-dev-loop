@@ -11,6 +11,7 @@ import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
 import { normalizeRepoPath } from './lib/autofix_guard.mjs';
 import { findGuardrailViolations, guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
+import { decideGenerationBlocked, escalateBlocked, findDeterministicBlock, parseIssueLabels } from './lib/generation_blocked.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { existsSync } from 'node:fs';
@@ -80,6 +81,41 @@ async function escalateRejection(rejection, { stage, stageStartMs, issueNumber }
   await tracer.finalize('partial');
 }
 
+// Blocked (ADR-0029 amendment): the issue cannot be implemented. Nothing is written, no branch is
+// pushed, no PR is opened (a notes-only PR would be approved and close the issue on merge): the
+// issue gets the reason and planned fix, `ready-for-dev` → `needs-human`, and a terminal code_gen event.
+async function blockIssue(blocked, { stageStartMs, issueNumber }) {
+  const meta = { reason: 'blocked', source: blocked.source };
+  try {
+    await escalateBlocked({
+      request: ghFetch,
+      repository: process.env.GITHUB_REPOSITORY,
+      issueNumber,
+      blocked,
+      needsHuman: loadLabelsConfig('autofix').needs_human,
+      readyForDev: loadLabelsConfig('issue').valid.name,
+    });
+  } catch (err) {
+    obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - stageStartMs, meta: { ...meta, error: err.message } });
+    tracer.endSpan('code_gen', { outcome: 'failed', meta: { ...meta, error: err.message } });
+    await tracer.finalize('failed');
+    throw err;
+  }
+  await appendMetric({
+    type: 'codegen_skip',
+    run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-codegen-skip` : `local-${Date.now()}`,
+    issue_number: issueNumber,
+    reason: 'blocked',
+    source: blocked.source,
+    ts: new Date().toISOString(),
+  });
+  obsLog({ stage: 'code_gen', event: 'code_gen.skipped', level: 'warn', duration_ms: Date.now() - stageStartMs, meta: { ...meta, detail: blocked.reason } });
+  tracer.endSpan('code_gen', { outcome: 'skipped', meta });
+  if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, 'blocked=true\n', 'utf8');
+  log('Issue blocked: no pull request opened', { source: blocked.source, reason: blocked.reason });
+  await tracer.finalize('partial');
+}
+
 process.on('unhandledRejection', async (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
@@ -99,9 +135,10 @@ async function main() {
   obsLog({ stage: 'code_gen', event: 'code_gen.start', level: 'info', meta: { issueNumber: config.issueNumber, model: config.model } });
   tracer.startSpan('code_gen', { issueNumber: config.issueNumber, model: config.model });
 
-  let fileContext, dependencies, prompt, systemPrompt;
+  let fileContext, dependencies, prompt, systemPrompt, deterministicBlock;
   try {
     fileContext = await buildFileContext(config.issueTitle, config.issueBody, process.cwd());
+    deterministicBlock = findDeterministicBlock({ ...config, hiddenPaths: fileContext.hiddenPaths, fileExists: (p) => existsSync(p) });
     // Snapshot before the LLM call: the verified manifest is never one the patch wrote.
     dependencies = await readPackageJsonDependencies(process.cwd());
     prompt = buildDeterministicPrompt({ ...config, fileContents: fileContext.block });
@@ -157,9 +194,10 @@ async function main() {
     throw new Error('AI response JSON must be an object');
   }
 
-  let summary, changes;
+  let summary, changes, blocked;
   try {
-    ({ summary, changes } = validateAiOutput(aiOutput));
+    blocked = decideGenerationBlocked({ deterministic: deterministicBlock, aiOutput, labels: parseIssueLabels(process.env.ISSUE_LABELS), fileExists: (p) => existsSync(p) });
+    if (!blocked) ({ summary, changes } = validateAiOutput(aiOutput));
   } catch (err) {
     if (err instanceof GuardrailError) return rejectPatch(err, { stage: 'code_gen', stageStartMs: startMs, issueNumber: config.issueNumber });
     obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
@@ -167,6 +205,7 @@ async function main() {
     await tracer.finalize('failed');
     throw err;
   }
+  if (blocked) return blockIssue(blocked, { stageStartMs: startMs, issueNumber: config.issueNumber });
   const codeGenMs = Date.now() - startMs;
   obsLog({ stage: 'code_gen', event: 'code_gen.complete', level: 'info', duration_ms: codeGenMs, meta: { changes_count: changes.length } });
   tracer.endSpan('code_gen', { outcome: 'success', meta: { changes_count: changes.length } });
