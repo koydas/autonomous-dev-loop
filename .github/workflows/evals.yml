@@ -32,6 +32,18 @@ on:
         description: Runs per case (>1 measures consistency)
         required: true
         default: '3'
+      # Issue #199: measure a stage on another provider without touching the repo-wide AI_PROVIDER that
+      # production reads. The eval step only; schedule ignores it. A run whose model is not the suite's
+      # published model is never appended to its history (ADR-0032 amendment): artifact + step summary only.
+      provider:
+        description: Provider for this run only (repo-variable = vars.AI_PROVIDER). Use publish off for a non-baseline provider
+        type: choice
+        required: true
+        default: repo-variable
+        options:
+          - repo-variable
+          - groq
+          - anthropic
       publish:
         description: Add the run to the eval dashboard on GitHub Pages (default branch only)
         type: boolean
@@ -101,12 +113,25 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
-          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          AI_PROVIDER: ${{ github.event_name != 'schedule' && inputs.provider != 'repo-variable' && inputs.provider || vars.AI_PROVIDER }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
           GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
         run: node scripts/run_evals.mjs --suite "$SUITE" --repeats "$REPEATS"
+
+      # Model, scores, cost (chars/4 estimate) and review coverage next to the suite's published run, in the
+      # step summary. No API key: it reads the results file and the public site. Never decides the job.
+      - name: Report run vs published baseline
+        if: always()
+        continue-on-error: true
+        env:
+          EVAL_SITE_URL: ${{ vars.EVAL_SITE_URL || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+        run: |
+          shopt -s nullglob
+          files=(evals/results/*.json)
+          if [ ${#files[@]} -eq 0 ]; then echo "No results file to report"; exit 0; fi
+          node scripts/build_eval_site.mjs --report --site-url "$EVAL_SITE_URL" "${files[@]}"
 
       - name: Upload eval results
         if: always()

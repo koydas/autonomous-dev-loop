@@ -18,6 +18,11 @@ import {
   replaceReadmeBlock,
   recordRuns,
   partitionPublishable,
+  partitionByPublishedModel,
+  runCost,
+  reviewCoverage,
+  formatCost,
+  formatCoverage,
 } from '../lib/eval_scorecard.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -290,4 +295,87 @@ test('partitionPublishable refuses provider evidence when meta.model is missing'
   assert.equal(publishable.length, 0);
   assert.equal(skipped[0].run_id, null);
   assert.match(skipped[0].reason, /not meta\.model unset/);
+});
+
+// ---------------------------------------------------------------------------
+// Issue #199: history per suite and model, cost line, review coverage
+// ---------------------------------------------------------------------------
+
+test('partitionByPublishedModel keeps runs of the suite\'s published model and skips another model', () => {
+  const scorecard = addRun(emptyScorecard(), 'validation', toScorecardRun(results({ runId: 'g1', model: 'groq:m' })));
+  const same = results({ runId: 'g2', model: 'groq:m' });
+  const other = results({ runId: 'a1', model: 'anthropic:claude-opus-5-5' });
+  const { publishable, skipped } = partitionByPublishedModel(scorecard, [same, other]);
+  assert.deepEqual(publishable, [same]);
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].run_id, 'a1');
+  assert.equal(skipped[0].kind, 'model_mismatch');
+  assert.match(skipped[0].reason, /anthropic:claude-opus-5-5 is not the validation history's model groq:m/);
+});
+
+test('partitionByPublishedModel: the first run of an empty suite sets its model for the rest of the batch', () => {
+  const first = results({ runId: 'a1', model: 'anthropic:x' });
+  const second = results({ runId: 'g1', model: 'groq:m' });
+  const { publishable, skipped } = partitionByPublishedModel(emptyScorecard(), [first, second]);
+  assert.deepEqual(publishable, [first]);
+  assert.deepEqual(skipped.map((s) => s.run_id), ['g1']);
+});
+
+test('partitionByPublishedModel: suites are independent, and a run without meta is reported with run_id null', () => {
+  const scorecard = addRun(emptyScorecard(), 'validation', toScorecardRun(results({ model: 'groq:m' })));
+  const review = { ...results({ runId: 'rv', model: 'anthropic:x' }), meta: { ...results().meta, suite: 'review', run_id: 'rv', model: 'anthropic:x' } };
+  assert.deepEqual(partitionByPublishedModel(scorecard, [review]).publishable, [review]);
+  const { skipped } = partitionByPublishedModel(scorecard, [{ meta: { suite: 'validation' } }]);
+  assert.equal(skipped[0].run_id, null);
+  assert.match(skipped[0].reason, /model unset/);
+});
+
+test('runCost prices a known model on the chars/4 estimate, per run and per call', () => {
+  const cost = runCost({ meta: { model: 'anthropic:claude-opus-5-5' }, summary: { tokens_est: { in: 1_000_000, out: 100_000 }, llm_calls: 4 } });
+  assert.deepEqual(cost, { usd: 6, per_call_usd: 1.5, source: 'chars/4 estimate' });
+});
+
+test('runCost is null for an unpriced model (Groq free tier) or a summary without tokens; per call null without calls', () => {
+  assert.equal(runCost({ meta: { model: 'groq:openai/gpt-oss-120b' }, summary: { tokens_est: { in: 1, out: 1 }, llm_calls: 1 } }), null);
+  assert.equal(runCost({ meta: { model: 'anthropic:claude-opus-5-5' }, summary: {} }), null);
+  assert.equal(runCost({}), null);
+  assert.equal(runCost({ meta: { model: 'anthropic:claude-opus-5-5' }, summary: { tokens_est: { in: 0, out: 0 } } }).per_call_usd, null);
+});
+
+test('reviewCoverage: shares of runs with the diff cut, code files cut and a WITHHELD verdict', () => {
+  const out = (o) => ({ output: { verdict: 'APPROVE', diff_truncated: false, unreviewed_code_files: [], ...o } });
+  const coverage = reviewCoverage([
+    out({ diff_truncated: true, unreviewed_code_files: ['a.mjs'], verdict: 'WITHHELD' }),
+    out({ diff_truncated: true }),
+    out({}),
+    out({}),
+    { output: null, error: 'boom' },
+  ]);
+  assert.deepEqual(coverage, { n: 4, diff_truncated: 0.5, code_cut: 0.25, withheld: 0.25 });
+});
+
+test('reviewCoverage is null for a suite without diff_truncated; code_cut null before ADR-0038', () => {
+  assert.equal(reviewCoverage([{ output: { verdict: 'valid' } }]), null);
+  assert.equal(reviewCoverage(undefined), null);
+  assert.deepEqual(reviewCoverage([{ output: { verdict: 'APPROVE', diff_truncated: true } }]), { n: 1, diff_truncated: 1, code_cut: null, withheld: 0 });
+});
+
+test('toScorecardRun records cost and coverage; formatScorecard shows them, labelled as estimates', () => {
+  const r = results({ model: 'anthropic:claude-opus-5-5' });
+  r.summary.llm_calls = 2;
+  r.results = [{ output: { verdict: 'WITHHELD', diff_truncated: true, unreviewed_code_files: ['x.mjs'] } }];
+  const run = toScorecardRun(r);
+  assert.deepEqual(run.cost_est, { usd: 0.008, per_call_usd: 0.004, source: 'chars/4 estimate' });
+  assert.deepEqual(run.coverage, { n: 1, diff_truncated: 1, code_cut: 1, withheld: 1 });
+  const md = formatScorecard(addRun(emptyScorecard(), 'review', run));
+  assert.match(md, /\| cost \(chars\/4 estimate\) \| \$0\.008 \(\$0\.004 per call\) \|/);
+  assert.match(md, /\| diff cut \/ code cut \/ withheld \| 100% \/ 100% \/ 100% \(n=1\) \|/);
+  const groq = formatScorecard(addRun(emptyScorecard(), 'validation', toScorecardRun(results())));
+  assert.doesNotMatch(groq, /cost \(|diff cut/);
+});
+
+test('formatCost and formatCoverage render a dash for null', () => {
+  assert.equal(formatCost(null), '—');
+  assert.equal(formatCoverage(null), '—');
+  assert.equal(formatCoverage({ n: 3, diff_truncated: null, code_cut: 0, withheld: 1 }), '— / 0% / 100% (n=3)');
 });

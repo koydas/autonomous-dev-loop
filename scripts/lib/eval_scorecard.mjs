@@ -30,7 +30,7 @@ export async function readScorecard(file) {
 }
 
 // Keep only what the scorecard displays: scorer means, not the full per-run results.
-export function toScorecardRun({ meta, summary, failures }) {
+export function toScorecardRun({ meta, summary, failures, results }) {
   if (!meta?.suite || !meta?.run_id || !summary) throw new Error('Results file is missing meta.suite, meta.run_id or summary');
   if (String(meta.model ?? '').startsWith('replay:')) throw new Error(`Run ${meta.run_id} is a replay; only live runs go on the scorecard`);
   return {
@@ -50,6 +50,42 @@ export function toScorecardRun({ meta, summary, failures }) {
     consistency: summary.consistency ?? null,
     latency_p95_ms: summary.latency_ms?.p95 ?? null,
     tokens_est: summary.tokens_est ?? null,
+    cost_est: runCost({ meta, summary }),
+    coverage: reviewCoverage(results),
+  };
+}
+
+// USD per million tokens, list price (2026-10). A model without an entry gets no cost line; Groq runs on
+// the free tier. anthropic_client.mjs does not return the API's usage, so cost is priced on the harness's
+// chars/4 estimate: input ignores the prompt cache (system prompt cached: over), output ignores thinking
+// tokens (effort high: under). Read it as an order of magnitude, never as the bill.
+export const PRICES_USD_PER_MTOK = {
+  'anthropic:claude-opus-5-5': { in: 4, out: 20 },
+};
+
+export function runCost({ meta, summary }) {
+  const price = PRICES_USD_PER_MTOK[String(meta?.model ?? '')];
+  const tokens = summary?.tokens_est;
+  if (!price || !tokens) return null;
+  const usd = (tokens.in * price.in + tokens.out * price.out) / 1e6;
+  const calls = summary.llm_calls ?? 0;
+  return { usd: Number(usd.toFixed(4)), per_call_usd: calls ? Number((usd / calls).toFixed(4)) : null, source: 'chars/4 estimate' };
+}
+
+// Review coverage (ADR-0038), over the runs that produced an output: share whose diff was cut to the input
+// budget, share with code files cut (unreviewed_code_files), share whose verdict was WITHHELD for it.
+// null for a suite whose output has no diff_truncated (validation); code_cut null for results recorded
+// before ADR-0038.
+export function reviewCoverage(results) {
+  const outputs = (results ?? []).map((r) => r?.output).filter((o) => o && 'diff_truncated' in o);
+  if (!outputs.length) return null;
+  const share = (list, pred) => (list.length ? Number((list.filter(pred).length / list.length).toFixed(4)) : null);
+  const withFiles = outputs.filter((o) => Array.isArray(o.unreviewed_code_files));
+  return {
+    n: outputs.length,
+    diff_truncated: share(outputs, (o) => o.diff_truncated === true),
+    code_cut: share(withFiles, (o) => o.unreviewed_code_files.length > 0),
+    withheld: share(outputs, (o) => o.verdict === 'WITHHELD'),
   };
 }
 
@@ -80,6 +116,26 @@ export function partitionPublishable(resultsList) {
   return { publishable, skipped };
 }
 
+// History is per suite and model (ADR-0032 amendment): a run whose meta.model differs from the suite's
+// latest published run is not appended, so Δ, trend and the ADR-0031 gates never compare two models.
+// The first run of a suite sets its model. Checked in order, against the history as it grows.
+export function partitionByPublishedModel(scorecard, resultsList) {
+  const published = Object.fromEntries(Object.entries(scorecard?.suites ?? {}).map(([suite, s]) => [suite, s.runs?.[0]?.model]));
+  const publishable = [];
+  const skipped = [];
+  for (const results of resultsList) {
+    const { suite, model, run_id: runId } = results.meta ?? {};
+    const current = published[suite];
+    if (current && model !== current) {
+      skipped.push({ run_id: runId ?? null, kind: 'model_mismatch', reason: `model ${model ?? 'unset'} is not the ${suite} history's model ${current}; results artifact only` });
+    } else {
+      published[suite] ??= model;
+      publishable.push(results);
+    }
+  }
+  return { publishable, skipped };
+}
+
 // Returns a new scorecard; a run_id already present is replaced, not duplicated.
 export function addRun(scorecard, suite, run) {
   const previous = scorecard.suites[suite]?.runs ?? [];
@@ -103,6 +159,10 @@ export function formatDelta(current, previous) {
   if (d === 0) return ' (=)';
   return d > 0 ? ` (▲ ${d})` : ` (▼ ${Math.abs(d)})`;
 }
+
+export const formatCost = (c) => (c ? `$${c.usd} ($${fmt(c.per_call_usd)} per call)` : '—');
+const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
+export const formatCoverage = (c) => (c ? `${pct(c.diff_truncated)} / ${pct(c.code_cut)} / ${pct(c.withheld)} (n=${c.n})` : '—');
 
 function headline(run) {
   return Object.entries(run.scores).map(([k, v]) => `${k} ${fmt(v)}`).join(' · ');
@@ -152,6 +212,8 @@ export function formatScorecard(scorecard) {
     lines.push(`| consistency | ${fmt(run.consistency)} |`);
     lines.push(`| latency p95 (ms) | ${fmt(run.latency_p95_ms)} |`);
     if (run.tokens_est) lines.push(`| tokens in / out (est.) | ${run.tokens_est.in} / ${run.tokens_est.out} |`);
+    if (run.cost_est) lines.push(`| cost (${run.cost_est.source}) | ${formatCost(run.cost_est)} |`);
+    if (run.coverage) lines.push(`| diff cut / code cut / withheld | ${formatCoverage(run.coverage)} |`);
     lines.push('');
 
     const scoreNames = [...new Set(runs.flatMap((r) => Object.keys(r.scores)))];
