@@ -923,3 +923,48 @@ test('run_evals live: every call records the provider and model that answered, m
   assert.ok(calls.length >= 2);
   assert.ok(calls.every((c) => `${c.provider}:${c.model}` === saved.meta.model));
 });
+
+// #178: only a top-level section heading ends a section.
+const subHeadingReview = (groupLine, verdict = 'APPROVED') => ['### ✅ Summary', 'Changes X.', '', '### ⚠️ Issues Found', groupLine, '- [High] crash on empty input', '', '### 🚀 Verdict', verdict].join('\n');
+
+test('findingSeverities reads past a #### sub-heading and a bold line that only contains a section word (#178)', () => {
+  assert.deepEqual(findingSeverities('### ⚠️ Issues Found\n#### scripts/foo.mjs\n- [High] crash\n\n### 🚀 Verdict\nAPPROVED'), ['high']);
+  assert.deepEqual(findingSeverities('### ⚠️ Issues Found\n**Summary of risks**\n- [High] crash\n\n### 🚀 Verdict\nAPPROVED'), ['high']);
+  assert.deepEqual(findingSeverities('### ⚠️ Issues Found\n##### deep\n**Verdict rationale:**\n- [Medium] x\n### 🚀 Verdict\nAPPROVED'), ['medium']);
+});
+
+test('no_false_alarm is false for a clean case whose High finding sits under a sub-heading (#178)', () => {
+  const { no_false_alarm } = reviewSuite.scorers;
+  for (const line of ['#### scripts/foo.mjs', '**Summary of risks**']) {
+    assert.equal(no_false_alarm({ verdict: 'APPROVE' }, { llm_verdict: 'APPROVED', review: subHeadingReview(line) }), false, line);
+    assert.equal(no_false_alarm({ verdict: 'WITHHELD' }, { llm_verdict: 'APPROVED', review: subHeadingReview(line) }), false, line);
+  }
+});
+
+test('flags_issue finds a must_flag keyword under a #### sub-heading inside Issues Found (#178)', () => {
+  const { flags_issue } = reviewSuite.scorers;
+  const out = { llm_verdict: 'REQUEST_CHANGES', review: subHeadingReview('#### scripts/foo.mjs', 'REQUEST_CHANGES') };
+  assert.equal(flags_issue({ must_flag: ['empty input'] }, out), 1);
+  const bold = { llm_verdict: 'REQUEST_CHANGES', review: subHeadingReview('**Summary of risks**', 'REQUEST_CHANGES') };
+  assert.equal(flags_issue({ must_flag: ['empty input'] }, bold), 1);
+});
+
+test('section titles still end a section: # to ### headings and bold-only titles, emoji and ":" aside (#178)', () => {
+  const after = (heading) => findingSeverities(['### ⚠️ Issues Found', '- [Low] kept', heading, '- [High] outside'].join('\n'));
+  for (const heading of ['### ✅ Summary', '## Notes', '# Review', '**🚀 Verdict**', '**Verdict:**', '**Verdict**:', '  **✅ Summary**  ', '**🏷️ Change Classification**']) {
+    assert.deepEqual(after(heading), ['low'], heading);
+  }
+  for (const line of ['#### Verdict', '**scripts/foo.mjs**', '**Summary of risks**', '**🚀 Verdict: APPROVED**', '**Issues Found in tests**', '**Fix:**']) {
+    assert.deepEqual(after(line), ['low', 'high'], line);
+  }
+  // A bold-only "Issues Found" title opens the section like a heading does.
+  assert.deepEqual(findingSeverities('**✅ Summary**\n- [High] no\n**⚠️ Issues Found:**\n- [Medium] yes'), ['medium']);
+});
+
+test('neither suite swallows an LLM error: the stage rethrows it to the harness', async () => {
+  const llm = async () => { throw new Error('Groq API HTTP error 500'); };
+  await assert.rejects(validationSuite.run({ title: '[FEATURE] Add login endpoint', body: 'Body' }, { llm }), /Groq API HTTP error 500/);
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
+    await assert.rejects(reviewSuite.run({ title: 'T', body: 'B', diff: SMALL_DIFF }, { llm }), /Groq API HTTP error 500/);
+  });
+});
