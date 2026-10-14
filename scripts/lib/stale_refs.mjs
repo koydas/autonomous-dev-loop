@@ -33,8 +33,9 @@ export function isSearchedPath(p) {
 
 /**
  * Parses a unified diff into removed blocks (consecutive `-` lines of one hunk) and the added text
- * per file. Paths come from `diff --git a/X b/Y`; a block's `line` is its first old-file line.
- * @returns {{ removed: Array<{ file: string, line: number, text: string }>, added: Map<string, string[]>, paths: Set<string> }}
+ * per file. Paths come from `diff --git a/X b/Y`; a block's `file` is X, `newFile` Y (they differ on a
+ * rename), and its `line` is its first old-file line.
+ * @returns {{ removed: Array<{ file: string, newFile: string, line: number, text: string }>, added: Map<string, string[]>, paths: Set<string> }}
  */
 export function parseDiffBlocks(rawDiff) {
   const removed = [];
@@ -67,7 +68,7 @@ export function parseDiffBlocks(rawDiff) {
     }
     if (!inHunk) continue;
     if (line.startsWith('-')) {
-      block ??= { file, line: oldLine, text: '' };
+      block ??= { file, newFile, line: oldLine, text: '' };
       block.text += `${block.text ? '\n' : ''}${line.slice(1)}`;
       oldLine++;
       continue;
@@ -182,7 +183,8 @@ export function findStaleReferences({ rawDiff, listFiles, readFile, logFn = log 
   const results = blocks.map((b) => ({ removedText: b.text, file: b.file, line: b.line, foundIn: [] }));
   try {
     const files = listFiles();
-    const live = liveWindows(files, new Set(blocks.map((b) => b.file)), readFile, index);
+    // The head version of a renamed file is at its new path.
+    const live = liveWindows(files, new Set(blocks.flatMap((b) => [b.file, b.newFile])), readFile, index);
     for (const p of files.filter(isSearchedPath).sort()) {
       const content = readFile(p);
       if (ADR_PATH.test(p) && INACTIVE_ADR.test(content)) continue;

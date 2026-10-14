@@ -35,7 +35,7 @@ test('isSearchedPath covers docs, skills and AGENTS.md, never CHANGELOG.md or pr
 test('parseDiffBlocks groups consecutive - lines per hunk with their old-file line', () => {
   const diff = fileDiff('a.md', ' ctx\n-one\n-two\n ctx\n-three\n+added', 5);
   const { removed, added, paths } = parseDiffBlocks(diff);
-  assert.deepEqual(removed, [{ file: 'a.md', line: 6, text: 'one\ntwo' }, { file: 'a.md', line: 9, text: 'three' }]);
+  assert.deepEqual(removed, [{ file: 'a.md', newFile: 'a.md', line: 6, text: 'one\ntwo' }, { file: 'a.md', newFile: 'a.md', line: 9, text: 'three' }]);
   assert.deepEqual(added.get('a.md'), ['added']);
   assert.deepEqual([...paths], ['a.md']);
 });
@@ -43,7 +43,7 @@ test('parseDiffBlocks groups consecutive - lines per hunk with their old-file li
 test('parseDiffBlocks ignores file headers and lines outside a hunk, and records both rename paths', () => {
   const diff = 'diff --git a/old.md b/new.md\n--- a/old.md\n+++ b/new.md\n-not in a hunk\n@@ -1 +1 @@\n-x\n\\ No newline at end of file\n+y';
   const { removed, paths } = parseDiffBlocks(diff);
-  assert.deepEqual(removed, [{ file: 'old.md', line: 1, text: 'x' }]);
+  assert.deepEqual(removed, [{ file: 'old.md', newFile: 'new.md', line: 1, text: 'x' }]);
   assert.deepEqual([...paths], ['old.md', 'new.md']);
   assert.deepEqual(parseDiffBlocks('@@ -1 +1 @@\n-orphan').removed, []);
   assert.deepEqual(parseDiffBlocks(undefined).removed, []);
@@ -144,6 +144,10 @@ test('findStaleReferences ignores removed text still in the head version of its 
   assert.deepEqual(run(diff, files), []);
   // A deleted source file holds nothing: the quote is stale.
   assert.equal(run(diff, { 'docs/guide.md': files['docs/guide.md'] }).length, 1);
+  // A renamed source file is read at its new path.
+  const renamed = diff.replace('diff --git a/prompts/review.md b/prompts/review.md', 'diff --git a/scripts/old.mjs b/scripts/new.mjs');
+  assert.deepEqual(run(renamed, { 'scripts/new.mjs': `// ${RULE} New wording.`, 'docs/guide.md': files['docs/guide.md'] }), []);
+  assert.equal(run(renamed, { 'scripts/new.mjs': 'Unrelated.', 'docs/guide.md': files['docs/guide.md'] }).length, 1);
 });
 
 test('findStaleReferences ignores removed text a prompt still holds, and never reports a prompt', () => {
