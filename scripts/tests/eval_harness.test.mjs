@@ -710,3 +710,13 @@ test('a quota error followed by a non-quota error in the same run keeps circuit_
   assert.equal(summary.circuit_breaker.quota, 'tokens per day (TPD)');
   assert.match(formatReport({ suite: 'echo', summary, failures: checkThresholds(summary), results }), /## ⛔ Circuit breaker/);
 });
+
+test('a swallowed quota error with an empty message (providerErrors only) still errors the run and trips the breaker', async () => {
+  const llmFor = () => async () => { throw pinnedError('', 429); };
+  const results = await runSuite({ suite: swallowingSuite, cases: [yesCase('a'), yesCase('b')], llmFor });
+  assert.equal(results[0].error, 'LLM call failed');
+  assert.deepEqual(results[0].scores, { exact: 0, only_yes: 0 });
+  assert.match(results[0].circuit_breaker.quota, /every provider refused \(groq 429\)/);
+  assert.equal(results[1].skipped, true);
+  assert.equal(summarize(results).error_rate, 1);
+});

@@ -214,7 +214,7 @@ async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) 
   }
   // A stage that swallows the LLM error (fallback output) still ran without the model: whatever it
   // returned, the run is errored. A quota error keeps its message (circuit breaker).
-  if (llmError && !error) error = quota?.message ?? llmErrorMessage(llmError);
+  if (llmError && !error) error = quota?.message || llmErrorMessage(llmError);
   const answered = calls.filter((c) => !c.error);
 
   const scores = {};
