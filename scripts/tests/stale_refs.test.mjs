@@ -5,8 +5,10 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   normalizeText, isSearchedPath, parseDiffBlocks, findStaleReferences, formatStaleRefsContext, formatStaleRefsSection,
-  MIN_MATCH_CHARS, MAX_REPORTED_HITS,
+  MIN_MATCH_CHARS, MIN_RUN_CHARS, QUOTE_SLACK_CHARS, MAX_REPORTED_HITS,
 } from '../lib/stale_refs.mjs';
+import { parseFlatYaml } from '../lib/yaml.mjs';
+import { LOW_HEADROOM_RATIO, computePromptBudgetImpact } from '../lib/prompt_budget.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -23,9 +25,9 @@ test('normalizeText strips backticks, * and _, collapses whitespace and lowercas
   assert.equal(normalizeText(null), '');
 });
 
-test('isSearchedPath covers docs, skills, top-level prompts and AGENTS.md, never CHANGELOG.md', () => {
-  for (const p of ['docs/a.md', 'docs/adr/0001-x.md', '.claude/skills/x/SKILL.md', 'prompts/p.md', 'AGENTS.md']) assert.ok(isSearchedPath(p), p);
-  for (const p of ['CHANGELOG.md', 'docs/CHANGELOG.md', 'prompts/sub/p.md', 'README.md', 'docs/a.txt', 'scripts/a.mjs']) assert.equal(isSearchedPath(p), false, p);
+test('isSearchedPath covers docs, skills and AGENTS.md, never CHANGELOG.md or prompts (live rules)', () => {
+  for (const p of ['docs/a.md', 'docs/adr/0001-x.md', '.claude/skills/x/SKILL.md', 'AGENTS.md']) assert.ok(isSearchedPath(p), p);
+  for (const p of ['CHANGELOG.md', 'docs/CHANGELOG.md', 'prompts/p.md', 'prompts/sub/p.md', 'README.md', 'docs/a.txt', 'scripts/a.mjs']) assert.equal(isSearchedPath(p), false, p);
 });
 
 // parseDiffBlocks
@@ -80,7 +82,7 @@ test('findStaleReferences excludes a file the diff re-adds the text to (a move),
 
 test('findStaleReferences matches despite backtick, emphasis, case and line-wrap differences', () => {
   const removed = '-The reviewer must flag every `new module` that ships\n-without a coverage step in the **workflow file**.';
-  const doc = 'Policy:\nthe Reviewer must flag every new_module that ships without\n   a coverage step in the workflow file.';
+  const doc = 'Policy:\nthe Reviewer must flag every *new module* that ships without\n   a coverage step in the workflow file.';
   const hits = run(fileDiff('prompts/review.md', removed), { 'docs/policy.md': doc });
   assert.equal(hits.length, 1);
   assert.equal(hits[0].removedText, 'The reviewer must flag every `new module` that ships\nwithout a coverage step in the **workflow file**.');
@@ -89,7 +91,7 @@ test('findStaleReferences matches despite backtick, emphasis, case and line-wrap
 
 test('findStaleReferences matches a doc quoting only a 60-char window of a longer block, at its longest quote', () => {
   const removed = `-Preamble that the doc never quotes at all. ${RULE} Trailing words nobody kept.`;
-  const doc = `Partial: the reviewer must flag every new module that ships without a coverage check.\nFull: ${RULE}`;
+  const doc = `Partial: the reviewer must flag every new module that ships without a coverage check.\nFull: never quotes at all. ${RULE}`;
   const hits = run(fileDiff('prompts/review.md', removed), { 'docs/a.md': doc });
   assert.deepEqual(hits[0].foundIn, [{ path: 'docs/a.md', line: 2 }]);
 });
@@ -134,6 +136,63 @@ test('findStaleReferences logs through observability by default (stderr JSON, no
     process.stderr.write = original;
   }
   assert.match(writes.join(''), /"event":"review\.stale_refs_error".*"level":"warn"/);
+});
+
+test('findStaleReferences ignores removed text still in the head version of its source file (a reworded line)', () => {
+  const diff = fileDiff('prompts/review.md', `-Old wording. ${RULE}\n+${RULE} New wording.`);
+  const files = { 'prompts/review.md': `${RULE} New wording.`, 'docs/guide.md': `> Old wording. ${RULE}` };
+  assert.deepEqual(run(diff, files), []);
+  // A deleted source file holds nothing: the quote is stale.
+  assert.equal(run(diff, { 'docs/guide.md': files['docs/guide.md'] }).length, 1);
+});
+
+test('findStaleReferences ignores removed text a prompt still holds, and never reports a prompt', () => {
+  const diff = fileDiff('prompts/auto-fix.md', `-${RULE}`);
+  assert.deepEqual(run(diff, { 'prompts/generation.md': RULE, 'docs/guide.md': RULE }), []);
+  assert.deepEqual(run(diff, { 'prompts/generation.md': 'Unrelated.', 'docs/guide.md': RULE }).map((h) => h.foundIn), [[{ path: 'docs/guide.md', line: 1 }]]);
+});
+
+test('findStaleReferences reports every doc quoting removed text: docs do not keep each other live', () => {
+  const hits = run(fileDiff('prompts/review.md', `-${RULE}`), { 'docs/a.md': RULE, 'AGENTS.md': RULE });
+  assert.deepEqual(hits[0].foundIn, [{ path: 'AGENTS.md', line: 1 }, { path: 'docs/a.md', line: 1 }]);
+});
+
+test('findStaleReferences needs a MIN_RUN_CHARS quote of a longer block, the whole block when shorter', () => {
+  const long = `${RULE} It also applies to every workflow that runs one of these modules in CI.`;
+  const shortQuote = normalizeText(RULE).slice(0, MIN_RUN_CHARS - 10);
+  assert.ok(shortQuote.length >= MIN_MATCH_CHARS);
+  assert.deepEqual(run(fileDiff('prompts/review.md', `-${long}`), { 'docs/a.md': shortQuote }), []);
+  assert.equal(run(fileDiff('prompts/review.md', `-${long}`), { 'docs/a.md': long.slice(0, MIN_RUN_CHARS + 5) }).length, 1);
+  // A block shorter than MIN_RUN_CHARS counts when quoted whole, give or take QUOTE_SLACK_CHARS (a
+  // comment prefix), not when only a window of it is.
+  const block = `// ${RULE}`;
+  assert.ok(normalizeText(block).length < MIN_RUN_CHARS);
+  assert.equal(run(fileDiff('scripts/a.mjs', `-${block}`), { 'docs/a.md': RULE }).length, 1);
+  const window = RULE.slice(0, RULE.length - QUOTE_SLACK_CHARS);
+  assert.ok(normalizeText(window).length >= MIN_MATCH_CHARS);
+  assert.deepEqual(run(fileDiff('scripts/a.mjs', `-${block}`), { 'docs/a.md': window }), []);
+});
+
+// Regression: PR #207 reworded every line of prompts/auto-fix-system.md (diff and head file as of
+// 46ee7d2, the head the review raised a High on). Six docs shared a 60-char window of generic
+// phrasing with the removed lines (excerpts around each quoted line); every rule still exists, in the
+// reworded prompt or in prompts/generation-system.md. None is stale.
+const PR207 = resolve(ROOT, 'scripts/tests/fixtures/stale-refs-pr207');
+const PR207_FILES = [
+  'prompts/auto-fix-system.md', 'prompts/generation-system.md', 'prompts/generation-user.md', 'docs/code-generation.md',
+  'docs/runbook.md', 'docs/adr/0009-llm-agent-guardrails.md', 'docs/adr/0021-protected-write-path-denylist.md',
+];
+
+test('findStaleReferences reports nothing on PR #207 (reworded prompt, rules still in the tree)', () => {
+  const rawDiff = readFileSync(resolve(PR207, 'pr207.diff'), 'utf8');
+  const files = Object.fromEntries(PR207_FILES.map((p) => [p, readFileSync(resolve(PR207, 'head', p), 'utf8')]));
+  // The fixture reproduces the trigger: each of the six locations shares a 60-char window with a removed block.
+  const windows = parseDiffBlocks(rawDiff).removed.flatMap(({ text }) => {
+    const n = normalizeText(text);
+    return Array.from({ length: Math.max(0, n.length - MIN_MATCH_CHARS + 1) }, (_, at) => n.slice(at, at + MIN_MATCH_CHARS));
+  });
+  for (const p of PR207_FILES.slice(1)) assert.ok(windows.some((w) => normalizeText(files[p]).includes(w)), p);
+  assert.deepEqual(run(rawDiff, files), []);
 });
 
 // Regression: PR #186 removed the old gate (c) rule from prompts/pr-review-system.md; ADR-0012
@@ -190,4 +249,22 @@ test('formatStaleRefsContext and formatStaleRefsSection cap the number of hits',
   assert.match(section, /^\n### 🔗 Stale References/);
   assert.match(section, /- `f0\.md:0` → `docs\/a\.md:1`/);
   assert.match(section, /…and 2 more$/);
+});
+
+// The block is a lead, never a verdict input (ADR-0035): the system prompt and the block both cap it at
+// one Low "verify" issue, and the rule must not push pr-review-system.md under the ADR-0037 margin.
+test('stale references are capped at a Low verify note in the prompt, within the review headroom', () => {
+  const ctx = formatStaleRefsContext([{ removedText: RULE, file: 'prompts/p.md', line: 1, foundIn: [{ path: 'docs/a.md', line: 1 }] }]);
+  assert.match(ctx, /at most one Low "Verify stale reference" issue, never Medium or High, never a reason for REQUEST_CHANGES/);
+  assert.doesNotMatch(ctx, /gate \(b\)/);
+  const PROMPT = 'prompts/pr-review-system.md';
+  const system = readFileSync(resolve(ROOT, PROMPT), 'utf8');
+  assert.match(system, /"Stale references" block is a lead.*at most one Low issue, "Verify stale reference".*never a Medium or High finding, never a gate \(b\) finding, and never a reason for REQUEST_CHANGES/);
+  const models = parseFlatYaml(readFileSync(resolve(ROOT, 'config/models.yaml'), 'utf8'));
+  const [impact] = computePromptBudgetImpact({
+    rawDiff: `diff --git a/${PROMPT} b/${PROMPT}\n--- a/${PROMPT}\n+++ b/${PROMPT}\n@@ -1 +1 @@\n-a\n+b\n`,
+    readBase: () => system, readHead: (p) => readFileSync(resolve(ROOT, p), 'utf8'), models, logFn: () => {},
+  });
+  assert.equal(impact.stage, 'review');
+  assert.ok(impact.headroomTokens >= Math.ceil(impact.maxInputTokens * LOW_HEADROOM_RATIO), `${impact.headroomTokens} of ${impact.maxInputTokens}`);
 });

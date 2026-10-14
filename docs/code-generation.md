@@ -120,10 +120,10 @@ The "Unauthorized dependency" check above is backed by `scripts/lib/dependency_m
 
 Before building the prompt, `pr_review.mjs` runs two deterministic text searches over the PR tree (`git ls-files` in the working directory, read as data per ADR-0023; regular files only, symlinks are never followed):
 
-- **Stale references** (`scripts/lib/stale_refs.mjs`): text the diff removes that is still quoted in `docs/**/*.md`, `.claude/skills/**/*.md`, `prompts/*.md` or `AGENTS.md`.
-  - Blocks are consecutive `-` lines of a hunk, at least 60 chars once backticks, `*`, `_`, whitespace and case are normalized. A file matches on the whole block or any 60-char window of it.
+- **Stale references** (`scripts/lib/stale_refs.mjs`): text the diff removes that is still quoted in `docs/**/*.md`, `.claude/skills/**/*.md` or `AGENTS.md`, and that the PR tree no longer holds elsewhere.
+  - Blocks are consecutive `-` lines of a hunk, at least 60 chars once backticks, `*`, `_`, whitespace and case are normalized. Text still in the head version of the source file (a reworded line) or in any `prompts/*.md` is live, not stale. A doc matches on a contiguous quote of ≥ 100 chars of the remaining text, or of a shorter block whole (±10 chars).
   - `CHANGELOG.md`, Superseded or Deprecated ADRs, the file the text was removed from, and files the diff re-adds it to are excluded.
-  - Hits are informational: a `## Stale references` block in the prompt and a `### 🔗 Stale References` section in the comment (at most 5 each). They never change the verdict.
+  - Hits are informational: a `## Stale references` block in the prompt and a `### 🔗 Stale References` section in the comment (at most 5 each). They never change the verdict. `pr-review-system.md` caps a hit at one Low "Verify stale reference" issue: never Medium/High, never REQUEST_CHANGES.
 - **Related ADRs** (`scripts/lib/related_adrs.mjs`): ADRs citing a changed path (exact path, or its basename when unique in the repo; `CHANGELOG.md` ignored).
   - Superseded or Deprecated ADRs are replaced by the ADR that supersedes them. ADRs the PR itself edits are skipped.
   - Ranking: changed non-test paths cited, then all changed paths cited, then exact-path citations, then most recent.

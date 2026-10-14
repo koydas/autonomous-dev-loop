@@ -1625,7 +1625,7 @@ test('pr_review skips symlinked docs and ADRs in the stale-reference and related
   const adr = (n, title) => `# ADR-${n}: ${title}\n\n- **Status:** Accepted\n\n## Decision\n\nscripts/review_stage.mjs posts one comment per head.\n`;
   const fixture = await makePrTree({
     files: {
-      'scripts/review_stage.mjs': `// ${removedLine}\n`,
+      'scripts/review_stage.mjs': '// One comment per head.\n',
       'docs/regular.md': `# Regular\n\n${removedLine}\n`,
       'docs/adr/0001-regular-adr.md': adr('0001', 'Regular ADR'),
     },
