@@ -50,10 +50,11 @@ autofix_temperature:    0.2
 autofix_reasoning_effort: low
 autofix_max_tokens:     4096
 # Bounds the user prompt only; the system prompt (auto-fix-system.md, ~583) comes on top.
-# (583 + 2600) × 1.10 + 4096 = 7598 ≤ 8000. The former 3000 gave 8375: no margin at all.
+# (583 + 2500) × 1.10 + 4096 = 7488 ≤ 8000. The former 3000 gave 8375: no margin at all.
+# 2500, not 2600: leaves 466 tokens (13%) of headroom for auto-fix-system.md instead of 366 (10.3%).
 # autofix_prompt_budget.test.mjs fails when less than 10% of the TPM-bounded input (3549) is left as headroom.
 # Raise this value on the Groq Developer plan (higher TPM) or when using Anthropic.
-autofix_max_input_tokens: 2600
+autofix_max_input_tokens: 2500
 # Files get the remainder (0.60). A file that does not fit is withheld with an explicit marker
 # and cannot be targeted (ADR-0029); the diff already repeats most of the shown files.
 autofix_diff_ratio:     0.15
