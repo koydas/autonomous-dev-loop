@@ -21,6 +21,7 @@ import {
   estimateRunTokens,
   checkTokenBudget,
 } from '../lib/eval_harness.mjs';
+import { partitionPublishable } from '../lib/eval_scorecard.mjs';
 
 // Minimal suite: the LLM returns "yes"/"no", label is that answer.
 const echoSuite = {
@@ -553,4 +554,169 @@ test('runSuite trips the circuit breaker on a pinned TPD 429 and records the run
   const summary = summarize(results);
   assert.equal(summary.error_rate, 1);
   assert.equal(summary.circuit_breaker.provider, 'groq');
+});
+
+// ---------------------------------------------------------------------------
+// Swallowed LLM errors — the stage returns a fallback output, the harness still errors the run
+// ---------------------------------------------------------------------------
+
+const swallowingSuite = {
+  ...echoSuite,
+  async run(input, { llm }) {
+    try {
+      return { answer: await llm({ prompt: input.q, systemPrompt: 'sys' }) };
+    } catch {
+      return { answer: 'yes' }; // fallback output that would score as a correct answer
+    }
+  },
+};
+const yesCase = (id) => ({ id, tags: [], input: { q: 'yes' }, expected: { answer: 'yes' } });
+
+test('runSuite errors a run whose stage swallowed a non-quota LLM error; the gate fails and the run is not published', async () => {
+  const llmFor = (key) => async ({ prompt }) => {
+    if (key === 'b#0') throw new Error('Groq API HTTP error 500');
+    return prompt;
+  };
+  const results = await runSuite({ suite: swallowingSuite, cases: [yesCase('a'), yesCase('b')], llmFor, now: fixedClock() });
+  assert.equal(results[0].error, null);
+  const b = results[1];
+  assert.equal(b.error, 'Groq API HTTP error 500');
+  assert.deepEqual(b.output, { answer: 'yes' }, 'the fallback output is kept for diagnosis');
+  assert.equal(b.label, null);
+  assert.deepEqual(b.scores, { exact: 0, only_yes: 0 }, 'the fallback is not scored as a model answer');
+  assert.equal('circuit_breaker' in b, false);
+  assert.deepEqual(b.calls, [{ raw: null, error: 'Groq API HTTP error 500', latency_ms: null, tokens_in_est: b.calls[0].tokens_in_est, tokens_out_est: 0 }]);
+  assert.ok(b.calls[0].tokens_in_est > 0);
+
+  const summary = summarize(results);
+  assert.equal(summary.error_rate, 0.5);
+  assert.equal('circuit_breaker' in summary, false);
+  assert.equal(summary.llm_calls, 1, 'a failed call is not an answered call');
+  assert.equal(summary.tokens_est.in, results[0].calls[0].tokens_in_est);
+  const failures = checkThresholds(summary, { error_rate: { max: 0.05 } });
+  assert.deepEqual(failures.map((f) => f.metric), ['error_rate']);
+  const { publishable, skipped } = partitionPublishable([{ meta: { run_id: 'r1', model: 'groq:m' }, summary, failures, results }]);
+  assert.equal(publishable.length, 0);
+  assert.match(skipped[0].reason, /error_rate 0\.5 above threshold/);
+  assert.match(formatReport({ suite: 'echo', summary, failures, results }), /\| b \| 0 \| yes \|  \| Groq API HTTP error 500 \|/);
+});
+
+test('a replay reproduces a swallowed LLM error from the recorded failed call', async () => {
+  const live = await runSuite({ suite: swallowingSuite, cases: [yesCase('a'), yesCase('b')], llmFor: (key) => async ({ prompt }) => {
+    if (key === 'b#0') throw new Error('Anthropic API HTTP error 529');
+    return prompt;
+  } });
+  const replayed = await runSuite({ suite: swallowingSuite, cases: [yesCase('a'), yesCase('b')], llmFor: createReplayLLM(live) });
+  assert.deepEqual(replayed.map((r) => [r.error, r.scores, r.calls.map((c) => c.error ?? c.raw)]), live.map((r) => [r.error, r.scores, r.calls.map((c) => c.error ?? c.raw)]));
+  assert.equal(summarize(replayed).error_rate, 0.5);
+});
+
+test('runSuite errors a run whose stage retried after a swallowed LLM error, and replays the calls in order', async () => {
+  const retryingSuite = {
+    ...echoSuite,
+    async run(input, { llm }) {
+      try {
+        return { answer: await llm({ prompt: input.q }) };
+      } catch {
+        return { answer: await llm({ prompt: input.q }) };
+      }
+    },
+  };
+  let n = 0;
+  const live = await runSuite({ suite: retryingSuite, cases: [yesCase('a')], llmFor: () => async ({ prompt }) => {
+    if (n++ === 0) throw new Error('socket hang up');
+    return prompt;
+  } });
+  assert.equal(live[0].error, 'socket hang up', 'the answer is not the model output the stage would have given on one call');
+  assert.deepEqual(live[0].calls.map((c) => c.error ?? c.raw), ['socket hang up', 'yes']);
+  assert.equal(summarize(live).llm_calls, 1);
+  const replayed = await runSuite({ suite: retryingSuite, cases: [yesCase('a')], llmFor: createReplayLLM(live) });
+  assert.equal(replayed[0].error, 'socket hang up');
+  assert.deepEqual(replayed[0].calls.map((c) => c.error ?? c.raw), ['socket hang up', 'yes']);
+});
+
+test('createReplayLLM throws a recorded failed call in its place, then serves the next call', async () => {
+  const llm = createReplayLLM([{ case_id: 'a', repeat: 0, calls: [{ raw: null, error: 'boom 500' }, { raw: 'ok' }], error: 'boom 500' }])('a#0');
+  await assert.rejects(llm(), /^Error: boom 500$/);
+  assert.equal(await llm(), 'ok');
+  await assert.rejects(llm(), /^Error: boom 500$/);
+});
+
+test('a swallowed quota error still trips the breaker, live and on replay', async () => {
+  const live = await runSuite({ suite: swallowingSuite, cases: [yesCase('a'), yesCase('b'), yesCase('c')], llmFor: quotaAfter(1) });
+  assert.equal(live[1].error, TPD_ERROR);
+  assert.equal(live[1].circuit_breaker.quota, 'tokens per day (TPD)');
+  assert.deepEqual(live[1].calls.map((c) => c.error), [TPD_ERROR]);
+  assert.equal(live[2].skipped, true);
+  assert.equal(summarize(live).error_rate, 1);
+
+  const replayed = await runSuite({ suite: swallowingSuite, cases: [yesCase('a'), yesCase('b'), yesCase('c')], llmFor: createReplayLLM(live) });
+  assert.equal(replayed[1].error, TPD_ERROR);
+  assert.equal(replayed[1].circuit_breaker.quota, 'tokens per day (TPD)');
+  assert.equal(replayed[2].skipped, true);
+});
+
+test('runSuite leaves a run without an LLM error unchanged: no error, answered calls only, scorers see them', async () => {
+  const seen = [];
+  const suite = { ...swallowingSuite, scorers: { ...echoSuite.scorers, calls_seen: (e, o, { calls }) => { seen.push(calls.length); return null; } } };
+  const results = await runSuite({ suite, cases: [yesCase('a')], llmFor: () => async ({ prompt }) => prompt, now: fixedClock() });
+  assert.equal(results[0].error, null);
+  assert.equal(results[0].label, 'yes');
+  assert.deepEqual(results[0].scores, { exact: 1, only_yes: 1, calls_seen: null });
+  assert.deepEqual(Object.keys(results[0].calls[0]).sort(), ['latency_ms', 'raw', 'tokens_in_est', 'tokens_out_est']);
+  assert.deepEqual(seen, [1]);
+  const summary = summarize(results);
+  assert.equal(summary.error_rate, 0);
+  assert.equal(summary.llm_calls, 1);
+});
+
+test('scorers see answered calls only: a failed call does not make the LLM count as consulted', async () => {
+  const seen = [];
+  const suite = { ...echoSuite, scorers: { calls_seen: (e, o, { calls }) => { seen.push(calls.length); return null; } } };
+  await runSuite({ suite, cases: [yesCase('a')], llmFor: () => async () => { throw new Error('Groq API HTTP error 500'); } });
+  assert.deepEqual(seen, [0]);
+});
+
+test('a swallowed LLM error with an empty message still errors the run, and replays as an error', async () => {
+  const live = await runSuite({ suite: swallowingSuite, cases: [yesCase('a')], llmFor: () => async () => { throw new Error(''); } });
+  assert.equal(live[0].error, 'LLM call failed');
+  assert.deepEqual(live[0].scores, { exact: 0, only_yes: 0 });
+  assert.equal(live[0].calls[0].error, 'LLM call failed');
+  assert.equal(summarize(live).error_rate, 1);
+  const replayed = await runSuite({ suite: swallowingSuite, cases: [yesCase('a')], llmFor: createReplayLLM(live) });
+  assert.equal(replayed[0].error, 'LLM call failed');
+  assert.equal(summarize(replayed).llm_calls, 0, 'the failed call is not served as an answer');
+});
+
+test('a quota error followed by a non-quota error in the same run keeps circuit_breaker and the quota message', async () => {
+  const retryAll = {
+    ...echoSuite,
+    async run(input, { llm }) {
+      for (let i = 0; i < 2; i++) {
+        try { return { answer: await llm({ prompt: input.q }) }; } catch { /* swallowed, retried */ }
+      }
+      return { answer: 'yes' };
+    },
+  };
+  let n = 0;
+  const results = await runSuite({ suite: retryAll, cases: [yesCase('a'), yesCase('b')], llmFor: () => async () => {
+    throw new Error(n++ === 0 ? TPD_ERROR : 'Groq API HTTP error 500');
+  } });
+  assert.equal(results[0].error, TPD_ERROR);
+  assert.equal(results[0].circuit_breaker.quota, 'tokens per day (TPD)');
+  assert.deepEqual(results[0].calls.map((c) => c.error), [TPD_ERROR, 'Groq API HTTP error 500']);
+  assert.equal(results[1].skipped, true);
+  const summary = summarize(results);
+  assert.equal(summary.circuit_breaker.quota, 'tokens per day (TPD)');
+  assert.match(formatReport({ suite: 'echo', summary, failures: checkThresholds(summary), results }), /## ⛔ Circuit breaker/);
+});
+
+test('a swallowed quota error with an empty message (providerErrors only) still errors the run and trips the breaker', async () => {
+  const llmFor = () => async () => { throw pinnedError('', 429); };
+  const results = await runSuite({ suite: swallowingSuite, cases: [yesCase('a'), yesCase('b')], llmFor });
+  assert.equal(results[0].error, 'LLM call failed');
+  assert.deepEqual(results[0].scores, { exact: 0, only_yes: 0 });
+  assert.match(results[0].circuit_breaker.quota, /every provider refused \(groq 429\)/);
+  assert.equal(results[1].skipped, true);
+  assert.equal(summarize(results).error_rate, 1);
 });

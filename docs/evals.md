@@ -169,6 +169,8 @@ Both fields (`cost_est`, `coverage`) are also recorded in every scorecard row an
 
 A TPM 429 that outlasts the retries, a 5xx or a network error does not trip it. Once open, no further case starts; the remaining case × repeat are recorded as skipped (`skipped: true`, no call). The run is a **provider failure**: `summary.error_rate = 1` (by definition, not a ratio), `summary.circuit_breaker = { provider, quota, limit, used, retry_after, skipped_runs }`, an `error_rate` threshold failure even for a suite that does not gate it (so `partitionPublishable` never publishes it), a ⛔ section in the report, one `::error::` (`eval/eval.error`, `meta.reason: "provider_quota"`) naming quota, usage and retry-after, exit 1. The results file and trace are still uploaded. Before this, run 37719923057 made 45 calls that all failed (Groq TPD 429, then Anthropic 401).
 
+**Swallowed LLM errors.** <a id="swallowed-llm-errors"></a>A run whose LLM call threw is an errored run, whatever the stage returned: a stage that catches the error and returns a fallback output (or retries) is not scored as a model answer (`runOne`, `eval_harness.mjs`). The run keeps the first LLM error as `error` (`LLM call failed` when its message is empty; the first quota message when the [circuit breaker](#token-budget) tripped, even if a later call failed otherwise), scores 0 on every applicable scorer, has no label, and counts in `error_rate`, so a run above the `error_rate` gate is not published. The failed call is recorded in `calls[]` as `{ raw: null, error, latency_ms: null, tokens_in_est, tokens_out_est: 0 }`; a replay throws it again at the same position, so it reproduces the error and the stage's fallback path. `llm_calls`, `tokens_est` and the scorers' `calls` count answered calls only. Before, only a quota error was forced into `error`: any other swallowed error (5xx, network) was scored on the fallback output with `error_rate` 0. Production stages are unchanged. Neither registered suite swallows one today (`validateIssue` and `reviewSuite.run` let the LLM error propagate); the harness rule covers any stage that does.
+
 **Weekly schedule vs the TPD** (ADR-0027 amendment 2026-10-12). Options evaluated on run 38271632735:
 
 | Option | Numbers | Verdict |
@@ -189,11 +191,11 @@ A red eval is fixed in the stage (prompt, parser, production code), never by loo
 | Metric | Meaning |
 |---|---|
 | `scores.<scorer>.mean` | Mean over runs where the scorer applies (`null` = not applicable) |
-| `error_rate` | Share of runs that threw (unparseable output, provider failure); 1 for a run the [circuit breaker](#token-budget) stopped |
+| `error_rate` | Share of runs that threw (unparseable output, provider failure) or whose LLM call threw although the stage returned an output ([swallowed LLM errors](#swallowed-llm-errors)); 1 for a run the [circuit breaker](#token-budget) stopped |
 | `per_class.<label>.{precision,recall,f1}` | From the expected × predicted confusion matrix; errors count as misses |
 | `consistency` | Share of cases whose repeats all produced the same label |
 | `latency_ms.{p50,p95}` | Per run, including retries |
-| `llm_calls`, `tokens_est` | Call count and chars/4 token estimates |
+| `llm_calls`, `tokens_est` | Answered call count and chars/4 token estimates (a failed call is not counted) |
 
 ### `validation`
 
@@ -209,6 +211,7 @@ Dataset tags: `core` marks the original 15 cases, so `--tags core` compares with
 
 - Dataset (`evals/datasets/review.jsonl`, 23 cases: 14 `request_changes`, 8 `approve`, 1 `withheld`): `{ id, tags, input: { title, body, diff, dependencies?, evidence?, head_sha? }, expected: { verdict, must_flag?, must_note? } }`. `dependencies` replaces the target repo's `package.json` (dependency manifest context). `evidence` is an evidence file as written by `run_review_evidence.mjs`; a case without it is a repository that has not opted in, so missing evidence does not withhold an approval.
 - Cases: real bugs (`off-by-one`, `null`, `shell-injection` via `execSync`, `deleted-test`, `undeclared-import`, the prompt's named checks, an unawaited `forEach`, `missing-tests`), unrequested docs deletion, minimal `pair`s (same issue, buggy vs clean diff), clean `docs` and `test-only` diffs (`tests_expected: false` per `change_classifier`), a complete `automation` change (tests + docs + c8 gate), `injection` in the PR body and in a code comment, `evidence` (pass, fail, timeout) and a `truncated` diff whose bug stays visible.
+- Sections (`flags_issue`, `no_false_alarm`, #178): only a top-level section heading ends a section, i.e. a `#`–`###` heading or a bold-only line whose whole text, emoji, `:` and whitespace aside, is `Change Classification`, `Summary`, `Issues Found` or `Verdict` (`**🚀 Verdict**`). A `#### scripts/foo.mjs` sub-heading, a `**scripts/foo.mjs**` group line or a `**Summary of risks**` line inside Issues Found stays in it, so the findings after it are read.
 - A review without a verdict line is an **errored run** (`error_rate`), not a `REQUEST_CHANGES`: production fails closed, but counting it as a rejection would inflate `request_changes` recall.
 
 | Scorer | Applies to | Meaning |

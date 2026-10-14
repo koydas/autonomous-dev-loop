@@ -89,10 +89,16 @@ export const validationSuite = {
 // review — pr_review.mjs prompt builder, verdict parser and decideVerdict (ADR-0024/0026/0028)
 // ---------------------------------------------------------------------------
 
-// A heading line: "### ✅ Summary", or a bold-only line naming a review section ("**🚀 Verdict**").
-// Other bold-only lines (a "**scripts/foo.mjs**" group inside Issues Found) do not end the section.
-const SECTION_TITLE = /Change Classification|Summary|Issues Found|Verdict/i;
-const isHeading = (line) => /^\s*#{1,6}\s/.test(line) || (/^\s*\*\*[^*]+\*\*:?\s*$/.test(line) && SECTION_TITLE.test(line));
+// A top-level section heading (#178): a "#"–"###" heading ("### ✅ Summary"), or a bold-only line whose
+// whole text, emoji, ":" and whitespace aside, is a section title ("**🚀 Verdict**", "**Issues Found:**").
+// A "#### scripts/foo.mjs" sub-heading, a "**scripts/foo.mjs**" group or a "**Summary of risks**" line
+// inside Issues Found does not end the section.
+const SECTION_TITLE = /^(?:Change Classification|Summary|Issues Found|Verdict)$/i;
+const isHeading = (line) => {
+  if (/^\s*#{1,3}\s/.test(line)) return true;
+  const bold = line.match(/^\s*\*\*([^*]+)\*\*:?\s*$/)?.[1];
+  return bold != null && SECTION_TITLE.test(bold.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''));
+};
 
 // Lines of the review whose section heading passes keep(heading); lines before any heading have heading ''.
 function filterSections(review, keep) {
