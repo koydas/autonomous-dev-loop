@@ -79,6 +79,34 @@ class Graph(unittest.TestCase):
             app.invoke(INPUT, config=cfg, context=ctx)
         self.assertEqual(app.get_state(cfg).values["attempt_counter"], MAX_ATTEMPTS)
 
+    def test_input_cannot_reset_the_budget(self):
+        app = build_graph(checkpointer=InMemorySaver())
+        cfg = {"configurable": {"thread_id": "t"}}
+        gen = ScriptedGenerator([BUGGY])
+        ctx = LoopContext(generator=gen)
+        app.invoke(INPUT, config=cfg, context=ctx)
+        # attempt_counter / outcome are not graph input: the escalated thread stays frozen.
+        with self.assertRaises(BudgetExhaustedError):
+            app.invoke({**INPUT, "attempt_counter": 0, "outcome": None}, config=cfg, context=ctx)
+        self.assertEqual(len(gen.calls), MAX_ATTEMPTS)
+        self.assertEqual(app.get_state(cfg).values["outcome"], "needs_human_review")
+
+    def test_early_exit_zero_is_a_fail_verdict(self):
+        for code in ("raise SystemExit(0)\n", "import os\nos._exit(0)\n"):
+            with self.subTest(code=code):
+                final, _ = run([code])
+                self.assertEqual(final["outcome"], "needs_human_review")
+                self.assertEqual(final["eval_report"]["status"], "fail")
+                self.assertEqual(final["eval_report"]["exit_code"], 0)
+
+    def test_suite_without_tests_is_a_fail_verdict(self):
+        final = build_graph().invoke(
+            {"issue_description": DEMO_ISSUE, "acceptance_tests": "import unittest\n"},
+            context=LoopContext(generator=ScriptedGenerator([FIXED])),
+        )
+        self.assertEqual(final["outcome"], "needs_human_review")
+        self.assertEqual(final["eval_report"]["status"], "fail")
+
 
 if __name__ == "__main__":
     unittest.main()

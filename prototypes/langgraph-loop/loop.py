@@ -14,19 +14,22 @@ The budget is enforced in code at three points, none of them reachable from a pr
 
 from __future__ import annotations
 
+import secrets
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, Field
+# Pydantic rejects typing.TypedDict as a model field on Python < 3.12.
+from typing_extensions import TypedDict
 
 MAX_ATTEMPTS: Final = 3
 # gen + eval per attempt, + one terminal node, + 1 margin.
@@ -54,6 +57,13 @@ class LoopState(BaseModel):
     eval_report: EvalReport | None = None
     attempt_counter: int = Field(default=0, ge=0)
     outcome: Outcome | None = None
+
+
+class LoopInput(BaseModel):
+    """Graph input: the caller cannot set attempt_counter or outcome (budget reset)."""
+
+    issue_description: str
+    acceptance_tests: str
 
 
 # ── Runtime context (injected dependencies, not state) ───────────────────────
@@ -86,20 +96,39 @@ def generate_code_node(state: LoopState, runtime: Runtime[LoopContext]) -> dict:
     return {"generated_code": code, "attempt_counter": state.attempt_counter + 1}
 
 
+# Prints the parent's nonce only once the runner has returned with tests run and none
+# failed: generated code that ends the process early (sys.exit(0) / os._exit(0) at
+# import) exits 0 without it.
+EVAL_HARNESS: Final = """\
+import sys, unittest
+nonce = sys.stdin.readline().strip()
+suite = unittest.defaultTestLoader.loadTestsFromName("test_solution")
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+if result.testsRun > 0 and result.wasSuccessful():
+    print(nonce)
+    sys.exit(0)
+sys.exit(1)
+"""
+
+
 def execute_evals_node(state: LoopState, runtime: Runtime[LoopContext]) -> dict:
-    """Deterministic verdict = exit code of the acceptance suite. No LLM involved.
+    """Deterministic verdict = the acceptance suite ran to completion and passed. No LLM involved.
 
     Prototype runs in a temp dir with the current interpreter; production must run
-    this in an isolated container (LLM-generated code is untrusted).
+    this in an isolated container (LLM-generated code is untrusted, and runs in the
+    harness process).
     """
+    nonce = secrets.token_hex(16)
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         (work / "solution.py").write_text(state.generated_code or "", encoding="utf-8")
         (work / "test_solution.py").write_text(state.acceptance_tests, encoding="utf-8")
+        (work / "_eval_harness.py").write_text(EVAL_HARNESS, encoding="utf-8")
         try:
             proc = subprocess.run(
-                [sys.executable, "-E", "-s", "-m", "unittest", "-v", "test_solution"],
+                [sys.executable, "-E", "-s", "_eval_harness.py"],
                 cwd=work,
+                input=nonce + "\n",
                 capture_output=True,
                 text=True,
                 timeout=runtime.context.eval_timeout_s,
@@ -110,11 +139,14 @@ def execute_evals_node(state: LoopState, runtime: Runtime[LoopContext]) -> dict:
                 errors=f"timeout after {runtime.context.eval_timeout_s}s",
             )}
 
-    output = (proc.stdout + proc.stderr)[-MAX_LOG_CHARS:]
+    passed = proc.returncode == 0 and nonce in proc.stdout.splitlines()
+    output = proc.stdout + proc.stderr
+    if proc.returncode == 0 and not passed:
+        output += "\nexit 0 without a completed passing run: the process ended before the test runner returned"
     return {"eval_report": EvalReport(
-        status="pass" if proc.returncode == 0 else "fail",
+        status="pass" if passed else "fail",
         exit_code=proc.returncode,
-        errors="" if proc.returncode == 0 else output,
+        errors="" if passed else output[-MAX_LOG_CHARS:],
     )}
 
 
@@ -146,7 +178,7 @@ def should_continue(state: LoopState) -> Route:
 
 
 def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> CompiledStateGraph:
-    g = StateGraph(LoopState, context_schema=LoopContext)
+    g = StateGraph(LoopState, context_schema=LoopContext, input_schema=LoopInput)
     g.add_node("generate_code", generate_code_node)
     g.add_node("execute_evals", execute_evals_node)
     g.add_node("ready_for_merge", ready_for_merge_node)

@@ -18,7 +18,7 @@ graph TD;
 ```bash
 cd prototypes/langgraph-loop
 pip install -r requirements.txt     # Python ≥ 3.11
-python -m unittest -v tests.test_loop   # 10 tests
+python -m unittest -v tests.test_loop   # 13 tests
 python loop.py                      # demo + writes loop_graph.mmd (and loop_graph.png, needs mermaid.ink)
 ```
 
@@ -27,7 +27,7 @@ python loop.py                      # demo + writes loop_graph.mmd (and loop_gra
 | Node | Kind | Writes |
 |---|---|---|
 | `generate_code` | LLM (injected) | `generated_code`, `attempt_counter += 1` |
-| `execute_evals` | deterministic | `eval_report` = exit code of `python -m unittest` on the generated code, timeout = fail |
+| `execute_evals` | deterministic | `eval_report`: `pass` only if the acceptance suite ran ≥ 1 test, all passed, and the harness printed the per-run nonce (an early exit 0 is `fail`); timeout = fail |
 | `ready_for_merge` | terminal | `outcome = "ready_for_merge"` |
 | `escalate_to_human` | terminal | `outcome = "needs_human_review"` |
 
@@ -45,7 +45,7 @@ python loop.py                      # demo + writes loop_graph.mmd (and loop_gra
 `MAX_ATTEMPTS = 3` is a module constant — not state, not config, not runtime context.
 
 1. `should_continue` — the routing table above.
-2. `generate_code_node` — raises `BudgetExhaustedError` if `attempt_counter >= MAX_ATTEMPTS` or `outcome` is set. With a checkpointer, re-invoking an escalated `thread_id` fails instead of granting new attempts.
+2. `generate_code_node` — raises `BudgetExhaustedError` if `attempt_counter >= MAX_ATTEMPTS` or `outcome` is set. With a checkpointer, re-invoking an escalated `thread_id` fails instead of granting new attempts; the graph input (`LoopInput`) cannot carry `attempt_counter` or `outcome`.
 3. `recursion_limit = 2 × MAX_ATTEMPTS + 2` on the compiled graph.
 
 ## Plugging a real LLM
@@ -65,7 +65,7 @@ app.invoke(
 
 ## Limits
 
-- Generated code runs **unsandboxed** in a temp dir with the current interpreter. Real use needs an isolated, secret-less job (see ADR-0024).
+- Generated code runs **unsandboxed** in a temp dir with the current interpreter. Real use needs an isolated, secret-less job (see ADR-0024): the eval nonce stops an early exit 0, not code that tampers with `unittest` in-process.
 - No observability events (ADR-0018), no write guards (ADR-0019/0021/0029), single-file output.
 - Cap is per thread; production's is per fix round, reset by APPROVE (ADR-0034).
 - Not run by CI.
