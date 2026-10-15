@@ -358,6 +358,22 @@ test('pr_review submits review to pulls reviews endpoint', async () => {
   }
 });
 
+test('pr_review ends the review body with the adl-review marker of the head and verdict', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    const { body } = JSON.parse(review.body);
+    assert.match(body, /^Automated review passed\./);
+    assert.match(body, new RegExp(`\\n\\n<!-- adl-review sha=${'a'.repeat(40)} verdict=APPROVE -->$`));
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 test('pr_review submits APPROVE event when verdict is APPROVED', async () => {
   const server = await startMockServer(makeHandler({ groqContent: 'All good.\n\nVerdict: APPROVED' }));
   const eventFile = await writeEventFile();
