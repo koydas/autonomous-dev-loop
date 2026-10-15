@@ -11,7 +11,7 @@ We want to know whether an explicit state graph (LangGraph, Python) expresses th
 
 ## Decision
 
-Keep a standalone prototype in `prototypes/langgraph-loop/` (`loop.py`, `test_loop.py`, pinned `langgraph==1.2.15`) with this contract:
+Keep a standalone prototype in `prototypes/langgraph-loop/` (`loop.py`, `tests/test_loop.py`, pinned `langgraph==1.2.15`) with this contract:
 
 1. **State** (`LoopState`, Pydantic): `issue_description`, `acceptance_tests`, `generated_code`, `eval_report` (`status: pass|fail`, `exit_code`, `errors`), `attempt_counter` (default 0, `ge=0`), `outcome` (`ready_for_merge | needs_human_review`).
 2. **Acceptance tests are an input, never generator output.** The generator cannot write the tests that grade it.

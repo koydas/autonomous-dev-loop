@@ -18,7 +18,7 @@ graph TD;
 ```bash
 cd prototypes/langgraph-loop
 pip install -r requirements.txt     # Python ≥ 3.11
-python -m unittest -v test_loop     # 10 tests
+python -m unittest -v tests.test_loop   # 10 tests
 python loop.py                      # demo + writes loop_graph.mmd (and loop_graph.png, needs mermaid.ink)
 ```
 
