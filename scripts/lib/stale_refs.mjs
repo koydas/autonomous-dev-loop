@@ -1,8 +1,9 @@
 import { log } from './observability.mjs';
 
 // Stale-reference check (ADR-0035): text a PR removes that is still quoted, near-verbatim, in the
-// repo's docs, skills or AGENTS.md, and that the PR tree no longer holds in its source or a prompt. Deterministic (text search, no LLM); the result is
-// informational evidence for the reviewer and never changes the verdict on its own.
+// repo's docs, skills or AGENTS.md, and that the PR tree no longer holds in its source or a prompt.
+// Deterministic (text search, no LLM); the result is informational evidence for the reviewer and
+// never changes the verdict on its own.
 
 export const MIN_MATCH_CHARS = 60;
 // A doc is reported only for a contiguous quote of at least this many normalized chars: on #207,
@@ -112,6 +113,8 @@ function normalizeLines(content) {
     norm += n;
   });
   const lineAt = (offset) => {
+    // A run can start on the space joining two lines (a block with a `//` or `-` prefix).
+    if (norm[offset] === ' ') offset++;
     let line = 1;
     for (const [start, l] of starts) {
       if (start > offset) break;
@@ -123,14 +126,14 @@ function normalizeLines(content) {
 }
 
 // Per block index: start offset and window count of its longest matched run in `norm` (consecutive
-// window hits). Windows in `live` (still in the head tree) break a run.
-function scan(norm, index, live = new Set()) {
+// window hits). Windows live for a block (`isLive(gram, i)`: still in the head tree) break its run.
+function scan(norm, index, isLive = () => false) {
   const best = new Map();
   const open = new Map(); // block index -> [runStart, lastHitOffset]
   for (let at = 0; at + MIN_MATCH_CHARS <= norm.length; at++) {
     const gram = norm.slice(at, at + MIN_MATCH_CHARS);
-    if (live.has(gram)) continue;
     for (const i of index.get(gram) ?? []) {
+      if (isLive(gram, i)) continue;
       const run = open.get(i);
       if (run && run[1] === at - 1) run[1] = at;
       else open.set(i, [at, at]);
@@ -142,28 +145,35 @@ function scan(norm, index, live = new Set()) {
   return best;
 }
 
-// Windows of the removed text that the PR tree still holds outside the docs: in the head version of a
-// file text was removed from (a reworded line), or in a prompt. Removed text still there is not stale.
-function liveWindows(files, sources, readFile, index) {
-  const live = new Set();
+// Windows of the removed text that the PR tree still holds: in the head version of a file text was
+// removed from (a reworded line), or in a prompt. Removed text still there is not stale. Prompts keep
+// every block live; a source file only its own blocks, so a doc the diff also edits elsewhere never
+// keeps the other docs' quotes live.
+function liveWindows(files, blocks, readFile, index) {
+  const sources = new Set(blocks.flatMap((b) => [b.file, b.newFile]));
+  const prompts = new Set();
+  const bySource = new Map();
   for (const p of files.filter((f) => sources.has(f) || LIVE_PATHS.test(f)).sort()) {
     const content = readFile(p);
     if (content.length > MAX_LIVE_SOURCE_CHARS) continue;
     const norm = normalizeText(content);
+    const live = LIVE_PATHS.test(p) ? prompts : new Set();
     for (let at = 0; at + MIN_MATCH_CHARS <= norm.length; at++) {
       const gram = norm.slice(at, at + MIN_MATCH_CHARS);
       if (index.has(gram)) live.add(gram);
     }
+    if (live !== prompts) bySource.set(p, live);
   }
-  return live;
+  // The head version of a renamed file is at its new path.
+  return (gram, i) => prompts.has(gram) || [blocks[i].file, blocks[i].newFile].some((f) => bySource.get(f)?.has(gram));
 }
 
 /**
  * Finds removed text (blocks of ≥ 60 normalized chars) still quoted in docs/**\/*.md,
  * .claude/skills/**\/*.md and AGENTS.md of the PR tree. A doc is reported when it holds a contiguous
  * run of ≥ MIN_RUN_CHARS (or the whole of a shorter block, within QUOTE_SLACK_CHARS) of removed text
- * that the head tree no longer holds elsewhere: windows still in the head version of the source file
- * or in any prompts/*.md are live (sources over MAX_LIVE_SOURCE_CHARS are not scanned).
+ * that the head tree no longer holds elsewhere: windows still in the head version of the block's own
+ * source file or in any prompts/*.md are live (sources over MAX_LIVE_SOURCE_CHARS are not scanned).
  * Excluded: CHANGELOG.md and Superseded / Deprecated ADRs (historical by design), the file the text
  * was removed from, and any file the diff re-adds it to.
  * `listFiles()` returns repo-relative paths, `readFile(path)` their content (both injected).
@@ -188,13 +198,12 @@ export function findStaleReferences({ rawDiff, listFiles, readFile, logFn = log 
   const results = blocks.map((b) => ({ removedText: b.text, file: b.file, line: b.line, foundIn: [] }));
   try {
     const files = listFiles();
-    // The head version of a renamed file is at its new path.
-    const live = liveWindows(files, new Set(blocks.flatMap((b) => [b.file, b.newFile])), readFile, index);
+    const isLive = liveWindows(files, blocks, readFile, index);
     for (const p of files.filter(isSearchedPath).sort()) {
       const content = readFile(p);
       if (ADR_PATH.test(p) && INACTIVE_ADR.test(content)) continue;
       const { norm, lineAt } = normalizeLines(content);
-      for (const [i, { at, windows }] of scan(norm, index, live)) {
+      for (const [i, { at, windows }] of scan(norm, index, isLive)) {
         if (p === blocks[i].file || reAdded[i].has(p)) continue;
         if (windows + MIN_MATCH_CHARS - 1 < minRun(blocks[i].norm)) continue;
         results[i].foundIn.push({ path: p, line: lineAt(at) });

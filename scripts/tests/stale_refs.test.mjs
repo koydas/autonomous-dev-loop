@@ -168,6 +168,23 @@ test('findStaleReferences reports every doc quoting removed text: docs do not ke
   assert.deepEqual(hits[0].foundIn, [{ path: 'AGENTS.md', line: 1 }, { path: 'docs/a.md', line: 1 }]);
 });
 
+test('findStaleReferences keeps a source file live for its own blocks only: a doc the diff edits elsewhere masks nothing', () => {
+  // The PR changes the rule in code and removes another paragraph of a doc that still quotes the rule.
+  const other = 'An unrelated paragraph of the guide that this pull request removes during a cleanup pass.';
+  const diff = fileDiff('scripts/x.mjs', `-// ${RULE}\n+// New behavior.`) + fileDiff('docs/guide.md', `-${other}`, 20);
+  const files = { 'scripts/x.mjs': '// New behavior.\n', 'docs/guide.md': `# Guide\n\n${RULE}\n`, 'docs/runbook.md': RULE };
+  const hits = run(diff, files);
+  assert.equal(hits.length, 1);
+  assert.deepEqual(hits[0].foundIn, [{ path: 'docs/guide.md', line: 3 }, { path: 'docs/runbook.md', line: 1 }]);
+});
+
+test('findStaleReferences reports the quote line when the removed block carries a `//` or `-` prefix', () => {
+  for (const prefix of ['// ', '- ']) {
+    const hits = run(fileDiff('scripts/x.mjs', `-${prefix}${RULE}`), { 'docs/guide.md': `# Guide\n\nIntro.\n\n${RULE}\n` });
+    assert.deepEqual(hits[0].foundIn, [{ path: 'docs/guide.md', line: 5 }], prefix);
+  }
+});
+
 test('findStaleReferences needs a MIN_RUN_CHARS quote of a longer block, the whole block when shorter', () => {
   const long = `${RULE} It also applies to every workflow that runs one of these modules in CI.`;
   const shortQuote = normalizeText(RULE).slice(0, MIN_RUN_CHARS - 10);
