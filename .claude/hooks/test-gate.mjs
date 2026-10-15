@@ -6,8 +6,9 @@
  *   node .claude/hooks/test-gate.mjs pre-push  PreToolUse(Bash) hook: before `git push`
  *
  * Runs `node --test scripts/tests/*.test.mjs` once per distinct change set under
- * scripts/ and .github/workflows/ (working tree and branch commits vs the merge-base
- * with origin/main), instead of after every edit. The result is cached per change set:
+ * WATCHED_PATHS (vs the merge-base with origin/main), instead of after every edit.
+ * Stop tests the working tree; pre-push tests HEAD — what `git push` sends — and
+ * refuses while watched paths have uncommitted or untracked changes. The result is cached per change set:
  * an unchanged set is never re-run, so a failing Stop does not loop, and `git push`
  * on a set that already failed is refused without re-running.
  *
@@ -21,11 +22,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WATCHED_PATHS = ['scripts', '.github/workflows'];
+export const WATCHED_PATHS = ['scripts', 'prompts', 'config', 'evals', '.github/workflows'];
 const MAX_REPORT_CHARS = 12000;
+const SUITE_TIMEOUT_MS = 280_000; // under the 300 s hook timeout, so a hang fails explicitly
 
 export function isPushCommand(command) {
-  return typeof command === 'string' && /(^|[\s;&|(])git\s+(?:-[Cc]\s+\S+\s+|-\S+\s+)*push\b/.test(command);
+  return typeof command === 'string' && /(^|[\s;&|("'/])git\s+(?:-[Cc]\s+\S+\s+|-\S+\s+)*push\b/.test(command);
 }
 
 function git(projectDir, args) {
@@ -35,17 +37,18 @@ function git(projectDir, args) {
 /**
  * Hash of the watched changes, or `null` when nothing under WATCHED_PATHS differs from
  * the merge-base with origin/main (HEAD when there is no origin/main).
+ * `ref` unset: working tree + untracked files. `ref: 'HEAD'`: committed state only.
  * Throws when git cannot describe the tree; the caller then runs the suite.
  */
-export function changeFingerprint(projectDir) {
+export function changeFingerprint(projectDir, { ref } = {}) {
   let base;
   try {
     base = git(projectDir, ['merge-base', 'HEAD', 'origin/main']).toString().trim();
   } catch {
     base = 'HEAD';
   }
-  const diff = git(projectDir, ['diff', '--binary', base, '--', ...WATCHED_PATHS]);
-  const untracked = git(projectDir, ['ls-files', '--others', '--exclude-standard', '-z', '--', ...WATCHED_PATHS])
+  const diff = git(projectDir, ['diff', '--binary', base, ...(ref ? [ref] : []), '--', ...WATCHED_PATHS]);
+  const untracked = ref ? [] : git(projectDir, ['ls-files', '--others', '--exclude-standard', '-z', '--', ...WATCHED_PATHS])
     .toString()
     .split('\0')
     .filter(Boolean)
@@ -91,6 +94,14 @@ export function summarizeFailure(output) {
   return text.length > MAX_REPORT_CHARS ? `…\n${text.slice(-MAX_REPORT_CHARS)}` : text;
 }
 
+/** Watched paths with uncommitted or untracked changes (porcelain lines). */
+export function dirtyWatchedPaths(projectDir) {
+  return git(projectDir, ['status', '--porcelain', '--untracked-files=all', '--', ...WATCHED_PATHS])
+    .toString()
+    .split('\n')
+    .filter(Boolean);
+}
+
 function runSuite(projectDir) {
   const testDir = join(projectDir, 'scripts', 'tests');
   const files = readdirSync(testDir).filter((f) => f.endsWith('.test.mjs')).map((f) => join(testDir, f));
@@ -100,8 +111,10 @@ function runSuite(projectDir) {
     env,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    timeout: SUITE_TIMEOUT_MS,
   });
-  return { ok: res.status === 0, output: `${res.stdout ?? ''}${res.stderr ?? ''}` };
+  const timedOut = res.error?.code === 'ETIMEDOUT' ? `\ntest suite killed after ${SUITE_TIMEOUT_MS / 1000} s\n` : '';
+  return { ok: res.status === 0, output: `${res.stdout ?? ''}${res.stderr ?? ''}${timedOut}` };
 }
 
 /** Returns the process exit code; writes the model-facing message to `stderr`. */
@@ -115,7 +128,17 @@ export function runGate({ mode, input, projectDir, stderr = process.stderr }) {
 
   let fingerprint;
   try {
-    fingerprint = changeFingerprint(projectDir);
+    if (mode === 'pre-push') {
+      const dirty = dirtyWatchedPaths(projectDir);
+      if (dirty.length > 0) {
+        stderr.write(
+          `test-gate: push blocked — watched paths have uncommitted changes, so the tested tree would not be what is pushed. Commit or stash them first:\n${dirty.slice(0, 20).join('\n')}\n`,
+        );
+        return 2;
+      }
+    }
+    // With a clean watched tree, HEAD and working-tree fingerprints are equal: Stop's cache entry is reused.
+    fingerprint = changeFingerprint(projectDir, mode === 'pre-push' ? { ref: 'HEAD' } : {});
   } catch {
     fingerprint = undefined; // not a git tree: always run, never cache
   }

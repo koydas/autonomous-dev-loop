@@ -22,7 +22,10 @@ function makeProject() {
   const dir = mkdtempSync(join(tmpdir(), 'gate-project-'));
   mkdirSync(join(dir, 'scripts', 'tests'), { recursive: true });
   mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
+  mkdirSync(join(dir, 'prompts'), { recursive: true });
   writeFileSync(join(dir, 'README.md'), 'readme\n');
+  writeFileSync(join(dir, 'prompts', 'p.md'), 'prompt\n');
+  writeFileSync(join(dir, '.gitignore'), 'ran.marker\n');
   writeFileSync(join(dir, 'scripts', 'lib.mjs'), 'export const x = 1;\n');
   writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), 'on: push\n');
   writeStub(dir, false);
@@ -31,6 +34,11 @@ function makeProject() {
   git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
   git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
   return dir;
+}
+
+function commitAll(dir, msg = 'change') {
+  git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A');
+  git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', msg);
 }
 
 function writeStub(dir, failing) {
@@ -174,9 +182,10 @@ test('pre-push: a Bash command that is not git push is let through without runni
   });
 });
 
-test('pre-push: git push on an untested change set runs the suite and blocks on failure', () => {
+test('pre-push: git push on an untested committed change set runs the suite and blocks on failure', () => {
   withProject((dir) => {
     writeStub(dir, true);
+    commitAll(dir);
     const { status, stderr } = gate(dir, 'pre-push', PUSH);
     assert.equal(status, 2);
     assert.match(stderr, /push blocked/);
@@ -187,6 +196,7 @@ test('pre-push: git push on an untested change set runs the suite and blocks on 
 test('pre-push: git push on a change set that already failed is blocked without re-running', () => {
   withProject((dir) => {
     writeStub(dir, true);
+    commitAll(dir);
     gate(dir, 'stop');
     const { status, stderr } = gate(dir, 'pre-push', PUSH);
     assert.equal(status, 2);
@@ -198,8 +208,49 @@ test('pre-push: git push on a change set that already failed is blocked without 
 test('pre-push: git push on a change set that already passed is let through without re-running', () => {
   withProject((dir) => {
     writeFileSync(join(dir, 'scripts', 'lib.mjs'), 'export const x = 7;\n');
+    commitAll(dir);
     gate(dir, 'stop');
     assert.equal(gate(dir, 'pre-push', PUSH).status, 0);
+    assert.equal(runs(dir), 1);
+  });
+});
+
+test('pre-push: committed break with an uncommitted fix is blocked — HEAD is what gets pushed', () => {
+  withProject((dir) => {
+    writeStub(dir, true);
+    commitAll(dir, 'break');
+    writeStub(dir, false);
+    const { status, stderr } = gate(dir, 'pre-push', PUSH);
+    assert.equal(status, 2);
+    assert.match(stderr, /uncommitted changes/);
+    assert.match(stderr, /stub\.test\.mjs/);
+    assert.equal(runs(dir), 0);
+  });
+});
+
+test('pre-push: an untracked file under a watched path blocks the push', () => {
+  withProject((dir) => {
+    writeFileSync(join(dir, 'scripts', 'new.mjs'), 'export {};\n');
+    const { status, stderr } = gate(dir, 'pre-push', PUSH);
+    assert.equal(status, 2);
+    assert.match(stderr, /scripts\/new\.mjs/);
+  });
+});
+
+test('pre-push: uncommitted changes outside watched paths do not block', () => {
+  withProject((dir) => {
+    writeFileSync(join(dir, 'scripts', 'lib.mjs'), 'export const x = 8;\n');
+    commitAll(dir);
+    writeFileSync(join(dir, 'README.md'), 'local note\n');
+    assert.equal(gate(dir, 'pre-push', PUSH).status, 0);
+    assert.equal(runs(dir), 1);
+  });
+});
+
+test('stop: a prompts/ change runs the suite', () => {
+  withProject((dir) => {
+    writeFileSync(join(dir, 'prompts', 'p.md'), 'changed prompt\n');
+    assert.equal(gate(dir, 'stop').status, 0);
     assert.equal(runs(dir), 1);
   });
 });
@@ -230,7 +281,7 @@ test('gate rejects an unknown mode', () => {
 });
 
 test('isPushCommand matches git push forms only', () => {
-  for (const c of ['git push', 'git push -u origin x', 'cd a && git push', 'git -C repo push', 'git -c k=v push --force-with-lease']) {
+  for (const c of ['git push', 'git push -u origin x', 'cd a && git push', 'git -C repo push', 'git -c k=v push --force-with-lease', '/usr/bin/git push', 'bash -c "git push"', "sh -c 'git push origin x'"]) {
     assert.equal(isPushCommand(c), true, c);
   }
   for (const c of ['git status', 'git log --grep push', 'echo git', 'npm run push', undefined, 42]) {

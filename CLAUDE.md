@@ -17,8 +17,8 @@ Commands and the CI-gate checklist are in `AGENTS.md` → **Local Checks** (shar
 
 ### Test gate (hooks in `.claude/settings.json`)
 
-- **Stop** — at the end of each turn, `npm test` runs once if `scripts/` or `.github/workflows/` differ from the merge-base with `origin/main` (working tree or branch commits). A failure keeps the turn going with the failing tests.
-- **PreToolUse `git push`** — the push is refused while the current change set has not passed.
+- **Stop** — at the end of each turn, `npm test` runs once if `scripts/`, `prompts/`, `config/`, `evals/` or `.github/workflows/` differ from the merge-base with `origin/main` (working tree or branch commits). A failure keeps the turn going with the failing tests.
+- **PreToolUse `git push`** — tests `HEAD`, i.e. what is pushed: refused while those paths have uncommitted or untracked changes (commit or stash first), and while the committed change set has not passed.
 - Results are cached per change set (`.claude/hooks/test-gate.mjs`): an unchanged set is never re-run, so iterating edits costs one suite run per turn, not one per edit.
 
 ## Toolbox — koydas/ai-dev-tools
