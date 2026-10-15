@@ -46,7 +46,7 @@ python loop.py                      # demo + writes loop_graph.mmd (and loop_gra
 
 1. `should_continue` — the routing table above.
 2. `generate_code_node` — raises `BudgetExhaustedError` if `attempt_counter >= MAX_ATTEMPTS` or `outcome` is set. With a checkpointer, re-invoking an escalated `thread_id` fails instead of granting new attempts; the graph input (`LoopInput`) cannot carry `attempt_counter` or `outcome`.
-3. `recursion_limit = 2 × MAX_ATTEMPTS + 2` on the compiled graph.
+3. `recursion_limit = 2 × MAX_ATTEMPTS + 2` as the compiled graph's default config. A caller's `config={"recursion_limit": …}` overrides it: 1 and 2 are the cap, 3 is a backstop.
 
 ## Plugging a real LLM
 
@@ -68,4 +68,4 @@ app.invoke(
 - Generated code runs **unsandboxed** in a temp dir with the current interpreter. Real use needs an isolated, secret-less job (see ADR-0024): the eval nonce stops an early exit 0, not code that tampers with `unittest` in-process.
 - No observability events (ADR-0018), no write guards (ADR-0019/0021/0029), single-file output.
 - Cap is per thread; production's is per fix round, reset by APPROVE (ADR-0034).
-- Not run by CI.
+- CI: `prototype-langgraph` job in `.github/workflows/test.yml` (Python 3.11 and 3.13).

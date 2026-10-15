@@ -118,4 +118,4 @@ It replaces the per-edit `PostToolUse` hook, which re-ran the whole suite after 
 
 ## CI
 
-The workflow `.github/workflows/test.yml` runs `node --test scripts/tests/*.test.mjs` on every push and pull request targeting any branch.
+The workflow `.github/workflows/test.yml` runs `node --test scripts/tests/*.test.mjs` on every push and pull request targeting any branch. Its `prototype-langgraph` job runs the Python tests of `prototypes/langgraph-loop/` (ADR-0039) on Python 3.11 and 3.13.

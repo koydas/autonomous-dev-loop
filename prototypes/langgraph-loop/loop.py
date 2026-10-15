@@ -9,7 +9,8 @@ The budget is enforced in code at three points, none of them reachable from a pr
   1. should_continue routes on attempt_counter vs MAX_ATTEMPTS.
   2. generate_code_node refuses to run once the budget is spent or an outcome is set
      (guards a resumed/re-invoked thread whose checkpoint already holds the counter).
-  3. recursion_limit caps graph supersteps as a last backstop.
+  3. recursion_limit caps graph supersteps as a default backstop. It is a config default:
+     a caller's config={"recursion_limit": ...} overrides it, so 1 and 2 are the cap.
 """
 
 from __future__ import annotations
@@ -241,4 +242,7 @@ if __name__ == "__main__":
     graph = app.get_graph()
     Path("loop_graph.mmd").write_text(graph.draw_mermaid(), encoding="utf-8")
     # PNG rendering calls the mermaid.ink API (network); use the .mmd offline.
-    graph.draw_mermaid_png(output_file_path="loop_graph.png")
+    try:
+        graph.draw_mermaid_png(output_file_path="loop_graph.png")
+    except Exception as exc:  # demo only: offline is a normal case, loop_graph.mmd is written
+        print(f"loop_graph.png skipped (mermaid.ink unreachable: {exc!r}); use loop_graph.mmd", file=sys.stderr)
