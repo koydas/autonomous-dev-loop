@@ -1,14 +1,25 @@
 import { log } from './observability.mjs';
 
 // Stale-reference check (ADR-0035): text a PR removes that is still quoted, near-verbatim, in the
-// repo's docs, skills, prompts or AGENTS.md. Deterministic (text search, no LLM); the result is
-// informational evidence for the reviewer and never changes the verdict on its own.
+// repo's docs, skills or AGENTS.md, and that the PR tree no longer holds in its source or a prompt.
+// Deterministic (text search, no LLM); the result is informational evidence for the reviewer and
+// never changes the verdict on its own.
 
 export const MIN_MATCH_CHARS = 60;
+// A doc is reported only for a contiguous quote of at least this many normalized chars: on #207,
+// reworded lines shared 61–86-char runs of generic phrasing with docs. A shorter block must be quoted
+// whole, give or take QUOTE_SLACK_CHARS (a `//`, `-` or `>` prefix, end punctuation).
+export const MIN_RUN_CHARS = 100;
+export const QUOTE_SLACK_CHARS = 10;
+const minRun = (norm) => Math.max(MIN_MATCH_CHARS, Math.min(MIN_RUN_CHARS, norm.length - QUOTE_SLACK_CHARS));
+// A live source (head source file, prompt) larger than this is not scanned: its text is not live.
+export const MAX_LIVE_SOURCE_CHARS = 1_000_000;
 export const MAX_REPORTED_HITS = 5;
 export const MAX_QUOTED_CHARS = 160;
 
-const SEARCHED_PATHS = [/^docs\/.+\.md$/, /^\.claude\/skills\/.+\.md$/, /^prompts\/[^/]+\.md$/, /^AGENTS\.md$/];
+const SEARCHED_PATHS = [/^docs\/.+\.md$/, /^\.claude\/skills\/.+\.md$/, /^AGENTS\.md$/];
+// Prompts are the rules themselves, not descriptions of them: text still in one is still live.
+const LIVE_PATHS = /^prompts\/[^/]+\.md$/;
 const HISTORICAL = /(^|\/)CHANGELOG\.md$/;
 // A Superseded or Deprecated ADR quotes the replaced rule on purpose, like CHANGELOG.md.
 const INACTIVE_ADR = /^- \*\*Status:\*\*\s*(superseded|deprecated)\b/im;
@@ -25,8 +36,9 @@ export function isSearchedPath(p) {
 
 /**
  * Parses a unified diff into removed blocks (consecutive `-` lines of one hunk) and the added text
- * per file. Paths come from `diff --git a/X b/Y`; a block's `line` is its first old-file line.
- * @returns {{ removed: Array<{ file: string, line: number, text: string }>, added: Map<string, string[]>, paths: Set<string> }}
+ * per file. Paths come from `diff --git a/X b/Y`; a block's `file` is X, `newFile` Y (they differ on a
+ * rename), and its `line` is its first old-file line.
+ * @returns {{ removed: Array<{ file: string, newFile: string, line: number, text: string }>, added: Map<string, string[]>, paths: Set<string> }}
  */
 export function parseDiffBlocks(rawDiff) {
   const removed = [];
@@ -59,7 +71,7 @@ export function parseDiffBlocks(rawDiff) {
     }
     if (!inHunk) continue;
     if (line.startsWith('-')) {
-      block ??= { file, line: oldLine, text: '' };
+      block ??= { file, newFile, line: oldLine, text: '' };
       block.text += `${block.text ? '\n' : ''}${line.slice(1)}`;
       oldLine++;
       continue;
@@ -101,6 +113,8 @@ function normalizeLines(content) {
     norm += n;
   });
   const lineAt = (offset) => {
+    // A run can start on the space joining two lines (a block with a `//` or `-` prefix).
+    if (norm[offset] === ' ') offset++;
     let line = 1;
     for (const [start, l] of starts) {
       if (start > offset) break;
@@ -111,28 +125,57 @@ function normalizeLines(content) {
   return { norm, lineAt };
 }
 
-// Per block index: start offset of its longest matched run in `norm` (consecutive window hits).
-function scan(norm, index) {
+// Per block index: start offset and window count of its longest matched run in `norm` (consecutive
+// window hits). Windows live for a block (`isLive(gram, i)`: still in the head tree) break its run.
+function scan(norm, index, isLive = () => false) {
   const best = new Map();
   const open = new Map(); // block index -> [runStart, lastHitOffset]
   for (let at = 0; at + MIN_MATCH_CHARS <= norm.length; at++) {
-    for (const i of index.get(norm.slice(at, at + MIN_MATCH_CHARS)) ?? []) {
+    const gram = norm.slice(at, at + MIN_MATCH_CHARS);
+    for (const i of index.get(gram) ?? []) {
+      if (isLive(gram, i)) continue;
       const run = open.get(i);
       if (run && run[1] === at - 1) run[1] = at;
       else open.set(i, [at, at]);
       const [start, end] = open.get(i);
       const prev = best.get(i);
-      if (!prev || end - start > prev.length) best.set(i, { at: start, length: end - start });
+      if (!prev || end - start + 1 > prev.windows) best.set(i, { at: start, windows: end - start + 1 });
     }
   }
-  return new Map([...best].map(([i, { at }]) => [i, at]));
+  return best;
+}
+
+// Windows of the removed text that the PR tree still holds: in the head version of a file text was
+// removed from (a reworded line), or in a prompt. Removed text still there is not stale. Prompts keep
+// every block live; a source file only its own blocks, so a doc the diff also edits elsewhere never
+// keeps the other docs' quotes live.
+function liveWindows(files, blocks, readFile, index) {
+  const sources = new Set(blocks.flatMap((b) => [b.file, b.newFile]));
+  const prompts = new Set();
+  const bySource = new Map();
+  for (const p of files.filter((f) => sources.has(f) || LIVE_PATHS.test(f)).sort()) {
+    const content = readFile(p);
+    if (content.length > MAX_LIVE_SOURCE_CHARS) continue;
+    const norm = normalizeText(content);
+    const live = LIVE_PATHS.test(p) ? prompts : new Set();
+    for (let at = 0; at + MIN_MATCH_CHARS <= norm.length; at++) {
+      const gram = norm.slice(at, at + MIN_MATCH_CHARS);
+      if (index.has(gram)) live.add(gram);
+    }
+    if (live !== prompts) bySource.set(p, live);
+  }
+  // The head version of a renamed file is at its new path.
+  return (gram, i) => prompts.has(gram) || [blocks[i].file, blocks[i].newFile].some((f) => bySource.get(f)?.has(gram));
 }
 
 /**
- * Finds removed text (blocks of ≥ 60 normalized chars) still present in docs/**\/*.md,
- * .claude/skills/**\/*.md, prompts/*.md and AGENTS.md of the PR tree. Excluded: CHANGELOG.md and
- * Superseded / Deprecated ADRs (historical by design), the file the text was removed from, and any
- * file the diff re-adds it to.
+ * Finds removed text (blocks of ≥ 60 normalized chars) still quoted in docs/**\/*.md,
+ * .claude/skills/**\/*.md and AGENTS.md of the PR tree. A doc is reported when it holds a contiguous
+ * run of ≥ MIN_RUN_CHARS (or the whole of a shorter block, within QUOTE_SLACK_CHARS) of removed text
+ * that the head tree no longer holds elsewhere: windows still in the head version of the block's own
+ * source file or in any prompts/*.md are live (sources over MAX_LIVE_SOURCE_CHARS are not scanned).
+ * Excluded: CHANGELOG.md and Superseded / Deprecated ADRs (historical by design), the file the text
+ * was removed from, and any file the diff re-adds it to.
  * `listFiles()` returns repo-relative paths, `readFile(path)` their content (both injected).
  * A listing or read error must not abort the review: it logs a `review.stale_refs_error` warn
  * event and returns [].
@@ -154,12 +197,15 @@ export function findStaleReferences({ rawDiff, listFiles, readFile, logFn = log 
 
   const results = blocks.map((b) => ({ removedText: b.text, file: b.file, line: b.line, foundIn: [] }));
   try {
-    for (const p of listFiles().filter(isSearchedPath).sort()) {
+    const files = listFiles();
+    const isLive = liveWindows(files, blocks, readFile, index);
+    for (const p of files.filter(isSearchedPath).sort()) {
       const content = readFile(p);
       if (ADR_PATH.test(p) && INACTIVE_ADR.test(content)) continue;
       const { norm, lineAt } = normalizeLines(content);
-      for (const [i, at] of scan(norm, index)) {
+      for (const [i, { at, windows }] of scan(norm, index, isLive)) {
         if (p === blocks[i].file || reAdded[i].has(p)) continue;
+        if (windows + MIN_MATCH_CHARS - 1 < minRun(blocks[i].norm)) continue;
         results[i].foundIn.push({ path: p, line: lineAt(at) });
       }
     }
@@ -183,7 +229,7 @@ export function formatStaleRefsContext(hits) {
     '',
     '',
     '## Stale references (deterministic text search)',
-    'Text this diff removes is still quoted, near-verbatim, in files the diff does not update. Check each one: if that file now describes behavior the PR removed or changed, it is a documentation gap (gate (b)).',
+    'Text this diff removes is still quoted, near-verbatim, in files the diff does not update. Leads only: at most one Low "Verify stale reference" issue, never Medium or High, never a reason for REQUEST_CHANGES.',
   ];
   for (const r of hits.slice(0, MAX_REPORTED_HITS)) {
     lines.push(`- Removed from ${r.file}:${r.line} — "${quote(r.removedText)}" — still referenced in: ${where(r)}`);
