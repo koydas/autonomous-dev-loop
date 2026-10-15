@@ -26,8 +26,18 @@ export const WATCHED_PATHS = ['scripts', 'prompts', 'config', 'evals', '.github/
 const MAX_REPORT_CHARS = 12000;
 const SUITE_TIMEOUT_MS = 280_000; // under the 300 s hook timeout, so a hang fails explicitly
 
+/**
+ * The command without its data: heredoc bodies and quoted strings (commit messages, echo
+ * text) are blanked, except the quoted script of `sh -c "…"`, which is code.
+ */
+function shellCode(command) {
+  return command
+    .replace(/<<-?[ \t]*(['"]?)(\w+)\1([^\n]*)\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g, ' $3')
+    .replace(/(-c\s+)?('[^']*'|"(?:\\.|[^"\\])*")/g, (_m, c, q) => (c ? c + q : ' '));
+}
+
 export function isPushCommand(command) {
-  return typeof command === 'string' && /(^|[\s;&|("'/])git\s+(?:-[Cc]\s+\S+\s+|-\S+\s+)*push\b/.test(command);
+  return typeof command === 'string' && /(^|[\s;&|("'/])git\s+(?:-[Cc]\s+\S+\s+|-\S+\s+)*push\b/.test(shellCode(command));
 }
 
 function git(projectDir, args) {

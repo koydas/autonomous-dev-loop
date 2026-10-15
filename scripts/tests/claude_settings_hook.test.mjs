@@ -289,6 +289,26 @@ test('isPushCommand matches git push forms only', () => {
   }
 });
 
+test('isPushCommand ignores "git push" inside commit messages, echo text and heredoc bodies', () => {
+  const heredoc = "git commit -F - <<'EOF'\nfix: git push gate\nEOF";
+  const subst = `git commit -m "$(cat <<'EOF'\nfix: git push gate tests HEAD\nEOF\n)"`;
+  for (const c of ['git commit -am "fix: git push gate tests HEAD"', "git commit -m 'git push'", 'git add -A && git commit -m "docs: explain git push flow"', 'echo "run git push later"', heredoc, subst]) {
+    assert.equal(isPushCommand(c), false, c);
+  }
+  for (const c of ['git commit -m "wip" && git push', `${heredoc}\ngit push -u origin x`, `${subst} && git push`, 'git -c "k=v" push']) {
+    assert.equal(isPushCommand(c), true, c);
+  }
+});
+
+test('pre-push: a commit whose message mentions git push is not blocked on a dirty tree', () => {
+  withProject((dir) => {
+    writeFileSync(join(dir, 'scripts', 'lib.mjs'), 'export const x = 9;\n');
+    const commit = { tool_input: { command: 'git add -A && git commit -m "fix: git push gate tests HEAD"' } };
+    assert.equal(gate(dir, 'pre-push', commit).status, 0);
+    assert.equal(runs(dir), 0);
+  });
+});
+
 test('summarizeFailure keeps the failing-tests section, else the tail, capped', () => {
   assert.equal(summarizeFailure('ok 1\n✖ failing tests:\n\nstub failure'), 'failing tests:\n\nstub failure');
   const tail = summarizeFailure(Array.from({ length: 200 }, (_, i) => `line ${i}`).join('\n'));
