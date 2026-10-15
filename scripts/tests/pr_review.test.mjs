@@ -358,6 +358,65 @@ test('pr_review submits review to pulls reviews endpoint', async () => {
   }
 });
 
+test('pr_review ends the review body with the adl-review marker of the head and verdict', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    const { body } = JSON.parse(review.body);
+    assert.match(body, /^Automated review passed\./);
+    assert.match(body, new RegExp(`\\n\\n<!-- adl-review sha=${'a'.repeat(40)} verdict=APPROVE -->$`));
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+for (const { verdict, groqContent, evidencePath, text } of [
+  { verdict: 'REQUEST_CHANGES', groqContent: 'Issues found.\n\nVerdict: REQUEST_CHANGES', evidencePath: undefined, text: /^Changes required\./ },
+  { verdict: 'WITHHELD', groqContent: 'Fine.\n\nVerdict: APPROVED', evidencePath: NO_EVIDENCE_PATH, text: /^Approval withheld: / },
+]) {
+  test(`pr_review ends the ${verdict} review body with the adl-review marker of the head and verdict`, async () => {
+    const server = await startMockServer(makeHandler({ groqContent }));
+    const eventFile = await writeEventFile();
+    try {
+      const env = evidencePath ? { REVIEW_EVIDENCE_PATH: evidencePath } : {};
+      const result = await runPrReview(server.address().port, eventFile, env);
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+      const { body } = JSON.parse(review.body);
+      assert.match(body, text);
+      assert.match(body, new RegExp(`\\n\\n<!-- adl-review sha=${'a'.repeat(40)} verdict=${verdict} -->$`));
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+    }
+  });
+}
+
+test('pr_review adds no adl-review marker to the review body or the comment without a head SHA', async () => {
+  const server = await startMockServer(makeHandler({
+    groqContent: 'Issues found.\n\nVerdict: REQUEST_CHANGES',
+    prHeadSha: 'not-a-sha',
+  }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).body, 'Changes required. See the automated review comment above for details.');
+    const comment = server.requests.find(
+      (r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url),
+    );
+    assert.doesNotMatch(JSON.parse(comment.body).body, /adl-review/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 test('pr_review submits APPROVE event when verdict is APPROVED', async () => {
   const server = await startMockServer(makeHandler({ groqContent: 'All good.\n\nVerdict: APPROVED' }));
   const eventFile = await writeEventFile();
