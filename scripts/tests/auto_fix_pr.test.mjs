@@ -1414,3 +1414,75 @@ test('auto_fix_pr blocks a test-file change that drops existing tests', async ()
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ADR-0039: auto-fix side effects (budget cut, LLM call, attempt label, escalation, skips) are journaled.
+async function runJournaled(handlerOpts, files = {}) {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-journal-'));
+  for (const [rel, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(tmpDir, rel)), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, rel), content);
+  }
+  const server = await startMockServer(makeHandler(handlerOpts));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir, extraEnv: { GITHUB_RUN_ID: '777', GITHUB_OUTPUT: path.join(tmpDir, 'out.txt') } });
+    const trace = JSON.parse(await fs.readFile(path.join(tmpDir, 'observability', 'traces', '777.json'), 'utf8'));
+    return { result, trace, find: (name) => trace.events.filter((e) => e.event === name) };
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+test('auto_fix_pr journals the prompt budget, the LLM call, the attempt label and the push', async () => {
+  const { result, trace, find } = await runJournaled(
+    { llmResponse: llmChanges([{ target_path: 'src/a.mjs', file_content: 'export const a = 2;\n' }]), diffBody: diffFor('src/a.mjs') },
+    { 'src/a.mjs': 'export const a = 1;\n' },
+  );
+  assert.equal(result.code, 0, result.stderr);
+  const names = trace.events.map((e) => e.event);
+  for (const name of ['autofix.start', 'autofix.prompt_budget', 'autofix.llm_request', 'llm_call', 'autofix.llm_response', 'autofix.push', 'autofix.attempt_labeled']) {
+    assert.ok(names.includes(name), `${name} journaled (got ${names.join(', ')})`);
+  }
+  const [budget] = find('autofix.prompt_budget');
+  assert.deepEqual(budget.meta.shown_files, ['src/a.mjs']);
+  assert.deepEqual(budget.meta.hidden_files, []);
+  assert.equal(budget.level, 'info');
+  assert.deepEqual(find('autofix.attempt_labeled')[0].meta, { prNumber: PR_NUMBER, attempt: 1, label: 'auto-fix-attempt-1' });
+  assert.equal(trace.envelope.pr_number, PR_NUMBER);
+  assert.deepEqual(trace.envelope.llm_calls.map((c) => [c.stage, c.provider]), [['autofix', 'anthropic']]);
+});
+
+test('auto_fix_pr journals an escalation to a human with the labels it applied', async () => {
+  const { result, find } = await runJournaled({ llmResponse: llmChanges([]) });
+  assert.equal(result.code, 0, result.stderr);
+  const [escalated] = find('autofix.escalated');
+  assert.equal(escalated.level, 'warn');
+  assert.equal(escalated.meta.reason, 'no_changes');
+  assert.deepEqual(escalated.meta.labels_added, ['auto-fix-attempt-1', 'needs-human']);
+  assert.equal(escalated.meta.url, null, 'the mock returns no html_url');
+  assert.equal(find('autofix.skipped')[0].meta.reason, 'no_changes');
+});
+
+test('auto_fix_pr journals the self-modification skip and its comment', async () => {
+  const { result, find } = await runJournaled({ diffBody: diffFor('scripts/auto_fix_pr.mjs') });
+  assert.equal(result.code, 0, result.stderr);
+  const [skipped] = find('autofix.skipped');
+  assert.equal(skipped.meta.reason, 'self_modification');
+  assert.equal(find('llm_call').length, 0, 'no LLM call');
+});
+
+test('auto_fix_pr logs an untrusted issue_comment as a skip on stderr, before any trace', async () => {
+  const server = await startMockServer(makeHandler());
+  const eventFile = path.join(os.tmpdir(), `auto-fix-evt-untrusted-${Date.now()}.json`);
+  await fs.writeFile(eventFile, JSON.stringify({ action: 'created', issue: { number: PR_NUMBER, pull_request: {} }, comment: { body: '- [x] Relancer Auto Fixer', author_association: 'NONE' } }));
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0);
+    assert.match(result.stderr, /"event":"autofix\.skipped".*"reason":"untrusted_comment"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});

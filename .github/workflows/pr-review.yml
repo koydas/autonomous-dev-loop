@@ -209,24 +209,10 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-        run: |
           # Only this run's records, written outside the checkout (ADR-0021): never the
           # working-tree metrics/runs.jsonl, which generated code could have modified.
-          # Appended to the `metrics` branch, never to main (PR-only; ADR-0013 amendment).
-          NEW_LINES=$(cat "$METRICS_FILE" 2>/dev/null || true)
-          [ -z "$NEW_LINES" ] && exit 0
-          UPLOADED=0
-          for i in 1 2 3; do
-            RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl?ref=metrics" 2>/dev/null || echo '{}')
-            SHA=$(echo "$RESP" | jq -r '.sha // empty')
-            CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
-            [ -n "$CURRENT" ] && CURRENT="${CURRENT}"$'\n'
-            NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
-            jq -nc --arg m "metrics: pr ${{ steps.ckpt.outputs.pr_number }} [skip ci]" \
-              --arg c "$NEW_B64" --arg s "$SHA" \
-              '{message:$m,content:$c,branch:"metrics"}+if $s!="" then {sha:$s} else {} end' \
-              | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
-              && { UPLOADED=1; break; } || sleep $((2**i))
-          done
-          [ "$UPLOADED" -eq 1 ] || echo "::warning::Failed to commit metrics after 3 attempts; data may be lost"
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+          RUN_RECORD_MESSAGE: "metrics: pr ${{ steps.ckpt.outputs.pr_number }} [skip ci]"
+        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
+        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0039).
+        run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"

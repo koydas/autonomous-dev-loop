@@ -135,6 +135,9 @@ async function ghFetch(path, options = {}) {
   }
 }
 
+// ADR-0039: the html_url GitHub returns for a created/updated object, for the run journal; never throws.
+const htmlUrlOf = (res) => Promise.resolve().then(() => res.json()).then((o) => o?.html_url ?? null, () => null);
+
 async function upsertLabel(label) {
   const createRes = await ghFetch(`/repos/${owner}/${repo}/labels`, {
     method: 'POST',
@@ -334,6 +337,7 @@ const evidence = assessEvidence(evidenceParse, {
   touchedPaths: findTouchedEvidencePaths(rawDiff),
 });
 log('Review evidence assessed', { prNumber, state: evidence.state, reason: evidence.reason, failing: evidence.failing, unverified: evidence.unverified });
+obsLog({ stage: 'review', event: 'review.evidence_assessed', level: 'info', meta: { prNumber, state: evidence.state, reason: evidence.reason ?? null, failing: evidence.failing, unverified: evidence.unverified } });
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
 // ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
@@ -343,6 +347,9 @@ const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles 
 });
 if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, unreviewedCodeFiles });
 if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });
+if (diffTruncated || bodyTruncated || adrCount < relatedAdrs.length) {
+  obsLog({ stage: 'review', event: 'review.prompt_truncated', level: 'warn', meta: { prNumber, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles.length, adrs_shown: adrCount, adrs_found: relatedAdrs.length, max_input_tokens: maxInputTokens } });
+}
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
 
@@ -398,6 +405,7 @@ const postRes = await ghFetch(commentUrl, {
 if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${await postRes.text()}`);
 
 log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
+obsLog({ stage: 'review', event: 'review.comment_posted', level: 'info', meta: { prNumber, action: existing ? 'updated' : 'created', headSha, url: await htmlUrlOf(postRes) } });
 
 const shortReviewBody = isApproved
   ? 'Automated review passed. See the review comment for details.'
@@ -439,6 +447,7 @@ if (!reviewRes.ok) {
       prNumber,
       status: reviewRes.status,
     });
+    obsLog({ stage: 'review', event: 'review.review_submitted', level: 'warn', meta: { prNumber, review_event: reviewEvent, skipped: 'own_pull_request', url: null } });
   } else if (permissionLikeFailure) {
     throw new Error(
       `Review submit failed due to permission/configuration issue: ${reviewRes.status} ${detail}`,
@@ -448,6 +457,7 @@ if (!reviewRes.ok) {
   }
 } else {
   log('PR review submitted', { prNumber, event: reviewEvent });
+  obsLog({ stage: 'review', event: 'review.review_submitted', level: 'info', meta: { prNumber, review_event: reviewEvent, url: await htmlUrlOf(reviewRes) } });
 }
 
 for (const label of PR_REVIEW_LABELS) {
@@ -462,13 +472,15 @@ if (isWithheld) {
   await removeLabel(reviewLabels.changes.name);
   await addLabel(reviewLabels.withheld.name);
   log('PR review labels applied: approval withheld', { prNumber, added: reviewLabels.withheld.name, reason: verdictReason });
+  obsLog({ stage: 'review', event: 'review.labels_applied', level: 'info', meta: { prNumber, added: [reviewLabels.withheld.name], removed: [reviewLabels.approved.name, reviewLabels.changes.name] } });
 } else {
   const apply = isApproved ? reviewLabels.approved.name : reviewLabels.changes.name;
   const remove = isApproved ? reviewLabels.changes.name : reviewLabels.approved.name;
 
+  let autoFixAlreadyRunning = false;
   if (!isApproved) {
     const branchName = prMeta?.head?.ref;
-    const autoFixAlreadyRunning = branchName ? await hasActiveAutoFixRun(branchName) : false;
+    autoFixAlreadyRunning = branchName ? await hasActiveAutoFixRun(branchName) : false;
     if (autoFixAlreadyRunning) {
       log('Skipping changes-requested re-pulse because auto-fix is already running', {
         prNumber,
@@ -488,6 +500,7 @@ if (isWithheld) {
     for (const name of AUTOFIX_LABELS_CLEARED_ON_APPROVE) await removeLabel(name);
   }
   log('PR review labels applied', { prNumber, added: apply, removed: remove, ...(isApproved ? { cleared: AUTOFIX_LABELS_CLEARED_ON_APPROVE } : {}) });
+  obsLog({ stage: 'review', event: 'review.labels_applied', level: 'info', meta: { prNumber, added: [apply], removed: [remove, reviewLabels.withheld.name, ...(isApproved ? AUTOFIX_LABELS_CLEARED_ON_APPROVE : [])], repulse_skipped: !isApproved && autoFixAlreadyRunning } });
 }
 
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;

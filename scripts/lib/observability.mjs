@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { attachJournal, recordEvent } from './run_journal.mjs';
 
 function safeStringify(obj) {
   try {
@@ -33,7 +34,11 @@ export function log({ stage, event, level = 'info', duration_ms = null, meta = {
       duration_ms,
       meta,
     };
-    process.stderr.write(safeStringify(entry) + '\n');
+    const line = safeStringify(entry);
+    process.stderr.write(line + '\n');
+    // ADR-0039: the run journal keeps the event in the trace file (first write failure reported once).
+    const journalError = recordEvent(line);
+    if (journalError) log({ stage: 'observability', event: 'trace_write_failed', level: 'warn', meta: { error: journalError.message } });
 
     if (level === 'error' && process.env.GITHUB_ACTIONS === 'true') {
       const file = meta.file ?? '';
@@ -57,6 +62,15 @@ export function createTracer({ runId, issueNumber = null, traceDir }) {
   const spanStartTimes = {};
   let traceStartedAt = null;
   const tracePath = path.join(traceDir, `${runId}.json`);
+  const skeleton = () => ({
+    run_id: runId,
+    issue_number: issueNumber,
+    started_at: traceStartedAt ?? new Date().toISOString(),
+    completed_at: null,
+    outcome: null,
+    spans: [],
+  });
+  const journal = attachJournal({ tracePath, skeleton });
 
   function ensureDirSync() {
     try { fs.mkdirSync(traceDir, { recursive: true }); } catch { /* already exists */ }
@@ -69,7 +83,7 @@ export function createTracer({ runId, issueNumber = null, traceDir }) {
   function writeTrace(data) {
     try {
       ensureDirSync();
-      fs.writeFileSync(tracePath, JSON.stringify(data, null, 2), 'utf8');
+      fs.writeFileSync(tracePath, JSON.stringify(journal.merge(data), null, 2), 'utf8');
     } catch (err) {
       log({ stage: 'observability', event: 'trace_write_failed', level: 'warn', meta: { error: err.message } });
     }
@@ -145,7 +159,7 @@ export function createTracer({ runId, issueNumber = null, traceDir }) {
         };
         trace.completed_at = now;
         trace.outcome = outcome;
-        await fsPromises.writeFile(tracePath, JSON.stringify(trace, null, 2), 'utf8');
+        await fsPromises.writeFile(tracePath, JSON.stringify(journal.merge(trace), null, 2), 'utf8');
       } catch (err) {
         log({ stage: 'observability', event: 'trace_finalize_failed', level: 'warn', meta: { error: err.message } });
       }

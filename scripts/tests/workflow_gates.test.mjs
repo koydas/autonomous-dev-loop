@@ -183,15 +183,23 @@ test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkou
 
 // ADR-0013 amendment: main only takes changes through a pull request, so every metrics read and
 // write targets the `metrics` branch; a Contents API call without it would hit main and fail (409).
-test('workflows that commit metrics read and write the metrics branch, never the default branch', () => {
+// ADR-0039: the step is scripts/commit_run_record.mjs, which writes runs.jsonl and the run record in one
+// commit on the metrics branch (Git Data API); it runs the trusted copy where the checkout is a PR tree.
+test('workflows that commit metrics read and write the metrics branch, never the default branch', async () => {
+  const { METRICS_BRANCH, RUNS_JSONL_PATH } = await import('../lib/run_record.mjs');
+  assert.equal(METRICS_BRANCH, 'metrics');
+  assert.equal(RUNS_JSONL_PATH, 'metrics/runs.jsonl');
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
   assert.equal(committing.length, 4);
   for (const { name, text } of committing) {
-    const calls = text.match(/gh api "repos\/\$GITHUB_REPOSITORY\/contents\/metrics\/runs\.jsonl[^"]*"/g) ?? [];
-    assert.equal(calls.length, 2, `${name}: one read and one write of metrics/runs.jsonl`);
-    assert.ok(calls.some((c) => c.endsWith('?ref=metrics"')), `${name}: the read targets ?ref=metrics`);
-    assert.match(text, /'\{message:\$m,content:\$c,branch:"metrics"\}/, `${name}: the PUT body names branch "metrics"`);
+    const step = text.slice(text.indexOf('- name: Commit metrics')).split(/\n      - name: /)[0];
+    const trusted = BRANCH_TRIGGERED_SECRET_WORKFLOWS.includes(name);
+    assert.ok(step.includes(trusted ? 'run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"' : 'run: node scripts/commit_run_record.mjs'), `${name}: Commit metrics runs ${trusted ? 'the trusted' : 'the'} commit_run_record.mjs`);
+    assert.match(step, /if: always\(\)/, `${name}: Commit metrics runs on failure too`);
+    assert.doesNotMatch(step, /contents\/metrics\/runs\.jsonl/, `${name}: no Contents API write (one file per commit) left in the step`);
   }
+  const script = readFileSync(resolve(ROOT, 'scripts/lib/run_record.mjs'), 'utf8');
+  assert.match(script, /git\/refs\/heads\/\$\{METRICS_BRANCH\}`, \{ sha: newCommit\.json\.sha, force: false \}/, 'fast-forward update of the metrics ref only');
 });
 
 // ADR-0023: workflows triggered by branch/PR activity hold LLM secrets and AI_PR_TOKEN;

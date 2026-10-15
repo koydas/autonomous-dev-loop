@@ -66,6 +66,8 @@ async function escalateRejection(rejection, { stage, stageStartMs, issueNumber }
     }),
   });
   if (!commentRes.ok) throw new Error(`Rejection comment failed: ${commentRes.status}`);
+  const url = await Promise.resolve().then(() => commentRes.json()).then((c) => c?.html_url ?? null, () => null);
+  obsLog({ stage: 'code_gen', event: 'code_gen.escalated', level: 'warn', meta: { during: stage, reason: 'guardrail_rejected', rules, labels_added: [needsHuman.name], url } });
   await appendMetric({
     type: 'codegen_skip',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-codegen-skip` : `local-${Date.now()}`,
@@ -101,6 +103,7 @@ async function blockIssue(blocked, { stageStartMs, issueNumber }) {
     await tracer.finalize('failed');
     throw err;
   }
+  obsLog({ stage: 'code_gen', event: 'code_gen.escalated', level: 'warn', meta: { during: 'code_gen', ...meta, labels_added: [loadLabelsConfig('autofix').needs_human.name], labels_removed: [loadLabelsConfig('issue').valid.name] } });
   await appendMetric({
     type: 'codegen_skip',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-codegen-skip` : `local-${Date.now()}`,
@@ -143,6 +146,7 @@ async function main() {
     dependencies = await readPackageJsonDependencies(process.cwd());
     prompt = buildDeterministicPrompt({ ...config, fileContents: fileContext.block });
     systemPrompt = loadPrompt('generation-system');
+    obsLog({ stage: 'code_gen', event: 'code_gen.context_built', level: 'info', meta: { shown_files: [...fileContext.shownPaths], hidden_files: [...fileContext.hiddenPaths], deterministic_block: deterministicBlock != null } });
   } catch (err) {
     obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
     tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: err.message } });
