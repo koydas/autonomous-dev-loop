@@ -57,6 +57,19 @@ Before committing any change to `scripts/` or `prompts/`:
 - Test files live only in `scripts/tests/` and use `node:test`; `scripts/tests/test_layout.test.mjs` fails the suite for a test file that `npm test` would not run (anywhere else, in a subdirectory, or not `.test.mjs`) or one using the Jest API, because `npm test` would never run it.
 - The suite includes **unit tests** (modules in isolation) and **smoke tests** (`smoke.test.mjs`, cross-module pipelines with real config/prompt files). Both must pass.
 
+### Local Checks
+
+Each CI gate has a local command. Run the ones your diff triggers before pushing:
+
+| Gate (CI workflow) | Triggered by | Local command |
+|---|---|---|
+| Test suite (`test.yml`) | `scripts/`, `prompts/`, `config/`, `evals/`, `.github/workflows/` | `npm test` (~30 s) — one file: `node --test scripts/tests/<name>.test.mjs` |
+| Syntax (`npm run lint`) | `scripts/` | `npm run lint` |
+| Event docs (`test.yml`) | a new `event: '…'` under `scripts/` | `node scripts/check_event_docs.mjs` |
+| Changelog (`changelog-check.yml`) | `scripts/*.mjs` entrypoint, `docs/adr/NNNN-*.md` | `git fetch origin main && node scripts/check_changelog.mjs` |
+| c8 ≥ 80% (`test.yml`) | a module listed in `test.yml` | `npx --yes c8 --include 'scripts/lib/<m>.mjs' --check-coverage --lines 80 --branches 80 --functions 80 --statements 80 node --test scripts/tests/<m>.test.mjs` |
+| Review hygiene (PR review) | behavior change in a workflow or `scripts/` | docs (`docs/code-generation.md` / `docs/runbook.md`) + tests in the same PR |
+
 ### Eval Gates (ADR-0031)
 
 A failing eval (`evals.yml`, `pr-evals.yml`, `eval-replay.yml`) is fixed **in the stage**: prompt, parser or production code. Never make it pass by lowering a `min`, raising a `max`, marking a metric `optional`, removing or relabelling the failing cases, or running a filtered subset. `scripts/tests/eval_threshold_floor.test.mjs` enforces it: thresholds only tighten, datasets only grow, and every existing case keeps its id, label and input (pinned). `workflow_gates.test.mjs` forbids `--tags` / `--limit` in `evals.yml` and `pr-evals.yml`. Never copy a dataset case's wording into a stage prompt: examples come from another domain (the floor test fails on a 5-word overlap). A dataset label may be corrected only when it is wrong on its own merits, in a separate PR; loosening a gate needs a new ADR.
@@ -73,7 +86,7 @@ Minimum required path coverage for automation modules (enforced by code review):
 | `scripts/lib/prompts.mjs` — `interpolatePrompt` | 100% of branches | single placeholder, multiple distinct placeholders, repeated placeholder, unknown placeholder left unchanged, non-placeholder content unchanged |
 | Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields produce explicit path-oriented errors (e.g. `pull_request.number`, `pull_request.head.ref`) |
 | `pr_review.mjs` — verdict parsing | 100% of accepted verdict forms | `### 🚀 Verdict` heading, `Verdict:` inline, bold verdict (`**APPROVED**`), bold heading (`**🚀 Verdict**`), bold heading with colon (`**Verdict:**`), each for APPROVED and REQUEST_CHANGES where it applies; template placeholder or missing verdict → REQUEST_CHANGES |
-| `.claude/settings.json` post-edit test hook | 100% of branches | path under `scripts/` or `.github/workflows/` runs the suite from `$CLAUDE_PROJECT_DIR`, other paths and missing `file_path` skip it, failing suite exits 2 with output on stderr, unusable `$CLAUDE_PROJECT_DIR` exits 2 (`scripts/tests/claude_settings_hook.test.mjs`) |
+| `.claude/hooks/test-gate.mjs` — Claude Code test gate (Stop + `git push`) | 100% of branches | `scripts/`, `prompts/`, `config/`, `evals/`, `.github/workflows/` change (uncommitted, committed on the branch, untracked) runs the suite; other paths skip it; unchanged change set not re-run after a pass or a failure (no Stop loop), new edit re-runs; failing suite exits 2 with output on stderr; `git push` tests `HEAD`: blocked while watched paths are dirty or untracked (committed break + uncommitted fix), blocked on a failed set without re-run, let through on a passed set, dirt outside watched paths ignored; non-push Bash commands skipped, including "git push" inside a commit message or heredoc; unusable `$CLAUDE_PROJECT_DIR` exits 2; outside a git tree the suite always runs (`scripts/tests/claude_settings_hook.test.mjs`) |
 
 Any PR that adds a new exported function to `scripts/lib/` must include tests for every failure branch, not only the happy path. PRs that lack these tests are considered incomplete regardless of whether existing tests pass.
 
