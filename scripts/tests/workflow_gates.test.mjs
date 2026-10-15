@@ -246,6 +246,16 @@ test('workflows that run PR code without secrets use a read-only token', () => {
   }
 });
 
+// ADR-0039: the LangGraph prototype's Python tests run in CI, on the declared minimum version.
+test('test.yml runs the LangGraph prototype tests on Python 3.11 and 3.13', () => {
+  const job = workflow.split(/^  prototype-langgraph:\n/m)[1];
+  assert.ok(job, 'test.yml must declare a prototype-langgraph job');
+  assert.match(job, /python: \["3\.11", "3\.13"\]/);
+  assert.match(job, /working-directory: prototypes\/langgraph-loop/);
+  assert.match(job, /pip install -r requirements\.txt/);
+  assert.match(job, /python -m unittest -v tests\.test_loop/);
+});
+
 // `echo "ref=$(gh api ...)"` does not fail under `bash -e`: an API failure would yield an
 // empty ref and the global group `pr-pipeline-`. The lookup must fail the job instead.
 test('head-ref lookups fail closed instead of producing an empty concurrency key', () => {
