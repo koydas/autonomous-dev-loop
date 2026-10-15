@@ -1,7 +1,7 @@
 import { log } from './observability.mjs';
 
 // Stale-reference check (ADR-0035): text a PR removes that is still quoted, near-verbatim, in the
-// repo's docs, skills, prompts or AGENTS.md. Deterministic (text search, no LLM); the result is
+// repo's docs, skills or AGENTS.md, and that the PR tree no longer holds in its source or a prompt. Deterministic (text search, no LLM); the result is
 // informational evidence for the reviewer and never changes the verdict on its own.
 
 export const MIN_MATCH_CHARS = 60;
@@ -11,6 +11,8 @@ export const MIN_MATCH_CHARS = 60;
 export const MIN_RUN_CHARS = 100;
 export const QUOTE_SLACK_CHARS = 10;
 const minRun = (norm) => Math.max(MIN_MATCH_CHARS, Math.min(MIN_RUN_CHARS, norm.length - QUOTE_SLACK_CHARS));
+// A live source (head source file, prompt) larger than this is not scanned: its text is not live.
+export const MAX_LIVE_SOURCE_CHARS = 1_000_000;
 export const MAX_REPORTED_HITS = 5;
 export const MAX_QUOTED_CHARS = 160;
 
@@ -145,7 +147,9 @@ function scan(norm, index, live = new Set()) {
 function liveWindows(files, sources, readFile, index) {
   const live = new Set();
   for (const p of files.filter((f) => sources.has(f) || LIVE_PATHS.test(f)).sort()) {
-    const norm = normalizeText(readFile(p));
+    const content = readFile(p);
+    if (content.length > MAX_LIVE_SOURCE_CHARS) continue;
+    const norm = normalizeText(content);
     for (let at = 0; at + MIN_MATCH_CHARS <= norm.length; at++) {
       const gram = norm.slice(at, at + MIN_MATCH_CHARS);
       if (index.has(gram)) live.add(gram);
@@ -157,8 +161,9 @@ function liveWindows(files, sources, readFile, index) {
 /**
  * Finds removed text (blocks of ≥ 60 normalized chars) still quoted in docs/**\/*.md,
  * .claude/skills/**\/*.md and AGENTS.md of the PR tree. A doc is reported when it holds a contiguous
- * run of ≥ MIN_RUN_CHARS (or the whole of a shorter block, within QUOTE_SLACK_CHARS) of removed text that the head tree no longer holds
- * elsewhere: windows still in the head version of the source file or in any prompts/*.md are live.
+ * run of ≥ MIN_RUN_CHARS (or the whole of a shorter block, within QUOTE_SLACK_CHARS) of removed text
+ * that the head tree no longer holds elsewhere: windows still in the head version of the source file
+ * or in any prompts/*.md are live (sources over MAX_LIVE_SOURCE_CHARS are not scanned).
  * Excluded: CHANGELOG.md and Superseded / Deprecated ADRs (historical by design), the file the text
  * was removed from, and any file the diff re-adds it to.
  * `listFiles()` returns repo-relative paths, `readFile(path)` their content (both injected).

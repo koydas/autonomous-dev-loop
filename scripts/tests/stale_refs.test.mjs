@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   normalizeText, isSearchedPath, parseDiffBlocks, findStaleReferences, formatStaleRefsContext, formatStaleRefsSection,
-  MIN_MATCH_CHARS, MIN_RUN_CHARS, QUOTE_SLACK_CHARS, MAX_REPORTED_HITS,
+  MIN_MATCH_CHARS, MIN_RUN_CHARS, QUOTE_SLACK_CHARS, MAX_LIVE_SOURCE_CHARS, MAX_REPORTED_HITS,
 } from '../lib/stale_refs.mjs';
 import { parseFlatYaml } from '../lib/yaml.mjs';
 import { LOW_HEADROOM_RATIO, computePromptBudgetImpact } from '../lib/prompt_budget.mjs';
@@ -150,6 +150,13 @@ test('findStaleReferences ignores removed text still in the head version of its 
   assert.equal(run(renamed, { 'scripts/new.mjs': 'Unrelated.', 'docs/guide.md': files['docs/guide.md'] }).length, 1);
 });
 
+test('findStaleReferences does not scan a live source over MAX_LIVE_SOURCE_CHARS: its text stays stale', () => {
+  const diff = fileDiff('data/big.json', `-${RULE}`);
+  const big = `${RULE}${' '.repeat(MAX_LIVE_SOURCE_CHARS)}`;
+  assert.equal(run(diff, { 'data/big.json': big, 'docs/guide.md': RULE }).length, 1);
+  assert.deepEqual(run(diff, { 'data/big.json': RULE, 'docs/guide.md': RULE }), []);
+});
+
 test('findStaleReferences ignores removed text a prompt still holds, and never reports a prompt', () => {
   const diff = fileDiff('prompts/auto-fix.md', `-${RULE}`);
   assert.deepEqual(run(diff, { 'prompts/generation.md': RULE, 'docs/guide.md': RULE }), []);
@@ -263,7 +270,7 @@ test('stale references are capped at a Low verify note in the prompt, within the
   assert.doesNotMatch(ctx, /gate \(b\)/);
   const PROMPT = 'prompts/pr-review-system.md';
   const system = readFileSync(resolve(ROOT, PROMPT), 'utf8');
-  assert.match(system, /"Stale references" block is a lead.*at most one Low issue, "Verify stale reference".*never a Medium or High finding, never a gate \(b\) finding, and never a reason for REQUEST_CHANGES/);
+  assert.match(system, /"Stale references" block is a lead.*at most one Low issue, "Verify stale reference".*never a Medium or High finding, never a reason for REQUEST_CHANGES\. A hit alone is never a gate \(b\) finding; judge gate \(b\) from the diff as usual/);
   const models = parseFlatYaml(readFileSync(resolve(ROOT, 'config/models.yaml'), 'utf8'));
   const [impact] = computePromptBudgetImpact({
     rawDiff: `diff --git a/${PROMPT} b/${PROMPT}\n--- a/${PROMPT}\n+++ b/${PROMPT}\n@@ -1 +1 @@\n-a\n+b\n`,
