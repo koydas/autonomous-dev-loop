@@ -166,7 +166,7 @@ test('upsert_comment journals issue_validation.comment_posted into the existing 
   const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), 'upsert-journal-'));
   const traceDir = path.join(cwd, 'observability', 'traces');
   await fsp.mkdir(traceDir, { recursive: true });
-  await fsp.writeFile(path.join(traceDir, '991.json'), JSON.stringify({ run_id: '991', outcome: 'success', spans: [{ stage: 'issue_validation' }], events: [{ event: 'issue_validation.pass' }] }));
+  await fsp.writeFile(path.join(traceDir, '991.json'), JSON.stringify({ run_id: '991', envelope: { run_id: '991', run_attempt: 1 }, outcome: 'success', spans: [{ stage: 'issue_validation' }], events: [{ event: 'issue_validation.pass' }] }));
   const server = await startMockServer((req, res) => {
     if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('[]'); }
     res.writeHead(201, { 'Content-Type': 'application/json' });

@@ -159,7 +159,8 @@ export function createTracer({ runId, issueNumber = null, traceDir }) {
         };
         trace.completed_at = now;
         trace.outcome = outcome;
-        await fsPromises.writeFile(tracePath, JSON.stringify(journal.merge(trace), null, 2), 'utf8');
+        // Synchronous: a log() flushed during an async write would be overwritten by this stale merge.
+        fs.writeFileSync(tracePath, JSON.stringify(journal.merge(trace), null, 2), 'utf8');
       } catch (err) {
         log({ stage: 'observability', event: 'trace_finalize_failed', level: 'warn', meta: { error: err.message } });
       }

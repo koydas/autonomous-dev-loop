@@ -12,7 +12,7 @@ export const JOURNAL_MAX_BYTES = 256 * 1024;
 export const EVENT_MAX_BYTES = 8 * 1024;
 
 const state = {
-  sink: null, // { tracePath, skeleton, base: { events, overflow }, payload }
+  sink: null, // { tracePath, skeleton, base: { events, overflow }, payload, secrets }
   events: [],
   bytes: 0,
   overflow: { count: 0, bytes: 0 },
@@ -35,6 +35,12 @@ function scrubMeta(value, secrets) {
   }
   return value;
 }
+
+// This process's non-public env values, computed once per tracer (the env does not change during a run).
+const processSecrets = () => state.sink?.secrets ?? secretValues(process.env);
+
+// The run this process belongs to, as buildEnvelope() records it.
+const currentRun = (env) => ({ runId: env.GITHUB_RUN_ID || null, runAttempt: toInt(env.GITHUB_RUN_ATTEMPT) ?? 1 });
 
 const firstMeta = (events, key) => {
   for (const e of events) if (e?.meta?.[key] != null) return e.meta[key];
@@ -103,12 +109,19 @@ function readPayload(env) {
   }
 }
 
-/** The trace with the journal merged in: schema version, envelope, events and overflow counters. */
+/**
+ * The trace with the journal merged in: schema version, envelope, events and overflow counters.
+ * Span meta is scrubbed here like event meta: every tracer write goes through merge().
+ */
 function merge(trace) {
   const base = state.sink?.base ?? { events: [], overflow: { count: 0, bytes: 0 } };
   const events = [...base.events, ...state.events];
+  const secrets = processSecrets();
   return {
     ...trace,
+    ...(Array.isArray(trace?.spans) && {
+      spans: trace.spans.map((s) => (s && typeof s === 'object' ? { ...s, meta: scrubMeta(s.meta, secrets) } : s)),
+    }),
     schema_version: TRACE_SCHEMA_VERSION,
     envelope: buildEnvelope(process.env, state.sink?.payload ?? null, events),
     events,
@@ -155,7 +168,7 @@ function flush() {
 export function recordEvent(line) {
   try {
     let event = JSON.parse(line);
-    event = { ...event, meta: scrubMeta(event.meta, secretValues(process.env)) };
+    event = { ...event, meta: scrubMeta(event.meta, processSecrets()) };
     let bytes = Buffer.byteLength(JSON.stringify(event), 'utf8');
     if (bytes > EVENT_MAX_BYTES) {
       event = { ...event, meta: { _meta_dropped_bytes: bytes } };
@@ -181,7 +194,9 @@ export function recordEvent(line) {
 
 /**
  * Points the journal at a trace file. Events logged before (in this process) are kept; a trace
- * already on disk (an earlier step of the same job) contributes its events as the base.
+ * already on disk contributes its events as the base only when its envelope names this run and
+ * attempt (an earlier step of the same job). Any other trace at that path — e.g. a file committed
+ * in the checked-out PR head — is replaced by a fresh one, so it can neither inject events nor spans.
  * Returns `merge(trace)` for the tracer's own writes.
  */
 export function attachJournal({ tracePath, skeleton }) {
@@ -193,11 +208,19 @@ export function attachJournal({ tracePath, skeleton }) {
     }
     let existing = null;
     try { existing = JSON.parse(fs.readFileSync(tracePath, 'utf8')); } catch { /* no trace yet */ }
+    const run = currentRun(process.env);
+    const foreign = existing !== null && (
+      typeof existing !== 'object'
+      || (existing.envelope?.run_id ?? null) !== run.runId
+      || (toInt(existing.envelope?.run_attempt) ?? 1) !== run.runAttempt
+    );
+    if (foreign) existing = null;
     const baseEvents = Array.isArray(existing?.events) ? existing.events : [];
     state.sink = {
       tracePath,
       skeleton,
       payload: readPayload(process.env),
+      secrets: secretValues(process.env),
       base: {
         events: baseEvents,
         bytes: baseEvents.reduce((n, e) => n + Buffer.byteLength(JSON.stringify(e), 'utf8'), 0),
@@ -208,6 +231,7 @@ export function attachJournal({ tracePath, skeleton }) {
       },
     };
     try { fs.mkdirSync(path.dirname(tracePath), { recursive: true }); } catch { /* reported on write */ }
+    if (foreign) fs.writeFileSync(tracePath, JSON.stringify(merge(skeleton()), null, 2), 'utf8');
   } catch {
     // never propagate observability failures into business logic
   }

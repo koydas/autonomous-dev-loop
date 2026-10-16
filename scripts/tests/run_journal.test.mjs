@@ -2,6 +2,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -75,15 +76,48 @@ test('events logged before the tracer exists are adopted by it', () => {
 test('a later process (next step of the job) appends to the events already in the trace', () => {
   const id = runId();
   const tracePath = path.join(dir, `${id}.json`);
-  fs.writeFileSync(tracePath, JSON.stringify({ run_id: id, spans: [{ stage: 'issue_validation' }], events: [{ event: 'issue_validation.pass' }], events_overflow: { count: 2, bytes: 40 }, outcome: 'success' }));
-  createTracer({ runId: id, traceDir: dir });
-  quiet(() => log({ stage: 'issue_validation', event: 'issue_validation.labels_applied' }));
-  const trace = read(id);
+  fs.writeFileSync(tracePath, JSON.stringify({ run_id: id, envelope: { run_id: '77', run_attempt: 1 }, spans: [{ stage: 'issue_validation' }], events: [{ event: 'issue_validation.pass' }], events_overflow: { count: 2, bytes: 40 }, outcome: 'success' }));
+  const trace = withEnv({ GITHUB_RUN_ID: '77', GITHUB_RUN_ATTEMPT: undefined }, () => {
+    createTracer({ runId: id, traceDir: dir });
+    quiet(() => log({ stage: 'issue_validation', event: 'issue_validation.labels_applied' }));
+    return read(id);
+  });
   assert.deepEqual(trace.events.map((e) => e.event), ['issue_validation.pass', 'issue_validation.labels_applied']);
   assert.deepEqual(trace.events_overflow, { count: 2, bytes: 40 }, 'overflow of the earlier process is kept');
   assert.equal(trace.outcome, 'success', 'the earlier outcome is not touched');
   assert.equal(trace.spans.length, 1);
 });
+
+for (const [label, envelope] of [
+  ['another run', { run_id: '1', run_attempt: 1 }],
+  ['another attempt of this run', { run_id: '77', run_attempt: 2 }],
+  ['no envelope', undefined],
+]) {
+  test(`a trace already at the path from ${label} (e.g. committed in the PR head) is replaced, never adopted`, () => {
+    const id = runId();
+    const tracePath = path.join(dir, `${id}.json`);
+    const forged = {
+      run_id: id, envelope, outcome: 'success',
+      spans: [{ stage: 'review', outcome: 'success', meta: { verdict: 'APPROVE' } }],
+      events: [{ event: 'review.comment_posted', meta: { url: 'https://github.com/o/r/pull/1#forged' } }],
+      events_overflow: { count: 9, bytes: 99 },
+    };
+    fs.writeFileSync(tracePath, JSON.stringify(forged));
+    const trace = withEnv({ GITHUB_RUN_ID: '77', GITHUB_RUN_ATTEMPT: '1' }, () => {
+      const tracer = createTracer({ runId: id, traceDir: dir });
+      const replaced = read(id);
+      assert.deepEqual(replaced.spans, [], 'the file is replaced as soon as the tracer attaches');
+      assert.equal(replaced.outcome, null);
+      quiet(() => { log({ stage: 'review', event: 'review.start' }); tracer.startSpan('review'); });
+      return read(id);
+    });
+    assert.deepEqual(trace.events.map((e) => e.event), ['review.start']);
+    assert.deepEqual(trace.spans.map((s) => s.meta), [{}]);
+    assert.deepEqual(trace.events_overflow, { count: 0, bytes: 0 });
+    assert.deepEqual(trace.envelope.links, []);
+    assert.equal(trace.envelope.run_id, '77');
+  });
+}
 
 test(`count cap: past ${JOURNAL_MAX_EVENTS} events, the rest is counted in events_overflow, not kept`, async () => {
   const id = runId();
@@ -155,6 +189,52 @@ test('a secret held only by the producing step never reaches the record, though 
   const record = JSON.stringify(redactTrace(read(id), { env: committerEnv }));
   assert.ok(!record.includes(secret));
   assert.ok(record.includes('rejected key [redacted]'));
+});
+
+test('span meta is scrubbed of this process env secrets too: a secret in an endSpan error never reaches the trace or the record', async () => {
+  const id = runId();
+  const secret = 'span-step-only-k3y-0123456789';
+  await withEnv({ LLM_STEP_API_KEY: secret }, async () => {
+    const tracer = createTracer({ runId: id, traceDir: dir });
+    quiet(() => {
+      tracer.startSpan('code_gen', { model: `m ${secret}` });
+      tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: `401 invalid key ${secret}`, paths: [secret] } });
+    });
+    await tracer.finalize('failed');
+  });
+  const raw = fs.readFileSync(path.join(dir, `${id}.json`), 'utf8');
+  assert.ok(!raw.includes(secret), 'the uploaded trace artifact holds no producer secret');
+  assert.deepEqual(read(id).spans[0].meta, { model: 'm [redacted]', error: '401 invalid key [redacted]', paths: ['[redacted]'] });
+  const record = JSON.stringify(redactTrace(read(id), { env: { GITHUB_SERVER_URL: 'https://github.com' } }));
+  assert.ok(!record.includes(secret));
+  assert.ok(record.includes('401 invalid key [redacted]'));
+});
+
+test('an event logged while finalize() is pending is kept: finalize never writes a merge computed before it', async () => {
+  const id = runId();
+  const tracer = createTracer({ runId: id, traceDir: dir });
+  // A slow disk: were finalize() to write asynchronously, its content would be computed several
+  // event-loop turns before it lands; an event logged in between must not be overwritten.
+  const turn = () => new Promise((resolve) => setImmediate(resolve));
+  const logged = [];
+  const logNow = (event) => { logged.push(event); quiet(() => log({ stage: 's', event })); };
+  const { writeFile } = fsPromises;
+  fsPromises.writeFile = async (...args) => {
+    for (let i = 0; i < 3; i += 1) await turn();
+    logNow('during.finalize.write');
+    return writeFile(...args);
+  };
+  try {
+    const pending = tracer.finalize('success');
+    await turn();
+    logNow('during.finalize');
+    await pending;
+  } finally {
+    fsPromises.writeFile = writeFile;
+  }
+  const trace = read(id);
+  assert.deepEqual(trace.events.map((e) => e.event), logged);
+  assert.equal(trace.outcome, 'success');
 });
 
 test('stdout is never written (GITHUB_OUTPUT protocol)', () => {

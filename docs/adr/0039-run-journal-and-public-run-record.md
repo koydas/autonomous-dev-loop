@@ -25,7 +25,8 @@ Missing events are added through `scripts/lib/observability.mjs` only (inventory
 `log()` hands each serialized line to the journal; `createTracer()` points it at the trace file. The trace gains `schema_version: 1`, `events[]` (every event, in order), `events_overflow { count, bytes }` and `envelope`.
 
 - Written on each event, so a killed job keeps what happened before the kill (same reasoning as ADR-0018 §D).
-- Process-wide: events logged before the tracer are adopted; a later process of the same job (validation comment and label steps) appends to the events already in the file.
+- Process-wide: events logged before the tracer are adopted; a later process of the same job (validation comment and label steps) appends to the events already in the file. A trace already at the path is adopted only when its `envelope` names this run id and attempt; any other file there (e.g. one committed in the PR head that `pr-review` / `auto-fix` check out) is replaced by a fresh trace, so it can inject neither events nor spans.
+- `finalize()` writes synchronously: an event logged while an async write was pending would be overwritten by the older content.
 - Capped at 500 events and 256 KiB; past a cap an event is counted, never kept and never dropped silently. A single event over 8 KiB keeps name, level and timing, its meta replaced by its size.
 - Failures stay contained: one `trace_write_failed` warn per process, no recursion, no throw; stdout untouched.
 
@@ -35,7 +36,7 @@ Built from the Actions env, the event payload (only the fields it needs are read
 
 ### 4. Public-safety contract (`redactTrace()` in `scripts/lib/run_record.mjs`)
 
-The only path from a trace to the store. Allowlist of meta keys **per event** (`EVENT_META_ALLOWLIST`), and per span; an unlisted event keeps name/level/timing with empty meta; unknown keys are dropped. Strings are scrubbed (every non-public env value of 12+ characters, credential shapes) **then** cut to 200 characters, so a secret at the cut cannot survive partially. The env scrub runs twice: in the journal, against the env of the process that logs the event (the step holding the LLM keys), and in `redactTrace()`, against the env of the "Commit metrics" step — which does not hold those keys, so a scrub there alone would not cover them. Nested objects are dropped; arrays ≤ 50 primitives; URLs are kept whole only on `GITHUB_SERVER_URL` with nothing to scrub. Records are capped at 256 KiB. A new event's meta is unpublished until its keys are added to the allowlist — the safe default.
+The only path from a trace to the store. Allowlist of meta keys **per event** (`EVENT_META_ALLOWLIST`), and per span; an unlisted event keeps name/level/timing with empty meta; unknown keys are dropped. Strings are scrubbed (every non-public env value of 12+ characters, credential shapes) **then** cut to 200 characters, so a secret at the cut cannot survive partially. The env scrub runs twice: in the journal, against the env of the process that writes the trace (the step holding the LLM keys) — event meta and span meta alike, since every tracer write goes through the journal — and in `redactTrace()`, against the env of the "Commit metrics" step — which does not hold those keys, so a scrub there alone would not cover them. Nested objects are dropped; arrays ≤ 50 primitives; URLs are kept whole only on `GITHUB_SERVER_URL` with nothing to scrub. Records are capped at 256 KiB. A new event's meta is unpublished until its keys are added to the allowlist — the safe default.
 
 ### 5. Storage layout and persistence
 
