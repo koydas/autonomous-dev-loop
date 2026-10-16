@@ -12,9 +12,9 @@ import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
 import { buildChangeClassificationContext } from '../lib/change_classifier.mjs';
 import { parseEvidence } from '../lib/review_evidence.mjs';
-import { GROQ_MODEL_DEFAULTS } from '../lib/config.mjs';
+import { GROQ_MODEL_DEFAULTS, loadLLMConfig } from '../lib/config.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
-import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage } from '../run_evals.mjs';
+import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage, liveCallArgs, createLiveLLM, buildLLM } from '../run_evals.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RUN_EVALS = path.join(REPO_ROOT, 'scripts', 'run_evals.mjs');
@@ -967,4 +967,168 @@ test('neither suite swallows an LLM error: the stage rethrows it to the harness'
   await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
     await assert.rejects(reviewSuite.run({ title: 'T', body: 'B', diff: SMALL_DIFF }, { llm }), /Groq API HTTP error 500/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Live eval call ↔ production call site parity (run 38561304861: review sent json_object, Groq 400)
+// ---------------------------------------------------------------------------
+
+// Text between the bracket at `open` and its match (strings and template literals skipped).
+function balanced(src, open) {
+  const pairs = { '{': '}', '(': ')', '[': ']' };
+  const stack = [];
+  for (let i = open; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      for (i++; i < src.length && src[i] !== ch; i++) if (src[i] === '\\') i++;
+    } else if (pairs[ch]) stack.push(pairs[ch]);
+    else if (ch === stack.at(-1) && (stack.pop(), stack.length === 0)) return src.slice(open + 1, i);
+  }
+  throw new Error(`unbalanced bracket at ${open}`);
+}
+
+// Top-level "key: value" / "key" entries of an object literal body.
+function entries(body) {
+  const out = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i <= body.length; i++) {
+    const ch = body[i];
+    if (ch === "'" || ch === '"' || ch === '`') { for (i++; i < body.length && body[i] !== ch; i++) if (body[i] === '\\') i++; continue; }
+    if ('{(['.includes(ch)) depth++;
+    else if ('})]'.includes(ch)) depth--;
+    else if ((ch === ',' && depth === 0) || i === body.length) {
+      const entry = body.slice(start, i).trim();
+      if (entry) {
+        const m = entry.match(/^([A-Za-z_$][\w$]*)\s*(?::\s*([\s\S]+))?$/);
+        if (!m) throw new Error(`unparsable entry: ${entry}`);
+        out.push([m[1], (m[2] ?? m[1]).trim()]);
+      }
+      start = i + 1;
+    }
+  }
+  return out;
+}
+
+// Production call: { stage, configKeys, options } from the stage's loadLLMConfig destructuring and its
+// single callLLM({ … }) literal. A value that is neither a config binding, a call input nor a literal fails.
+async function productionCall(file) {
+  const src = await fs.readFile(path.join(REPO_ROOT, file), 'utf8');
+  const destructure = src.match(/const\s*\{([^}]+)\}\s*=\s*loadLLMConfig\(\s*'(\w+)'\s*\)/);
+  assert.ok(destructure, `${file}: no loadLLMConfig('<stage>') destructuring`);
+  const configBinding = new Map(entries(destructure[1]).map(([key, local]) => [local, key]));
+  const calls = [...src.matchAll(/\bcallLLM\(\s*\{/g)];
+  assert.equal(calls.length, 1, `${file}: expected one callLLM({ … }) call site`);
+  const callInputs = new Set(['prompt', 'systemPrompt']);
+  const call = { stage: null, configKeys: [], options: {} };
+  for (const [key, value] of entries(balanced(src, calls[0].index + calls[0][0].length - 1))) {
+    if (key === 'stage') call.stage = JSON.parse(value.replace(/'/g, '"'));
+    else if (callInputs.has(key)) continue;
+    else if (configBinding.get(value) === key) call.configKeys.push(key);
+    else {
+      // Literal option (null, boolean, number, string, { type: 'json_object' }).
+      const json = value.replace(/'/g, '"').replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":');
+      try { call.options[key] = JSON.parse(json); } catch { assert.fail(`${file}: callLLM option ${key}: ${value} is not a config field nor a literal`); }
+    }
+  }
+  return { ...call, configStage: destructure[2] };
+}
+
+const PRODUCTION_CALL_SITES = { validation: 'scripts/validate_issue.mjs', review: 'scripts/pr_review.mjs' };
+
+test('every suite mirrors its production stage call site: same config fields, same literal callLLM options', async () => {
+  assert.deepEqual(Object.keys(PRODUCTION_CALL_SITES).sort(), Object.keys(SUITES).sort(), 'a new suite needs its production call site here');
+  for (const [name, file] of Object.entries(PRODUCTION_CALL_SITES)) {
+    const suite = SUITES[name];
+    const prod = await productionCall(file);
+    assert.equal(prod.stage, suite.stage, `${name}: callLLM stage`);
+    assert.equal(prod.configStage, suite.stage, `${name}: loadLLMConfig stage`);
+    assert.deepEqual([...suite.llmCall.configKeys].sort(), prod.configKeys.sort(), `${name}: config fields forwarded to callLLM`);
+    assert.deepEqual(suite.llmCall.options, prod.options, `${name}: callLLM options (responseFormat, …)`);
+  }
+});
+
+test('review mirrors responseFormat null; validation keeps the json_object default (no responseFormat)', () => {
+  assert.deepEqual(reviewSuite.llmCall.options, { responseFormat: null });
+  assert.equal('responseFormat' in validationSuite.llmCall.options, false);
+});
+
+test('parity parser: a responseFormat drift or an extra config field is caught', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'parity-'));
+  const file = path.join(tmp, 'stage.mjs');
+  await fs.writeFile(file, "const { apiKey: k, model, maxInputTokens } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, systemPrompt: SYS, apiKey: k, model, maxInputTokens, responseFormat: { type: 'json_object' } });\n");
+  const prod = await productionCall(path.relative(REPO_ROOT, file));
+  assert.deepEqual(prod, { stage: 'review', configStage: 'review', configKeys: ['apiKey', 'model', 'maxInputTokens'], options: { responseFormat: { type: 'json_object' } } });
+  assert.notDeepEqual(reviewSuite.llmCall.options, prod.options);
+  assert.notDeepEqual([...reviewSuite.llmCall.configKeys].sort(), prod.configKeys.sort());
+  await fs.writeFile(file, "const { model } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, model, responseFormat: pick() });\n");
+  await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /responseFormat: pick\(\) is not a config field nor a literal/);
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('liveCallArgs: only the suite config fields + options, pinned to the primary', () => {
+  const config = { provider: 'groq', apiKey: 'k', model: 'm', apiUrl: 'u', temperature: 0.6, maxTokens: 1024, maxInputTokens: 6300, diffRatio: undefined, feedbackRatio: undefined, reasoningEffort: 'low' };
+  assert.deepEqual(liveCallArgs(reviewSuite, config, { prompt: 'p', systemPrompt: 's' }), {
+    apiKey: 'k', model: 'm', apiUrl: 'u', temperature: 0.6, maxTokens: 1024, reasoningEffort: 'low', responseFormat: null, stage: 'review', prompt: 'p', systemPrompt: 's', fallback: false,
+  });
+  assert.deepEqual(liveCallArgs(validationSuite, config, { prompt: 'p', systemPrompt: 's' }), {
+    apiKey: 'k', model: 'm', apiUrl: 'u', temperature: 0.6, maxTokens: 1024, maxInputTokens: 6300, reasoningEffort: 'low', stage: 'validation', prompt: 'p', systemPrompt: 's', fallback: false,
+  });
+  // Anthropic config has no temperature nor input budget: absent fields are not sent as undefined.
+  assert.deepEqual(Object.keys(liveCallArgs(reviewSuite, { provider: 'anthropic', apiKey: 'k', model: 'm', maxTokens: 16000 }, { prompt: 'p', systemPrompt: 's' })).sort(),
+    ['apiKey', 'fallback', 'maxTokens', 'model', 'prompt', 'responseFormat', 'stage', 'systemPrompt']);
+});
+
+// Groq-only env, fetch mocked: the payload the live eval LLM sends for one case of a suite.
+async function liveGroqPayload(suite, input, content, expected) {
+  const savedFetch = globalThis.fetch;
+  const payloads = [];
+  globalThis.fetch = async (_url, opts) => {
+    payloads.push(JSON.parse(opts.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content } }], usage: {} }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    return await withEnv({ AI_PROVIDER: 'groq', GROQ_API_KEY: 'gk', ANTHROPIC_API_KEY: undefined, GROQ_MODEL: undefined, GROQ_API_URL: undefined, GROQ_MAX_RETRIES: '0' }, async () => {
+      const live = createLiveLLM(suite, loadLLMConfig(suite.stage));
+      const [result] = await runSuite({ suite, cases: [{ id: 'c1', input, expected }], llmFor: () => live });
+      return { result, payloads };
+    });
+  } finally {
+    globalThis.fetch = savedFetch;
+  }
+}
+
+test('live review eval call reaches groq_client without response_format', async () => {
+  const review = '### ✅ Summary\nFine.\n\n### 🚀 Verdict\nAPPROVED';
+  const { result, payloads } = await liveGroqPayload(reviewSuite, { title: 'T', body: 'B', diff: SMALL_DIFF }, review, { verdict: 'APPROVE' });
+  assert.equal(payloads.length, 1);
+  assert.equal('response_format' in payloads[0], false);
+  assert.equal(result.error, null);
+  assert.equal(result.output.llm_verdict, 'APPROVED');
+});
+
+test('live validation eval call still sends response_format json_object', async () => {
+  const { result, payloads } = await liveGroqPayload(validationSuite, { title: '[FEATURE] Add login endpoint', body: 'Body' }, llmResponse({ valid: true }), { valid: true });
+  assert.equal(payloads.length, 1);
+  assert.deepEqual(payloads[0].response_format, { type: 'json_object' });
+  assert.equal(result.error, null);
+  assert.equal(result.output.valid, true);
+});
+
+test('replay is unaffected: recorded answers, no provider call, no API key needed', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'replay-'));
+  const file = path.join(tmp, 'review.json');
+  await fs.writeFile(file, JSON.stringify({ meta: { model: 'groq:x' }, results: [{ case_id: 'c1', repeat: 0, calls: [{ raw: 'recorded' }] }] }));
+  const savedFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('replay must not call a provider'); };
+  try {
+    await withEnv({ AI_PROVIDER: undefined, GROQ_API_KEY: undefined, ANTHROPIC_API_KEY: undefined }, async () => {
+      const { llmFor, model } = await buildLLM(reviewSuite, file);
+      assert.equal(model, 'replay:groq:x');
+      assert.equal(await llmFor('c1#0')({ prompt: 'p', systemPrompt: 's' }), 'recorded');
+    });
+  } finally {
+    globalThis.fetch = savedFetch;
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
 });

@@ -213,6 +213,8 @@ Dataset tags: `core` marks the original 15 cases, so `--tags core` compares with
 - Cases: real bugs (`off-by-one`, `null`, `shell-injection` via `execSync`, `deleted-test`, `undeclared-import`, the prompt's named checks, an unawaited `forEach`, `missing-tests`), unrequested docs deletion, minimal `pair`s (same issue, buggy vs clean diff), clean `docs` and `test-only` diffs (`tests_expected: false` per `change_classifier`), a complete `automation` change (tests + docs + c8 gate), `injection` in the PR body and in a code comment, `evidence` (pass, fail, timeout) and a `truncated` diff whose bug stays visible.
 - Sections (`flags_issue`, `no_false_alarm`, #178): only a top-level section heading ends a section, i.e. a `#`–`###` heading or a bold-only line whose whole text, emoji, `:` and whitespace aside, is `Change Classification`, `Summary`, `Issues Found` or `Verdict` (`**🚀 Verdict**`). A `#### scripts/foo.mjs` sub-heading, a `**scripts/foo.mjs**` group line or a `**Summary of risks**` line inside Issues Found stays in it, so the findings after it are read.
 - A review without a verdict line is an **errored run** (`error_rate`), not a `REQUEST_CHANGES`: production fails closed, but counting it as a rejection would inflate `request_changes` recall.
+- **LLM call.** The live eval sends the same `callLLM` options as `pr_review.mjs` (`llmCall`): `responseFormat: null` (the review is Markdown) and no `maxInputTokens` (the prompt is fitted by `buildReviewPrompt`). `eval_suites.test.mjs` parses both production call sites and fails when a suite's `llmCall` disagrees.
+- **Results before this fix are not a model measurement on Groq.** The live eval used to call Groq with its `response_format: { type: 'json_object' }` default, which Groq rejects for a Markdown review (`400 Failed to generate JSON`). Every live `review` run on Groq up to and including [38561304861](https://github.com/koydas/autonomous-dev-loop/actions/runs/38561304861) (4 of 40 calls answered before the TPD circuit breaker tripped) measured that rejection, not the model; the failed calls still spent the Groq daily quota. Do not compare a later `review` run with them. Anthropic ignores `response_format`, so Anthropic runs are unaffected; `validation` always sent `json_object`, as production does.
 
 | Scorer | Applies to | Meaning |
 |---|---|---|
@@ -239,6 +241,8 @@ export const autofixSuite = {
   name: 'autofix',
   stage: 'autofix',                         // loadLLMConfig stage
   dataset: 'evals/datasets/autofix.jsonl',
+  // The production callLLM call: loadLLMConfig fields it forwards + literal options (responseFormat, …).
+  llmCall: { configKeys: ['apiKey', 'model', 'apiUrl', 'temperature', 'maxTokens', 'reasoningEffort'], options: {} },
   run: async (input, { llm }) => { /* call the stage's production logic with llm */ },
   scorers: { /* ... */ },
   label: (output) => output.verdict,        // optional: confusion matrix + consistency
@@ -247,7 +251,7 @@ export const autofixSuite = {
 };
 ```
 
-`run` must go through the stage's production code (prompt builder + parser), not a copy, so parser regressions are caught. When an entrypoint script keeps that logic inline (`pr_review.mjs` did), extract it to `scripts/lib/` first, as `review_prompt.mjs` was. Add a test in `scripts/tests/eval_suites.test.mjs`. The dashboard needs no change: it renders one section, badge (`badges/<suite>.json`) and trend per suite.
+`run` must go through the stage's production code (prompt builder + parser), not a copy, so parser regressions are caught. When an entrypoint script keeps that logic inline (`pr_review.mjs` did), extract it to `scripts/lib/` first, as `review_prompt.mjs` was. `llmCall` must match the stage's `callLLM({ … })` call site: add the stage file to `PRODUCTION_CALL_SITES` in `scripts/tests/eval_suites.test.mjs`, whose parity test fails on any drift (a stage's `responseFormat` default is `json_object` on Groq). Add a test in `scripts/tests/eval_suites.test.mjs`. The dashboard needs no change: it renders one section, badge (`badges/<suite>.json`) and trend per suite.
 
 ## Tests and coverage
 

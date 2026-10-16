@@ -81,21 +81,30 @@ export function resolveReplayRepeats(recordedMeta, { repeats, repeatsExplicit })
   return recordedRepeats;
 }
 
-async function buildLLM(suite, replayFile) {
+// callLLM args of one live eval call: the production stage's call (suite.llmCall), pinned to the primary.
+export function liveCallArgs(suite, config, { prompt, systemPrompt }) {
+  const { configKeys, options } = suite.llmCall;
+  const fromConfig = Object.fromEntries(configKeys.filter((k) => config[k] !== undefined).map((k) => [k, config[k]]));
+  return { ...fromConfig, ...options, stage: suite.stage, prompt, systemPrompt, fallback: false };
+}
+
+// Pinned to the primary (ADR-0032 amendment): a fallback answer would be published as meta.model's.
+// A primary failure is a run error; a quota one trips the circuit breaker.
+export function createLiveLLM(suite, config) {
+  return async ({ prompt, systemPrompt }) => {
+    let answer = {};
+    const text = await callLLM({ ...liveCallArgs(suite, config, { prompt, systemPrompt }), onAnswer: (a) => { answer = a; } });
+    return { text, ...answer };
+  };
+}
+
+export async function buildLLM(suite, replayFile) {
   if (replayFile) {
     const recorded = JSON.parse(await fs.readFile(replayFile, 'utf8'));
     return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, recorded };
   }
   const config = loadLLMConfig(suite.stage);
-  // Pinned to the primary (ADR-0032 amendment): a fallback answer would be published as meta.model's.
-  // A primary failure is a run error; a quota one trips the circuit breaker.
-  const live = async ({ prompt, systemPrompt }) => {
-    let answer = {};
-    const text = await callLLM({
-      ...config, stage: suite.stage, prompt, systemPrompt, fallback: false, onAnswer: (a) => { answer = a; },
-    });
-    return { text, ...answer };
-  };
+  const live = createLiveLLM(suite, config);
   return { llmFor: () => live, model: `${config.provider}:${config.model}` };
 }
 
