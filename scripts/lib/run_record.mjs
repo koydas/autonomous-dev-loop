@@ -115,11 +115,17 @@ export function secretValues(env = {}) {
     .sort((a, b) => b.length - a.length);
 }
 
-/** Scrub, then truncate to MAX_STRING characters (scrubbing first: a cut secret would no longer match). */
-export function redactString(value, secrets = []) {
+/** Replaces every env value in `secrets` and every credential shape by [redacted]; no truncation. */
+export function scrubString(value, secrets = []) {
   let s = String(value);
   for (const secret of secrets) if (s.includes(secret)) s = s.split(secret).join(REDACTED);
   for (const re of TOKEN_PATTERNS) s = s.replace(re, REDACTED);
+  return s;
+}
+
+/** Scrub, then truncate to MAX_STRING characters (scrubbing first: a cut secret would no longer match). */
+export function redactString(value, secrets = []) {
+  const s = scrubString(value, secrets);
   return s.length > MAX_STRING ? `${s.slice(0, MAX_STRING)}…` : s;
 }
 

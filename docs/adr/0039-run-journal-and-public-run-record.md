@@ -35,7 +35,7 @@ Built from the Actions env, the event payload (only the fields it needs are read
 
 ### 4. Public-safety contract (`redactTrace()` in `scripts/lib/run_record.mjs`)
 
-The only path from a trace to the store. Allowlist of meta keys **per event** (`EVENT_META_ALLOWLIST`), and per span; an unlisted event keeps name/level/timing with empty meta; unknown keys are dropped. Strings are scrubbed (every non-public env value of 12+ characters, credential shapes) **then** cut to 200 characters, so a secret at the cut cannot survive partially. Nested objects are dropped; arrays ≤ 50 primitives; URLs are kept whole only on `GITHUB_SERVER_URL` with nothing to scrub. Records are capped at 256 KiB. A new event's meta is unpublished until its keys are added to the allowlist — the safe default.
+The only path from a trace to the store. Allowlist of meta keys **per event** (`EVENT_META_ALLOWLIST`), and per span; an unlisted event keeps name/level/timing with empty meta; unknown keys are dropped. Strings are scrubbed (every non-public env value of 12+ characters, credential shapes) **then** cut to 200 characters, so a secret at the cut cannot survive partially. The env scrub runs twice: in the journal, against the env of the process that logs the event (the step holding the LLM keys), and in `redactTrace()`, against the env of the "Commit metrics" step — which does not hold those keys, so a scrub there alone would not cover them. Nested objects are dropped; arrays ≤ 50 primitives; URLs are kept whole only on `GITHUB_SERVER_URL` with nothing to scrub. Records are capped at 256 KiB. A new event's meta is unpublished until its keys are added to the allowlist — the safe default.
 
 ### 5. Storage layout and persistence
 
@@ -57,6 +57,6 @@ Retention: a record is ~3–10 KB (measured 5.5 KB for a 16-event review); at ~6
 - ✅ `observability.mjs` keeps its API (`log`, `createTracer` unchanged); entrypoints only add `log()` calls.
 - ✅ One commit per run on `metrics`: metrics and record never diverge.
 - ⚠️ Over-redaction by design: a public value that happens to equal a non-public env value is replaced by `[redacted]`; a new event publishes no meta until allowlisted.
-- ⚠️ Free-text fields (`error`, `reason`, `detail`) are published, scrubbed and cut to 200 characters: an error message quoting content would leak at most that much.
+- ⚠️ Free-text fields (`error`, `reason`, `detail`) are published, scrubbed and cut to 200 characters: an error message quoting content would leak at most that much per field.
 - ⚠️ The `metrics` branch grows without automated pruning; same integrity caveat as the ADR-0013 amendment (any `contents: write` token can rewrite it).
 - ⚠️ Runs that exit before their tracer (untrusted auto-fix comment, review with no open PR) and the `pr-review` evidence job leave no record; the step after "Commit metrics" in `validate-issue` (dispatching code generation) is not journaled — the code-generation run records itself.

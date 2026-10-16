@@ -3,6 +3,7 @@
 // observability.mjs feeds it: log() → recordEvent(), createTracer() → attachJournal(). Never throws.
 import fs from 'node:fs';
 import path from 'node:path';
+import { scrubString, secretValues } from './run_record.mjs';
 
 export const TRACE_SCHEMA_VERSION = 1;
 export const JOURNAL_MAX_EVENTS = 500;
@@ -23,6 +24,17 @@ const toInt = (v) => {
   const n = typeof v === 'number' ? v : Number.parseInt(String(v ?? ''), 10);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
+
+// Scrubbed in the producing process, whose env holds the step's secrets (LLM keys): the
+// "Commit metrics" step that runs redactTrace() does not have them (ADR-0039 §4).
+function scrubMeta(value, secrets) {
+  if (typeof value === 'string') return scrubString(value, secrets);
+  if (Array.isArray(value)) return value.map((v) => scrubMeta(v, secrets));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrubMeta(v, secrets)]));
+  }
+  return value;
+}
 
 const firstMeta = (events, key) => {
   for (const e of events) if (e?.meta?.[key] != null) return e.meta[key];
@@ -133,15 +145,18 @@ function flush() {
 }
 
 /**
- * Records one serialized log() line. Over JOURNAL_MAX_EVENTS / JOURNAL_MAX_BYTES (this process
- * and the processes before it in the same trace) the event is counted in `events_overflow`, not kept;
+ * Records one serialized log() line, its meta strings scrubbed of this process's non-public env
+ * values and credential shapes (the stderr line is unchanged). Over JOURNAL_MAX_EVENTS /
+ * JOURNAL_MAX_BYTES (this process and the processes before it in the same trace) the event is
+ * counted in `events_overflow`, not kept;
  * the counter reaches the file with the next tracer write.
  * Returns the first flush error of the process (for one `trace_write_failed` warn), else null.
  */
 export function recordEvent(line) {
   try {
-    let bytes = Buffer.byteLength(line, 'utf8');
     let event = JSON.parse(line);
+    event = { ...event, meta: scrubMeta(event.meta, secretValues(process.env)) };
+    let bytes = Buffer.byteLength(JSON.stringify(event), 'utf8');
     if (bytes > EVENT_MAX_BYTES) {
       event = { ...event, meta: { _meta_dropped_bytes: bytes } };
       bytes = Buffer.byteLength(JSON.stringify(event), 'utf8');

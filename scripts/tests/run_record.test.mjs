@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  redactTrace, redactString, secretValues, recordPath, commitRunRecord,
+  redactTrace, redactString, scrubString, secretValues, recordPath, commitRunRecord,
   EVENT_META_ALLOWLIST, MAX_STRING, MAX_ARRAY, MAX_RECORD_BYTES, RECORD_SCHEMA_VERSION, RUNS_JSONL_PATH,
 } from '../lib/run_record.mjs';
 
@@ -79,6 +79,16 @@ test('credential shapes are scrubbed even when no env var holds them', () => {
     assert.ok(!out.includes(token), token);
   }
   assert.equal(redactString('Bearer abcdefghijklmnop0123', []), '[redacted]');
+});
+
+test('scrubString: env values and credential shapes are replaced, nothing is cut; a clean or non-string value is kept', () => {
+  const long = `${PLANTED_SECRET} ${'x'.repeat(MAX_STRING * 2)}`;
+  const out = scrubString(long, [PLANTED_SECRET]);
+  assert.ok(out.startsWith('[redacted] '));
+  assert.equal(out.length, '[redacted] '.length + MAX_STRING * 2);
+  assert.equal(scrubString(`key ghp_${'b'.repeat(30)}`), 'key [redacted]');
+  assert.equal(scrubString('nothing to hide', [PLANTED_SECRET]), 'nothing to hide');
+  assert.equal(scrubString(42), '42');
 });
 
 test('a prompt body never survives: prompt-like meta keys are not allowlisted, unknown events lose their meta', () => {

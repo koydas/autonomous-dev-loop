@@ -10,6 +10,7 @@ import {
   attachJournal, recordEvent, buildEnvelope,
   TRACE_SCHEMA_VERSION, JOURNAL_MAX_EVENTS, JOURNAL_MAX_BYTES, EVENT_MAX_BYTES,
 } from '../lib/run_journal.mjs';
+import { redactTrace } from '../lib/run_record.mjs';
 
 let dir;
 let seq = 0;
@@ -129,6 +130,31 @@ test('a circular meta is journaled as the serialized stderr line ([Circular]), n
   meta.self = meta;
   quiet(() => log({ stage: 's', event: 'e.circular', meta }));
   assert.deepEqual(read(id).events[0].meta, { a: 1, self: '[Circular]' });
+});
+
+test('meta strings are scrubbed of this process env secrets and credential shapes; the stderr line is unchanged', () => {
+  const id = runId();
+  const secret = 'producer-only-k3y-0123456789';
+  const token = `gsk_${'a'.repeat(24)}`;
+  const { lines } = withEnv({ PRODUCER_API_KEY: secret }, () => {
+    createTracer({ runId: id, traceDir: dir });
+    return quiet(() => log({ stage: 's', event: 'e.secret', meta: { error: `401 for ${secret}`, nested: { list: [token, 7] } } }));
+  });
+  assert.deepEqual(read(id).events[0].meta, { error: '401 for [redacted]', nested: { list: ['[redacted]', 7] } });
+  assert.ok(lines.some((l) => l.includes(secret)), 'stderr keeps the original line');
+});
+
+test('a secret held only by the producing step never reaches the record, though the committing step lacks it', () => {
+  const id = runId();
+  const secret = 'llm-step-only-k3y-9876543210';
+  withEnv({ LLM_STEP_API_KEY: secret }, () => {
+    createTracer({ runId: id, traceDir: dir });
+    quiet(() => log({ stage: 'retry', event: 'retry.wait', level: 'warn', meta: { attempt: 1, error: `rejected key ${secret}` } }));
+  });
+  const committerEnv = { GITHUB_SERVER_URL: 'https://github.com', GH_TOKEN: 'ghs_committer_token_0123456789' };
+  const record = JSON.stringify(redactTrace(read(id), { env: committerEnv }));
+  assert.ok(!record.includes(secret));
+  assert.ok(record.includes('rejected key [redacted]'));
 });
 
 test('stdout is never written (GITHUB_OUTPUT protocol)', () => {
