@@ -132,11 +132,12 @@ export function detectQuotaExhaustion(err) {
 // Expected LLM tokens of a live run: runs × tokens per run, the larger of the newest error-free recorded
 // run of the suite (history entries, oldest first, as appended to EVAL_HISTORY_FILE) and the suite's
 // static tokensPerRunEst. history tokens_est are chars/4 (≈ 25% under provider usage): alone, it would
-// let EVAL_TOKEN_BUDGET pass runs up to ≈ 1.34× the cap.
+// let EVAL_TOKEN_BUDGET pass runs up to ≈ 1.34× the cap. summary.error_rate leaves known-gap runs out (ADR-0031 §7):
+// a run whose known-gap case errored has fewer answered calls than runs and is skipped too.
 export function estimateRunTokens({ suite, nRuns, history = [] }) {
   const hasStatic = Number.isFinite(suite.tokensPerRunEst) && suite.tokensPerRunEst > 0;
   const last = [...history].reverse().find((h) => h?.suite === suite.name && h.summary?.n_runs > 0
-    && h.summary.error_rate === 0 && h.summary.tokens_est && !String(h.model ?? '').startsWith('replay:'));
+    && h.summary.error_rate === 0 && !(h.summary.known_gap?.error_rate > 0) && h.summary.tokens_est && !String(h.model ?? '').startsWith('replay:'));
   if (last) {
     const perRun = Math.ceil((last.summary.tokens_est.in + last.summary.tokens_est.out) / last.summary.n_runs);
     if (!hasStatic || perRun > suite.tokensPerRunEst) {
@@ -439,6 +440,13 @@ export function formatReport({ suite, summary, failures, results, meta = {} }) {
   }
   lines.push(`| latency p50 / p95 (ms) | ${summary.latency_ms.p50} / ${summary.latency_ms.p95} |`);
   lines.push(`| llm calls · tokens in/out (est.) | ${summary.llm_calls} · ${summary.tokens_est.in} / ${summary.tokens_est.out} |`);
+  // ADR-0031 §7: cases / runs above include the known-gap cases; every metric above excludes them.
+  const kg = summary.known_gap;
+  if (kg) {
+    lines.push(`| known-gap (not gated) cases / runs | ${kg.n_cases} / ${kg.n_runs} |`);
+    for (const [name, { mean: m, n }] of Object.entries(kg.scores)) lines.push(`| known-gap scores.${name} | ${m} (n=${n}) |`);
+    lines.push(`| known-gap error_rate | ${kg.error_rate} |`);
+  }
   lines.push('');
 
   const cb = summary.circuit_breaker;

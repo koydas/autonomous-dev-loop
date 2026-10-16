@@ -329,6 +329,20 @@ test('formatReport lists metrics, threshold failures and failing cases', async (
   assert.match(report, /\| b \| 1 \| no \|  \| parse failed \|/);
 });
 
+test('formatReport shows the known-gap block apart from the gated metrics, only when the run has one (ADR-0031 §7)', async () => {
+  const cases = parseDataset('{"id":"a","input":{"q":"yes"},"expected":{"answer":"yes"}}\n{"id":"g","tags":["known-gap"],"input":{"q":"no"},"expected":{"answer":"yes"}}');
+  const results = await runSuite({ suite: echoSuite, cases, llmFor: () => async ({ prompt }) => prompt });
+  const summary = summarize(results);
+  const report = formatReport({ suite: 'echo', summary, failures: [], results });
+  assert.match(report, /\| cases \/ runs \| 2 \/ 2 \|/);
+  assert.match(report, /\| scores\.exact \| 1 \(n=1\) \|/);
+  assert.match(report, /\| known-gap \(not gated\) cases \/ runs \| 1 \/ 1 \|/);
+  assert.match(report, /\| known-gap scores\.exact \| 0 \(n=1\) \|/);
+  assert.match(report, /\| known-gap error_rate \| 0 \|/);
+  const gated = summarize(results.filter((r) => r.case_id === 'a'));
+  assert.doesNotMatch(formatReport({ suite: 'echo', summary: gated, failures: [], results: [] }), /known-gap/);
+});
+
 test('formatReport says all thresholds met when there are no failures', () => {
   const report = formatReport({ suite: 'echo', summary: summarize([]), failures: [], results: [] });
   assert.match(report, /## ✅ All thresholds met/);
@@ -502,6 +516,16 @@ test('estimateRunTokens uses the newest error-free live run of the suite', () =>
     null,
   ];
   assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 4, history }), { tokens: 10004, per_run: 2501, source: 'history:good' });
+});
+
+test('estimateRunTokens skips a run whose known-gap case errored: its answered calls undercount its runs (ADR-0031 §7)', () => {
+  const history = [
+    histLine({ run_id: 'good' }),
+    histLine({ run_id: 'gap-errored', summary: { n_runs: 10, error_rate: 0, known_gap: { error_rate: 0.5 }, tokens_est: { in: 1, out: 1 } } }),
+    histLine({ run_id: 'gap-clean', summary: { n_runs: 1, error_rate: 0, known_gap: { error_rate: 0 }, tokens_est: { in: 3000, out: 0 } } }),
+  ];
+  assert.equal(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 1, history }).source, 'history:gap-clean');
+  assert.equal(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 1, history: history.slice(0, 2) }).source, 'history:good');
 });
 
 test('estimateRunTokens falls back to the static estimate, then to unknown', () => {
