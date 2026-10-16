@@ -281,6 +281,12 @@ export function renderRun(detail) {
     ...Object.entries(summary.per_class ?? {}).map(([cls, m]) => [`${cls} precision / recall / F1`, `${fmt(m.precision)} / ${fmt(m.recall)} / ${fmt(m.f1)} (support ${fmt(m.support)})`]),
     ['latency p50 / p95 (ms)', `${fmt(summary.latency_ms?.p50)} / ${fmt(summary.latency_ms?.p95)}`],
     ['llm calls · tokens in / out (est.)', `${fmt(summary.llm_calls)} · ${fmt(summary.tokens_est?.in)} / ${fmt(summary.tokens_est?.out)}`],
+    // ADR-0031 §7: known-gap cases are scored but left out of every metric above and of the gate.
+    ...(summary.known_gap ? [
+      ['known-gap (not gated) cases / runs', `${fmt(summary.known_gap.n_cases)} / ${fmt(summary.known_gap.n_runs)}`],
+      ...Object.entries(summary.known_gap.scores ?? {}).map(([s, v]) => [`known-gap scores.${s}`, `${fmt(v.mean)} (n=${fmt(v.n)})`]),
+      ['known-gap error_rate', fmt(summary.known_gap.error_rate)],
+    ] : []),
   ].map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td class="num">${escapeHtml(v)}</td></tr>`).join('');
 
   const caseRows = results.map((r) => {

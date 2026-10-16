@@ -24,6 +24,8 @@ import { detectProvider, GROQ_MODEL_DEFAULTS } from './config.mjs';
 import { buildReviewPrompt, parseReviewVerdict, withholdOnUnreviewedCode } from './review_prompt.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, decideVerdict } from './review_evidence.mjs';
+import { formatStaleRefsContext } from './stale_refs.mjs';
+import { formatPromptBudgetContext } from './prompt_budget.mjs';
 
 const verdict = (valid) => (valid ? 'valid' : 'invalid');
 
@@ -151,8 +153,9 @@ export const reviewSuite = {
   name: 'review',
   stage: 'review',
   dataset: 'evals/datasets/review.jsonl',
-  // ≈ 2.9k chars/4 input per call × 1.34 (validation's Groq-reported / chars/4 ratio) + output: ≈ 97k per repeat.
-  tokensPerRunEst: 4200,
+  // ≈ 3.76k chars/4 input per call (28 cases, system prompt ≈ 2.6k) × 1.34 (validation's Groq-reported / chars/4
+  // ratio) + output: ≈ 148k per repeat. Was 4200 (2.9k input, 23 cases) before the incident cases (docs/evals.md).
+  tokensPerRunEst: 5300,
   // scripts/pr_review.mjs: the review is Markdown, so responseFormat null (json_object: Groq 400
   // "Failed to generate JSON"). No maxInputTokens: the prompt is fitted by buildReviewPrompt instead.
   llmCall: {
@@ -160,8 +163,11 @@ export const reviewSuite = {
     options: { responseFormat: null },
   },
 
-  // input: { title, body, diff, dependencies?, evidence?, head_sha? }. A case without `evidence` is a
-  // repository that has not opted in (no config): the evidence is missing and does not withhold approval.
+  // input: { title, body, diff, dependencies?, evidence?, head_sha?, stale_refs?, related_adrs?, prompt_budget? }.
+  // A case without `evidence` is a repository that has not opted in (no config): the evidence is missing and
+  // does not withhold approval. stale_refs / related_adrs / prompt_budget are precomputed, in the shapes
+  // findStaleReferences / findRelatedAdrs / computePromptBudgetImpact return (the PR tree is not in the case),
+  // and go through the same formatters as in pr_review.mjs. eval_suites.test.mjs pins the field parity.
   async run(input, { llm }) {
     const { system, user } = loadReviewPrompts();
     const evidence = assessEvidence(
@@ -177,6 +183,9 @@ export const reviewSuite = {
       maxInputTokens: reviewInputBudget(),
       evidence,
       dependencyManifestContext: formatDependencyManifestContext(input.dependencies),
+      staleRefsContext: formatStaleRefsContext(input.stale_refs),
+      relatedAdrs: input.related_adrs ?? [],
+      promptBudgetContext: formatPromptBudgetContext(input.prompt_budget),
     });
     const { cleanReview, verdict: llmVerdict } = parseReviewVerdict(await llm({ prompt: userPrompt, systemPrompt: system }));
     // Production fails closed on a missing verdict line; the eval counts it as an errored run instead,

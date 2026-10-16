@@ -32,6 +32,7 @@ on:
       - 'scripts/lib/token_budget.mjs'
       - 'scripts/lib/related_adrs.mjs'
       - 'scripts/lib/stale_refs.mjs'
+      - 'scripts/lib/prompt_budget.mjs'
       - 'config/models.yaml'
       - 'scripts/replay_evals_ci.mjs'
       - 'evals/datasets/**'

@@ -20,6 +20,8 @@ import {
   detectQuotaExhaustion,
   estimateRunTokens,
   checkTokenBudget,
+  KNOWN_GAP_TAG,
+  isKnownGap,
 } from '../lib/eval_harness.mjs';
 import { partitionPublishable } from '../lib/eval_scorecard.mjs';
 
@@ -253,6 +255,65 @@ test('checkThresholds skips an optional metric the run did not measure, and enfo
   assert.match(failures[0].reason, /0\.8 < min 0\.9/);
 });
 
+// ADR-0031 §7: a known-gap case is run and scored, but never reaches the gated metrics.
+test('summarize leaves known-gap cases out of the gated metrics and reports them under known_gap', async () => {
+  const cases = parseDataset([
+    '{"id":"a","input":{"q":"yes"},"expected":{"answer":"yes"}}',
+    '{"id":"b","input":{"q":"no"},"expected":{"answer":"no"}}',
+    '{"id":"gap","tags":["known-gap"],"input":{"q":"boom"},"expected":{"answer":"yes"}}',
+    '{"id":"gap2","tags":["x","known-gap"],"input":{"q":"no"},"expected":{"answer":"yes"}}',
+  ].join('\n'));
+  const results = await runSuite({ suite: echoSuite, cases, repeats: 2, llmFor: () => async ({ prompt }) => prompt, now: fixedClock() });
+  assert.equal(KNOWN_GAP_TAG, 'known-gap');
+  assert.deepEqual(results.filter(isKnownGap).map((r) => r.case_id), ['gap', 'gap', 'gap2', 'gap2']);
+  const s = summarize(results);
+  // Gated metrics: cases a and b only, both right.
+  assert.equal(s.error_rate, 0);
+  assert.deepEqual(s.scores.exact, { mean: 1, n: 4 });
+  assert.equal(s.consistency, 1);
+  assert.deepEqual(s.confusion, { yes: { yes: 2 }, no: { no: 2 } });
+  assert.equal(s.per_class.yes.recall, 1);
+  // Cost and size cover every run.
+  assert.equal(s.n_cases, 4);
+  assert.equal(s.n_runs, 8);
+  assert.equal(s.llm_calls, 8);
+  // The known-gap block: same metrics, its runs only.
+  assert.equal(s.known_gap.n_cases, 2);
+  assert.equal(s.known_gap.n_runs, 4);
+  assert.equal(s.known_gap.error_rate, 0.5);
+  assert.deepEqual(s.known_gap.scores.exact, { mean: 0, n: 4 });
+  assert.deepEqual(s.known_gap.confusion, { yes: { __error__: 2, no: 2 } });
+  assert.equal(s.known_gap.per_class.yes.recall, 0);
+  assert.equal(s.known_gap.consistency, 1);
+  // Gated thresholds pass although every known-gap run failed.
+  assert.deepEqual(checkThresholds(s, { 'scores.exact.mean': { min: 1 }, error_rate: { max: 0 }, 'per_class.yes.recall': { min: 1 } }), []);
+  // Without the tag the same runs fail the gate.
+  const untagged = summarize(results.map((r) => ({ ...r, tags: r.tags.filter((t) => t !== KNOWN_GAP_TAG) })));
+  assert.equal(untagged.known_gap, undefined);
+  assert.deepEqual(checkThresholds(untagged, { error_rate: { max: 0 } }).map((f) => f.metric), ['error_rate']);
+});
+
+test('summarize: no known_gap block without known-gap results; the circuit breaker sets both error rates', () => {
+  assert.equal('known_gap' in summarize([{ case_id: 'a', tags: [], scores: {}, calls: [], duration_ms: 1 }]), false);
+  const breaker = { provider: 'groq', quota: 'tokens per day (TPD)', limit: 1, used: 1, retry_after: null };
+  const s = summarize([
+    { case_id: 'a', tags: [], scores: {}, calls: [], duration_ms: 1, error: 'quota', circuit_breaker: breaker },
+    { case_id: 'g', tags: ['known-gap'], scores: {}, calls: [], duration_ms: 0, error: 'skipped', skipped: true },
+  ]);
+  assert.equal(s.error_rate, 1);
+  assert.equal(s.known_gap.error_rate, 1);
+  assert.equal(s.circuit_breaker.skipped_runs, 1);
+  assert.equal(isKnownGap({ tags: 'known-gap' }), false);
+  assert.equal(isKnownGap(null), false);
+});
+
+test('checkThresholds refuses a threshold on known_gap metrics: they are never gated', () => {
+  const summary = { error_rate: 0, known_gap: { error_rate: 0, scores: { exact: { mean: 1 } } } };
+  const failures = checkThresholds(summary, { 'known_gap.scores.exact.mean': { min: 0.5 }, error_rate: { max: 0.1 } });
+  assert.deepEqual(failures.map((f) => f.metric), ['known_gap.scores.exact.mean']);
+  assert.match(failures[0].reason, /never gated/);
+});
+
 test('formatReport lists metrics, threshold failures and failing cases', async () => {
   const cases = parseDataset('{"id":"a","input":{"q":"no"},"expected":{"answer":"yes"}}\n{"id":"b","input":{"q":"boom"},"expected":{"answer":"no"}}');
   const results = await runSuite({ suite: echoSuite, cases, repeats: 2, llmFor: () => async ({ prompt }) => prompt });
@@ -266,6 +327,20 @@ test('formatReport lists metrics, threshold failures and failing cases', async (
   assert.match(report, /## ❌ Threshold failures/);
   assert.match(report, /\| a \| 0 \| yes \| no \|  \|/);
   assert.match(report, /\| b \| 1 \| no \|  \| parse failed \|/);
+});
+
+test('formatReport shows the known-gap block apart from the gated metrics, only when the run has one (ADR-0031 §7)', async () => {
+  const cases = parseDataset('{"id":"a","input":{"q":"yes"},"expected":{"answer":"yes"}}\n{"id":"g","tags":["known-gap"],"input":{"q":"no"},"expected":{"answer":"yes"}}');
+  const results = await runSuite({ suite: echoSuite, cases, llmFor: () => async ({ prompt }) => prompt });
+  const summary = summarize(results);
+  const report = formatReport({ suite: 'echo', summary, failures: [], results });
+  assert.match(report, /\| cases \/ runs \| 2 \/ 2 \|/);
+  assert.match(report, /\| scores\.exact \| 1 \(n=1\) \|/);
+  assert.match(report, /\| known-gap \(not gated\) cases \/ runs \| 1 \/ 1 \|/);
+  assert.match(report, /\| known-gap scores\.exact \| 0 \(n=1\) \|/);
+  assert.match(report, /\| known-gap error_rate \| 0 \|/);
+  const gated = summarize(results.filter((r) => r.case_id === 'a'));
+  assert.doesNotMatch(formatReport({ suite: 'echo', summary: gated, failures: [], results: [] }), /known-gap/);
 });
 
 test('formatReport says all thresholds met when there are no failures', () => {
@@ -441,6 +516,16 @@ test('estimateRunTokens uses the newest error-free live run of the suite', () =>
     null,
   ];
   assert.deepEqual(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 4, history }), { tokens: 10004, per_run: 2501, source: 'history:good' });
+});
+
+test('estimateRunTokens skips a run whose known-gap case errored: its answered calls undercount its runs (ADR-0031 §7)', () => {
+  const history = [
+    histLine({ run_id: 'good' }),
+    histLine({ run_id: 'gap-errored', summary: { n_runs: 10, error_rate: 0, known_gap: { error_rate: 0.5 }, tokens_est: { in: 1, out: 1 } } }),
+    histLine({ run_id: 'gap-clean', summary: { n_runs: 1, error_rate: 0, known_gap: { error_rate: 0 }, tokens_est: { in: 3000, out: 0 } } }),
+  ];
+  assert.equal(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 1, history }).source, 'history:gap-clean');
+  assert.equal(estimateRunTokens({ suite: { name: 'validation', tokensPerRunEst: 2000 }, nRuns: 1, history: history.slice(0, 2) }).source, 'history:good');
 });
 
 test('estimateRunTokens falls back to the static estimate, then to unknown', () => {

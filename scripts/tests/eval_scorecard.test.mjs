@@ -101,6 +101,15 @@ test('toScorecardRun applies defaults for optional fields', () => {
   assert.ok(run.ts);
 });
 
+test('toScorecardRun records the known-gap block next to the gated metrics, only when the run has one (ADR-0031 §7)', () => {
+  const summary = { n_cases: 3, n_runs: 3, error_rate: 0, scores: { v: { mean: 1, n: 2 } }, known_gap: { n_cases: 1, n_runs: 1, error_rate: 0, scores: { v: { mean: 0, n: 1 } }, per_class: {} } };
+  const run = toScorecardRun({ meta: { suite: 's', run_id: 'x' }, summary });
+  assert.deepEqual([run.n_cases, run.scores], [3, { v: 1 }]);
+  assert.deepEqual(run.known_gap, { n_cases: 1, n_runs: 1, error_rate: 0, scores: { v: 0 } });
+  assert.deepEqual(toScorecardRun({ meta: { suite: 's', run_id: 'x' }, summary: { ...summary, known_gap: { n_cases: 1, n_runs: 1, error_rate: 1 } } }).known_gap.scores, {});
+  assert.equal('known_gap' in toScorecardRun({ meta: { suite: 's', run_id: 'x' }, summary: { n_cases: 1, n_runs: 1, error_rate: 0 } }), false);
+});
+
 test('toScorecardRun rejects incomplete results and replay runs', () => {
   assert.throws(() => toScorecardRun({ meta: { run_id: 'x' }, summary: {} }), /missing meta\.suite/);
   assert.throws(() => toScorecardRun({ meta: { suite: 's', run_id: 'x' } }), /missing meta\.suite, meta\.run_id or summary/);

@@ -52,6 +52,15 @@ export function toScorecardRun({ meta, summary, failures, results }) {
     tokens_est: summary.tokens_est ?? null,
     cost_est: runCost({ meta, summary }),
     coverage: reviewCoverage(results),
+    // n_cases / n_runs count every case run; scores, per_class and error_rate leave the known-gap cases out (ADR-0031 §7).
+    ...(summary.known_gap ? {
+      known_gap: {
+        n_cases: summary.known_gap.n_cases,
+        n_runs: summary.known_gap.n_runs,
+        error_rate: summary.known_gap.error_rate,
+        scores: Object.fromEntries(Object.entries(summary.known_gap.scores ?? {}).map(([k, v]) => [k, v.mean])),
+      },
+    } : {}),
   };
 }
 

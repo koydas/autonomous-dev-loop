@@ -488,14 +488,14 @@ test('review dataset: docs-only and test-only cases are classified tests_expecte
   }
 });
 
-test('review dataset: only truncated cases overflow the production budget, every prompt fits one 8K TPM window', async () => {
+test('review dataset: only truncated / budget-cut cases overflow the production budget, every prompt fits one 8K TPM window', async () => {
   const cases = await loadReviewCases();
   const budget = parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10);
   const maxTokens = parseInt(GROQ_MODEL_DEFAULTS.review_max_tokens, 10);
   await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined }, async () => {
     for (const c of cases) {
       const { output, request } = await runReview(c.input);
-      assert.equal(output.diff_truncated, c.tags.includes('truncated'), `${c.id}: diff_truncated`);
+      assert.equal(output.diff_truncated, c.tags.includes('truncated') || c.tags.includes('budget-cut'), `${c.id}: diff_truncated`);
       const tokens = estimateTokens(request.systemPrompt + request.prompt);
       assert.ok(tokens <= budget && tokens * 1.1 + maxTokens <= 8000, `${c.id}: ~${tokens} input tokens`);
     }
@@ -507,6 +507,32 @@ test('review dataset: only truncated cases overflow the production budget, every
     assert.match(request.prompt, /headers\.get\('retry-after'\)\.trim\(\)/);
     assert.ok(c.expected.must_note?.some((f) => f.includes('truncat')), `${c.id}: must_note the truncation`);
   }
+});
+
+test('review dataset: incident cases name their source PR and reproduce its shape', async () => {
+  const cases = await loadReviewCases();
+  const incidents = filterCases(cases, { tags: ['incident'] });
+  assert.ok(incidents.length >= 5, `only ${incidents.length} incident cases`);
+  for (const c of cases) assert.equal(c.tags.includes('incident'), c.source !== undefined, `${c.id}: source iff incident`);
+  for (const c of incidents) assert.match(c.source, /^PR #\d+$/, `${c.id}: source`);
+  const byId = Object.fromEntries(incidents.map((c) => [c.id, c]));
+  await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined }, async () => {
+    // #191/#196: documentation only, so tests are not expected: the finding must come from the issue, not gate (a).
+    assert.match(buildChangeClassificationContext(byId['incident-note-instead-of-fix'].input.diff), /- tests_expected: false/);
+    // #207: the stale-reference hits and the prompt budget reach the prompt; nothing is cut.
+    const stale = await runReview(byId['incident-stale-refs-shared-phrasing'].input);
+    assert.match(stale.request.prompt, /## Stale references[\s\S]*## Prompt budget impact[\s\S]*## Related ADRs/);
+    assert.equal(stale.output.diff_truncated, false);
+    // #187: the workflow is shown in full, the test file is cut mid-way, the docs are not shown.
+    const cut = await runReview(byId['incident-finding-on-cut-hunks'].input);
+    assert.deepEqual(cut.output.unreviewed_code_files, []);
+    assert.match(cut.request.prompt, /include: \$\{\{ github\.event_name == 'schedule'/);
+    assert.match(cut.request.prompt, /\+test\('nightly\.yml: the ingest job/);
+    assert.doesNotMatch(cut.request.prompt, /a manual run of digest|docs\/maintenance\.md b\//);
+    // #206: an approval of the clean change is withheld for the cut code file (ADR-0038).
+    const code = await runReview(byId['incident-clean-code-cut'].input);
+    assert.deepEqual([code.output.verdict, code.output.unreviewed_code_files], ['WITHHELD', ['src/http/status_class.mjs']]);
+  });
 });
 
 test('review dataset: evidence cases carry a valid evidence file for the case head SHA', async () => {
@@ -750,12 +776,23 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   // decideVerdict on recorded output: an approval over a timed-out check is withheld.
   assert.equal(byId['evidence-unverified-timeout'].output.llm_verdict, 'APPROVED');
   assert.equal(byId['evidence-unverified-timeout'].label, 'withheld');
+  // Incident cases: an approval of a clean diff whose code was cut is withheld (ADR-0038); the known-gap
+  // TOCTOU case is missed, as on Groq, and stays out of the gated metrics (ADR-0031 §7).
+  assert.equal(byId['incident-clean-code-cut'].label, 'withheld');
+  assert.equal(byId['incident-note-instead-of-fix'].scores.flags_issue, 1);
+  assert.equal(byId['incident-stale-refs-shared-phrasing'].scores.no_false_alarm, 1);
+  assert.equal(byId['incident-toctou-untested-claim'].label, 'approve');
   const { summary } = saved;
+  // 28 cases run, 27 gated: the known-gap case is counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [23, 0.0435, 0.8696, 0.8571, 0.7778],
+    [28, 0.037, 0.8889, 0.8667, 0.8333],
   );
-  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9286, 0.75]);
+  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9333, 0.8]);
+  assert.deepEqual(
+    [summary.known_gap.n_cases, summary.known_gap.error_rate, summary.known_gap.scores.verdict_match.mean, summary.known_gap.per_class.request_changes.recall],
+    [1, 0, 0, 0],
+  );
 });
 
 test('run_evals --suite review exits 1 when the reviewer approves everything', async () => {
@@ -1112,6 +1149,67 @@ test('parity parser: comments in the call site (apostrophe, braces, block) are s
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+});
+
+// Review prompt context parity: every field pr_review.mjs passes to buildReviewPrompt, the suite passes too,
+// through the same formatter when production wraps the value in one (ADR-0035/0036/0037 contexts, #217 follow-up).
+async function buildReviewPromptFields(file) {
+  const src = await fs.readFile(path.join(REPO_ROOT, file), 'utf8');
+  const calls = [...src.matchAll(/\bbuildReviewPrompt\(\s*\{/g)];
+  assert.equal(calls.length, 1, `${file}: expected one buildReviewPrompt({ … }) call site`);
+  return new Map(entries(stripComments(balanced(src, calls[0].index + calls[0][0].length - 1)))
+    .map(([key, value]) => [key, value.match(/^([A-Za-z_$][\w$]*)\(/)?.[1] ?? null]));
+}
+
+// Fields of `prod` the suite does not pass, or passes without production's formatter.
+function reviewPromptDrift(prod, suite) {
+  const drift = [];
+  for (const [key, formatter] of prod) {
+    if (!suite.has(key)) drift.push(`${key}: not passed by the suite`);
+    else if (formatter && suite.get(key) !== formatter) drift.push(`${key}: production formats it with ${formatter}(), the suite with ${suite.get(key) ?? 'no call'}`);
+  }
+  return drift;
+}
+
+test('review suite passes buildReviewPrompt every field pr_review.mjs passes, through the same formatter', async () => {
+  const prod = await buildReviewPromptFields('scripts/pr_review.mjs');
+  const suite = await buildReviewPromptFields('scripts/lib/eval_suites.mjs');
+  for (const key of ['staleRefsContext', 'relatedAdrs', 'promptBudgetContext']) assert.ok(prod.has(key), `pr_review.mjs no longer passes ${key}: update this test`);
+  assert.deepEqual(reviewPromptDrift(prod, suite), []);
+});
+
+test('review prompt parity: a production field the suite lacks, or another formatter, is caught', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'parity-'));
+  const file = path.join(tmp, 'stage.mjs');
+  try {
+    await fs.writeFile(file, 'const r = buildReviewPrompt({ systemPrompt, rawDiff, staleRefsContext: formatStaleRefsContext(hits), relatedAdrs, newContext: formatNew(x) /* ) */ });\n');
+    const prod = await buildReviewPromptFields(path.relative(REPO_ROOT, file));
+    assert.deepEqual([...prod], [['systemPrompt', null], ['rawDiff', null], ['staleRefsContext', 'formatStaleRefsContext'], ['relatedAdrs', null], ['newContext', 'formatNew']]);
+    const suite = new Map([['systemPrompt', null], ['rawDiff', null], ['staleRefsContext', 'quote'], ['relatedAdrs', null]]);
+    assert.deepEqual(reviewPromptDrift(prod, suite), [
+      'staleRefsContext: production formats it with formatStaleRefsContext(), the suite with quote',
+      'newContext: not passed by the suite',
+    ]);
+    await fs.writeFile(file, 'buildReviewPrompt({ a });\nbuildReviewPrompt({ b });\n');
+    await assert.rejects(buildReviewPromptFields(path.relative(REPO_ROOT, file)), /expected one buildReviewPrompt/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('reviewSuite.run renders the precomputed stale_refs, related_adrs and prompt_budget contexts like production', async () => {
+  const input = {
+    title: 'T', body: 'B', diff: SMALL_DIFF,
+    stale_refs: [{ removedText: 'old rule text', file: 'prompts/x.md', line: 4, foundIn: [{ path: 'docs/y.md', line: 9 }] }],
+    related_adrs: [{ id: 'ADR-0042', title: 'Some decision', status: 'Accepted', decisionExcerpt: 'Do the thing.' }],
+    prompt_budget: [{ prompt: 'prompts/x.md', stage: 'review', budget: 'input', deltaTokens: -5, headTokens: 100, maxInputTokens: 6300, headroomTokens: 4000, lowHeadroom: false }],
+  };
+  const { request } = await runReview(input);
+  assert.match(request.prompt, /## Stale references \(deterministic text search\)\n[\s\S]*- Removed from prompts\/x\.md:4 — "old rule text" — still referenced in: docs\/y\.md:9/);
+  assert.match(request.prompt, /## Related ADRs\n[\s\S]*- ADR-0042: Some decision \(Accepted\) — Decision: Do the thing\./);
+  assert.match(request.prompt, /## Prompt budget impact[\s\S]*- prompts\/x\.md: -5 tokens \(now 100\)/);
+  const bare = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF });
+  assert.doesNotMatch(bare.request.prompt, /Stale references|Related ADRs|Prompt budget impact/);
 });
 
 test('liveCallArgs: only the suite config fields + options, pinned to the primary', () => {

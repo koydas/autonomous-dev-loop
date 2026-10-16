@@ -132,11 +132,12 @@ export function detectQuotaExhaustion(err) {
 // Expected LLM tokens of a live run: runs × tokens per run, the larger of the newest error-free recorded
 // run of the suite (history entries, oldest first, as appended to EVAL_HISTORY_FILE) and the suite's
 // static tokensPerRunEst. history tokens_est are chars/4 (≈ 25% under provider usage): alone, it would
-// let EVAL_TOKEN_BUDGET pass runs up to ≈ 1.34× the cap.
+// let EVAL_TOKEN_BUDGET pass runs up to ≈ 1.34× the cap. summary.error_rate leaves known-gap runs out (ADR-0031 §7):
+// a run whose known-gap case errored has fewer answered calls than runs and is skipped too.
 export function estimateRunTokens({ suite, nRuns, history = [] }) {
   const hasStatic = Number.isFinite(suite.tokensPerRunEst) && suite.tokensPerRunEst > 0;
   const last = [...history].reverse().find((h) => h?.suite === suite.name && h.summary?.n_runs > 0
-    && h.summary.error_rate === 0 && h.summary.tokens_est && !String(h.model ?? '').startsWith('replay:'));
+    && h.summary.error_rate === 0 && !(h.summary.known_gap?.error_rate > 0) && h.summary.tokens_est && !String(h.model ?? '').startsWith('replay:'));
   if (last) {
     const perRun = Math.ceil((last.summary.tokens_est.in + last.summary.tokens_est.out) / last.summary.n_runs);
     if (!hasStatic || perRun > suite.tokensPerRunEst) {
@@ -333,36 +334,57 @@ export function computeConsistency(results) {
   return round(multi.filter((labels) => labels.every((l) => l === labels[0])).length / multi.length);
 }
 
-export function summarize(results) {
+// A case tagged known-gap (an incident the stage is known to get wrong) is run, scored and published, but
+// left out of the quality metrics the thresholds read: summary.known_gap holds its own. Run cost and duration
+// (n_cases, n_runs, latency, llm_calls, tokens_est) and the circuit breaker cover every run (ADR-0031 §7).
+export const KNOWN_GAP_TAG = 'known-gap';
+export const isKnownGap = (r) => Array.isArray(r?.tags) && r.tags.includes(KNOWN_GAP_TAG);
+
+// error_rate, scores, consistency, confusion and per_class of a set of results.
+function qualityMetrics(results, breaker) {
   const scoreNames = [...new Set(results.flatMap((r) => Object.keys(r.scores)))];
   const scores = {};
   for (const name of scoreNames) {
     const applicable = results.map((r) => r.scores[name]).filter((v) => v != null);
     scores[name] = { mean: round(mean(applicable)), n: applicable.length };
   }
+  const confusion = computeConfusion(results);
+  return {
+    error_rate: breaker ? 1 : round(results.length ? results.filter((r) => r.error).length / results.length : 0),
+    scores,
+    consistency: computeConsistency(results),
+    confusion,
+    per_class: perClassMetrics(confusion),
+  };
+}
 
+export function summarize(results) {
   // A run cut short by the circuit breaker measured the provider, not the stage: error_rate 1 by
   // definition, so the error_rate gate fails and the dashboard skips it (partitionPublishable).
   const breaker = results.find((r) => r.circuit_breaker)?.circuit_breaker ?? null;
   const latencies = results.filter((r) => !r.skipped).map((r) => r.duration_ms);
   // Answered calls only: a failed call ({ error }) has no response and is not usage.
   const calls = results.flatMap((r) => r.calls).filter((c) => !c.error);
-  const confusion = computeConfusion(results);
+  const knownGap = results.filter(isKnownGap);
+  const { error_rate, scores, consistency, confusion, per_class } = qualityMetrics(results.filter((r) => !isKnownGap(r)), breaker);
 
   return {
     n_cases: new Set(results.map((r) => r.case_id)).size,
     n_runs: results.length,
-    error_rate: breaker ? 1 : round(results.length ? results.filter((r) => r.error).length / results.length : 0),
+    error_rate,
     scores,
-    consistency: computeConsistency(results),
+    consistency,
     confusion,
-    per_class: perClassMetrics(confusion),
+    per_class,
     latency_ms: { p50: percentile(latencies, 50), p95: percentile(latencies, 95) },
     llm_calls: calls.length,
     tokens_est: {
       in: calls.reduce((s, c) => s + c.tokens_in_est, 0),
       out: calls.reduce((s, c) => s + c.tokens_out_est, 0),
     },
+    ...(knownGap.length ? {
+      known_gap: { n_cases: new Set(knownGap.map((r) => r.case_id)).size, n_runs: knownGap.length, ...qualityMetrics(knownGap, breaker) },
+    } : {}),
     ...(breaker ? {
       circuit_breaker: {
         provider: breaker.provider, quota: breaker.quota, limit: breaker.limit, used: breaker.used,
@@ -374,9 +396,14 @@ export function summarize(results) {
 
 // thresholds: { "<dot.path into summary>": { min?, max?, optional? } }, e.g. { "scores.verdict_match.mean": { min: 0.8 } }
 // optional: a metric the run did not measure (e.g. consistency with --repeats 1) is skipped instead of failing.
+// summary.known_gap is never gated: a threshold on it is a failure of the threshold itself.
 export function checkThresholds(summary, thresholds = {}) {
   const failures = [];
   for (const [metricPath, { min, max, optional = false }] of Object.entries(thresholds)) {
+    if (metricPath.split('.')[0] === 'known_gap') {
+      failures.push({ metric: metricPath, value: null, reason: 'known-gap metrics are never gated (remove the case\'s known-gap tag instead)' });
+      continue;
+    }
     const value = metricPath.split('.').reduce((o, k) => (o == null ? undefined : o[k]), summary);
     if (value == null && optional) continue;
     if (value == null) {
@@ -413,6 +440,13 @@ export function formatReport({ suite, summary, failures, results, meta = {} }) {
   }
   lines.push(`| latency p50 / p95 (ms) | ${summary.latency_ms.p50} / ${summary.latency_ms.p95} |`);
   lines.push(`| llm calls · tokens in/out (est.) | ${summary.llm_calls} · ${summary.tokens_est.in} / ${summary.tokens_est.out} |`);
+  // ADR-0031 §7: cases / runs above include the known-gap cases; every metric above excludes them.
+  const kg = summary.known_gap;
+  if (kg) {
+    lines.push(`| known-gap (not gated) cases / runs | ${kg.n_cases} / ${kg.n_runs} |`);
+    for (const [name, { mean: m, n }] of Object.entries(kg.scores)) lines.push(`| known-gap scores.${name} | ${m} (n=${n}) |`);
+    lines.push(`| known-gap error_rate | ${kg.error_rate} |`);
+  }
   lines.push('');
 
   const cb = summary.circuit_breaker;

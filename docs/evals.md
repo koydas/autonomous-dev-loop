@@ -149,7 +149,7 @@ Groq does not count cached prompt tokens against its rate limits ([Groq rate lim
 
 `try again in` on a TPD 429 is exactly `(used + requested − 200000) / (200000 / 86400 s)` (e.g. 1892 tokens → 13m37s, 8366 → 1h0m14s): about 8.3k tokens come back per hour, the whole quota in 24 h.
 
-**Pre-flight estimate.** `eval.start` logs `meta.cases`, `meta.tokens_est`, `meta.tokens_est_per_run` and `meta.tokens_est_source`: runs (cases × repeats) × tokens per run, the larger of the newest error-free live run of the suite in `EVAL_HISTORY_FILE` (`history:<run_id>`; local only, a CI runner starts with no history) and the suite's static `tokensPerRunEst` (`static`). A replay costs nothing (`replay`, 0). `eval.start` is logged once the dataset is loaded; a failure before that still logs a bare `eval.start` before `eval.error`. The estimate is cache-blind, so it overstates a Groq run: validation × 3 = 35 × 3 × 2700 = **283,500**, review × 3 = 23 × 3 × 4200 = **289,800**.
+**Pre-flight estimate.** `eval.start` logs `meta.cases`, `meta.tokens_est`, `meta.tokens_est_per_run` and `meta.tokens_est_source`: runs (cases × repeats) × tokens per run, the larger of the newest error-free live run of the suite in `EVAL_HISTORY_FILE` (`history:<run_id>`; local only, a CI runner starts with no history) and the suite's static `tokensPerRunEst` (`static`). A replay costs nothing (`replay`, 0). `eval.start` is logged once the dataset is loaded; a failure before that still logs a bare `eval.start` before `eval.error`. The estimate is cache-blind, so it overstates a Groq run: validation × 3 = 35 × 3 × 2700 = **283,500**, review × 3 = 28 × 3 × 5300 = **445,200** (23 × 3 × 4200 = 289,800 before the [incident cases](#incident-cases)).
 
 **`EVAL_TOKEN_BUDGET`** (env; repository variable `EVAL_TOKEN_BUDGET` in `evals.yml` and `pr-evals.yml`, unset = no cap): a live run whose estimate exceeds it is refused before any LLM call (`eval.error`, exit 1, no results file). A non-integer value, or a budget with no estimate available, is refused too. Replays ignore it. **Scheduled runs never read it** (`evals.yml` passes `''` on `schedule`): any cap under the TPD would refuse both weekly suites before their first call, and a cap above 290k protects nothing. Manual and PR runs keep it.
 
@@ -180,17 +180,40 @@ A TPM 429 that outlasts the retries, a 5xx or a network error does not trip it. 
 | `EVAL_TOKEN_BUDGET` per suite | estimates 283.5k / 289.8k against a 200k TPD | Rejected as the fix: refuses the run, publishes nothing. Not read on schedule |
 | Evals on Anthropic | — | Excluded: evals measure the production primary model (Groq `openai/gpt-oss-120b`) |
 
+**Review suite with the incident cases** (2026-10-16, chars/4 from `estimateRunTokens` and the fitted prompts, no live run):
+
+| | cases | input / repeat | × 3 input | × 3 output (`max_tokens` ceiling) | × 3 total, chars/4 |
+|---|---|---|---|---|---|
+| before | 23 | 81.5k | 244.6k | ≤ 70.7k | ≤ 315k |
+| after | 28 | 105.2k (+23.7k: two cases sit at the 6300 budget) | 315.6k | ≤ 86.0k | ≤ 402k |
+
+- **Why validation fit under the TPD (run 38847780079: ≈ 275k estimated input, completed).** Not because chars/4 overestimates: the code takes it to be ≈ 25% *under* provider usage (`estimateRunTokens`, and the 1.34 Groq-reported / chars/4 ratio behind `tokensPerRunEst`). The gap is the prompt cache: Groq does not count cached prompt tokens against its limits, and every call of a suite repeats the same system prompt ([ADR-0027 amendment](./adr/0027-offline-eval-harness.md)).
+- **Review under the same model:** the system prompt (≈ 2.6k of 3.76k per call) is ≈ 218k of the 315.6k input. With every call after the first a cache hit, the counted cost is ≈ 98k input + the real output (≤ 86k) ≈ **≤ 185k**: it fits, without much margin. With validation's measured ratio instead (counted ≤ 0.65 × estimate), ≈ 261k: it does not. Cache hits are best-effort, so the first Wednesday run decides; the circuit breaker stops it at the first TPD 429 and nothing is published.
+- **If it trips:** a separate Groq organization for evals (same model, its own TPD) keeps every gate and every case. Not proposed: fewer repeats (loosens `consistency`, rejected above), a `--tags` split across two days (a filtered run skips thresholds, which `workflow_gates.test.mjs` forbids under ADR-0031 §2: it needs a new ADR), dropping cases (ADR-0031).
+
 Residual risk: a suite day spends up to the whole TPD that production shares (≈ 8.3k tokens back per hour), and cache hits are not guaranteed. A run that hits the TPD anyway is stopped by the circuit breaker at the first 429 and not published; the following week retries. If review × 3 trips it, the remaining levers keep the gates: a separate Groq organization for evals (same model, own TPD) or the Groq Dev tier.
 
 ## Gates only tighten (ADR-0031)
+
+### Known-gap cases
+
+A case tagged **`known-gap`** (ADR-0031 §7) is run, scored, published and shown (run page: the tag on its rows, a "known-gap (not gated)" block in the metrics), but stays out of the gate: `summarize` computes `error_rate`, `scores`, `consistency`, `confusion` and `per_class`, the metrics `checkThresholds` reads, over the other cases only, and reports the known-gap cases under `summary.known_gap`. Run size and cost (`n_cases`, `n_runs`, latency, `llm_calls`, `tokens_est`) and the circuit breaker cover every run. A threshold on a `known_gap.*` path fails as such.
+
+- It is for an incident the stage is known to fail today (`incident-toctou-untested-claim`), so the case is measured without turning the gate red until the stage is fixed.
+- **Removing the tag is the only way in**, and it is one-way: `eval_threshold_floor.test.mjs` requires every untagged case to be pinned and every tagged case to be listed in its `KNOWN_GAP` map and not pinned. Removing the tag therefore pins the case in the same PR, and a pinned case can never be tagged again.
+- The floor's minimum case count counts gated cases only.
+- Where it shows: `cases / runs` (report, scorecard `n_cases` / `n_runs`) counts every case run; the report and the run page add `known-gap` rows, and the scorecard entry a `known_gap` field (`n_cases`, `n_runs`, `error_rate`, scorer means). A history entry whose known-gap case errored is not used to calibrate the [pre-flight estimate](#token-budget).
 
 A red eval is fixed in the stage (prompt, parser, production code), never by loosening its gate: no lower `min`, higher `max`, new `optional`, dropped or relabelled case, or filtered run. `scripts/tests/eval_threshold_floor.test.mjs` pins every suite's thresholds, minimum case count and each case's id, label and input hash (a relabelled, removed or rewritten case fails it), and fails when a suite's prompts share a 5-word run with one of its cases (prompt examples must not quote the dataset); tightening a threshold or adding cases raises the floor in the same PR. Loosening needs a new ADR.
 
 ## Metrics
 
+Every quality metric but `known_gap` leaves the [known-gap cases](#known-gap-cases) out; they are the only metrics thresholds read.
+
 | Metric | Meaning |
 |---|---|
 | `scores.<scorer>.mean` | Mean over runs where the scorer applies (`null` = not applicable) |
+| `known_gap` | The same quality metrics (`n_cases`, `n_runs`, `error_rate`, `scores`, `consistency`, `confusion`, `per_class`) over the [known-gap cases](#known-gap-cases) only; absent when the run has none. Never gated |
 | `error_rate` | Share of runs that threw (unparseable output, provider failure) or whose LLM call threw although the stage returned an output ([swallowed LLM errors](#swallowed-llm-errors)); 1 for a run the [circuit breaker](#token-budget) stopped |
 | `per_class.<label>.{precision,recall,f1}` | From the expected × predicted confusion matrix; errors count as misses |
 | `consistency` | Share of cases whose repeats all produced the same label |
@@ -205,11 +228,14 @@ A red eval is fixed in the stage (prompt, parser, production code), never by loo
 
 Dataset tags: `core` marks the original 15 cases, so `--tags core` compares with runs from before the dataset grew. The edge-case tags are `partial-ac`, `role-scope`, `scope-pair`, `stub` (B4 minimal pair), `short`, `fr`, `warnings-only` and `injection`.
 
+`invalid-partial-ac-style` (one AC item measured against "the existing error style" of a directory) is still missed 3/3 on live run 38847780079, with every gate met (invalid recall 0.884). No prompt change is applied: the B2 rule already covers it generically ("Measured against a reference the issue does not state … Naming where the reference lives does not state it"), with an example from another domain (the tone of `src/i18n/` strings). A further edit would restate that rule or paraphrase the case (ADR-0031 §6), and its effect on the miss and on valid recall cannot be measured without a live run. The case stays gated and unedited.
+
 ### `review`
 
 `run` goes through the production code of `scripts/pr_review.mjs`: `buildReviewPrompt` (diff filter, classification / automation-gate / dependency / evidence contexts, token budget) and `parseReviewVerdict` from `scripts/lib/review_prompt.mjs`, then `decideVerdict` (ADR-0024/0026). The label is the **final pipeline verdict**: `approve`, `request_changes` or `withheld`.
 
-- Dataset (`evals/datasets/review.jsonl`, 23 cases: 14 `request_changes`, 8 `approve`, 1 `withheld`): `{ id, tags, input: { title, body, diff, dependencies?, evidence?, head_sha? }, expected: { verdict, must_flag?, must_note? } }`. `dependencies` replaces the target repo's `package.json` (dependency manifest context). `evidence` is an evidence file as written by `run_review_evidence.mjs`; a case without it is a repository that has not opted in, so missing evidence does not withhold an approval.
+- Dataset (`evals/datasets/review.jsonl`, 28 cases: 16 `request_changes`, 10 `approve`, 2 `withheld`; 27 gated, 1 [`known-gap`](#known-gap-cases)): `{ id, tags, source?, input: { title, body, diff, dependencies?, evidence?, head_sha?, stale_refs?, related_adrs?, prompt_budget? }, expected: { verdict, must_flag?, must_note? } }`. `dependencies` replaces the target repo's `package.json` (dependency manifest context). `evidence` is an evidence file as written by `run_review_evidence.mjs`; a case without it is a repository that has not opted in, so missing evidence does not withhold an approval.
+- **Context parity.** `stale_refs`, `related_adrs` and `prompt_budget` are precomputed in the shapes `findStaleReferences` (ADR-0035), `findRelatedAdrs` (ADR-0036) and `computePromptBudgetImpact` (ADR-0037) return, since a case has no PR tree to search, and go through the same formatters and `buildReviewPrompt` fields as in `pr_review.mjs` (related ADRs: one at most on Groq, dropped first under budget pressure). `eval_suites.test.mjs` parses both `buildReviewPrompt({ … })` call sites and fails when `pr_review.mjs` passes a field the suite does not, or formats it with another function.
 - Cases: real bugs (`off-by-one`, `null`, `shell-injection` via `execSync`, `deleted-test`, `undeclared-import`, the prompt's named checks, an unawaited `forEach`, `missing-tests`), unrequested docs deletion, minimal `pair`s (same issue, buggy vs clean diff), clean `docs` and `test-only` diffs (`tests_expected: false` per `change_classifier`), a complete `automation` change (tests + docs + c8 gate), `injection` in the PR body and in a code comment, `evidence` (pass, fail, timeout) and a `truncated` diff whose bug stays visible.
 - Sections (`flags_issue`, `no_false_alarm`, #178): only a top-level section heading ends a section, i.e. a `#`–`###` heading or a bold-only line whose whole text, emoji, `:` and whitespace aside, is `Change Classification`, `Summary`, `Issues Found` or `Verdict` (`**🚀 Verdict**`). A `#### scripts/foo.mjs` sub-heading, a `**scripts/foo.mjs**` group line or a `**Summary of risks**` line inside Issues Found stays in it, so the findings after it are read.
 - A review without a verdict line is an **errored run** (`error_rate`), not a `REQUEST_CHANGES`: production fails closed, but counting it as a rejection would inflate `request_changes` recall.
@@ -226,7 +252,33 @@ Dataset tags: `core` marks the original 15 cases, so `--tags core` compares with
 
 **Duration and tokens.** Each prompt is fitted to `review_max_input_tokens` (6300 estimated tokens; × 1.10 + `review_max_tokens` 1024 = 7954 ≤ 8000 TPM), exactly like production. The dataset averages ≈ 2.9k estimated input tokens per call (system prompt ≈ 1.9k); the `truncated` case sits at the budget. One repeat ≈ 66k input + ≤ 24k output tokens. On the Groq free tier (8K TPM, `--concurrency 1`, TPM is the bottleneck) that is **≈ 11–12 min per repeat, ≈ 35–40 min for the default `--repeats 3`** with the 60 s rate-limit waits; worst case (every call at the budget, TPM shared with live pipeline runs) ≈ 70 min, inside the 120 min job timeout. Anthropic has no budget: the diff keeps the 12,000-char cap.
 
-**Replay fixture.** `scripts/tests/fixtures/review-replay.json` holds hand-written model outputs in the production format (`<think>` block, bold and inline verdict headings) with four planted failures: a truncated review without verdict, a missed bug, an over-severe docs review and a right verdict for the wrong reason. `eval_suites.test.mjs` replays it through `run_evals.mjs` and pins the resulting metrics. Adding a case to the dataset means adding its recorded output to the fixture.
+**Replay fixture.** `scripts/tests/fixtures/review-replay.json` holds hand-written model outputs in the production format (`<think>` block, bold and inline verdict headings) with four planted failures: a truncated review without verdict, a missed bug, an over-severe docs review and a right verdict for the wrong reason. The five incident cases add their outputs (the `known-gap` TOCTOU case is missed, as expected on Groq, and stays out of the pinned gated metrics). `eval_suites.test.mjs` replays it through `run_evals.mjs` and pins the resulting metrics. Adding a case to the dataset means adding its recorded output to the fixture.
+
+### Incident cases
+
+Cases reproduced from a production misjudgment (AGENTS.md → Eval Gates), tag `incident`, `source: "PR #n"`, diff reduced to the minimum with identifiers rewritten:
+
+| Case | Source | Production did | Expected |
+|---|---|---|---|
+| `incident-note-instead-of-fix` | PR #191 (#196 same shape) | approved a bug-fix PR that only adds a Markdown note with the planned fix | `REQUEST_CHANGES`, must_flag `no code\|not implemented\|does not fix\|only a note` |
+| `incident-stale-refs-shared-phrasing` | PR #207 | a High "missing documentation update" from stale-reference hits that were shared phrasing (fixed by #212) | `APPROVE`, `no_false_alarm` (at most a Low "Verify stale reference"); the stale-refs, related-ADR and prompt-budget contexts are in the prompt |
+| `incident-toctou-untested-claim` | PR #194 | approved an `lstat`-then-read path check (TOCTOU) whose PR body claims a test the diff does not hold | `REQUEST_CHANGES`, must_flag `race\|toctou\|symlink`; **`known-gap`** (expected missed on Groq; the #199 provider comparison case) |
+| `incident-finding-on-cut-hunks` | PR #187 | a High finding whose fix sat in a test / doc past the budget cut | `APPROVE`, `no_false_alarm` (ADR-0034): the workflow is shown in full, the tests are cut mid-way, the docs are not shown |
+| `incident-clean-code-cut` | PR #206 | `WITHHELD`, correct: regression case | `WITHHELD` (ADR-0038): clean change, a code file cut by the budget |
+
+`incident-note-instead-of-fix` is classified documentation (`tests_expected: false`), so no gate of the prompt caught it: `prompts/pr-review-system.md` gained one generic rule (a PR that changes no code when the issue asks for a code change does not resolve it; example from another domain), +110 tokens, headroom 3471 of 6300 (55%, ADR-0037). Not measured live: the replay gate cannot measure a prompt change; a `run-evals` label run will.
+
+### Incident backlog
+
+Misjudgments of stages without a suite, recorded so a future suite starts from them. Each line is the case it would need.
+
+| Stage | Incident | Input it needs | Expected |
+|---|---|---|---|
+| generation | #191, #196: a bug issue whose files are protected or withheld produced a PR holding only a handoff note | issue title/body, the file context the stage was given (withheld / protected paths) | no PR: `blocked` (ADR-0029 amendment, #206), never a note under `notes/` or `patches/` |
+| generation / autofix | ADR-0028 deletions: a patch that drops content the issue did not target | the issue or the review feedback, the shown file, the model's `changes[]` | rejected by `static_verifier` / `autofix_guard` (`mass_deletion`), or no deletion in `changes[]` |
+| autofix | #207, #187: auto-fix ran on findings it could not act on (protected `docs/`, a withheld file) and proposed no change | review feedback, shown files, protected paths | `changes: []` with a reason naming the protected / unseen path, `needs-human` (ADR-0034), no speculative edit |
+
+Each needs a suite (`run` through the stage's production code, `llmCall` parity, a cron day): see [Add a suite](#extend).
 
 ## Extend
 
