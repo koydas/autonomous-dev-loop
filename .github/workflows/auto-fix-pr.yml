@@ -186,5 +186,5 @@ jobs:
           RUN_RECORD_PUSH_OUTCOME: ${{ steps.push.outcome }}
           RUN_RECORD_PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
-        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0039).
+        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
         run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"

@@ -104,7 +104,7 @@ if (event.issue && event.comment && !isManualRerunRequested(event)) {
     prNumber,
     authorAssociation: event.comment.author_association ?? null,
   });
-  // Before the tracer: stderr only, no trace file and so no run record (ADR-0039).
+  // Before the tracer: stderr only, no trace file and so no run record (ADR-0040).
   obsLog({ stage: 'autofix', event: 'autofix.skipped', level: 'info', meta: { reason: 'untrusted_comment', prNumber } });
   process.exit(0);
 }
@@ -153,7 +153,7 @@ async function ghFetch(endpoint, options = {}) {
   }
 }
 
-// ADR-0039: the html_url GitHub returns for a created object, for the run journal; never throws.
+// ADR-0040: the html_url GitHub returns for a created object, for the run journal; never throws.
 const htmlUrlOf = (res) => Promise.resolve().then(() => res?.json()).then((o) => o?.html_url ?? null, () => null);
 
 // GET /issues/{n}/comments lists oldest first and ignores sort/direction: read every page,
@@ -430,7 +430,7 @@ log('token_estimate', {
   total: systemTokens + userWrapperTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
 });
 
-// ADR-0039: what the token budget cut from the prompt (truncateToTokenBudget slices at budget × 4 chars).
+// ADR-0040: what the token budget cut from the prompt (truncateToTokenBudget slices at budget × 4 chars).
 const budgetCuts = { hidden_files: [...hiddenPaths], skipped_files: Math.max(0, changedFiles.length - MAX_FILES), diff_truncated: diff.length < rawDiff.length, feedback_truncated: reviewFeedback.length >= feedbackBudget * 4 };
 obsLog({ stage: 'autofix', event: 'autofix.prompt_budget', level: budgetCuts.hidden_files.length || budgetCuts.skipped_files || budgetCuts.diff_truncated || budgetCuts.feedback_truncated ? 'warn' : 'info', meta: { prNumber, attempt: nextAttempt, input_budget: inputBudget, shown_files: [...shownPaths], ...budgetCuts } });
 

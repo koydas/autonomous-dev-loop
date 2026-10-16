@@ -7,8 +7,8 @@ This document describes the structured observability system for the autonomous-d
 Three complementary outputs are produced for every pipeline run:
 
 1. **Structured JSON logs** — one JSON line per event written to stderr by each script.
-2. **Run trace file** — one JSON file per GitHub Actions run, uploaded as an artifact: the spans, the **run journal** (every event of the run) and the **run envelope** (ADR-0039).
-3. **Public run record** — the trace after the redaction allowlist, committed to the `metrics` branch as `metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json` by "Commit metrics" (ADR-0039, see [Run record](#public-run-record)).
+2. **Run trace file** — one JSON file per GitHub Actions run, uploaded as an artifact: the spans, the **run journal** (every event of the run) and the **run envelope** (ADR-0040).
+3. **Public run record** — the trace after the redaction allowlist, committed to the `metrics` branch as `metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json` by "Commit metrics" (ADR-0040, see [Run record](#public-run-record)).
 
 ## Structured JSON Logs
 
@@ -182,7 +182,7 @@ Emitted by `llm_client.mjs` and `config.mjs` (ADR-0032). `stage` is the calling 
 
 | Event                      | Level         | `duration_ms` | Key `meta` fields |
 |----------------------------|---------------|---------------|-------------------|
-| `llm_call`                 | info          | ✓             | `provider`, `model`, `fallback` — the provider and model that answered (ADR-0039); `stage` is the calling stage. Feeds `envelope.llm_calls` |
+| `llm_call`                 | info          | ✓             | `provider`, `model`, `fallback` — the provider and model that answered (ADR-0040); `stage` is the calling stage. Feeds `envelope.llm_calls` |
 | `llm_call_failed`          | warn          | ✓             | `providers` (`<provider>:<status \| skip reason>`) — no provider answered; the caller gets the error |
 | `llm_fallback`             | warn / error  | —             | `from`, `to`, `error_type`, `error` — the primary failed and the call goes to the other provider; `error` level when the primary's key or config is wrong (`PERMANENT`, 401/403) |
 | `llm_fallback_disabled`    | warn          | —             | `from`, `error_type`, `error` — the primary failed and the caller passed `fallback: false` (live evals) |
@@ -198,7 +198,7 @@ Emitted by `retry.mjs` before each wait of `retryWithBackoff` (GitHub API calls 
 
 ### `workflow`
 
-Emitted by `commit_run_record.mjs` ("Commit metrics") for what a workflow step did, not a script (ADR-0039).
+Emitted by `commit_run_record.mjs` ("Commit metrics") for what a workflow step did, not a script (ADR-0040).
 
 | Event                   | Level       | `duration_ms` | Key `meta` fields |
 |-------------------------|-------------|---------------|-------------------|
@@ -275,7 +275,7 @@ Created incrementally as each stage starts and ends. Finalized (with `completed_
 
 > **`autofix` stage and `partial`**: `auto_fix_pr.mjs` finalizes as `partial` (not `success`) because the git commit and push are performed by the CI step that runs *after* the script exits. The trace accurately records script-level completion; the workflow artifact upload (which runs after the push step) reflects whether the overall job succeeded.
 
-### Run journal and envelope (ADR-0039)
+### Run journal and envelope (ADR-0040)
 
 `scripts/lib/run_journal.mjs`, fed by `observability.mjs`: `log()` records each event it writes to stderr, `createTracer()` points the journal at `<traceDir>/<runId>.json`.
 
@@ -297,7 +297,7 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 
 ## Public Run Record
 
-`metrics/runs/<YYYY-MM>/<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>.json` on the `metrics` branch: the dashboard's source. Written by `scripts/commit_run_record.mjs` (the "Commit metrics" step of `validate-issue`, `code-generation`, `pr-review` and `auto-fix-pr`) in **the same commit** as the run's `metrics/runs.jsonl` lines, with the same 3-attempt retry (ADR-0013, ADR-0039).
+`metrics/runs/<YYYY-MM>/<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>.json` on the `metrics` branch: the dashboard's source. Written by `scripts/commit_run_record.mjs` (the "Commit metrics" step of `validate-issue`, `code-generation`, `pr-review` and `auto-fix-pr`) in **the same commit** as the run's `metrics/runs.jsonl` lines, with the same 3-attempt retry (ADR-0013, ADR-0040).
 
 ### Redaction contract
 

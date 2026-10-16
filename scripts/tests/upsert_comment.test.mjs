@@ -158,7 +158,7 @@ test('upsert_comment exits 1 when comment upsert fails', async () => {
   }
 });
 
-// ADR-0039: the comment is an observability event with the html_url GitHub returns, appended to the
+// ADR-0040: the comment is an observability event with the html_url GitHub returns, appended to the
 // trace validate_issue.mjs wrote earlier in the same job (same GITHUB_RUN_ID).
 test('upsert_comment journals issue_validation.comment_posted into the existing validation trace', async () => {
   const fsp = await import('node:fs/promises');

@@ -1,4 +1,4 @@
-# ADR-0039: Run journal in the trace and a redacted public run record on the `metrics` branch
+# ADR-0040: Run journal in the trace and a redacted public run record on the `metrics` branch
 
 - **Date:** 2026-10-15
 - **Status:** Accepted

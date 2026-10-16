@@ -43,4 +43,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0037: Prompt budget impact as review evidence](./0037-prompt-budget-impact.md)
 - [ADR-0038: Withhold approval when code was cut from the reviewed diff](./0038-withhold-approval-on-unreviewed-code.md)
 - [ADR-0039: LangGraph prototype of the bounded auto-fix loop](./0039-langgraph-bounded-autofix-prototype.md)
-- [ADR-0039: Run journal in the trace and a redacted public run record on the `metrics` branch](./0039-run-journal-and-public-run-record.md)
+- [ADR-0040: Run journal in the trace and a redacted public run record on the `metrics` branch](./0040-run-journal-and-public-run-record.md)

@@ -180,5 +180,5 @@ jobs:
           RUN_RECORD_PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
           RUN_RECORD_PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
         # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
-        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0039).
+        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
         run: node scripts/commit_run_record.mjs

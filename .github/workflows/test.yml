@@ -257,7 +257,7 @@ jobs:
             --statements 80 \
             node --test scripts/tests/generation_blocked.test.mjs
 
-      # ADR-0039 public-safety contract: the journal scrubs at the source, redactTrace() is the only path to `metrics`.
+      # ADR-0040 public-safety contract: the journal scrubs at the source, redactTrace() is the only path to `metrics`.
       - name: Check run_journal coverage (≥80%)
         run: |
           npx --yes c8 \

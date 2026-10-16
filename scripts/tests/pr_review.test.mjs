@@ -1713,7 +1713,7 @@ test('pr_review skips symlinked docs and ADRs in the stale-reference and related
   }
 });
 
-// ADR-0039: every side effect of a review is an observability event, journaled in the trace file with
+// ADR-0040: every side effect of a review is an observability event, journaled in the trace file with
 // the run envelope (provider/model per LLM call, comment and review URLs).
 test('pr_review journals its side effects and the run envelope in the trace file', async () => {
   const base = makeHandler({ groqContent: 'Found issues.\n\nVerdict: REQUEST_CHANGES' });

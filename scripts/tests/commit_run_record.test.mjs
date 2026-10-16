@@ -1,4 +1,4 @@
-// ADR-0039: scripts/commit_run_record.mjs — the "Commit metrics" step: runs.jsonl lines and the
+// ADR-0040: scripts/commit_run_record.mjs — the "Commit metrics" step: runs.jsonl lines and the
 // redacted run record in one commit on the metrics branch, workflow-level effects journaled first.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

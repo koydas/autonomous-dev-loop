@@ -728,7 +728,7 @@ test('generation prompts keep >= 10% headroom on the generation input budget', a
 });
 
 // ---------------------------------------------------------------------------
-// ADR-0039: run journal → public record, real entrypoint, real prompts
+// ADR-0040: run journal → public record, real entrypoint, real prompts
 // ---------------------------------------------------------------------------
 
 async function readOnlyTrace(repoDir) {

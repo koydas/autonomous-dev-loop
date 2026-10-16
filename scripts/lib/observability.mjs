@@ -36,7 +36,7 @@ export function log({ stage, event, level = 'info', duration_ms = null, meta = {
     };
     const line = safeStringify(entry);
     process.stderr.write(line + '\n');
-    // ADR-0039: the run journal keeps the event in the trace file (first write failure reported once).
+    // ADR-0040: the run journal keeps the event in the trace file (first write failure reported once).
     const journalError = recordEvent(line);
     if (journalError) log({ stage: 'observability', event: 'trace_write_failed', level: 'warn', meta: { error: journalError.message } });
 

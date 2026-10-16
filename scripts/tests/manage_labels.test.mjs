@@ -201,7 +201,7 @@ test('manage_labels succeeds when removeLabel returns 404 (label already absent)
   }
 });
 
-// ADR-0039: the label change is an observability event, journaled in the validation run's trace.
+// ADR-0040: the label change is an observability event, journaled in the validation run's trace.
 test('manage_labels logs issue_validation.labels_applied with the labels added and removed', async () => {
   const server = await startMockServer(makeHandler());
   try {

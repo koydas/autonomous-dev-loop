@@ -49,4 +49,4 @@ Pipeline performance needs to be recorded after each completed workflow run (iss
 
 ## Amendment (2026-10-15): one commit per run, with the run record
 
-"Commit metrics" is `scripts/commit_run_record.mjs` (ADR-0039): the run's `runs.jsonl` lines and its redacted record `metrics/runs/<YYYY-MM>/<run_id>.json` (same composite `run_id`) go to the `metrics` branch in one Git Data API commit, fast-forward only, with the same 3 attempts and 2^i s backoff. `runs.jsonl` is read raw (no 1 MB Contents API cap). A record already stored for a `run_id` is never rewritten (first write wins, like `deduplicateMetrics`).
+"Commit metrics" is `scripts/commit_run_record.mjs` (ADR-0040): the run's `runs.jsonl` lines and its redacted record `metrics/runs/<YYYY-MM>/<run_id>.json` (same composite `run_id`) go to the `metrics` branch in one Git Data API commit, fast-forward only, with the same 3 attempts and 2^i s backoff. `runs.jsonl` is read raw (no 1 MB Contents API cap). A record already stored for a `run_id` is never rewritten (first write wins, like `deduplicateMetrics`).

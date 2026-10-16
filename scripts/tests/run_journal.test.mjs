@@ -1,4 +1,4 @@
-// ADR-0039: the run journal — every log() event in the trace file, capped and counted, plus the run envelope.
+// ADR-0040: the run journal — every log() event in the trace file, capped and counted, plus the run envelope.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

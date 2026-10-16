@@ -1,4 +1,4 @@
-// Run journal (ADR-0039): every observability event of the run, kept in the trace file next to the
+// Run journal (ADR-0040): every observability event of the run, kept in the trace file next to the
 // spans, plus a run envelope (workflow, run, trigger, actor, issue/PR, head SHA, LLM calls, links).
 // observability.mjs feeds it: log() → recordEvent(), createTracer() → attachJournal(). Never throws.
 import fs from 'node:fs';
@@ -26,7 +26,7 @@ const toInt = (v) => {
 };
 
 // Scrubbed in the producing process, whose env holds the step's secrets (LLM keys): the
-// "Commit metrics" step that runs redactTrace() does not have them (ADR-0039 §4).
+// "Commit metrics" step that runs redactTrace() does not have them (ADR-0040 §4).
 function scrubMeta(value, secrets) {
   if (typeof value === 'string') return scrubString(value, secrets);
   if (Array.isArray(value)) return value.map((v) => scrubMeta(v, secrets));

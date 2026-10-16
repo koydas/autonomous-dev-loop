@@ -1,4 +1,4 @@
-// Public run record (ADR-0039): the redacted trace a dashboard reads from the `metrics` branch, and
+// Public run record (ADR-0040): the redacted trace a dashboard reads from the `metrics` branch, and
 // the single-commit write of that record with the run's metrics/runs.jsonl lines (ADR-0013).
 // redactTrace() is the only path from a trace file to the store: the site is public.
 
@@ -84,7 +84,7 @@ export const SPAN_META_ALLOWLIST = Object.freeze([
 const PUBLIC_ENV = new Set([
   'GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_OWNER', 'GITHUB_SERVER_URL', 'GITHUB_API_URL', 'GITHUB_GRAPHQL_URL',
   'GITHUB_WORKFLOW', 'GITHUB_WORKFLOW_REF', 'GITHUB_ACTOR', 'GITHUB_TRIGGERING_ACTOR', 'GITHUB_EVENT_NAME',
-  'GITHUB_REF', 'GITHUB_REF_NAME', 'GITHUB_HEAD_REF', 'GITHUB_BASE_REF', 'GITHUB_SHA', 'GITHUB_RUN_ID',
+  'GITHUB_REF', 'GITHUB_REF_NAME', 'GITHUB_HEAD_REF', 'GITHUB_BASE_REF', 'GITHUB_SHA', 'GITHUB_WORKFLOW_SHA', 'GITHUB_RUN_ID',
   'GITHUB_RUN_NUMBER', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB', 'AI_PROVIDER',
 ]);
 const PUBLIC_ENV_SUFFIX = /_(MODEL|EFFORT|PROVIDER)$/;
@@ -197,7 +197,7 @@ function redactEnvelope(e, secrets, server) {
 }
 
 /**
- * The public record of a trace file (ADR-0039). Allowlist only: unknown top-level keys, meta keys
+ * The public record of a trace file (ADR-0040). Allowlist only: unknown top-level keys, meta keys
  * not in EVENT_META_ALLOWLIST / SPAN_META_ALLOWLIST and nested objects are dropped; strings are
  * scrubbed of env values and credential shapes, then cut to MAX_STRING. Events past MAX_RECORD_BYTES
  * are counted in `events_overflow`, like the journal's own cap.

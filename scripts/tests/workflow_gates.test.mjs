@@ -185,7 +185,7 @@ test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkou
 
 // ADR-0013 amendment: main only takes changes through a pull request, so every metrics read and
 // write targets the `metrics` branch; a Contents API call without it would hit main and fail (409).
-// ADR-0039: the step is scripts/commit_run_record.mjs, which writes runs.jsonl and the run record in one
+// ADR-0040: the step is scripts/commit_run_record.mjs, which writes runs.jsonl and the run record in one
 // commit on the metrics branch (Git Data API); it runs the trusted copy where the checkout is a PR tree.
 test('workflows that commit metrics read and write the metrics branch, never the default branch', async () => {
   const { METRICS_BRANCH, RUNS_JSONL_PATH } = await import('../lib/run_record.mjs');

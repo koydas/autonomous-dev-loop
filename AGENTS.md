@@ -133,7 +133,7 @@ For any change to workflow behavior (for example files under `.github/workflows/
 - Observability failures must never abort business logic. The `log()` and tracer methods catch their own errors — do not add extra try/catch around them.
 - The `observability/traces/` directory is git-tracked; the `*.json` files it contains are git-ignored (written at runtime and uploaded as CI artifacts). Do not commit trace files.
 - When adding a new workflow that runs an instrumented script, add `GITHUB_RUN_ID: ${{ github.run_id }}` to the step env and an `upload-artifact` step for the trace file (`if: always()`). See existing workflows for the pattern.
-- Every side effect a stage performs (LLM call, label, comment, push, escalation, budget cut, skip) emits an event, and every event lands in the run journal of the trace (ADR-0039). The trace is published on the `metrics` branch only through `redactTrace()` (`scripts/lib/run_record.mjs`): a new event's meta stays unpublished until its keys are added to `EVENT_META_ALLOWLIST`, and no prompt, model output, file content, title/body or env value may ever be allowlisted.
+- Every side effect a stage performs (LLM call, label, comment, push, escalation, budget cut, skip) emits an event, and every event lands in the run journal of the trace (ADR-0040). The trace is published on the `metrics` branch only through `redactTrace()` (`scripts/lib/run_record.mjs`): a new event's meta stays unpublished until its keys are added to `EVENT_META_ALLOWLIST`, and no prompt, model output, file content, title/body or env value may ever be allowlisted.
 
 ## Documentation Rules
 

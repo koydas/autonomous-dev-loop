@@ -599,7 +599,7 @@ test('callLLM reports a null model to onAnswer when the primary config carries n
   assert.deepEqual(answered, { provider: 'groq', model: null });
 });
 
-// ADR-0039: one llm_call event per answered call (provider and model actually used), one
+// ADR-0040: one llm_call event per answered call (provider and model actually used), one
 // llm_call_failed per call that no provider answered, both under the calling stage.
 const llmEvents = (lines) => lines.map((l) => { try { return JSON.parse(l); } catch { return null; } })
   .filter((e) => e && (e.event === 'llm_call' || e.event === 'llm_call_failed'));

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * "Commit metrics" step of validate-issue, code-generation, pr-review and auto-fix-pr (ADR-0013, ADR-0039).
+ * "Commit metrics" step of validate-issue, code-generation, pr-review and auto-fix-pr (ADR-0013, ADR-0040).
  * One commit on the `metrics` branch with:
  *   - this run's metrics/runs.jsonl lines (METRICS_FILE, outside the checkout: ADR-0021);
  *   - the redacted run record metrics/runs/<YYYY-MM>/<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>.json, from

@@ -1415,7 +1415,7 @@ test('auto_fix_pr blocks a test-file change that drops existing tests', async ()
   }
 });
 
-// ADR-0039: auto-fix side effects (budget cut, LLM call, attempt label, escalation, skips) are journaled.
+// ADR-0040: auto-fix side effects (budget cut, LLM call, attempt label, escalation, skips) are journaled.
 async function runJournaled(handlerOpts, files = {}) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-journal-'));
   for (const [rel, content] of Object.entries(files)) {

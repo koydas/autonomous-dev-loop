@@ -135,7 +135,7 @@ async function ghFetch(path, options = {}) {
   }
 }
 
-// ADR-0039: the html_url GitHub returns for a created/updated object, for the run journal; never throws.
+// ADR-0040: the html_url GitHub returns for a created/updated object, for the run journal; never throws.
 const htmlUrlOf = (res) => Promise.resolve().then(() => res.json()).then((o) => o?.html_url ?? null, () => null);
 
 async function upsertLabel(label) {

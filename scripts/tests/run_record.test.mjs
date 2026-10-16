@@ -1,4 +1,4 @@
-// ADR-0039: the public run record — redaction contract and single-commit persistence.
+// ADR-0040: the public run record — redaction contract and single-commit persistence.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -205,6 +205,14 @@ test('a missing or malformed trace still yields a well-formed empty record', () 
 test('secretValues: public run metadata and *_MODEL / *_EFFORT / *_PROVIDER are kept, short values ignored', () => {
   const values = secretValues({ ...ENV, ANTHROPIC_EFFORT: 'high-effort-value', AI_PROVIDER: 'anthropic-provider', NOT_STRING: 5 });
   assert.deepEqual(values.sort(), [PLANTED_ENV_VALUE, PLANTED_SECRET].sort());
+});
+
+test('a head SHA equal to GITHUB_WORKFLOW_SHA (push-triggered run) is public, not redacted', () => {
+  const env = { ...ENV, GITHUB_WORKFLOW_SHA: SHA };
+  assert.ok(!secretValues(env).includes(SHA));
+  assert.equal(scrubString(`headSha=${SHA}`, secretValues(env)), `headSha=${SHA}`);
+  const record = redactTrace(trace({ events: [{ ts: '2026-10-15T00:00:00.000Z', stage: 'review', event: 'review.skipped', level: 'info', meta: { headSha: SHA, reason: 'already_reviewed' } }] }), { env });
+  assert.equal(record.events[0].meta.headSha, SHA);
 });
 
 test('every allowlisted key list is free of prompt, body, title, content and env keys', () => {

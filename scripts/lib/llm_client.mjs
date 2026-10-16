@@ -30,7 +30,7 @@ export async function callLLM(args) {
   // quota from a bad response (eval circuit breaker): { provider, status } for a provider that was called
   // (status null without an HTTP response), { provider, status: null, skipped } for one that was not.
   const providerErrors = [];
-  // ADR-0039: one llm_call (provider and model that answered) or llm_call_failed event per call.
+  // ADR-0040: one llm_call (provider and model that answered) or llm_call_failed event per call.
   const startMs = Date.now();
   const answeredBy = (provider, model, isFallback) =>
     log({ stage, event: 'llm_call', level: 'info', duration_ms: Date.now() - startMs, meta: { provider, model, fallback: isFallback } });

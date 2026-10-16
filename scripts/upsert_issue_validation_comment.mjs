@@ -11,7 +11,7 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
-// ADR-0039: joins the trace of validate_issue.mjs (same job, same GITHUB_RUN_ID) so its events reach the run journal.
+// ADR-0040: joins the trace of validate_issue.mjs (same job, same GITHUB_RUN_ID) so its events reach the run journal.
 createTracer({ runId: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`, traceDir: path.join(process.cwd(), 'observability', 'traces') });
 
 const COMMENT_MARKER = '<!-- issue-validation-report -->';
