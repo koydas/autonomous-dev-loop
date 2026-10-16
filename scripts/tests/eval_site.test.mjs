@@ -178,6 +178,18 @@ test('renderRun omits the workflow run link for a local EVAL_RUN_ID', () => {
   assert.match(html, /href="my-local-run\.json">results JSON/);
 });
 
+test('renderRun shows the known-gap block apart from the gated metrics, and the tag on its cases (ADR-0031 §7)', () => {
+  const r = results();
+  r.summary.known_gap = { n_cases: 1, n_runs: 3, error_rate: 0.3333, scores: { verdict_match: { mean: 0, n: 3 } } };
+  r.results[0].tags = ['request_changes', 'known-gap'];
+  const html = renderRun(r);
+  assert.match(html, /known-gap \(not gated\) cases \/ runs<\/td><td class="num">1 \/ 3/);
+  assert.match(html, /known-gap scores\.verdict_match<\/td><td class="num">0 \(n=3\)/);
+  assert.match(html, /known-gap error_rate<\/td><td class="num">0\.3333/);
+  assert.match(html, /request_changes, known-gap/);
+  assert.doesNotMatch(renderRun(results()), /known-gap/);
+});
+
 test('renderRun tolerates a minimal results file', () => {
   const html = renderRun({ meta: { run_id: 'x', suite: 'validation' } });
   assert.match(html, /Run <code>x<\/code>/);

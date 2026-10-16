@@ -32,3 +32,21 @@ A failing gate can be turned green in two ways: make the stage better, or make t
 - ✅ An agent (auto-fix, Claude Code) cannot green a gate by editing `thresholds` or the dataset: `eval_threshold_floor.test.mjs` fails.
 - ⚠️ A hard dataset can keep a suite red for a while; that is the intended signal, not a reason to relax it.
 - ⚠️ Tightening is one-way: raise a bound only once several live runs show it holds with margin.
+
+## Amendment (2026-10-16): §7 known-gap cases; production misjudgments become cases
+
+The review dataset had not changed since #177 while the review stage misjudged real PRs (#187, #191, #194, #196, #207). Turning an incident into a gated case the stage fails today turns the gate red until the stage is fixed. That is the intended signal for most incidents, but not for one whose fix is a model or provider question (#194, the #199 comparison case): the choice was then to leave the incident out of the dataset, which is how the dataset stopped learning.
+
+**7. Known-gap cases.** A case tagged `known-gap` is run, scored and published, but left out of every gated metric: `summarize` computes the quality metrics thresholds read (`error_rate`, `scores`, `consistency`, `confusion`, `per_class`) over the other cases, and reports the tagged ones under `summary.known_gap`, which no threshold may name (`checkThresholds` fails such a threshold). Run size, cost and the circuit breaker cover every run. `eval_threshold_floor.test.mjs` enforces the rest:
+- a tagged case is listed in `KNOWN_GAP` (id → input hash) and is not pinned;
+- every untagged case is pinned, so removing the tag pins the case in the same PR, and a pinned case can never be tagged again: removing the tag is the only way into the gate, and it is one-way;
+- the floor's minimum case count counts gated cases only.
+
+**Production misjudgments become cases** (rule in `AGENTS.md` → Eval Gates): a wrong verdict, false finding, missed bug or wrong validation gets a dataset case in the PR that fixes it, or a linked issue labelled `eval-case`. Stages without a suite keep an incident backlog in `docs/evals.md`.
+
+**Why an amendment and not a new ADR (§5).** §5 asks a new ADR for loosening. This loosens nothing: every threshold, its bound and its `optional` flag are unchanged; the gated case set only grows (a case enters it untagged or by losing its tag, never leaves it); a gated case cannot be tagged, so the tag cannot be used to drop a failing case from the gate (§2, §4). A known-gap case is a measurement that did not exist before, not one removed from the gate. Tagging every new case `known-gap` would add cases without raising the gate; the `KNOWN_GAP` map makes each tag a reviewed line of the floor test, like a relabel under §4.
+
+Consequences:
+- ✅ An incident is recorded the day it happens, gated or not; the dashboard shows how the stage does on it.
+- ✅ A fixed known-gap case enters the gate for good.
+- ⚠️ A known-gap case can stay tagged after the stage starts passing it; nothing offline detects that. The run page shows it, and a human removes the tag.

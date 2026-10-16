@@ -2,6 +2,9 @@
 // loosening the gate. This floor fails when a threshold is relaxed, a gated metric is
 // dropped or made optional, a dataset loses cases, or a pinned case is relabelled, removed or
 // rewritten, or a suite's prompts quote its dataset. Tightening raises the floor here.
+// ADR-0031 §7: a case tagged known-gap is outside the gate. It must be listed in KNOWN_GAP and never pinned
+// (a gated case can never be tagged), and every other case must be pinned: removing the tag pins the case,
+// which enters the gate for good.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -24,7 +27,7 @@ const FLOOR = {
     },
   },
   review: {
-    cases: 23,
+    cases: 27,
     thresholds: {
       'scores.verdict_match.mean': { min: 0.75 },
       'per_class.request_changes.recall': { min: 0.8 },
@@ -100,8 +103,23 @@ const PINNED = {
     "evidence-failing-check": ["request_changes", "27e4f68f3776"],
     "evidence-unverified-timeout": ["withheld", "7ce3e5eae36a"],
     "truncated-diff-visible-bug": ["request_changes", "c4d45130fdba"],
+    "incident-note-instead-of-fix": ["request_changes", "bc1f549ee629"],
+    "incident-stale-refs-shared-phrasing": ["approve", "a8a1b16fb636"],
+    "incident-finding-on-cut-hunks": ["approve", "f5ac114479c2"],
+    "incident-clean-code-cut": ["withheld", "634e54f32f55"],
   },
 };
+
+// Cases tagged known-gap, id → input hash. Only a case that was never gated (never in PINNED) can be listed:
+// removing the tag moves it to PINNED, and a pinned case can never come back here.
+const KNOWN_GAP = {
+  validation: {},
+  review: {
+    // PR #194 incident, expected missed on Groq: the #199 provider comparison case.
+    "incident-toctou-untested-claim": "3f6da6d06c69",
+  },
+};
+const KNOWN_GAP_TAG = 'known-gap';
 
 const readCases = (path) => readFileSync(resolve(ROOT, path), 'utf8').split('\n')
   .filter((l) => l.trim() && !l.trim().startsWith('//')).map((l) => JSON.parse(l));
@@ -111,9 +129,53 @@ const canonical = (v) => (Array.isArray(v) ? v.map(canonical)
   : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])])) : v);
 const inputHash = (input) => createHash('sha256').update(JSON.stringify(canonical(input))).digest('hex').slice(0, 12);
 
+const isKnownGap = (c) => (c.tags ?? []).includes(KNOWN_GAP_TAG);
+
+// ADR-0031 §7 rules over one dataset: [] when they hold, else one message per violation.
+function knownGapViolations({ cases, pinned, knownGap }) {
+  const out = [];
+  for (const c of cases) {
+    if (isKnownGap(c)) {
+      if (pinned[c.id]) out.push(`${c.id}: a pinned (gated) case cannot be tagged ${KNOWN_GAP_TAG}`);
+      else if (!knownGap[c.id]) out.push(`${c.id}: tagged ${KNOWN_GAP_TAG} but not listed in KNOWN_GAP`);
+      else if (knownGap[c.id] !== inputHash(c.input)) out.push(`${c.id}: known-gap case input was rewritten`);
+    } else if (!pinned[c.id]) {
+      out.push(`${c.id}: gated case not pinned${knownGap[c.id] ? ' (its known-gap tag was removed: move it from KNOWN_GAP to PINNED)' : ''}`);
+    }
+  }
+  const ids = new Set(cases.map((c) => c.id));
+  for (const id of Object.keys(knownGap)) {
+    if (pinned[id]) out.push(`${id}: listed in KNOWN_GAP and PINNED`);
+    else if (!ids.has(id)) out.push(`${id}: listed in KNOWN_GAP but not in the dataset`);
+  }
+  return out;
+}
+
 test('every registered suite has a threshold floor', () => {
   assert.deepEqual(Object.keys(SUITES).sort(), Object.keys(FLOOR).sort());
   assert.deepEqual(Object.keys(SUITES).sort(), Object.keys(PINNED).sort());
+  assert.deepEqual(Object.keys(SUITES).sort(), Object.keys(KNOWN_GAP).sort());
+});
+
+test('known-gap rules: a gated case can never be (re-)tagged, an untagged case must be pinned (ADR-0031 §7)', () => {
+  const input = { title: 't' };
+  const hash = inputHash(input);
+  const gap = { id: 'g', tags: [KNOWN_GAP_TAG], input };
+  const gated = { id: 'p', tags: [], input };
+  assert.deepEqual(knownGapViolations({ cases: [gap, gated], pinned: { p: ['x', hash] }, knownGap: { g: hash } }), []);
+  // A case that passed into the gate (pinned) gets the tag back: refused, whether or not it is also listed.
+  assert.deepEqual(knownGapViolations({ cases: [{ ...gated, tags: [KNOWN_GAP_TAG] }], pinned: { p: ['x', hash] }, knownGap: {} }),
+    ['p: a pinned (gated) case cannot be tagged known-gap']);
+  assert.deepEqual(knownGapViolations({ cases: [{ ...gated, tags: [KNOWN_GAP_TAG] }], pinned: { p: ['x', hash] }, knownGap: { p: hash } }),
+    ['p: a pinned (gated) case cannot be tagged known-gap', 'p: listed in KNOWN_GAP and PINNED']);
+  // The tag removed: the case is gated and must be pinned in the same PR.
+  assert.deepEqual(knownGapViolations({ cases: [{ ...gap, tags: [] }], pinned: {}, knownGap: { g: hash } }),
+    ['g: gated case not pinned (its known-gap tag was removed: move it from KNOWN_GAP to PINNED)']);
+  // A new tag must be declared; a declared case keeps its input; a stale declaration fails.
+  assert.deepEqual(knownGapViolations({ cases: [gap], pinned: {}, knownGap: {} }), ['g: tagged known-gap but not listed in KNOWN_GAP']);
+  assert.deepEqual(knownGapViolations({ cases: [{ ...gap, input: { title: 'u' } }], pinned: {}, knownGap: { g: hash } }), ['g: known-gap case input was rewritten']);
+  assert.deepEqual(knownGapViolations({ cases: [], pinned: {}, knownGap: { g: hash } }), ['g: listed in KNOWN_GAP but not in the dataset']);
+  assert.deepEqual(knownGapViolations({ cases: [{ id: 'n', input }], pinned: {}, knownGap: {} }), ['n: gated case not pinned']);
 });
 
 for (const [name, floor] of Object.entries(FLOOR)) {
@@ -128,8 +190,13 @@ for (const [name, floor] of Object.entries(FLOOR)) {
     }
   });
 
-  test(`${name}: the dataset keeps at least ${floor.cases} cases (ADR-0031)`, () => {
-    assert.ok(readCases(SUITES[name].dataset).length >= floor.cases, `${name}: dataset shrank below ${floor.cases} cases`);
+  test(`${name}: the dataset keeps at least ${floor.cases} gated cases, known-gap ones not counted (ADR-0031)`, () => {
+    const gated = readCases(SUITES[name].dataset).filter((c) => !isKnownGap(c)).length;
+    assert.ok(gated >= floor.cases, `${name}: ${gated} gated cases, below the floor of ${floor.cases}`);
+  });
+
+  test(`${name}: known-gap cases are declared and were never gated; every gated case is pinned (ADR-0031 §7)`, () => {
+    assert.deepEqual(knownGapViolations({ cases: readCases(SUITES[name].dataset), pinned: PINNED[name], knownGap: KNOWN_GAP[name] }), []);
   });
 
   test(`${name}: every pinned case keeps its id, label and input (ADR-0031)`, () => {

@@ -20,6 +20,8 @@ import {
   detectQuotaExhaustion,
   estimateRunTokens,
   checkTokenBudget,
+  KNOWN_GAP_TAG,
+  isKnownGap,
 } from '../lib/eval_harness.mjs';
 import { partitionPublishable } from '../lib/eval_scorecard.mjs';
 
@@ -251,6 +253,65 @@ test('checkThresholds skips an optional metric the run did not measure, and enfo
   const failures = checkThresholds({ consistency: 0.8 }, thresholds);
   assert.equal(failures.length, 1);
   assert.match(failures[0].reason, /0\.8 < min 0\.9/);
+});
+
+// ADR-0031 §7: a known-gap case is run and scored, but never reaches the gated metrics.
+test('summarize leaves known-gap cases out of the gated metrics and reports them under known_gap', async () => {
+  const cases = parseDataset([
+    '{"id":"a","input":{"q":"yes"},"expected":{"answer":"yes"}}',
+    '{"id":"b","input":{"q":"no"},"expected":{"answer":"no"}}',
+    '{"id":"gap","tags":["known-gap"],"input":{"q":"boom"},"expected":{"answer":"yes"}}',
+    '{"id":"gap2","tags":["x","known-gap"],"input":{"q":"no"},"expected":{"answer":"yes"}}',
+  ].join('\n'));
+  const results = await runSuite({ suite: echoSuite, cases, repeats: 2, llmFor: () => async ({ prompt }) => prompt, now: fixedClock() });
+  assert.equal(KNOWN_GAP_TAG, 'known-gap');
+  assert.deepEqual(results.filter(isKnownGap).map((r) => r.case_id), ['gap', 'gap', 'gap2', 'gap2']);
+  const s = summarize(results);
+  // Gated metrics: cases a and b only, both right.
+  assert.equal(s.error_rate, 0);
+  assert.deepEqual(s.scores.exact, { mean: 1, n: 4 });
+  assert.equal(s.consistency, 1);
+  assert.deepEqual(s.confusion, { yes: { yes: 2 }, no: { no: 2 } });
+  assert.equal(s.per_class.yes.recall, 1);
+  // Cost and size cover every run.
+  assert.equal(s.n_cases, 4);
+  assert.equal(s.n_runs, 8);
+  assert.equal(s.llm_calls, 8);
+  // The known-gap block: same metrics, its runs only.
+  assert.equal(s.known_gap.n_cases, 2);
+  assert.equal(s.known_gap.n_runs, 4);
+  assert.equal(s.known_gap.error_rate, 0.5);
+  assert.deepEqual(s.known_gap.scores.exact, { mean: 0, n: 4 });
+  assert.deepEqual(s.known_gap.confusion, { yes: { __error__: 2, no: 2 } });
+  assert.equal(s.known_gap.per_class.yes.recall, 0);
+  assert.equal(s.known_gap.consistency, 1);
+  // Gated thresholds pass although every known-gap run failed.
+  assert.deepEqual(checkThresholds(s, { 'scores.exact.mean': { min: 1 }, error_rate: { max: 0 }, 'per_class.yes.recall': { min: 1 } }), []);
+  // Without the tag the same runs fail the gate.
+  const untagged = summarize(results.map((r) => ({ ...r, tags: r.tags.filter((t) => t !== KNOWN_GAP_TAG) })));
+  assert.equal(untagged.known_gap, undefined);
+  assert.deepEqual(checkThresholds(untagged, { error_rate: { max: 0 } }).map((f) => f.metric), ['error_rate']);
+});
+
+test('summarize: no known_gap block without known-gap results; the circuit breaker sets both error rates', () => {
+  assert.equal('known_gap' in summarize([{ case_id: 'a', tags: [], scores: {}, calls: [], duration_ms: 1 }]), false);
+  const breaker = { provider: 'groq', quota: 'tokens per day (TPD)', limit: 1, used: 1, retry_after: null };
+  const s = summarize([
+    { case_id: 'a', tags: [], scores: {}, calls: [], duration_ms: 1, error: 'quota', circuit_breaker: breaker },
+    { case_id: 'g', tags: ['known-gap'], scores: {}, calls: [], duration_ms: 0, error: 'skipped', skipped: true },
+  ]);
+  assert.equal(s.error_rate, 1);
+  assert.equal(s.known_gap.error_rate, 1);
+  assert.equal(s.circuit_breaker.skipped_runs, 1);
+  assert.equal(isKnownGap({ tags: 'known-gap' }), false);
+  assert.equal(isKnownGap(null), false);
+});
+
+test('checkThresholds refuses a threshold on known_gap metrics: they are never gated', () => {
+  const summary = { error_rate: 0, known_gap: { error_rate: 0, scores: { exact: { mean: 1 } } } };
+  const failures = checkThresholds(summary, { 'known_gap.scores.exact.mean': { min: 0.5 }, error_rate: { max: 0.1 } });
+  assert.deepEqual(failures.map((f) => f.metric), ['known_gap.scores.exact.mean']);
+  assert.match(failures[0].reason, /never gated/);
 });
 
 test('formatReport lists metrics, threshold failures and failing cases', async () => {

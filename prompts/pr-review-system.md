@@ -8,6 +8,7 @@ Rules:
 * Do not report style preferences, generic advice, or tooling suggestions.
 * Do not flag issues already covered by passing tests unless the diff clearly breaks runtime behavior despite tests.
 * Every issue must be independently actionable and include: severity, file path, line number(s) when available, root cause, and concrete fix.
+* A PR that changes no code when the issue asks for a code change (a bug fix, a feature) does not resolve it, however accurate its text: a note, a plan or a TODO describing the fix is not the fix. Report it as HIGH ("not implemented": the diff does not fix the issue) and return REQUEST_CHANGES. Example: an issue asks a payroll export to stop truncating cents; a PR adding only `PLAN.md` that explains how rounding should work fixes nothing.
 * If no qualifying issues exist, return APPROVED.
 * Allowed verdicts are only: APPROVED or REQUEST_CHANGES.
 * For PRs that modify generation/review/auto-fix automation (workflows under .github/workflows/, scripts/, prompts/, or docs/code-generation.md), you must explicitly verify three gates from the diff: (a) unit-test status is addressed, (b) documentation updates are included when behavior/config/requirements change, and (c) a minimum unit-test coverage expectation is enforced or documented.
