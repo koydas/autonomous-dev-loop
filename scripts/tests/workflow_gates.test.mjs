@@ -196,7 +196,13 @@ test('workflows that commit metrics read and write the metrics branch, never the
   for (const { name, text } of committing) {
     const step = text.slice(text.indexOf('- name: Commit metrics')).split(/\n      - name: /)[0];
     const trusted = BRANCH_TRIGGERED_SECRET_WORKFLOWS.includes(name);
-    assert.ok(step.includes(trusted ? 'run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"' : 'run: node scripts/commit_run_record.mjs'), `${name}: Commit metrics runs ${trusted ? 'the trusted' : 'the'} commit_run_record.mjs`);
+    if (trusted) {
+      assert.ok(step.includes('SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"') && step.includes('node "$SCRIPT"'), `${name}: Commit metrics runs the trusted commit_run_record.mjs`);
+      // Best effort like the shell step it replaced: a default branch without the script warns, never fails the job.
+      assert.match(step, /\[ -f "\$SCRIPT" \] \|\| \{ echo "::warning::[^"]+"; exit 0; \}/, `${name}: a trusted copy without the script is a warning, exit 0`);
+    } else {
+      assert.ok(step.includes('run: node scripts/commit_run_record.mjs'), `${name}: Commit metrics runs commit_run_record.mjs`);
+    }
     assert.match(step, /if: always\(\)/, `${name}: Commit metrics runs on failure too`);
     assert.doesNotMatch(step, /contents\/metrics\/runs\.jsonl/, `${name}: no Contents API write (one file per commit) left in the step`);
   }

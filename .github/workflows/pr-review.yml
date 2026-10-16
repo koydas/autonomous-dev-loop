@@ -215,4 +215,8 @@ jobs:
           RUN_RECORD_MESSAGE: "metrics: pr ${{ steps.ckpt.outputs.pr_number }} [skip ci]"
         # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
         # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
-        run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
+        # The trusted copy is the default branch: until it ships the script, a warning, not a red job.
+        run: |
+          SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
+          [ -f "$SCRIPT" ] || { echo "::warning::commit_run_record.mjs is not on the default branch yet; metrics not committed"; exit 0; }
+          node "$SCRIPT"
