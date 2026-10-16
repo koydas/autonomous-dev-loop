@@ -291,3 +291,22 @@ jobs:
             --functions 80 \
             --statements 80 \
             node --test scripts/tests/build_eval_site.test.mjs
+
+  # ADR-0039: the LangGraph prototype's Python tests, which node --test does not run.
+  # 3.11 is the declared minimum; read-only token and no secrets (generated code runs here).
+  prototype-langgraph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    defaults:
+      run:
+        working-directory: prototypes/langgraph-loop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements.txt
+      - run: python -m unittest -v tests.test_loop

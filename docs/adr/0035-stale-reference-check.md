@@ -13,8 +13,8 @@ New pure module `scripts/lib/stale_refs.mjs`, called by `pr_review.mjs` before t
 
 - **Input:** the raw unified diff, plus injected `listFiles()` (repo-relative paths, `git ls-files` in the PR tree) and `readFile(path)`. The working directory is the PR head checkout, read as data only (ADR-0023). Unit tests never touch the real file system.
 - **Removed blocks:** consecutive `-` lines of one hunk, with the file and old-file line of the first one. Normalized: markdown backticks, `*` and `_` stripped, whitespace collapsed, lowercased. Blocks under 60 normalized chars are ignored (too generic to be a quote).
-- **Search:** every 60-char window of a block is indexed, then each searched file is scanned for those windows (linear in the size of the docs: ~0.1 s on this repo). A file matches when it contains the block or any 60-char window of it. The reported line is the start of the longest matched run in that file.
-- **Searched files:** `docs/**/*.md`, `.claude/skills/**/*.md`, `prompts/*.md`, `AGENTS.md`.
+- **Search** (run threshold and live text amended 2026-10-14, see below)**:** every 60-char window of a block is indexed, then each searched file is scanned for those windows (linear in the size of the docs: ~0.1 s on this repo). A file matches when it contains the block or any 60-char window of it. The reported line is the start of the longest matched run in that file.
+- **Searched files** (prompts removed by the 2026-10-14 amendment)**:** `docs/**/*.md`, `.claude/skills/**/*.md`, `prompts/*.md`, `AGENTS.md`.
 - **Excluded:** `CHANGELOG.md` and Superseded or Deprecated ADRs (both quote replaced rules on purpose), the file the text was removed from, and any file the diff re-adds the text to (a move). An ADR is inactive when its `- **Status:**` line starts with `Superseded` or `Deprecated`.
 - **Untrusted tree:** `pr_review.mjs` lists only regular files and refuses to read anything else, so a symlink in the PR (to `/dev/zero`, or out of the tree) is never followed.
 - **Output:** `[{ removedText, file, line, foundIn: [{ path, line }] }]`.
@@ -37,3 +37,25 @@ New pure module `scripts/lib/stale_refs.mjs`, called by `pr_review.mjs` before t
 - ⚠️ Text that is only paraphrased (no 60-char run in common) is not found.
 - ⚠️ Historical quotes (an ADR's Context) are reported too. The reviewer has to judge them, which is why a hit never changes the verdict.
 - ⚠️ The `review` eval suite builds the prompt without this block, so evals do not measure its effect on the reviewer.
+
+## Amendment (2026-10-14): a hit needs removed text the tree no longer holds, and is at most a Low note
+
+On #207 (base `d497433`, reviewed heads `46ee7d2` and `54ec1e5`) the check reported 2 blocks / 6 locations for `prompts/auto-fix-system.md`. Every line of the prompt was reworded, not removed, and each location shared a 61–111-char run of generic phrasing with it: the reworded prompt itself, or `prompts/generation-system.md`, which states the same guardrails on its own. The block told the reviewer a hit "is a documentation gap (gate (b))", the model raised a High "missing documentation update", auto-fix could only touch protected `docs/` paths, and the PR went `needs-human`. Being outside `decideVerdict` did not help: once in the prompt, the model acts on it.
+
+- **Live text.** A 60-char window of a removed block is live when the PR tree still holds it in the head version of the block's source file (a reworded line; its new path on a rename) or in any `prompts/*.md`. Live windows never count toward a hit. A source file keeps only its own blocks live: a doc the diff edits elsewhere (it loses another paragraph) still holds a removed rule as a stale quote, and does not mask that rule in the other docs. Prompts are the rules themselves, so they are a live source and no longer a searched path. Other docs are not: two docs quoting the same removed rule are both stale, and do not keep each other live. This narrows "present anywhere in the head tree" on purpose: code and other files are not read (unbounded size in an untrusted tree, and a rule quoted in code is not what this check is for). The exception is the source file itself, which can be any type: a live source over `MAX_LIVE_SOURCE_CHARS` (1,000,000 chars) is read but not scanned, so its text counts as gone (the check errs toward reporting).
+- **Run threshold.** A doc is reported only for a contiguous quote of ≥ `MIN_RUN_CHARS` (100) normalized chars of non-live removed text. A block shorter than that must be quoted whole, give or take `QUOTE_SLACK_CHARS` (10: a `//`, `-` or `>` prefix, end punctuation). The 60-char window stays the index unit.
+- **Measured** (`findStaleReferences` on the real diffs and head trees):
+
+  | Variant | #207 at `46ee7d2` | #207 at `54ec1e5` | #186 at `f14dd92` (true positive) |
+  |---|---|---|---|
+  | Before (60-char window) | 2 blocks / 6 locations | 2 / 6 | 1 / 1 (ADR-0012:18) |
+  | Live text only | 1 / 1 (`docs/code-generation.md`, 65-char run) | 0 | 1 / 1 |
+  | 100-char run only | 1 / 2 (ADR-0021 111, `generation-system.md` 418) | 1 / 2 | 1 / 1 |
+  | 150-char run only | 1 / 1 (`generation-system.md`) | 1 / 1 | 1 / 1 |
+  | **Both (adopted)** | **0** | **0** | **1 / 1** (240-char run) |
+
+  Neither filter alone clears #207: the generation prompt shares a 418-char run with the removed guardrails (its own rule, not a quote), and `docs/code-generation.md` keeps a 65-char run nothing else holds. `scripts/tests/stale_refs.test.mjs` pins #207 on a fixture (diff and prompts at `46ee7d2`, excerpts of the four docs around each location) and keeps the #186 test.
+- **Prompt.** The `## Stale references` block and `prompts/pr-review-system.md` (+97 tokens; review headroom 3,597 of 6,300, 57%, pinned ≥ `LOW_HEADROOM_RATIO` by the same test) say a hit may yield at most one Low "Verify stale reference" issue, never a Medium or High finding, never REQUEST_CHANGES. A hit alone is never a gate (b) finding, and gate (b) is still judged from the diff as usual: a hit must not suppress a real undocumented behavior change either. The earlier "it is a documentation gap (gate (b))" wording is gone.
+- **Not enforced in code.** The verdict comes from the model's verdict line, and a finding does not say which evidence it rests on: a High "missing documentation update" from a stale hit reads the same as a genuine gate (b) finding (the diff changes behavior, a doc is not updated). Telling them apart means matching finding prose against hit paths, a parser that a rewording defeats in both directions. Not built. The guard is at the source: the block now appears only for removed text the tree no longer holds, which is a rare event, and a false hit costs one Low line at most if the model follows the rule.
+- ⚠️ A doc that paraphrases a removed rule while a prompt keeps the same wording for its own purpose is no longer reported.
+- ⚠️ A removed block under 100 chars quoted only in part (more than 10 chars missing) is no longer reported.

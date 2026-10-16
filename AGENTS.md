@@ -67,6 +67,7 @@ Each CI gate has a local command. Run the ones your diff triggers before pushing
 | Syntax (`npm run lint`) | `scripts/` | `npm run lint` |
 | Event docs (`test.yml`) | a new `event: '…'` under `scripts/` | `node scripts/check_event_docs.mjs` |
 | Changelog (`changelog-check.yml`) | `scripts/*.mjs` entrypoint, `docs/adr/NNNN-*.md` | `git fetch origin main && node scripts/check_changelog.mjs` |
+| LangGraph prototype (`test.yml` → `prototype-langgraph`) | `prototypes/langgraph-loop/` | `cd prototypes/langgraph-loop && python -m unittest -v tests.test_loop` (Python ≥ 3.11, `pip install -r requirements.txt`) |
 | c8 ≥ 80% (`test.yml`) | a module listed in `test.yml` | `npx --yes c8 --include 'scripts/lib/<m>.mjs' --check-coverage --lines 80 --branches 80 --functions 80 --statements 80 node --test scripts/tests/<m>.test.mjs` |
 | Review hygiene (PR review) | behavior change in a workflow or `scripts/` | docs (`docs/code-generation.md` / `docs/runbook.md`) + tests in the same PR |
 

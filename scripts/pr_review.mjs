@@ -430,8 +430,10 @@ function isOwnPullRequestApprovalFailure(status, detail) {
 
 const reviewRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`, {
   method: 'POST',
+  // Same marker as the comment: tools reading PR feedback tell this review from a human one
+  // posted with the same token (AI_PR_TOKEN). Informational: verdicts are read from the comment only.
   body: JSON.stringify({
-    body: shortReviewBody,
+    body: shortReviewBody + reviewMarker,
     event: reviewEvent,
   }),
 });

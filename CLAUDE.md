@@ -28,7 +28,7 @@ Commands and the CI-gate checklist are in `AGENTS.md` → **Local Checks** (shar
 | Need | Command |
 |---|---|
 | Evidence-grounded review of a PR, posted on the PR | `/ai-dev-tools:pr-review <n>` |
-| Apply the blocking fixes of that review | `/ai-dev-tools:pr-fixer` |
+| Apply the fixes of that review and of human PR comments (blocking, then in-scope non-blocking and nits; bots ignored) | `/ai-dev-tools:pr-fixer` |
 | Interactive issue → patch (human-gated alternative to the `ready-for-dev` pipeline) | `/ai-dev-tools:issue-code-generation <n> [--strict]` |
 | Check a branch against an issue's acceptance criteria | `/ai-dev-tools:ac-check <n>` |
 
