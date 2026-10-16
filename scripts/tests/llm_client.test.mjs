@@ -598,3 +598,61 @@ test('callLLM reports a null model to onAnswer when the primary config carries n
   await callLLM({ prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', apiUrl: GROQ_API_URL_DEFAULT, onAnswer: (a) => { answered = a; } });
   assert.deepEqual(answered, { provider: 'groq', model: null });
 });
+
+// ADR-0040: one llm_call event per answered call (provider and model actually used), one
+// llm_call_failed per call that no provider answered, both under the calling stage.
+const llmEvents = (lines) => lines.map((l) => { try { return JSON.parse(l); } catch { return null; } })
+  .filter((e) => e && (e.event === 'llm_call' || e.event === 'llm_call_failed'));
+
+test('callLLM logs llm_call with the primary provider and model, fallback false', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async () => makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  const { lines } = await captureStderr(() => callLLM({ stage: 'validation', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'gpt-x', apiUrl: GROQ_API_URL_DEFAULT }));
+  const [event, ...rest] = llmEvents(lines);
+  assert.equal(rest.length, 0);
+  assert.equal(event.event, 'llm_call');
+  assert.equal(event.stage, 'validation');
+  assert.equal(event.level, 'info');
+  assert.deepEqual(event.meta, { provider: 'groq', model: 'gpt-x', fallback: false });
+  assert.ok(Number.isInteger(event.duration_ms) && event.duration_ms >= 0);
+});
+
+test('callLLM logs llm_call with the fallback provider and its own model, fallback true', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async (_url, opts) => (opts.headers['x-api-key']
+    ? makeResponse('invalid x-api-key', 401)
+    : makeResponse({ choices: [{ message: { content: 'fallback-ok' } }] }));
+  const { lines } = await captureStderr(() => callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' }));
+  const events = llmEvents(lines);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'llm_call');
+  assert.equal(events[0].meta.provider, 'groq');
+  assert.equal(events[0].meta.fallback, true);
+  assert.equal(events[0].meta.model, GROQ_MODEL_DEFAULTS.review);
+});
+
+test('callLLM logs llm_call_failed with each provider outcome when no provider answers', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async (_url, opts) => (opts.headers['x-api-key']
+    ? makeResponse('bad request', 400)
+    : makeResponse('{"error":{"message":"model not found"}}', 404));
+  const { lines } = await captureStderr(() => assert.rejects(() => callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })));
+  const events = llmEvents(lines);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'llm_call_failed');
+  assert.equal(events[0].level, 'warn');
+  assert.deepEqual(events[0].meta.providers, ['anthropic:400', 'groq:404']);
+});
+
+test('callLLM logs llm_call_failed with the skip reasons when no request was made', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async () => { throw new Error('no request expected'); };
+  const { lines } = await captureStderr(() => assert.rejects(() => callLLM({ stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100, fallback: false })));
+  assert.deepEqual(llmEvents(lines).map((e) => e.meta.providers), [['groq:over_input_budget', 'anthropic:disabled']]);
+});

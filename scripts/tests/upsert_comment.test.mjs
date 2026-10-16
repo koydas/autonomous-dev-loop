@@ -157,3 +157,48 @@ test('upsert_comment exits 1 when comment upsert fails', async () => {
     server.close();
   }
 });
+
+// ADR-0040: the comment is an observability event with the html_url GitHub returns, appended to the
+// trace validate_issue.mjs wrote earlier in the same job (same GITHUB_RUN_ID).
+test('upsert_comment journals issue_validation.comment_posted into the existing validation trace', async () => {
+  const fsp = await import('node:fs/promises');
+  const os = await import('node:os');
+  const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), 'upsert-journal-'));
+  const traceDir = path.join(cwd, 'observability', 'traces');
+  await fsp.mkdir(traceDir, { recursive: true });
+  await fsp.writeFile(path.join(traceDir, '991.json'), JSON.stringify({ run_id: '991', envelope: { run_id: '991', run_attempt: 1 }, outcome: 'success', spans: [{ stage: 'issue_validation' }], events: [{ event: 'issue_validation.pass' }] }));
+  const server = await startMockServer((req, res) => {
+    if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('[]'); }
+    res.writeHead(201, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ id: 3, html_url: 'https://github.com/owner/repo/issues/1#issuecomment-3' }));
+  });
+  try {
+    const env = { PATH: process.env.PATH, GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'owner/repo', ISSUE_NUMBER: '1', COMMENT_BODY: 'x', GITHUB_API_URL: `http://127.0.0.1:${server.address().port}`, GITHUB_RUN_ID: '991' };
+    const code = await new Promise((resolve) => {
+      const child = spawn(process.execPath, [path.join(SCRIPTS_DIR, 'upsert_issue_validation_comment.mjs')], { env, cwd, stdio: 'ignore' });
+      child.on('close', resolve);
+    });
+    assert.equal(code, 0);
+    const trace = JSON.parse(await fsp.readFile(path.join(traceDir, '991.json'), 'utf8'));
+    assert.deepEqual(trace.events.map((e) => e.event), ['issue_validation.pass', 'issue_validation.comment_posted']);
+    assert.deepEqual(trace.events[1].meta, { issueNumber: '1', action: 'created', url: 'https://github.com/owner/repo/issues/1#issuecomment-3' });
+    assert.equal(trace.outcome, 'success', 'the validation outcome is kept');
+    assert.deepEqual(trace.envelope.links, [{ event: 'issue_validation.comment_posted', url: 'https://github.com/owner/repo/issues/1#issuecomment-3' }]);
+  } finally {
+    server.close();
+    await fsp.rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('upsert_comment logs comment_posted with action updated when it PATCHes the existing comment', async () => {
+  const listBody = JSON.stringify([{ id: COMMENT_ID, body: `${COMMENT_MARKER}\nold` }]);
+  const server = await startMockServer(makeHandler({ listBody, upsertStatus: 200 }));
+  try {
+    const result = await runUpsertComment(server.address().port);
+    assert.equal(result.code, 0, result.stderr);
+    const event = result.stderr.split('\n').filter((l) => l.includes('"issue_validation.comment_posted"')).map((l) => JSON.parse(l))[0];
+    assert.deepEqual(event.meta, { issueNumber: '1', action: 'updated', url: null });
+  } finally {
+    server.close();
+  }
+});

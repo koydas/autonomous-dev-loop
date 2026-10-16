@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 
 import { requireEnv } from './lib/config.mjs';
+import path from 'node:path';
 import { log, error as logError } from './lib/logger.mjs';
+import { log as obsLog, createTracer } from './lib/observability.mjs';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
   process.exit(1);
 });
+
+// ADR-0040: joins the trace of validate_issue.mjs (same job, same GITHUB_RUN_ID) so its events reach the run journal.
+createTracer({ runId: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`, traceDir: path.join(process.cwd(), 'observability', 'traces') });
 
 const COMMENT_MARKER = '<!-- issue-validation-report -->';
 
@@ -70,23 +75,25 @@ async function main() {
   const body = buildCommentBody(commentBody);
 
   if (existing) {
-    await githubRequest({
+    const updated = await githubRequest({
       method: 'PATCH',
       path: `/repos/${owner}/${name}/issues/comments/${existing.id}`,
       token,
       body: { body },
     });
     log('Updated validation comment', { commentId: existing.id, issueNumber });
+    obsLog({ stage: 'issue_validation', event: 'issue_validation.comment_posted', level: 'info', meta: { issueNumber, action: 'updated', url: updated?.html_url ?? null } });
     return;
   }
 
-  await githubRequest({
+  const created = await githubRequest({
     method: 'POST',
     path: `/repos/${owner}/${name}/issues/${issueNumber}/comments`,
     token,
     body: { body },
   });
   log('Created validation comment', { issueNumber });
+  obsLog({ stage: 'issue_validation', event: 'issue_validation.comment_posted', level: 'info', meta: { issueNumber, action: 'created', url: created?.html_url ?? null } });
 }
 
 main().catch((err) => {

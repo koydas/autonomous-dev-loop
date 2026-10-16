@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { parseAdr, findRelatedAdrs, formatRelatedAdrsContext, DEFAULT_EXCERPT_CHARS } from '../lib/related_adrs.mjs';
 
 const adr = ({ title = 'A decision', status = 'Accepted', decision = 'We decided X.', body = '' } = {}) =>
@@ -165,4 +167,14 @@ test('formatRelatedAdrsContext lists up to max ADRs and is empty when none or ma
   assert.equal(formatRelatedAdrsContext(adrs, 0), '');
   assert.equal(formatRelatedAdrsContext([], 3), '');
   assert.equal(formatRelatedAdrsContext(undefined, 3), '');
+});
+
+// Repository invariant: findRelatedAdrs() keys ADRs by number, so two files sharing a number would
+// shadow each other in the review prompt (two concurrent PRs both taking the next free number).
+test('every docs/adr/NNNN-*.md file has a distinct number', () => {
+  const adrDir = fileURLToPath(new URL('../../docs/adr/', import.meta.url));
+  const numbers = fs.readdirSync(adrDir).map((name) => name.match(/^(\d{4})-.+\.md$/)?.[1]).filter(Boolean);
+  const duplicates = numbers.filter((n, i) => numbers.indexOf(n) !== i);
+  assert.ok(numbers.length > 0);
+  assert.deepEqual(duplicates, [], `duplicate ADR numbers: ${[...new Set(duplicates)].join(', ')}`);
 });

@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 
 import { requireEnv, loadLabelsConfig } from './lib/config.mjs';
+import path from 'node:path';
 import { log, error as logError } from './lib/logger.mjs';
+import { log as obsLog, createTracer } from './lib/observability.mjs';
 
 process.on('unhandledRejection', (reason) => {
   const err = reason instanceof Error ? reason : new Error(String(reason));
   logError('Unhandled promise rejection', { error: err.message, stack: err.stack });
   process.exit(1);
 });
+
+// ADR-0040: joins the trace of validate_issue.mjs (same job, same GITHUB_RUN_ID) so its events reach the run journal.
+createTracer({ runId: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`, traceDir: path.join(process.cwd(), 'observability', 'traces') });
 
 const issueLabels = loadLabelsConfig('issue');
 const LABELS = [issueLabels.valid, issueLabels.invalid];
@@ -93,6 +98,7 @@ async function main() {
   await addLabel(owner, name, token, issueNumber, apply);
   await removeLabel(owner, name, token, issueNumber, remove);
   log('Labels applied', { issueNumber, added: apply, removed: remove });
+  obsLog({ stage: 'issue_validation', event: 'issue_validation.labels_applied', level: 'info', meta: { issueNumber, added: [apply], removed: [remove] } });
 }
 
 main().catch((err) => {

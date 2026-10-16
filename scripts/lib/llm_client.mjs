@@ -30,7 +30,15 @@ export async function callLLM(args) {
   // quota from a bad response (eval circuit breaker): { provider, status } for a provider that was called
   // (status null without an HTTP response), { provider, status: null, skipped } for one that was not.
   const providerErrors = [];
-  const fail = () => Object.assign(new Error(`All providers failed: ${errors.join(', ')}`), { providerErrors });
+  // ADR-0040: one llm_call (provider and model that answered) or llm_call_failed event per call.
+  const startMs = Date.now();
+  const answeredBy = (provider, model, isFallback) =>
+    log({ stage, event: 'llm_call', level: 'info', duration_ms: Date.now() - startMs, meta: { provider, model, fallback: isFallback } });
+  const fail = () => {
+    const providers = providerErrors.map((e) => [e.provider, e.skipped ?? e.status ?? 'error'].join(':'));
+    log({ stage, event: 'llm_call_failed', level: 'warn', duration_ms: Date.now() - startMs, meta: { providers } });
+    return Object.assign(new Error(`All providers failed: ${errors.join(', ')}`), { providerErrors });
+  };
   const httpStatus = (error) => (Number.isInteger(error.status) ? error.status : null);
   let errorType;
   let status;
@@ -53,6 +61,7 @@ export async function callLLM(args) {
       : { provider: primary, status: null, skipped: 'over_input_budget' });
   }
   if (answered) {
+    answeredBy(primary, args.model ?? null, false);
     args.onAnswer?.({ provider: primary, model: args.model ?? null });
     return text;
   }
@@ -102,6 +111,7 @@ export async function callLLM(args) {
     providerErrors.push({ provider: fallback, status: httpStatus(error) });
     throw fail();
   }
+  answeredBy(fallback, fallbackConfig.model ?? null, true);
   args.onAnswer?.({ provider: fallback, model: fallbackConfig.model ?? null });
   return text;
 }

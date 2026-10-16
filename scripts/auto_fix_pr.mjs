@@ -104,6 +104,8 @@ if (event.issue && event.comment && !isManualRerunRequested(event)) {
     prNumber,
     authorAssociation: event.comment.author_association ?? null,
   });
+  // Before the tracer: stderr only, no trace file and so no run record (ADR-0040).
+  obsLog({ stage: 'autofix', event: 'autofix.skipped', level: 'info', meta: { reason: 'untrusted_comment', prNumber } });
   process.exit(0);
 }
 
@@ -150,6 +152,9 @@ async function ghFetch(endpoint, options = {}) {
     throw new Error(`Network error calling GitHub API (${endpoint}): ${err.message}`, { cause: err });
   }
 }
+
+// ADR-0040: the html_url GitHub returns for a created object, for the run journal; never throws.
+const htmlUrlOf = (res) => Promise.resolve().then(() => res?.json()).then((o) => o?.html_url ?? null, () => null);
 
 // GET /issues/{n}/comments lists oldest first and ignores sort/direction: read every page,
 // then keep the most recent comment by a trusted author (review_marker.mjs).
@@ -201,6 +206,7 @@ async function applyAttemptLabel(attempt) {
   if (!applyLabelRes.ok) {
     throw new Error(`Auto-fix label apply failed: ${applyLabelRes.status}`);
   }
+  obsLog({ stage: 'autofix', event: 'autofix.attempt_labeled', level: 'info', meta: { prNumber, attempt, label: attemptLabelName } });
 }
 
 // No-op exit (ADR-0028): no push, no failed check.
@@ -248,6 +254,7 @@ if (manualRerunRequested) {
     );
   }
   log('Manual auto-fix rerun requested via comment checkbox', { prNumber, removedLabels: attemptLabels.length, removedCheckpointFiles: removedCheckpointFiles.length });
+  obsLog({ stage: 'autofix', event: 'autofix.reset', level: 'info', meta: { prNumber, removed_labels: attemptLabels, removed_checkpoints: removedCheckpointFiles.length } });
 }
 
 const refreshedLabelsRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/labels`);
@@ -257,12 +264,12 @@ const attemptCount = refreshedLabels.filter((l) => l.name.startsWith(ATTEMPT_LAB
 
 if (attemptCount >= MAX_ATTEMPTS) {
   const exhaustedBody = `## \u{1F92A} Auto-Fix Exhausted\n\nMaximum auto-fix attempts (${MAX_ATTEMPTS}) reached on this PR. Please review the remaining issues manually.`;
-  await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+  const exhaustedRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body: exhaustedBody }),
   });
   log('Max auto-fix attempts reached', { prNumber, attemptCount });
-  obsLog({ stage: 'autofix', event: 'autofix.max_attempts_reached', level: 'warn', meta: { attempt: MAX_ATTEMPTS, prNumber } });
+  obsLog({ stage: 'autofix', event: 'autofix.max_attempts_reached', level: 'warn', meta: { attempt: MAX_ATTEMPTS, prNumber, url: exhaustedRes?.ok ? await htmlUrlOf(exhaustedRes) : null } });
   tracer.startSpan('autofix', { prNumber, attempt: MAX_ATTEMPTS });
   tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason: 'max_attempts_reached' } });
   await tracer.finalize('partial');
@@ -356,13 +363,14 @@ const allChangedFiles = [...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b
 
 const SELF_PATH = 'scripts/auto_fix_pr.mjs';
 if (allChangedFiles.includes(SELF_PATH)) {
-  await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+  const selfModRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({
       body: `## 🤖 Auto-Fix Skipped\n\nThis PR modifies \`${SELF_PATH}\`. Automated self-modification is disabled to prevent feedback loops. Please review and merge this PR manually.`,
     }),
   });
   log('Auto-fix skipped: PR modifies auto_fix_pr.mjs itself', { prNumber });
+  obsLog({ stage: 'autofix', event: 'autofix.skipped', level: 'warn', duration_ms: Date.now() - autofixStartMs, meta: { reason: 'self_modification', attempt: nextAttempt, prNumber, url: selfModRes?.ok ? await htmlUrlOf(selfModRes) : null } });
   tracer.endSpan('autofix', { outcome: 'skipped', meta: { reason: 'self_modification' } });
   await tracer.finalize('partial');
   process.exit(0);
@@ -422,6 +430,10 @@ log('token_estimate', {
   total: systemTokens + userWrapperTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
 });
 
+// ADR-0040: what the token budget cut from the prompt (truncateToTokenBudget slices at budget × 4 chars).
+const budgetCuts = { hidden_files: [...hiddenPaths], skipped_files: Math.max(0, changedFiles.length - MAX_FILES), diff_truncated: diff.length < rawDiff.length, feedback_truncated: reviewFeedback.length >= feedbackBudget * 4 };
+obsLog({ stage: 'autofix', event: 'autofix.prompt_budget', level: budgetCuts.hidden_files.length || budgetCuts.skipped_files || budgetCuts.diff_truncated || budgetCuts.feedback_truncated ? 'warn' : 'info', meta: { prNumber, attempt: nextAttempt, input_budget: inputBudget, shown_files: [...shownPaths], ...budgetCuts } });
+
 const inputTokensEst = estimateTokens(systemPrompt + userPrompt);
 obsLog({ stage: 'autofix', event: 'autofix.llm_request', level: 'info', meta: { model, input_tokens_est: inputTokensEst, attempt: nextAttempt, prNumber } });
 
@@ -474,6 +486,7 @@ async function escalateToHuman(reason, heading, explanation, details, metricExtr
     }),
   });
   if (!escalationRes.ok) throw new Error(`Escalation comment failed (${reason}): ${escalationRes.status}`);
+  obsLog({ stage: 'autofix', event: 'autofix.escalated', level: 'warn', meta: { prNumber, attempt: nextAttempt, reason, labels_added: [`${ATTEMPT_LABEL_PREFIX}${nextAttempt}`, needsHuman.name], url: await htmlUrlOf(escalationRes) } });
   await appendMetric({
     type: 'autofix_skip',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-autofix-skip` : `local-${Date.now()}`,

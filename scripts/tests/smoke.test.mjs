@@ -726,3 +726,59 @@ test('generation prompts keep >= 10% headroom on the generation input budget', a
   assert.ok(budget > 0);
   assert.ok(budget - used >= budget * LOW_HEADROOM_RATIO, `headroom ${budget - used} of ${budget}`);
 });
+
+// ---------------------------------------------------------------------------
+// ADR-0040: run journal → public record, real entrypoint, real prompts
+// ---------------------------------------------------------------------------
+
+async function readOnlyTrace(repoDir) {
+  const dir = path.join(repoDir, 'observability', 'traces');
+  const [file] = await fs.readdir(dir);
+  return JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'));
+}
+
+test('generation entrypoint: escalations and the prompt context are journaled in the trace', async () => {
+  const rejected = await runGeneration([{ target_path: 'README.md', file_content: '# stub\n' }]);
+  const blocked = await runGeneration(null, {
+    issueBody: 'Blocked by #188.',
+    aiOutput: { summary: 'Blocked', changes: [], blocked: true, blocked_reason: 'Blocked by unmerged PR #188.', planned_fix: 'Later.' },
+  });
+  try {
+    const r = await readOnlyTrace(rejected.repoDir);
+    const names = r.events.map((e) => e.event);
+    for (const name of ['code_gen.start', 'code_gen.context_built', 'code_gen.llm_request', 'llm_call', 'code_gen.llm_response', 'code_gen.escalated', 'code_gen.skipped']) {
+      assert.ok(names.includes(name), `${name} journaled (got ${names.join(', ')})`);
+    }
+    const escalated = r.events.find((e) => e.event === 'code_gen.escalated');
+    assert.deepEqual([escalated.meta.reason, escalated.meta.rules, escalated.meta.labels_added], ['guardrail_rejected', ['protected_path'], [loadLabelsConfig('autofix').needs_human.name]]);
+    assert.equal(r.envelope.issue_number, 7, 'issue number taken from the code_gen.start meta');
+    const b = (await readOnlyTrace(blocked.repoDir)).events.find((e) => e.event === 'code_gen.escalated');
+    assert.deepEqual([b.meta.reason, b.meta.source, b.meta.labels_removed], ['blocked', 'model', [loadLabelsConfig('issue').valid.name]]);
+  } finally {
+    await fs.rm(rejected.repoDir, { recursive: true, force: true });
+    await fs.rm(blocked.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('public record of a real generation trace carries no prompt, issue body, model output or secret', async () => {
+  const { redactTrace } = await import('../lib/run_record.mjs');
+  const issueBody = 'Add a helper. PRIVATE-ISSUE-BODY-c41f';
+  const run = await runGeneration([{ target_path: 'src/helper.mjs', file_content: 'export const MODEL_OUTPUT_9d2e = 1;\n' }], { issueBody });
+  try {
+    assert.equal(run.result.code, 0, run.result.stderr);
+    const trace = await readOnlyTrace(run.repoDir);
+    const record = redactTrace(trace, { env: { ...process.env, ISSUE_BODY: issueBody, ANTHROPIC_API_KEY: 'sk-ant-test-planted-key-0001' } });
+    const json = JSON.stringify(record);
+    const systemPrompt = loadPrompt('generation-system');
+    for (const line of systemPrompt.split('\n').filter((l) => l.trim().length > 40)) {
+      assert.ok(!json.includes(line.trim()), `prompt line leaked: ${line.slice(0, 60)}`);
+    }
+    assert.ok(!json.includes('PRIVATE-ISSUE-BODY-c41f'));
+    assert.ok(!json.includes('MODEL_OUTPUT_9d2e'));
+    assert.ok(!json.includes('sk-ant-test-planted-key-0001'));
+    assert.deepEqual(record.events.find((e) => e.event === 'pr_prepare.complete').meta, { paths: ['src/helper.mjs'] });
+    assert.deepEqual(record.envelope.llm_calls.map((c) => c.provider), ['anthropic']);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});

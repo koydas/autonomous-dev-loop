@@ -200,3 +200,17 @@ test('manage_labels succeeds when removeLabel returns 404 (label already absent)
     server.close();
   }
 });
+
+// ADR-0040: the label change is an observability event, journaled in the validation run's trace.
+test('manage_labels logs issue_validation.labels_applied with the labels added and removed', async () => {
+  const server = await startMockServer(makeHandler());
+  try {
+    const result = await runManageLabels(server.address().port, { IS_VALID: 'false' });
+    assert.equal(result.code, 0, result.stderr);
+    const event = result.stderr.split('\n').filter((l) => l.includes('"issue_validation.labels_applied"')).map((l) => JSON.parse(l))[0];
+    assert.ok(event, result.stderr);
+    assert.deepEqual(event.meta, { issueNumber: '1', added: ['needs-refinement'], removed: ['ready-for-dev'] });
+  } finally {
+    server.close();
+  }
+});

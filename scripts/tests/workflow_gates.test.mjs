@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs'];
 
 // Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
 const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
@@ -69,6 +69,8 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['stale_refs.mjs', 'stale_refs.test.mjs'],
     ['related_adrs.mjs', 'related_adrs.test.mjs'],
     ['prompt_budget.mjs', 'prompt_budget.test.mjs'],
+    ['run_journal.mjs', 'run_journal.test.mjs'],
+    ['run_record.mjs', 'run_record.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -183,15 +185,29 @@ test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkou
 
 // ADR-0013 amendment: main only takes changes through a pull request, so every metrics read and
 // write targets the `metrics` branch; a Contents API call without it would hit main and fail (409).
-test('workflows that commit metrics read and write the metrics branch, never the default branch', () => {
+// ADR-0040: the step is scripts/commit_run_record.mjs, which writes runs.jsonl and the run record in one
+// commit on the metrics branch (Git Data API); it runs the trusted copy where the checkout is a PR tree.
+test('workflows that commit metrics read and write the metrics branch, never the default branch', async () => {
+  const { METRICS_BRANCH, RUNS_JSONL_PATH } = await import('../lib/run_record.mjs');
+  assert.equal(METRICS_BRANCH, 'metrics');
+  assert.equal(RUNS_JSONL_PATH, 'metrics/runs.jsonl');
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
   assert.equal(committing.length, 4);
   for (const { name, text } of committing) {
-    const calls = text.match(/gh api "repos\/\$GITHUB_REPOSITORY\/contents\/metrics\/runs\.jsonl[^"]*"/g) ?? [];
-    assert.equal(calls.length, 2, `${name}: one read and one write of metrics/runs.jsonl`);
-    assert.ok(calls.some((c) => c.endsWith('?ref=metrics"')), `${name}: the read targets ?ref=metrics`);
-    assert.match(text, /'\{message:\$m,content:\$c,branch:"metrics"\}/, `${name}: the PUT body names branch "metrics"`);
+    const step = text.slice(text.indexOf('- name: Commit metrics')).split(/\n      - name: /)[0];
+    const trusted = BRANCH_TRIGGERED_SECRET_WORKFLOWS.includes(name);
+    if (trusted) {
+      assert.ok(step.includes('SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"') && step.includes('node "$SCRIPT"'), `${name}: Commit metrics runs the trusted commit_run_record.mjs`);
+      // Best effort like the shell step it replaced: a default branch without the script warns, never fails the job.
+      assert.match(step, /\[ -f "\$SCRIPT" \] \|\| \{ echo "::warning::[^"]+"; exit 0; \}/, `${name}: a trusted copy without the script is a warning, exit 0`);
+    } else {
+      assert.ok(step.includes('run: node scripts/commit_run_record.mjs'), `${name}: Commit metrics runs commit_run_record.mjs`);
+    }
+    assert.match(step, /if: always\(\)/, `${name}: Commit metrics runs on failure too`);
+    assert.doesNotMatch(step, /contents\/metrics\/runs\.jsonl/, `${name}: no Contents API write (one file per commit) left in the step`);
   }
+  const script = readFileSync(resolve(ROOT, 'scripts/lib/run_record.mjs'), 'utf8');
+  assert.match(script, /git\/refs\/heads\/\$\{METRICS_BRANCH\}`, \{ sha: newCommit\.json\.sha, force: false \}/, 'fast-forward update of the metrics ref only');
 });
 
 // ADR-0023: workflows triggered by branch/PR activity hold LLM secrets and AI_PR_TOKEN;

@@ -1712,3 +1712,78 @@ test('pr_review skips symlinked docs and ADRs in the stale-reference and related
     await fixture.cleanup();
   }
 });
+
+// ADR-0040: every side effect of a review is an observability event, journaled in the trace file with
+// the run envelope (provider/model per LLM call, comment and review URLs).
+test('pr_review journals its side effects and the run envelope in the trace file', async () => {
+  const base = makeHandler({ groqContent: 'Found issues.\n\nVerdict: REQUEST_CHANGES' });
+  const server = await startMockServer((req, res) => {
+    if (req.method === 'POST' && /\/issues\/\d+\/comments$/.test(req.url)) {
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ id: 1, html_url: 'https://github.com/owner/repo/pull/7#issuecomment-1' }));
+    }
+    if (req.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(req.url)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ id: 2, html_url: 'https://github.com/owner/repo/pull/7#pullrequestreview-2' }));
+    }
+    return base(req, res);
+  });
+  const eventFile = await writeEventFile();
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-review-journal-'));
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { GITHUB_RUN_ID: '4242', GITHUB_RUN_ATTEMPT: '1', GITHUB_WORKFLOW: 'PR Review', GITHUB_EVENT_NAME: 'pull_request', GITHUB_ACTOR: 'github-actions[bot]' }, { cwd });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout.includes('"duration_ms"'), false, 'no observability event on stdout (GITHUB_OUTPUT protocol)');
+    const trace = JSON.parse(await fs.readFile(path.join(cwd, 'observability', 'traces', '4242.json'), 'utf8'));
+    const names = trace.events.map((e) => e.event);
+    for (const name of ['review.start', 'review.evidence_assessed', 'review.llm_request', 'llm_call', 'review.llm_response', 'review.comment_posted', 'review.review_submitted', 'review.labels_applied', 'review.verdict']) {
+      assert.ok(names.includes(name), `${name} journaled (got ${names.join(', ')})`);
+    }
+    assert.ok(names.indexOf('review.comment_posted') < names.indexOf('review.review_submitted'));
+    const byName = Object.fromEntries(trace.events.map((e) => [e.event, e]));
+    assert.equal(byName['review.comment_posted'].meta.url, 'https://github.com/owner/repo/pull/7#issuecomment-1');
+    assert.equal(byName['review.comment_posted'].meta.action, 'created');
+    assert.equal(byName['review.review_submitted'].meta.review_event, 'REQUEST_CHANGES');
+    assert.deepEqual(byName['review.labels_applied'].meta.added, [LABELS.review.changes.name]);
+    assert.equal(byName['review.labels_applied'].meta.repulse_skipped, false);
+    assert.equal(trace.envelope.pr_number, PR_NUMBER);
+    assert.equal(trace.envelope.actor_type, 'bot');
+    assert.equal(trace.envelope.workflow, 'PR Review');
+    assert.deepEqual(trace.envelope.llm_calls.map((c) => [c.stage, c.provider, c.outcome]), [['review', 'anthropic', 'answered']]);
+    assert.deepEqual(trace.envelope.links.map((l) => l.event), ['review.comment_posted', 'review.review_submitted']);
+    assert.equal(trace.outcome, 'partial');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test('pr_review journals a review submit GitHub refused on its own PR, and a prompt cut to the budget', async () => {
+  const bigDiff = `diff --git a/src/big.mjs b/src/big.mjs\n--- a/src/big.mjs\n+++ b/src/big.mjs\n@@ -1 +1,4000 @@\n${Array.from({ length: 4000 }, (_, i) => `+export const v${i} = ${i};`).join('\n')}\n`;
+  const server = await startMockServer(makeHandler({
+    groqContent: 'Fine.\n\nVerdict: APPROVED',
+    reviewStatus: 422,
+    reviewBody: JSON.stringify({ message: 'Unprocessable Entity', errors: ['Can not approve your own pull request'] }),
+    diffText: bigDiff,
+  }));
+  const eventFile = await writeEventFile();
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-review-journal-'));
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { GITHUB_RUN_ID: '4343', AI_PROVIDER: 'groq', GROQ_API_KEY: 'g', GROQ_API_URL: `http://127.0.0.1:${server.address().port}/openai/v1/chat/completions` }, { cwd });
+    assert.equal(result.code, 0, result.stderr);
+    const trace = JSON.parse(await fs.readFile(path.join(cwd, 'observability', 'traces', '4343.json'), 'utf8'));
+    const submitted = trace.events.find((e) => e.event === 'review.review_submitted');
+    assert.equal(submitted.meta.skipped, 'own_pull_request');
+    assert.equal(submitted.level, 'warn');
+    const cut = trace.events.find((e) => e.event === 'review.prompt_truncated');
+    assert.ok(cut, 'the budget cut is journaled');
+    assert.equal(cut.meta.diff_truncated, true);
+    assert.ok(cut.meta.unreviewed_code_files >= 1);
+    assert.equal(trace.events.find((e) => e.event === 'review.verdict').meta.verdict, 'WITHHELD');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
+});

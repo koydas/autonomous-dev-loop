@@ -257,6 +257,29 @@ jobs:
             --statements 80 \
             node --test scripts/tests/generation_blocked.test.mjs
 
+      # ADR-0040 public-safety contract: the journal scrubs at the source, redactTrace() is the only path to `metrics`.
+      - name: Check run_journal coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/run_journal.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/run_journal.test.mjs
+
+      - name: Check run_record coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/run_record.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/run_record.test.mjs
+
       # Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build).
       - name: Check build_eval_site coverage (≥80%)
         run: |

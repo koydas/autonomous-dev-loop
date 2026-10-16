@@ -132,6 +132,7 @@ jobs:
       # A guardrail rejection (ADR-0019) exits 0 with rejected=true, a blocked issue (ADR-0029
       # amendment) with blocked=true: nothing was written, no branch is pushed, no PR is opened.
       - name: Create pull request
+        id: cpr
         if: steps.generate.outputs.rejected != 'true' && steps.generate.outputs.blocked != 'true'
         uses: peter-evans/create-pull-request@v6
         with:
@@ -171,24 +172,13 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-        run: |
           # Only this run's records, written outside the checkout (ADR-0021): never the
           # working-tree metrics/runs.jsonl, which generated code could have modified.
-          # Appended to the `metrics` branch, never to main (PR-only; ADR-0013 amendment).
-          NEW_LINES=$(cat "$METRICS_FILE" 2>/dev/null || true)
-          [ -z "$NEW_LINES" ] && exit 0
-          UPLOADED=0
-          for i in 1 2 3; do
-            RESP=$(gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl?ref=metrics" 2>/dev/null || echo '{}')
-            SHA=$(echo "$RESP" | jq -r '.sha // empty')
-            CURRENT=$(echo "$RESP" | jq -r '.content // ""' | tr -d '\n' | base64 -d 2>/dev/null || true)
-            [ -n "$CURRENT" ] && CURRENT="${CURRENT}"$'\n'
-            NEW_B64=$(printf "%s" "${CURRENT}${NEW_LINES}"$'\n' | base64 -w0)
-            jq -nc --arg m "metrics: issue ${{ steps.issue.outputs.number }} code-generation [skip ci]" \
-              --arg c "$NEW_B64" --arg s "$SHA" \
-              '{message:$m,content:$c,branch:"metrics"}+if $s!="" then {sha:$s} else {} end' \
-              | gh api "repos/$GITHUB_REPOSITORY/contents/metrics/runs.jsonl" -X PUT --input - \
-              && { UPLOADED=1; break; } || sleep $((2**i))
-          done
-          [ "$UPLOADED" -eq 1 ] || echo "::warning::Failed to commit metrics after 3 attempts; data may be lost"
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+          RUN_RECORD_MESSAGE: "metrics: issue ${{ steps.issue.outputs.number }} code-generation [skip ci]"
+          RUN_RECORD_PR_OPERATION: ${{ steps.cpr.outputs.pull-request-operation }}
+          RUN_RECORD_PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+          RUN_RECORD_PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
+        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
+        run: node scripts/commit_run_record.mjs

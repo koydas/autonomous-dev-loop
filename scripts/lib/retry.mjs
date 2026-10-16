@@ -1,4 +1,5 @@
 import { log } from './logger.mjs';
+import { log as obsLog } from './observability.mjs';
 
 const DEFAULT_OPTIONS = {
   maxAttempts: 4,
@@ -61,6 +62,7 @@ export async function retryWithBackoff(fn, options = {}) {
       const base = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
       const waitMs = error.waitMs ?? (jitter ? base * (Math.random() * 0.4 + 0.8) : base);
       log('retry', { attempt, error: error.message, waitMs });
+      obsLog({ stage: 'retry', event: 'retry.wait', level: 'warn', meta: { attempt, wait_ms: Math.round(waitMs), status: error.status ?? null, error: error.message } });
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       attempt++;
     }
