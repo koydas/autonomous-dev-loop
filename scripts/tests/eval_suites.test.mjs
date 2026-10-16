@@ -973,15 +973,39 @@ test('neither suite swallows an LLM error: the stage rethrows it to the harness'
 // Live eval call ↔ production call site parity (run 38561304861: review sent json_object, Groq 400)
 // ---------------------------------------------------------------------------
 
-// Text between the bracket at `open` and its match (strings and template literals skipped).
+// Index of the last character of the string, template literal or comment starting at i; i when none does.
+function literalEnd(src, i) {
+  const ch = src[i];
+  if (ch === "'" || ch === '"' || ch === '`') {
+    let j = i + 1;
+    for (; j < src.length && src[j] !== ch; j++) if (src[j] === '\\') j++;
+    return j;
+  }
+  if (ch === '/' && src[i + 1] === '/') { const j = src.indexOf('\n', i); return j === -1 ? src.length - 1 : j - 1; }
+  if (ch === '/' && src[i + 1] === '*') { const j = src.indexOf('*/', i + 2); return j === -1 ? src.length - 1 : j + 1; }
+  return i;
+}
+
+// Source without its // and /* */ comments; strings and template literals kept as they are.
+function stripComments(src) {
+  let out = '';
+  for (let i = 0; i < src.length; i++) {
+    const end = literalEnd(src, i);
+    out += src[i] === '/' && end !== i ? ' ' : src.slice(i, end + 1);
+    i = end;
+  }
+  return out;
+}
+
+// Text between the bracket at `open` and its match (strings, template literals and comments skipped).
 function balanced(src, open) {
   const pairs = { '{': '}', '(': ')', '[': ']' };
   const stack = [];
   for (let i = open; i < src.length; i++) {
     const ch = src[i];
-    if (ch === "'" || ch === '"' || ch === '`') {
-      for (i++; i < src.length && src[i] !== ch; i++) if (src[i] === '\\') i++;
-    } else if (pairs[ch]) stack.push(pairs[ch]);
+    const end = literalEnd(src, i);
+    if (end !== i) i = end;
+    else if (pairs[ch]) stack.push(pairs[ch]);
     else if (ch === stack.at(-1) && (stack.pop(), stack.length === 0)) return src.slice(open + 1, i);
   }
   throw new Error(`unbalanced bracket at ${open}`);
@@ -1021,7 +1045,7 @@ async function productionCall(file) {
   assert.equal(calls.length, 1, `${file}: expected one callLLM({ … }) call site`);
   const callInputs = new Set(['prompt', 'systemPrompt']);
   const call = { stage: null, configKeys: [], options: {} };
-  for (const [key, value] of entries(balanced(src, calls[0].index + calls[0][0].length - 1))) {
+  for (const [key, value] of entries(stripComments(balanced(src, calls[0].index + calls[0][0].length - 1)))) {
     if (key === 'stage') call.stage = JSON.parse(value.replace(/'/g, '"'));
     else if (callInputs.has(key)) continue;
     else if (configBinding.get(value) === key) call.configKeys.push(key);
@@ -1056,14 +1080,38 @@ test('review mirrors responseFormat null; validation keeps the json_object defau
 test('parity parser: a responseFormat drift or an extra config field is caught', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'parity-'));
   const file = path.join(tmp, 'stage.mjs');
-  await fs.writeFile(file, "const { apiKey: k, model, maxInputTokens } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, systemPrompt: SYS, apiKey: k, model, maxInputTokens, responseFormat: { type: 'json_object' } });\n");
-  const prod = await productionCall(path.relative(REPO_ROOT, file));
-  assert.deepEqual(prod, { stage: 'review', configStage: 'review', configKeys: ['apiKey', 'model', 'maxInputTokens'], options: { responseFormat: { type: 'json_object' } } });
-  assert.notDeepEqual(reviewSuite.llmCall.options, prod.options);
-  assert.notDeepEqual([...reviewSuite.llmCall.configKeys].sort(), prod.configKeys.sort());
-  await fs.writeFile(file, "const { model } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, model, responseFormat: pick() });\n");
-  await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /responseFormat: pick\(\) is not a config field nor a literal/);
-  await fs.rm(tmp, { recursive: true, force: true });
+  try {
+    await fs.writeFile(file, "const { apiKey: k, model, maxInputTokens } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, systemPrompt: SYS, apiKey: k, model, maxInputTokens, responseFormat: { type: 'json_object' } });\n");
+    const prod = await productionCall(path.relative(REPO_ROOT, file));
+    assert.deepEqual(prod, { stage: 'review', configStage: 'review', configKeys: ['apiKey', 'model', 'maxInputTokens'], options: { responseFormat: { type: 'json_object' } } });
+    assert.notDeepEqual(reviewSuite.llmCall.options, prod.options);
+    assert.notDeepEqual([...reviewSuite.llmCall.configKeys].sort(), prod.configKeys.sort());
+    await fs.writeFile(file, "const { model } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, model, responseFormat: pick() });\n");
+    await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /responseFormat: pick\(\) is not a config field nor a literal/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('parity parser: comments in the call site (apostrophe, braces, block) are skipped', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'parity-'));
+  const file = path.join(tmp, 'stage.mjs');
+  try {
+    await fs.writeFile(file, [
+      "const { model, maxTokens } = loadLLMConfig('review');",
+      'await callLLM({',
+      "  stage: 'review', // don't send json_object: the review is Markdown {",
+      '  prompt,',
+      '  /* budget: ) fitted upstream */ model,',
+      '  maxTokens,',
+      '  responseFormat: null, // last',
+      '});',
+      '',
+    ].join('\n'));
+    assert.deepEqual(await productionCall(path.relative(REPO_ROOT, file)), { stage: 'review', configStage: 'review', configKeys: ['model', 'maxTokens'], options: { responseFormat: null } });
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
 });
 
 test('liveCallArgs: only the suite config fields + options, pinned to the primary', () => {

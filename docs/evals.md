@@ -241,8 +241,9 @@ export const autofixSuite = {
   name: 'autofix',
   stage: 'autofix',                         // loadLLMConfig stage
   dataset: 'evals/datasets/autofix.jsonl',
-  // The production callLLM call: loadLLMConfig fields it forwards + literal options (responseFormat, …).
-  llmCall: { configKeys: ['apiKey', 'model', 'apiUrl', 'temperature', 'maxTokens', 'reasoningEffort'], options: {} },
+  // The production callLLM call: loadLLMConfig fields it forwards + literal options (auto_fix_pr.mjs: responseFormat null).
+  // A computed argument (autofix maxTokens: maxOutputBudget) is neither: the parity test rejects it until it supports one.
+  llmCall: { configKeys: ['apiKey', 'model', 'apiUrl', 'temperature', 'reasoningEffort'], options: { responseFormat: null } },
   run: async (input, { llm }) => { /* call the stage's production logic with llm */ },
   scorers: { /* ... */ },
   label: (output) => output.verdict,        // optional: confusion matrix + consistency
