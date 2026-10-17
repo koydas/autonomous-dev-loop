@@ -66,3 +66,37 @@ test('fitReviewPrompt throws without building an over-budget prompt when the fix
     /review prompt is ~\d+ estimated input tokens with no diff and no PR description left, over review_max_input_tokens \(1000\)/,
   );
 });
+
+// #219: the budget cut ends on a whole line of the diff, with the cut marker, never inside a line.
+
+const stepDiff = (n) => `diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml\n--- a/.github/workflows/test.yml\n+++ b/.github/workflows/test.yml\n@@ -1,1 +1,${n} @@\n${Array.from({ length: n }, (_, i) => `+      - name: Check module_${i} coverage (≥80%)`).join('\n')}`;
+
+test('fitReviewPrompt cuts the diff on a line boundary and appends the cut marker', () => {
+  const diff = stepDiff(400);
+  const r = fitReviewPrompt({ systemPrompt: SYSTEM, buildUserPrompt: build, diff, prBody: 'b', maxInputTokens: 2000 });
+  assert.ok(estimateTokens(SYSTEM + r.userPrompt) <= 2000);
+  assert.equal(r.diffTruncated, true);
+  const lines = r.diff.split('\n');
+  assert.match(lines.at(-1), /^… \[diff cut: \d+ more lines not shown, in \.github\/workflows\/test\.yml \(partly shown\)\]$/);
+  const kept = lines.slice(0, -1);
+  assert.ok(diff.startsWith(`${kept.join('\n')}\n`), 'the kept part is whole lines of the diff');
+  assert.match(kept.at(-1), /^\+ {6}- name: Check module_\d+ coverage \(≥80%\)$/);
+  assert.equal(Number(lines.at(-1).match(/(\d+) more lines/)[1]), diff.split('\n').length - kept.length, 'the marker counts the lines left out');
+  assert.equal(r.bodyTruncated, false);
+});
+
+test('fitReviewPrompt leaves a diff that fits uncut, with no marker', () => {
+  const diff = stepDiff(3);
+  const r = fitReviewPrompt({ systemPrompt: SYSTEM, buildUserPrompt: build, diff, prBody: 'b', maxInputTokens: 2000 });
+  assert.equal(r.diff, diff);
+  assert.equal(r.diffTruncated, false);
+  assert.doesNotMatch(r.userPrompt, /diff cut/);
+});
+
+test('fitReviewPrompt with a diff reduced to its marker still moves on to the PR body, then fits', () => {
+  const r = fitReviewPrompt({ systemPrompt: SYSTEM, buildUserPrompt: build, diff: stepDiff(400), prBody: 'b'.repeat(6000), maxInputTokens: 600 });
+  assert.ok(estimateTokens(SYSTEM + r.userPrompt) <= 600);
+  assert.equal(r.diffTruncated, true);
+  assert.equal(r.bodyTruncated, true);
+  assert.ok(!/\+ {6}- name/.test(r.diff), 'no diff line left');
+});

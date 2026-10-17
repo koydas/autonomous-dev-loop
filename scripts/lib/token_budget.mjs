@@ -1,4 +1,5 @@
 import { estimateTokens } from './metrics.mjs';
+import { cutDiffAtBoundary } from './file_filters.mjs';
 
 // Groq free tier: tokens per minute shared by the whole org. One request (input + max_tokens)
 // above it is rejected with 413 (ADR-0028).
@@ -28,23 +29,20 @@ export function assertInputBudget(stage, estimatedInputTokens, maxInputTokens) {
 
 const BODY_TRUNCATION_NOTE = '\n\n…(PR description truncated to fit the token budget)';
 
-function cut(text, overflowTokens) {
-  return text.slice(0, Math.max(0, text.length - overflowTokens * 4));
-}
-
 /**
  * Shrinks the variable parts of the review prompt until `system + user` fits `maxInputTokens`:
- * the diff first, then the PR body. `buildUserPrompt({ diff, prBody, diffTruncated })` renders
- * the user prompt. Returns `{ userPrompt, diff, prBody, diffTruncated, bodyTruncated }`.
+ * the diff first (cutDiffAtBoundary: whole lines, cut marker), then the PR body.
+ * `buildUserPrompt({ diff, prBody, diffTruncated })` renders the user prompt. Returns `{ userPrompt, diff, prBody, diffTruncated, bodyTruncated }`.
  * Throws when the prompt is still over budget with no diff and no body left.
  * Without a budget (Anthropic provider) the inputs pass through unchanged.
  */
 export function fitReviewPrompt({ systemPrompt, buildUserPrompt, diff: fullDiff, prBody: fullBody, maxInputTokens, diffTruncated: alreadyTruncated = false }) {
   let diff = fullDiff;
+  let diffChars = fullDiff.length;
   let prBody = fullBody;
   let bodyChars = fullBody.length;
   const render = () => {
-    const diffTruncated = alreadyTruncated || diff.length < fullDiff.length;
+    const diffTruncated = alreadyTruncated || diff !== fullDiff;
     return { userPrompt: buildUserPrompt({ diff, prBody, diffTruncated }), diffTruncated };
   };
   let current = render();
@@ -55,8 +53,11 @@ export function fitReviewPrompt({ systemPrompt, buildUserPrompt, diff: fullDiff,
   for (;;) {
     const overflow = estimateTokens(systemPrompt + current.userPrompt) - maxInputTokens;
     if (overflow <= 0) break;
-    if (diff.length > 0) {
-      diff = cut(diff, overflow);
+    if (diffChars > 0) {
+      // Always cut from the full diff, on a line boundary, with the cut marker (#219). diffChars only
+      // decreases, so a diff reduced to its marker still moves on to the body.
+      diffChars = Math.max(0, Math.min(diffChars, diff.length) - overflow * 4);
+      diff = cutDiffAtBoundary(fullDiff, diffChars);
     } else if (bodyChars > 0) {
       // The first cut also makes room for the truncation note it appends.
       const noteChars = prBody === fullBody ? BODY_TRUNCATION_NOTE.length : 0;

@@ -153,9 +153,10 @@ export const reviewSuite = {
   name: 'review',
   stage: 'review',
   dataset: 'evals/datasets/review.jsonl',
-  // ≈ 3.76k chars/4 input per call (28 cases, system prompt ≈ 2.6k) × 1.34 (validation's Groq-reported / chars/4
-  // ratio) + output: ≈ 148k per repeat. Was 4200 (2.9k input, 23 cases) before the incident cases (docs/evals.md).
-  tokensPerRunEst: 5300,
+  // ≈ 3.93k chars/4 input per call (30 cases, system prompt ≈ 2.7k; the two #219 cases fill the 6.3k budget) × 1.34
+  // (validation's Groq-reported / chars/4 ratio) + output: ≈ 165k per repeat. Was 5300 (3.76k input, 28 cases) before
+  // the #219 cases, 4200 (2.9k input, 23 cases) before the first incident cases (docs/evals.md).
+  tokensPerRunEst: 5500,
   // scripts/pr_review.mjs: the review is Markdown, so responseFormat null (json_object: Groq 400
   // "Failed to generate JSON"). No maxInputTokens: the prompt is fitted by buildReviewPrompt instead.
   llmCall: {
@@ -174,7 +175,7 @@ export const reviewSuite = {
       input.evidence === undefined ? { ok: false, reason: `no evidence file at ${path.join('evidence', 'review-evidence.json')}` } : parseEvidence(JSON.stringify(input.evidence)),
       { prHeadSha: input.head_sha ?? null, touchedPaths: findTouchedEvidencePaths(input.diff) },
     );
-    const { userPrompt, diffTruncated, bodyTruncated, unreviewedCodeFiles } = buildReviewPrompt({
+    const { userPrompt, diffTruncated, bodyTruncated, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
       systemPrompt: system,
       userPromptTemplate: user,
       rawDiff: input.diff,
@@ -194,6 +195,8 @@ export const reviewSuite = {
     const { verdict, reason } = withholdOnUnreviewedCode(
       decideVerdict(llmVerdict === 'APPROVED', evidence, { evidenceRequired: input.evidence !== undefined }),
       unreviewedCodeFiles,
+      cleanReview,
+      { checksFailed: evidence.failing.length > 0, shownFiles },
     );
     return { verdict, llm_verdict: llmVerdict, reason, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview };
   },

@@ -532,6 +532,16 @@ test('review dataset: incident cases name their source PR and reproduce its shap
     // #206: an approval of the clean change is withheld for the cut code file (ADR-0038).
     const code = await runReview(byId['incident-clean-code-cut'].input);
     assert.deepEqual([code.output.verdict, code.output.unreviewed_code_files], ['WITHHELD', ['src/http/status_class.mjs']]);
+    // #219: the old character cut ended these diffs mid-line in test.yml (`- nam`, then before the second
+    // c8 step). The cut now ends on a hunk boundary before test.yml and the marker names it as not shown.
+    for (const id of ['incident-cut-mid-step-name', 'incident-missing-step-in-cut']) {
+      const run = await runReview(byId[id].input);
+      assert.equal(run.output.diff_truncated, true, id);
+      assert.ok(run.output.unreviewed_code_files.includes('.github/workflows/test.yml'), id);
+      assert.match(run.request.prompt, /\n… \[diff cut: \d+ more lines not shown, in [^\n]*\.github\/workflows\/test\.yml(?! \(partly)[^\n]*\]\n/, id);
+      assert.doesNotMatch(run.request.prompt, /^\+ +- nam?$|Check \w+ coverage/m, id);
+      assert.match(run.request.prompt, /^\+ +- name: Upload run trace$/m, `${id}: the reset-auto-fix hunks before the cut are shown`);
+    }
   });
 });
 
@@ -782,11 +792,17 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.equal(byId['incident-note-instead-of-fix'].scores.flags_issue, 1);
   assert.equal(byId['incident-stale-refs-shared-phrasing'].scores.no_false_alarm, 1);
   assert.equal(byId['incident-toctou-untested-claim'].label, 'approve');
+  // #219: the recorded false REQUEST_CHANGES cite only code files the cut hid, so the verdict is withheld
+  // (ADR-0038 amendment); the High / Medium finding itself still counts as a false alarm.
+  for (const id of ['incident-cut-mid-step-name', 'incident-missing-step-in-cut']) {
+    assert.deepEqual([byId[id].output.llm_verdict, byId[id].label, byId[id].scores.no_false_alarm], ['REQUEST_CHANGES', 'withheld', 0], id);
+    assert.match(byId[id].output.reason, /^every finding cites only code cut from the reviewed diff: .*\.github\/workflows\/test\.yml/);
+  }
   const { summary } = saved;
-  // 28 cases run, 27 gated: the known-gap case is counted only in summary.known_gap.
+  // 30 cases run, 29 gated: the known-gap case is counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [28, 0.037, 0.8889, 0.8667, 0.8333],
+    [30, 0.0345, 0.8966, 0.8667, 0.7143],
   );
   assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9333, 0.8]);
   assert.deepEqual(
