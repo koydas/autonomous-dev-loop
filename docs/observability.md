@@ -9,6 +9,7 @@ Three complementary outputs are produced for every pipeline run:
 1. **Structured JSON logs** — one JSON line per event written to stderr by each script.
 2. **Run trace file** — one JSON file per GitHub Actions run, uploaded as an artifact: the spans, the **run journal** (every event of the run) and the **run envelope** (ADR-0040).
 3. **Public run record** — the trace after the redaction allowlist, committed to the `metrics` branch as `metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json` by "Commit metrics" (ADR-0040, see [Run record](#public-run-record)).
+4. **Pipeline views** — the records and trace indexes rendered on the dashboard site, next to the evals ([below](#pipeline-views-on-the-dashboard)).
 
 ## Structured JSON Logs
 
@@ -95,7 +96,7 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.start`     | info   | —             | `prNumber`, `model`                                      |
 | `review.llm_request` | info | —             | `model`, `input_tokens_est`, `prNumber`                  |
 | `review.llm_response`| info | —             | `output_tokens_est`, `prNumber`                          |
-| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override`, `unreviewed_code_files` (count of code files cut from the reviewed diff; > 0 turns an approval into `WITHHELD`, ADR-0038) |
+| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override`, `unreviewed_code_files` (count of code files cut from the reviewed diff; > 0 turns an approval into `WITHHELD`, ADR-0038), `withheld_from` (`APPROVE` \| `REQUEST_CHANGES` \| null: the verdict the unseen-code backstop turned into `WITHHELD`, ADR-0038 / #219) |
 | `review.skipped`   | info   | ✓             | `reason` (`already_reviewed` \| `superseded`), `prNumber`, `headSha` — no LLM call (ADR-0028) |
 | `review.evidence_assessed` | info | —           | `prNumber`, `state` (`available` \| `missing` \| `stale`), `reason`, `failing`, `unverified` (check names) — the CI evidence read (ADR-0024, ADR-0026) |
 | `review.prompt_truncated` | warn | —            | `prNumber`, `diff_truncated`, `body_truncated`, `unreviewed_code_files`, `adrs_shown`, `adrs_found`, `max_input_tokens` — the token budget cut the prompt (ADR-0028, ADR-0036, ADR-0038) |
@@ -453,6 +454,23 @@ done
 ```
 
 All the run records of a trace concatenated (`spans` of each `otlp` block, same `traceId`) form the full item trace in any OTLP viewer (e.g. a local Jaeger `/v1/traces` import).
+
+---
+
+## Pipeline views on the dashboard
+
+**[koydas.github.io/autonomous-dev-loop/pipeline/](https://koydas.github.io/autonomous-dev-loop/pipeline/)** — static pages built by `build_eval_site.mjs --pipeline-dir` from a checkout of the `metrics` branch, in the same build as the eval dashboard (ADR-0027 amendment 2026-10-17: Pages hosts one site). Rebuilt by `pipeline-site.yml` after each run of the five workflows that commit a record (`workflow_run`; their `GITHUB_TOKEN` + `[skip ci]` commits create no push run), on a push to `metrics` and on dispatch, and by every eval publish.
+
+| Page | Content |
+|---|---|
+| `pipeline/index.html` | Activity feed: every journal event, newest first (latest 300), with stage, level, a summary of its decisive meta (`verdict`, `reason`, `rules`, …), issue, PR, run and run outcome; filters by stage, run outcome, level, issue and PR (inline script, rows stay readable without it). Input warnings (skipped records) are listed here |
+| `pipeline/feed/<YYYY-MM>.html` | The same per month, at most 2000 actions (the run pages keep every event) |
+| `pipeline/traces/<trace_id>.html` | One per trace index: one waterfall of every run of the work item (validation → codegen → review cycles → auto-fix attempts → reset), each run's span tree down to LLM calls and side effects; duration, status, `provider:model` (`gen_ai.*`), tokens flagged `est.`, links (run, PR, issue, comments); lead time, running vs waiting; `runs_overflow` / `spans_overflow`; a listed run without a loadable record stays as a row |
+| `pipeline/runs/<run_id>.html` | Envelope, links, the span waterfall (a v1 record is shown flat), every event with its meta, overflow counters, link to the item trace |
+| `pipeline/health.html` | Funnel (validated → PR opened → approved; merged is not journaled), WITHHELD rate and causes (incl. cut diffs, `withheld_from`), REQUEST_CHANGES turned WITHHELD (#220), auto-fix outcomes and guardrail rules (legacy `runs.jsonl` lines without a record included), fallbacks / `llm_call_failed` / 429 waits, review cycles per PR, p50/p95 per stage, critical path per item, Groq tokens per day vs the 200k TPD with the eval crons and eval runs |
+| `pipeline/models.html` | Per `provider:model`: pipeline calls, failures, fallback answers, tokens, runs — and the eval runs of that model (cross-link with the eval pages) |
+
+Rules: every record string is escaped (the allowlist limits keys, not content); URLs are links only when `https:`; `run_id`, `trace_id` and month are validated before naming a file; the newest 6 months of records are rendered. Modules: `pipeline_model.mjs`, `pipeline_health.mjs`, `pipeline_site.mjs` (pure, c8-gated). Token counts are chars/4 estimates; runner clocks differ, so offsets between runs on a trace waterfall and the running/waiting split are approximate.
 
 ---
 

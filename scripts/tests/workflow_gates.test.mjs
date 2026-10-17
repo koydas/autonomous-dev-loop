@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs', 'trace_context.mjs', 'otlp_trace.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs', 'trace_context.mjs', 'otlp_trace.mjs', 'pipeline_model.mjs', 'pipeline_health.mjs', 'pipeline_site.mjs'];
 
 // Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
 const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
@@ -73,6 +73,9 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['run_record.mjs', 'run_record.test.mjs'],
     ['trace_context.mjs', 'trace_context.test.mjs'],
     ['otlp_trace.mjs', 'otlp_trace.test.mjs'],
+    ['pipeline_model.mjs', 'pipeline_model.test.mjs'],
+    ['pipeline_health.mjs', 'pipeline_health.test.mjs'],
+    ['pipeline_site.mjs', 'pipeline_site.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -103,17 +106,25 @@ test('every issue_comment-triggered workflow gates on trusted comment author_ass
 
 // Workflows whose jobs push commits or mutate labels/comments: a run must never be
 // cancelled halfway, so they queue (cancel-in-progress: false) instead.
-const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'code-generation.yml', 'validate-issue.yml', 'reset-auto-fix.yml', 'evals.yml', 'pr-evals.yml'];
+const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'code-generation.yml', 'validate-issue.yml', 'reset-auto-fix.yml', 'evals.yml', 'pr-evals.yml', 'pipeline-site.yml'];
+// Pages hosts one site (ADR-0027 amendment, 2026-10-17): the two deploy jobs share this group, and
+// pipeline-site.yml serializes its own runs on one repository-wide group. Neither calls an LLM.
+const SITE_GROUP = 'pages-site-${{ github.repository }}';
+const SITE_WORKFLOW_GROUP = 'pipeline-site-${{ github.repository }}';
 // Triggers fire for unrelated labels/comments too; a workflow-level group would let a
 // skipped run replace the pending real one, so the group must sit on the gated job.
 const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'code-generation.yml', 'pr-evals.yml'];
 
 test('every workflow declares a concurrency group keyed per PR/issue', () => {
   const workflows = readWorkflows();
-  assert.equal(workflows.length, 10, `expected 10 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  assert.equal(workflows.length, 11, `expected 11 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
   for (const { name, text } of workflows) {
-    const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1]);
-    assert.equal(groups.length, 1, `${name} must declare exactly one concurrency group`);
+    const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1].trim()).filter((g) => g !== SITE_GROUP);
+    assert.equal(groups.length, 1, `${name} must declare exactly one concurrency group besides the shared Pages group`);
+    if (name === 'pipeline-site.yml') {
+      assert.equal(groups[0], SITE_WORKFLOW_GROUP, 'pipeline-site.yml rebuilds the one site: one repository-wide group');
+      continue;
+    }
     assert.match(groups[0], /\$\{\{.*(number|ref).*\}\}/, `${name} concurrency group must be keyed per PR/issue`);
   }
 });
@@ -398,7 +409,7 @@ test('evals.yml deploys the eval dashboard to Pages and never pushes', () => {
   const text = readFileSync(resolve(WORKFLOWS_DIR, 'evals.yml'), 'utf8');
   assert.doesNotMatch(text, /git (push|add|commit)\b/);
   assert.doesNotMatch(text, /gh pr (create|merge|edit)/);
-  assert.match(text, /args=\(--out "\$SITE_DIR"\)/);
+  assert.match(text, /args=\(--out "\$SITE_DIR" --pipeline-dir "\$PIPELINE_DIR"\)/);
   assert.match(text, /args\+=\(--site-url "\$SITE_URL"\)/);
   assert.match(text, /node scripts\/build_eval_site\.mjs "\$\{args\[@\]\}" "\$\{results\[@\]\}"/);
   // An empty history is opt-in (init_site), never a fallback; every deployed tree is backed up.
@@ -808,4 +819,83 @@ test('pr-evals.yml keeps the observability contract in every job', () => {
     assert.match(job, new RegExp(`- name: Upload run trace\\n\\s+if: always\\(\\)\\n\\s+uses: actions/upload-artifact@v4\\n\\s+with:\\n\\s+name: run-trace-\\$\\{\\{ github\\.run_id \\}\\}-${name}\\n`), `${name}: trace upload`);
     assert.match(job, /^    timeout-minutes: \d+$/m, `${name}: timeout`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Pipeline views on the Pages site (ADR-0027 amendment, 2026-10-17)
+// ---------------------------------------------------------------------------
+
+const pipelineSite = () => readFileSync(resolve(WORKFLOWS_DIR, 'pipeline-site.yml'), 'utf8');
+const metricsCheckout = /- name: Check out the metrics branch\n\s+uses: actions\/checkout@v\d+\n\s+with:\n\s+ref: metrics\n\s+path: \.metrics\n\s+persist-credentials: false\n\s+sparse-checkout: metrics\n/;
+
+test('pipeline-site.yml rebuilds on the pipeline workflows completing, a push to metrics and a dispatch', () => {
+  const text = pipelineSite();
+  const on = text.slice(text.indexOf('\non:\n'), text.indexOf('\npermissions:'));
+  // Every workflow that commits a record, by its name: GITHUB_TOKEN commits create no push event.
+  const committing = readWorkflows().filter(({ text: t }) => t.includes('name: Commit metrics')).map(({ text: t }) => t.match(/^name: (.+)$/m)[1]).sort();
+  const listed = on.match(/workflows: \[([^\]]+)\]/)[1].split(',').map((w) => w.trim()).sort();
+  assert.deepEqual(listed, committing);
+  assert.match(on, /workflow_run:\n\s+workflows: \[[^\]]+\]\n\s+types: \[completed\]\n/);
+  assert.match(on, /\n  push:\n    branches: \[metrics\]\n/);
+  assert.match(on, /\n  workflow_dispatch:\n/);
+  assert.doesNotMatch(on, /pull_request|issue_comment|schedule/);
+});
+
+test('pipeline-site.yml deploys Pages with contents: read, pages: write, id-token: write only, and no secret', () => {
+  const text = pipelineSite();
+  assert.match(text, /^permissions:\n  contents: read\n\n/m);
+  const job = jobsOf(text).find((j) => j.name === 'publish').text;
+  const perms = job.match(/\n    permissions:\n((?:      .+\n)+)/)[1].trim().split(/\n\s*/).sort();
+  assert.deepEqual(perms, ['contents: read', 'id-token: write', 'pages: write']);
+  assert.doesNotMatch(text, /secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN:/);
+  assert.doesNotMatch(text, /git (push|add|commit)\b/);
+  assert.match(job, /uses: actions\/upload-pages-artifact@v\d+/);
+  assert.equal([...job.matchAll(/uses: actions\/deploy-pages@/g)].length, 1);
+  assert.match(job, /name: github-pages/);
+  assert.match(job, /^    timeout-minutes: \d+$/m);
+});
+
+test('pipeline-site.yml runs the default-branch builder only, reading the metrics branch as data', () => {
+  const text = pipelineSite();
+  const job = jobsOf(text).find((j) => j.name === 'publish').text;
+  assert.match(job, /if: \$\{\{ github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\) \|\| \(github\.event_name == 'push' && github\.ref == 'refs\/heads\/metrics'\) \}\}/);
+  assert.match(job, /- uses: actions\/checkout@v\d+\n\s+with:\n\s+ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+persist-credentials: false\n/);
+  assert.match(job, metricsCheckout);
+  // A workflow_run never checks out the triggering run's code.
+  assert.doesNotMatch(text, /workflow_run\.head_(sha|branch)|github\.event\.workflow_run\.head/);
+  assert.match(job, /args=\(--out "\$SITE_DIR" --pipeline-dir "\$PIPELINE_DIR" --site-url "\$SITE_URL"\)/);
+  assert.match(job, /node scripts\/build_eval_site\.mjs "\$\{args\[@\]\}"\n/);
+  assert.match(job, /PIPELINE_DIR: \$\{\{ github\.workspace \}\}\/\.metrics/);
+  // An empty eval history is a manual opt-in, never the default of an unattended rebuild.
+  assert.match(job, /^      INIT_SITE: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.init_site \}\}$/m);
+  assert.equal([...text.matchAll(/--allow-empty/g)].length, 1);
+  assert.match(job, /if \[ "\$INIT_SITE" = "true" \]; then args\+=\(--allow-empty\); fi/);
+  assert.doesNotMatch(job, /--previous-dir|restore_run_id/, 'restore stays an evals.yml input (ADR-0027)');
+});
+
+test('evals.yml and pipeline-site.yml deploy jobs share one never-cancelled Pages group', () => {
+  const evalsPublish = evalsJobs().publish;
+  const sitePublish = jobsOf(pipelineSite()).find((j) => j.name === 'publish').text;
+  for (const [name, job] of [['evals.yml publish', evalsPublish], ['pipeline-site.yml publish', sitePublish]]) {
+    assert.ok(job.includes(`    concurrency:\n      group: ${SITE_GROUP}\n      cancel-in-progress: false\n`), `${name} must join ${SITE_GROUP}`);
+  }
+  // At most one job of each side in the shared group (one running + one pending): GitHub's
+  // one-pending-per-group rule can then never cancel a pending eval publish.
+  assert.match(pipelineSite(), new RegExp(`^concurrency:\\n  group: ${SITE_WORKFLOW_GROUP.replace(/[$.{}]/g, '\\$&')}\\n  cancel-in-progress: false$`, 'm'));
+  assert.match(evalsYml(), /^concurrency:\n  group: evals-\$\{\{ github\.ref \}\}\n  cancel-in-progress: false$/m);
+  assert.equal([...readWorkflows().map(({ text }) => text).join('\n').matchAll(/uses: actions\/deploy-pages@/g)].length, 2, 'only these two jobs deploy Pages');
+});
+
+test('evals.yml publish rebuilds the pipeline views from the metrics branch, never from the site', () => {
+  const publish = evalsJobs().publish;
+  assert.match(publish, metricsCheckout);
+  assert.match(publish, /PIPELINE_DIR: \$\{\{ github\.workspace \}\}\/\.metrics/);
+  assert.ok(publish.indexOf('- name: Check out the metrics branch') < publish.indexOf('- name: Build eval dashboard'));
+});
+
+test('pipeline_health EVAL_CRONS mirror the evals.yml crons and their suites', async () => {
+  const { EVAL_CRONS } = await import('../lib/pipeline_health.mjs');
+  const cronSuites = evalsCronSuites();
+  assert.deepEqual(Object.fromEntries(EVAL_CRONS.map((c) => [c.cron, c.suite])), cronSuites);
+  for (const c of EVAL_CRONS) assert.equal(Number(c.cron.split(' ')[4]), c.weekday);
 });

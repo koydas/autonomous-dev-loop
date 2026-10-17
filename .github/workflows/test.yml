@@ -303,6 +303,39 @@ jobs:
             --statements 80 \
             node --test scripts/tests/otlp_trace.test.mjs
 
+      - name: Check pipeline_model coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/pipeline_model.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/pipeline_model.test.mjs
+
+      - name: Check pipeline_health coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/pipeline_health.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/pipeline_health.test.mjs
+
+      - name: Check pipeline_site coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/pipeline_site.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/pipeline_site.test.mjs
+
       # Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build).
       - name: Check build_eval_site coverage (≥80%)
         run: |

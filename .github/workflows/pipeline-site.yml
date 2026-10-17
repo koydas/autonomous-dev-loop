@@ -1,0 +1,102 @@
+name: Pipeline site
+
+# Rebuilds the dashboard on GitHub Pages when the `metrics` branch gains run records (ADR-0027 amendment,
+# 2026-10-17): the pipeline views from a checkout of `metrics`, the eval history read back from the live
+# site exactly as evals.yml does (no new eval result: the eval half is redeployed unchanged). One build,
+# build_eval_site.mjs, serves both workflows, so neither deploy drops the other's half.
+#
+# Triggers:
+# - workflow_run: the pipeline workflows commit their record in "Commit metrics" before they complete.
+#   This is the trigger that fires: their commits are made with GITHUB_TOKEN (no push event is created
+#   for them) and carry [skip ci].
+# - push to metrics: any other push (a manual fix, a token that does create events). GitHub runs the
+#   workflow file of the pushed commit, so it fires only once this file is also on the metrics branch;
+#   the job still runs the builder from the default branch.
+# - workflow_dispatch: manual rebuild; init_site starts an empty eval history on a site without one.
+on:
+  workflow_run:
+    workflows: [Issue Validation Agent, Code Generation, PR Review, Auto-Fix PR, Reset Auto-Fix Counter]
+    types: [completed]
+  push:
+    branches: [metrics]
+  workflow_dispatch:
+    inputs:
+      init_site:
+        description: First deploy only — start an empty eval history if the site has no scorecard yet
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One rebuild at a time; a newer pending run replaces an older pending one (it reads a newer metrics
+# branch). The deploy job also joins the group of evals.yml's publish job: see there.
+concurrency:
+  group: pipeline-site-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Default branch only: workflow_run and dispatch run on it; a push to metrics runs metrics' copy of
+    # this file, and the builder below is checked out from the default branch either way.
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || (github.event_name == 'push' && github.ref == 'refs/heads/metrics') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    # INTENTIONALLY SHARED with evals.yml's publish job (one Pages site, read-modify-redeploy): see the
+    # comment there. Do not rename.
+    concurrency:
+      group: pages-site-${{ github.repository }}
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      INIT_SITE: ${{ github.event_name == 'workflow_dispatch' && inputs.init_site }}
+    steps:
+      # The builder: always the default branch, never the triggering run's head or the metrics branch.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Data only: read as files, never executed.
+      - name: Check out the metrics branch
+        uses: actions/checkout@v4
+        with:
+          ref: metrics
+          path: .metrics
+          persist-credentials: false
+          sparse-checkout: metrics
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      # A 404 on the deployed scorecard aborts (never a site without its eval history) unless init_site.
+      - name: Build the dashboard
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+          SITE_DIR: ${{ runner.temp }}/eval-site
+          PIPELINE_DIR: ${{ github.workspace }}/.metrics
+        run: |
+          set -euo pipefail
+          args=(--out "$SITE_DIR" --pipeline-dir "$PIPELINE_DIR" --site-url "$SITE_URL")
+          if [ "$INIT_SITE" = "true" ]; then args+=(--allow-empty); fi
+          node scripts/build_eval_site.mjs "${args[@]}"
+          du -sh "$SITE_DIR" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/eval-site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
