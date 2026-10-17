@@ -27,7 +27,7 @@ const FLOOR = {
     },
   },
   review: {
-    cases: 27,
+    cases: 29,
     thresholds: {
       'scores.verdict_match.mean': { min: 0.75 },
       'per_class.request_changes.recall': { min: 0.8 },
@@ -107,6 +107,8 @@ const PINNED = {
     "incident-stale-refs-shared-phrasing": ["approve", "a8a1b16fb636"],
     "incident-finding-on-cut-hunks": ["approve", "f5ac114479c2"],
     "incident-clean-code-cut": ["withheld", "634e54f32f55"],
+    "incident-cut-mid-step-name": ["withheld", "75c37e934634"],
+    "incident-missing-step-in-cut": ["withheld", "c2b057607c25"],
   },
 };
 

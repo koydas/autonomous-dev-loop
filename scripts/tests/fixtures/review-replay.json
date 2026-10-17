@@ -256,6 +256,24 @@
           "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new runtime module.\n\n### ✅ Summary\nAdds the status-class table and routes `fetch_with_retry` through `isRetryable`.\nNot verified (diff truncated): the end of `status_class.mjs` and the tests.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
+    },
+    {
+      "case_id": "incident-cut-mid-step-name",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n**🧩 Change Classification**  \nType: mixed | Tests expected: yes — executable code and CI/CD workflow files are modified.\n\n**✅ Summary**  \n- Added `work_item_key.mjs` and `span_export.mjs` to the eval‑replay workflow.  \n- Updated `reset-auto-fix.yml` to run a new script, added permissions, and inserted artifact upload and metric‑commit steps.  \n- Modified `test.yml` to include a new comment block (partial view due to truncation).  \n\n*Note: the diff is truncated; only the shown hunks were inspected.*\n\n**⚠️ Issues Found**  \n- **High** Broken workflow syntax — File: `.github/workflows/test.yml` Lines: 280‑281 (visible) Root cause: The added line \"`- n`\" is an incomplete YAML list item, rendering the workflow file syntactically invalid and causing CI runs to fail. Fix: Remove the stray \"`- n`\" or replace it with a valid step definition.  \n\n**🚀 Verdict**  \n**REQUEST_CHANGES**  \n\nThe broken YAML in `test.yml` is a critical regression that will prevent the CI workflow from executing. Please correct the syntax before merging."
+        }
+      ]
+    },
+    {
+      "case_id": "incident-missing-step-in-cut",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n**🧩 Change Classification**  \nType: mixed | Tests expected: yes — new automation modules and workflow changes.\n\n**✅ Summary**  \n- Adds `item_lineage.mjs` and `lineage_spans.mjs`, wires them into `eval-replay.yml`, and moves the reset-auto-fix heredoc into a script.  \n- Diff view is truncated; later hunks were not inspected.\n\n**⚠️ Issues Found**  \n- **Medium** Missing coverage for new module — File: `.github/workflows/test.yml` Lines: 292‑302 Root cause: `scripts/lib/lineage_spans.mjs` is added without a matching `c8 --check-coverage` step; only the `item_lineage` step is present. Fix: add a `Check lineage_spans coverage (≥80%)` step to `test.yml`.\n\n**🚀 Verdict**  \n**REQUEST_CHANGES**"
+        }
+      ]
     }
   ]
 }

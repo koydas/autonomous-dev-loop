@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReviewPrompt, findUnreviewedCodeFiles, formatUnreviewedCodeNote, orderDiffForReview, parseReviewVerdict, withholdOnUnreviewedCode } from '../lib/review_prompt.mjs';
+import { buildReviewPrompt, findingCitedFiles, findUnreviewedCodeFiles, formatUnreviewedCodeNote, formatUnseenFindingsNote, orderDiffForReview, parseReviewVerdict, withholdOnUnreviewedCode } from '../lib/review_prompt.mjs';
+import { cutDiffAtBoundary } from '../lib/file_filters.mjs';
 import { assessEvidence } from '../lib/review_evidence.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
 
@@ -37,12 +38,18 @@ test('buildReviewPrompt shrinks the diff to the Groq budget and flags it', () =>
   assert.match(userPrompt, /- diff_truncated: true/);
 });
 
-test('buildReviewPrompt without a budget (Anthropic) caps the diff at 12,000 chars and flags it', () => {
-  const raw = fileDiff('src/a.js', '+'.padEnd(20000, 'y'));
-  const { userPrompt, diffTruncated } = build({ rawDiff: raw, maxInputTokens: null });
+test('buildReviewPrompt without a budget (Anthropic) caps the diff at 12,000 chars on a line boundary and flags it', () => {
+  const lines = Array.from({ length: 2000 }, (_, i) => `+line ${String(i).padStart(4, '0')}`);
+  const raw = fileDiff('src/a.js', lines.join('\n'));
+  const { userPrompt, diffTruncated, unreviewedCodeFiles } = build({ rawDiff: raw, maxInputTokens: null });
   assert.equal(diffTruncated, true);
-  assert.ok(userPrompt.includes(raw.slice(0, 12000)));
-  assert.ok(!userPrompt.includes(raw.slice(0, 12001)));
+  const shown = userPrompt.slice(userPrompt.indexOf('diff --git'), userPrompt.indexOf(']', userPrompt.indexOf('… [diff cut: ')) + 1);
+  assert.ok(shown.length <= 12000, `${shown.length} chars`);
+  const kept = shown.split('\n').slice(0, -1);
+  assert.ok(raw.startsWith(`${kept.join('\n')}\n`), 'the shown diff is a prefix of whole lines');
+  assert.match(kept.at(-1), /^\+line \d{4}$/);
+  assert.match(shown.split('\n').at(-1), new RegExp(`^… \\[diff cut: ${2004 - kept.length} more lines not shown, in src/a\\.js \\(partly shown\\)\\]$`));
+  assert.deepEqual(unreviewedCodeFiles, ['src/a.js']);
 });
 
 test('buildReviewPrompt throws, without a prompt, when the fixed part alone is over budget', () => {
@@ -235,4 +242,73 @@ test('buildReviewPrompt without a budget (Anthropic) reports the code files past
   const { diffTruncated, unreviewedCodeFiles } = build({ rawDiff: fileDiff('scripts/a.mjs', '+'.padEnd(20000, 'y')), maxInputTokens: null });
   assert.equal(diffTruncated, true);
   assert.deepEqual(unreviewedCodeFiles, ['scripts/a.mjs']);
+});
+
+// --- #219: cut on boundaries, partly shown files, REQUEST_CHANGES on unseen code (ADR-0038 amendment) ---
+
+test('findUnreviewedCodeFiles reads a boundary cut with its marker: a file with only some hunks shown is unreviewed', () => {
+  const twoHunks = `diff --git a/scripts/a.mjs b/scripts/a.mjs\n--- a/scripts/a.mjs\n+++ b/scripts/a.mjs\n@@ -1 +1 @@\n-a\n+b\n@@ -40 +40 @@\n-c\n+${'d'.repeat(200)}\n`;
+  const full = twoHunks + fileDiff('scripts/tests/a.test.mjs', '+t');
+  const shown = cutDiffAtBoundary(full, full.indexOf('\n@@ -40') + 120);
+  assert.match(shown, /\n\+b\n… \[diff cut: .*scripts\/a\.mjs \(partly shown\)/);
+  assert.deepEqual(findUnreviewedCodeFiles(full, shown), ['scripts/a.mjs']);
+  const fileBoundary = cutDiffAtBoundary(full, full.indexOf('diff --git a/scripts/tests') + 80);
+  assert.deepEqual(findUnreviewedCodeFiles(full, fileBoundary), [], 'a.mjs shown in full, only the test file cut');
+  assert.deepEqual(findUnreviewedCodeFiles(full, cutDiffAtBoundary(full, 60)), ['scripts/a.mjs'], 'marker only: nothing shown');
+});
+
+test('buildReviewPrompt on Groq: the #219 step-name line is shown whole or not at all, and test.yml counts as unreviewed', () => {
+  const steps = Array.from({ length: 300 }, (_, i) => `+      - name: Check module_${i} coverage (≥80%)\n+        run: npx c8 node --test m${i}.test.mjs`).join('\n');
+  const raw = fileDiff('.github/workflows/test.yml', steps) + fileDiff('scripts/lib/m.mjs', '+export const m = 1;');
+  const { userPrompt, unreviewedCodeFiles } = build({ rawDiff: raw, maxInputTokens: 2500 });
+  const diffPart = userPrompt.slice(userPrompt.indexOf('diff --git'), userPrompt.indexOf('\n', userPrompt.indexOf('… [diff cut: ')));
+  for (const line of diffPart.split('\n').slice(0, -1)) assert.ok(raw.split('\n').includes(line), `partial line: ${line}`);
+  assert.match(diffPart.split('\n').at(-1), /^… \[diff cut: \d+ more lines not shown, in \.github\/workflows\/test\.yml \(partly shown\), scripts\/lib\/m\.mjs\]$/);
+  assert.deepEqual(unreviewedCodeFiles, ['.github/workflows/test.yml', 'scripts/lib/m.mjs']);
+});
+
+const review = (...findings) => ['## 🔍 Automated Code Review', '', '**✅ Summary**', '- Adds `scripts/lib/visible.mjs`.', '', '**⚠️ Issues Found**', ...findings, '', '**🚀 Verdict**', '**REQUEST_CHANGES**'].join('\n');
+const STRAY = '- **High** Broken workflow syntax — File: `.github/workflows/test.yml` Lines: 280‑281 Root cause: the added line "`- n`" is an incomplete YAML list item. Fix: remove it.';
+const MISSING_STEP = '- **Medium** Missing coverage — File: `.github/workflows/test.yml`\n  `scripts/lib/span_export.mjs` is added without a c8 step.';
+const VISIBLE = '- [High] Off-by-one — File: scripts/lib/visible.mjs:12 Root cause: `<=`. Fix: `<`.';
+const RC = { verdict: 'REQUEST_CHANGES', reason: null };
+const CUT = ['.github/workflows/test.yml', 'scripts/lib/span_export.mjs'];
+
+test('findingCitedFiles reads the files cited by each Issues Found bullet, continuation lines included', () => {
+  assert.deepEqual(findingCitedFiles(review(STRAY, MISSING_STEP, VISIBLE)), [
+    ['.github/workflows/test.yml'],
+    ['.github/workflows/test.yml', 'scripts/lib/span_export.mjs'],
+    ['scripts/lib/visible.mjs'],
+  ]);
+  assert.deepEqual(findingCitedFiles(review('1. **Low** Verify `test.yml:12`.')), [['test.yml']], 'numbered bullet, bare file name');
+  assert.deepEqual(findingCitedFiles(review('- **Medium** Missing tests for the new export.')), [[]], 'a finding with no file');
+  assert.deepEqual(findingCitedFiles(review('None.')), [], 'no finding bullet');
+  assert.deepEqual(findingCitedFiles('### ⚠️ Issues Found\n- [High] a in `x.mjs`\n### 🚀 Verdict\n- [High] not a finding in `y.mjs`'), [['x.mjs']], 'the Verdict section ends it');
+  assert.deepEqual(findingCitedFiles(undefined), []);
+});
+
+test('withholdOnUnreviewedCode withholds a REQUEST_CHANGES whose findings all cite only cut code files (#219)', () => {
+  for (const text of [review(STRAY), review(MISSING_STEP), review(STRAY, MISSING_STEP), review('- **High** stray line in `test.yml`')]) {
+    assert.deepEqual(withholdOnUnreviewedCode(RC, CUT, text), {
+      verdict: 'WITHHELD', reason: 'every finding cites only code cut from the reviewed diff: .github/workflows/test.yml, scripts/lib/span_export.mjs',
+    });
+  }
+});
+
+test('withholdOnUnreviewedCode keeps the REQUEST_CHANGES when any finding cites a shown file, cites no file, or there is none', () => {
+  assert.equal(withholdOnUnreviewedCode(RC, CUT, review(STRAY, VISIBLE)), RC, 'one finding on a shown file');
+  assert.equal(withholdOnUnreviewedCode(RC, CUT, review('- **High** `.github/workflows/test.yml` breaks `scripts/lib/visible.mjs`')), RC, 'one finding citing a shown file too');
+  assert.equal(withholdOnUnreviewedCode(RC, CUT, review('- **Medium** Missing tests for the new export.')), RC, 'no citation');
+  assert.equal(withholdOnUnreviewedCode(RC, CUT, review('None.')), RC, 'no finding (e.g. a gate verdict)');
+  assert.equal(withholdOnUnreviewedCode(RC, CUT), RC, 'no review text');
+  assert.equal(withholdOnUnreviewedCode(RC, [], review(STRAY)), RC, 'nothing was cut');
+  const failing = { verdict: 'REQUEST_CHANGES', reason: 'failing checks: tests' };
+  assert.equal(withholdOnUnreviewedCode(failing, CUT, review(STRAY)), failing, 'a failing check is never withheld');
+});
+
+test('formatUnseenFindingsNote names the cut files and says auto-fix is not triggered', () => {
+  const note = formatUnseenFindingsNote(CUT);
+  assert.match(note, /^\n> \*\*Changes not requested\*\* — the diff was cut to the token budget/);
+  assert.match(note, /`\.github\/workflows\/test\.yml`, `scripts\/lib\/span_export\.mjs`/);
+  assert.match(note, /Auto-fix is not triggered/);
 });

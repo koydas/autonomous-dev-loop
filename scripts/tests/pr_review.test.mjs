@@ -1421,6 +1421,47 @@ test('pr_review (Groq) withholds an approval when code was cut from the reviewed
   }
 });
 
+// #219: a REQUEST_CHANGES whose every finding cites only code the cut hid is withheld, not sent to auto-fix.
+const unseenFinding = (file) => `### ⚠️ Issues Found\n- **High** Broken workflow syntax — File: \`${file}\` Lines: 280-281 Root cause: stray \`- n\`. Fix: remove it.\n\n### 🚀 Verdict\nREQUEST_CHANGES`;
+
+test('pr_review (Groq) withholds a REQUEST_CHANGES whose findings cite only code cut from the diff (#219)', async () => {
+  const server = await startMockServer(makeHandler({ diffText: bigDiff(60000), groqContent: unseenFinding('src/big.js') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReviewOnGroq(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const [payload] = groqRequests(server);
+    assert.match(payload.messages[1].content, /\n… \[diff cut: \d+ more lines not shown, in src\/big\.js \(partly shown\)\]\n/);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.match(JSON.parse(review.body).body, /Changes not requested: every finding cites only code cut from the reviewed diff/);
+    const comment = server.requests.find((r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url));
+    assert.match(JSON.parse(comment.body).body, /Changes not requested\*\* — the diff was cut to the token budget, and every finding above cites only code files the reviewer did not see in full: `src\/big\.js`/);
+    assert.doesNotMatch(JSON.parse(comment.body).body, /The model approved what it saw|tool evidence cannot confirm it/);
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
+    assert.match(result.stderr, /"verdict":"WITHHELD"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review (Groq) keeps a REQUEST_CHANGES on a cut diff when a finding cites a file that was shown (#219)', async () => {
+  const shown = 'diff --git a/src/small.js b/src/small.js\n--- a/src/small.js\n+++ b/src/small.js\n@@ -1 +1 @@\n-a\n+b\n';
+  const server = await startMockServer(makeHandler({ diffText: shown + bigDiff(60000), groqContent: unseenFinding('src/small.js') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReviewOnGroq(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.match(result.stderr, /"verdict":"REQUEST_CHANGES"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 test('pr_review (Groq) still approves when the cut only removed documentation', async () => {
   const docs = `diff --git a/docs/big.md b/docs/big.md\n--- a/docs/big.md\n+++ b/docs/big.md\n@@ -0,0 +1 @@\n${'+prose line for the token budget\n'.repeat(2000)}`;
   const code = 'diff --git a/src/small.js b/src/small.js\n--- a/src/small.js\n+++ b/src/small.js\n@@ -1 +1 @@\n-a\n+b\n';

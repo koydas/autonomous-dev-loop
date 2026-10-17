@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldIncludeFile, filterDiff, truncateContextLines } from '../lib/file_filters.mjs';
+import { shouldIncludeFile, filterDiff, truncateContextLines, cutDiffAtBoundary, stripDiffCutMarker, DIFF_CUT_MARKER_PREFIX } from '../lib/file_filters.mjs';
 
 // shouldIncludeFile
 
@@ -78,10 +78,11 @@ test('filterDiff falls back to rawDiff when all chunks are filtered', () => {
   assert.ok(result.includes('node_modules/foo'));
 });
 
-test('filterDiff truncates to maxChars', () => {
+test('filterDiff truncates to maxChars, never inside a line', () => {
   const big = 'x'.repeat(5000);
   const result = filterDiff(big, 100);
-  assert.equal(result.length, 100);
+  assert.ok(result.length <= 100);
+  assert.equal(result, '… [diff cut: 1 more line not shown]', 'a single line over the cap is left out whole');
 });
 
 // truncateContextLines / context-line cut in filterDiff
@@ -147,4 +148,108 @@ test('filterDiff cuts context before the maxChars cap (#186-shaped diff is no lo
   assert.equal(capped, filterDiff(raw, Infinity), 'nothing cut by the cap → diff_truncated stays false');
   assert.deepEqual(plusMinus(capped), plusMinus(raw));
   assert.ok(capped.endsWith('+});'));
+});
+
+// cutDiffAtBoundary — #219: a cut ends on a whole line, preferably a hunk, with a marker naming what is left out
+
+const file = (path, ...hunks) => `diff --git a/${path} b/${path}\nindex 1111111..2222222 100644\n--- a/${path}\n+++ b/${path}\n${hunks.join('\n')}`;
+const TWO_FILES = `${file('.github/workflows/test.yml',
+  '@@ -280,2 +280,6 @@ jobs:\n             node --test a.test.mjs\n \n+      - name: Check trace_context coverage (≥80%)\n+        run: npx c8 node --test b.test.mjs',
+  '@@ -300,1 +304,2 @@ jobs:\n       - uses: actions/checkout@v4\n+      - run: npm run lint')}\n${file('scripts/lib/b.mjs', '@@ -0,0 +1,2 @@\n+export const b = 1;\n+export const c = 2;')}\n`;
+const kept = (out) => out.split('\n').slice(0, -1).join('\n');
+const markerOf = (out) => out.split('\n').at(-1);
+
+test('cutDiffAtBoundary returns the diff unchanged when it fits, cut or not on an exact boundary', () => {
+  assert.equal(cutDiffAtBoundary(TWO_FILES, TWO_FILES.length), TWO_FILES);
+  assert.equal(cutDiffAtBoundary(TWO_FILES, Infinity), TWO_FILES);
+  assert.equal(cutDiffAtBoundary('', 0), '');
+  assert.equal(cutDiffAtBoundary(undefined, 10), '');
+});
+
+test('cutDiffAtBoundary never ends inside a line: the kept part is a prefix of whole lines, within maxChars', () => {
+  for (let max = 0; max < TWO_FILES.length; max++) {
+    const out = cutDiffAtBoundary(TWO_FILES, max);
+    assert.ok(out.length <= max, `max ${max}: ${out.length} chars`);
+    if (!out) continue;
+    assert.ok(markerOf(out).startsWith(DIFF_CUT_MARKER_PREFIX), `max ${max}: no marker`);
+    const prefix = kept(out);
+    assert.ok(prefix === '' || TWO_FILES.startsWith(`${prefix}\n`), `max ${max}: not a whole-line prefix`);
+    const last = prefix.split('\n').at(-1);
+    assert.ok(prefix === '' || /^[+\- ]/.test(last) && !/^(\+\+\+|---) [ab]\//.test(last), `max ${max}: ends on a header line "${last}"`);
+    assert.doesNotMatch(out, /\n\+ +- n\n/, `max ${max}: the step name of #219 is never cut`);
+  }
+});
+
+test('cutDiffAtBoundary prefers the hunk boundary and names the partly shown and the unseen files', () => {
+  const firstHunkEnd = TWO_FILES.indexOf('\n@@ -300');
+  const marker = '… [diff cut: 10 more lines not shown, in .github/workflows/test.yml (partly shown), scripts/lib/b.mjs]';
+  // Room for the first hunk, the marker and a few chars of the second hunk: the cut is on the hunk boundary.
+  const out = cutDiffAtBoundary(TWO_FILES, firstHunkEnd + 1 + marker.length + 30);
+  assert.equal(kept(out), TWO_FILES.slice(0, firstHunkEnd));
+  assert.equal(markerOf(out), marker);
+  const onFileBoundary = TWO_FILES.indexOf('\ndiff --git a/scripts/lib/b.mjs');
+  const second = cutDiffAtBoundary(TWO_FILES, onFileBoundary + 80);
+  assert.equal(kept(second), TWO_FILES.slice(0, onFileBoundary), 'a cut exactly on a file boundary keeps the whole first file');
+  assert.equal(markerOf(second), '… [diff cut: 7 more lines not shown, in scripts/lib/b.mjs]');
+});
+
+test('cutDiffAtBoundary falls back to a line boundary inside one huge hunk, never on its header', () => {
+  const body = Array.from({ length: 400 }, (_, i) => `+const v${i} = ${i};`).join('\n');
+  const big = file('src/big.js', `@@ -0,0 +1,400 @@\n${body}`);
+  const out = cutDiffAtBoundary(big, 3000);
+  assert.ok(out.length <= 3000);
+  assert.match(kept(out), /\n\+const v\d+ = \d+;$/, 'cut between two lines of the hunk');
+  assert.match(markerOf(out), /^… \[diff cut: \d+ more lines not shown, in src\/big\.js \(partly shown\)\]$/);
+  const shownLines = kept(out).split('\n').length;
+  assert.equal(markerOf(out), `… [diff cut: ${big.split('\n').length - shownLines} more lines not shown, in src/big.js (partly shown)]`);
+  // Too small for the header and one line: only the marker, never a header without a line under it.
+  const tiny = cutDiffAtBoundary(big, 140);
+  assert.equal(tiny, '… [diff cut: 405 more lines not shown, in src/big.js]');
+});
+
+test('cutDiffAtBoundary drops a single line too long for the budget whole, and returns "" when not even the marker fits', () => {
+  const huge = file('src/min.js', `@@ -0,0 +1 @@\n+${'x'.repeat(20000)}`);
+  assert.equal(cutDiffAtBoundary(huge, 12000), '… [diff cut: 6 more lines not shown, in src/min.js]');
+  assert.equal(cutDiffAtBoundary(huge, 20), '');
+});
+
+test('cutDiffAtBoundary counts UTF-16 units and never splits a multi-byte character', () => {
+  const diff = file('docs/a.md', `@@ -1 +1,3 @@\n+≥80% 🚀 ${'é'.repeat(50)}\n+🚀🚀🚀🚀🚀\n+fin`);
+  for (let max = 60; max < diff.length; max++) {
+    const out = cutDiffAtBoundary(diff, max);
+    assert.ok(out.length <= max);
+    assert.doesNotMatch(out, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/, `max ${max}: lone surrogate`);
+    if (out) assert.ok(kept(out) === '' || diff.startsWith(`${kept(out)}\n`));
+  }
+});
+
+test('cutDiffAtBoundary may end after a hunk-less header block (binary file, rename)', () => {
+  const bin = 'diff --git a/img.png b/img.png\nindex 1111111..2222222 100644\nBinary files a/img.png and b/img.png differ';
+  const diff = `${bin}\n${file('src/a.js', '@@ -1 +1 @@\n-a\n+b')}`;
+  assert.equal(kept(cutDiffAtBoundary(diff, bin.length + 60)), bin);
+});
+
+test('cutDiffAtBoundary lists at most 5 files in the marker, then counts the rest', () => {
+  const many = Array.from({ length: 8 }, (_, i) => file(`src/f${i}.js`, '@@ -1 +1 @@\n-a\n+b')).join('\n');
+  const out = cutDiffAtBoundary(many, 300);
+  assert.match(markerOf(out), /, in src\/f1\.js, src\/f2\.js, src\/f3\.js, src\/f4\.js, src\/f5\.js, 2 more files\]$/);
+});
+
+test('filterDiff cuts on a line boundary, with the marker, as cutDiffAtBoundary does', () => {
+  const diff = file('src/a.js', `@@ -0,0 +1,2000 @@\n${Array.from({ length: 2000 }, (_, i) => `+line ${i}`).join('\n')}`);
+  const out = filterDiff(diff, 5000);
+  assert.equal(out, cutDiffAtBoundary(diff, 5000));
+  assert.match(markerOf(out), /in src\/a\.js \(partly shown\)\]$/);
+});
+
+test('stripDiffCutMarker removes only a trailing marker line', () => {
+  const out = cutDiffAtBoundary(TWO_FILES, 200);
+  assert.equal(stripDiffCutMarker(out), kept(out));
+  assert.equal(stripDiffCutMarker('… [diff cut: 3 more lines not shown]'), '');
+  assert.equal(stripDiffCutMarker(TWO_FILES), TWO_FILES, 'no marker');
+  const quoted = '+const note = "… [diff cut: 1 more line not shown]";';
+  assert.equal(stripDiffCutMarker(quoted), quoted, 'a marker quoted inside a diff line is content');
+  const notLast = `x\n${DIFF_CUT_MARKER_PREFIX}1 more line not shown]\n+y`;
+  assert.equal(stripDiffCutMarker(notLast), notLast, 'a marker line not at the end is content');
+  assert.equal(stripDiffCutMarker(undefined), '');
 });

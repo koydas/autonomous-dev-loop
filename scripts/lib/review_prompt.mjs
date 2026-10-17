@@ -1,4 +1,4 @@
-import { filterDiff } from './file_filters.mjs';
+import { filterDiff, stripDiffCutMarker } from './file_filters.mjs';
 import { interpolatePrompt } from './prompts.mjs';
 import { buildAutomationGateContext } from './coverage_checker.mjs';
 import { buildChangeClassificationContext, isDocumentationFile, isTestFile } from './change_classifier.mjs';
@@ -46,12 +46,14 @@ export function orderDiffForReview(rawDiff) {
 
 /**
  * Code files (not a test, not documentation: the first tier of orderDiffForReview) whose diff the
- * reviewer did not see in full (ADR-0038). `shownDiff` is the prefix of `fullDiff` put in the prompt.
+ * reviewer did not see in full (ADR-0038). `shownDiff` is the diff put in the prompt: a prefix of
+ * `fullDiff` cut on a line boundary, plus the cut marker line, which is not part of the prefix.
+ * A file with only some of its hunks shown counts as unreviewed.
  * @returns {string[]}
  */
 export function findUnreviewedCodeFiles(fullDiff, shownDiff) {
   const full = String(fullDiff ?? '').replace(/\n+$/, '');
-  const shownLength = String(shownDiff ?? '').length;
+  const shownLength = stripDiffCutMarker(shownDiff).length;
   if (shownLength >= full.length) return [];
   const headers = [...full.matchAll(/^diff --git a\/(.+?) b\//gm)];
   return headers
@@ -62,14 +64,51 @@ export function findUnreviewedCodeFiles(fullDiff, shownDiff) {
     .map((header) => header[1]);
 }
 
+// Finding bullets of the review's Issues Found section: "- **High** …", "* [Medium] …", "1. **Low** …".
+const ISSUES_HEADING = /^\s*(?:#{1,3}\s|\*\*)[^\n]*issues found/i;
+const OTHER_HEADING = /^\s*(?:#{1,3}\s|\*\*[^*\n]*(?:verdict|summary|change classification)[^*\n]*\*\*:?\s*$)/i;
+const FINDING_BULLET = /^\s*(?:[-*]|\d+[.)])\s*\**\[?\**(?:High|Medium|Low)\b/i;
+// A path-like token: `a/b.mjs`, `.github/workflows/test.yml`, `test.yml`. Over-matching ("e.g") is safe:
+// a token that names no cut file keeps the finding, and so the REQUEST_CHANGES.
+const PATH_TOKEN = /(?:[\w.-]+\/)*[\w-][\w.-]*\.[A-Za-z]\w{0,7}\b/g;
+
+/**
+ * Files cited by each finding of the review's Issues Found section (#219): one array per finding
+ * bullet (its continuation lines included). [] when the section has no finding bullet.
+ * @returns {string[][]}
+ */
+export function findingCitedFiles(review) {
+  const findings = [];
+  let inIssues = false;
+  for (const line of String(review ?? '').split('\n')) {
+    if (ISSUES_HEADING.test(line)) inIssues = true;
+    else if (OTHER_HEADING.test(line)) inIssues = false;
+    else if (inIssues && FINDING_BULLET.test(line)) findings.push([line]);
+    else if (inIssues && findings.length) findings.at(-1).push(line);
+  }
+  return findings.map((lines) => [...new Set(lines.join('\n').match(PATH_TOKEN) ?? [])]);
+}
+
+const citesCutFile = (token, files) => files.some((f) => f === token || f.endsWith(`/${token}`));
+
 /**
  * ADR-0038: an APPROVE given on a diff whose code was cut to the budget is withheld (ADR-0026 path:
- * no auto-fix). Any other decision, or nothing left unseen, passes through unchanged.
+ * no auto-fix). Amendment (#219): so is a model REQUEST_CHANGES (not one from failing checks) when
+ * every finding of `review` cites at least one file and every file it cites was cut: such a finding
+ * is about content the model did not see, and the fixer cannot see it either. A finding with no
+ * citation, or citing any other file, keeps the REQUEST_CHANGES. Anything else passes through unchanged.
  * @returns {{ verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'WITHHELD', reason: string | null }}
  */
-export function withholdOnUnreviewedCode(decision, unreviewedCodeFiles = []) {
-  if (decision.verdict !== 'APPROVE' || unreviewedCodeFiles.length === 0) return decision;
-  return { verdict: 'WITHHELD', reason: `code cut from the reviewed diff: ${unreviewedCodeFiles.join(', ')}` };
+export function withholdOnUnreviewedCode(decision, unreviewedCodeFiles = [], review = '') {
+  if (unreviewedCodeFiles.length === 0) return decision;
+  if (decision.verdict === 'APPROVE') {
+    return { verdict: 'WITHHELD', reason: `code cut from the reviewed diff: ${unreviewedCodeFiles.join(', ')}` };
+  }
+  if (decision.verdict !== 'REQUEST_CHANGES' || decision.reason != null) return decision;
+  const cited = findingCitedFiles(review);
+  const onlyUnseen = cited.length > 0 && cited.every((files) => files.length > 0 && files.every((f) => citesCutFile(f, unreviewedCodeFiles)));
+  if (!onlyUnseen) return decision;
+  return { verdict: 'WITHHELD', reason: `every finding cites only code cut from the reviewed diff: ${unreviewedCodeFiles.join(', ')}` };
 }
 
 /** Markdown note appended to the review comment when approval is withheld for unseen code (ADR-0038). */
@@ -79,6 +118,15 @@ export function formatUnreviewedCodeNote(unreviewedCodeFiles) {
     `> **Approval withheld** — the diff was cut to the token budget, and these code files were not shown to the reviewer in full: ${unreviewedCodeFiles.map((f) => `\`${f}\``).join(', ')}.`,
     '> The model approved what it saw; a human must review the rest. No check failed, so auto-fix is not triggered.',
     '> A full review needs a smaller PR or a provider with a larger input budget (ADR-0032).',
+  ].join('\n');
+}
+
+/** Markdown note appended to the review comment when a REQUEST_CHANGES on unseen code is withheld (ADR-0038, #219). */
+export function formatUnseenFindingsNote(unreviewedCodeFiles) {
+  return [
+    '',
+    `> **Changes not requested** — the diff was cut to the token budget, and every finding above cites only code files the reviewer did not see in full: ${unreviewedCodeFiles.map((f) => `\`${f}\``).join(', ')}.`,
+    '> A finding about unseen content cannot be verified, and auto-fix cannot edit what it is not shown: a human must review those files. Auto-fix is not triggered.',
   ].join('\n');
 }
 

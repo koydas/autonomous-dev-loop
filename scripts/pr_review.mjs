@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
-import { buildReviewPrompt, formatUnreviewedCodeNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
+import { buildReviewPrompt, formatUnreviewedCodeNote, formatUnseenFindingsNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { prWorkItemHint } from './lib/trace_context.mjs';
@@ -381,8 +381,10 @@ const llmApproved = llmVerdict === 'APPROVED';
 const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
 const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
 // ADR-0038: an approval of a diff whose code was cut to the budget is withheld; a human reviews the rest.
-const { verdict, reason: verdictReason } = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles);
+// So is a REQUEST_CHANGES whose findings all cite only cut code files (#219).
+const { verdict, reason: verdictReason } = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview);
 const withheldForUnreviewedCode = evidenceDecision.verdict === 'APPROVE' && verdict === 'WITHHELD';
+const withheldForUnseenFindings = evidenceDecision.verdict === 'REQUEST_CHANGES' && verdict === 'WITHHELD';
 const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES';
 const isApproved = verdict === 'APPROVE';
 const isWithheld = verdict === 'WITHHELD';
@@ -390,7 +392,7 @@ const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_C
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 // ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : formatWithheldNote(verdictReason)) : '');
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : withheldForUnseenFindings ? formatUnseenFindingsNote(unreviewedCodeFiles) : formatWithheldNote(verdictReason)) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
 const body = stripReviewMarkers(evidence.failing.length > 0
@@ -416,7 +418,9 @@ const shortReviewBody = isApproved
   : isWithheld
     ? (withheldForUnreviewedCode
       ? 'Approval withheld: code was cut from the reviewed diff. See the review comment for details.'
-      : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
+      : withheldForUnseenFindings
+        ? 'Changes not requested: every finding cites only code cut from the reviewed diff. See the review comment for details.'
+        : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
     : 'Changes required. See the automated review comment above for details.';
 
 function isOwnPullRequestApprovalFailure(status, detail) {
