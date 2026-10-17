@@ -31,13 +31,13 @@ const day = (ts) => String(ts ?? '').slice(0, 10);
 const stamp = (ts) => String(ts ?? '').slice(5, 16).replace('T', ' ');
 const compact = (n) => (n == null ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const runFile = (runId) => `runs/${encodeURIComponent(runId)}`;
-// A run published before workflow_run_id existed has the workflow run ID as run_id; anything else
-// (a local EVAL_RUN_ID) has no workflow run to link.
 // Anchor of a model on the pipeline's models page (pipeline/models.html): the eval ↔ pipeline cross-link.
 export const modelAnchor = (model) => `model-${String(model ?? 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
 const modelHtml = (model, pipelineRoot) => (pipelineRoot == null
   ? `<code>${escapeHtml(model)}</code>`
   : `<a href="${pipelineRoot}pipeline/models.html#${modelAnchor(model)}"><code>${escapeHtml(model)}</code></a>`);
+// A run published before workflow_run_id existed has the workflow run ID as run_id; anything else
+// (a local EVAL_RUN_ID) has no workflow run to link.
 const workflowRunId = (meta) => meta.workflow_run_id ?? (/^\d+$/.test(String(meta.run_id ?? '')) ? meta.run_id : null);
 
 function deltaHtml(current, previous) {

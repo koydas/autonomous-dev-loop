@@ -61,6 +61,16 @@ test('reviews: WITHHELD rate, every cause, the #220 backstop, cut diffs and cycl
   assert.equal(computeHealth({ model: model([]) }).reviews.withheld_rate, null);
 });
 
+test('reviews: a present withheld_from: null on a cut diff is an evidence cause, not a pre-key record', () => {
+  const records = [
+    makeRecord({ runId: '18', start: T0, events: [verdict('WITHHELD', { evidence_state: 'missing', unreviewed_code_files: 3, withheld_from: null })] }),
+    makeRecord({ runId: '19', start: T0 + 1, events: [verdict('WITHHELD', { evidence_state: 'stale', unreviewed_code_files: 1, withheld_from: null })] }),
+    makeRecord({ runId: '20', start: T0 + 2, events: [verdict('WITHHELD', { evidence_state: 'available', unreviewed_code_files: 2, withheld_from: null })] }),
+  ];
+  const causes = Object.fromEntries(computeHealth({ model: model(records) }).reviews.causes.map((c) => [c.key, c.count]));
+  assert.deepEqual(causes, { approve_cut: 0, rc_unseen: 0, cut_unknown: 0, evidence_missing: 1, evidence_stale: 1, other: 1 });
+});
+
 test('auto-fix outcomes by kind and guardrail rule; legacy lines count only without a record', () => {
   const af = (runId, events) => makeRecord({ runId, workflow: 'Auto-Fix PR', stage: 'autofix', start: T0, events });
   const records = [

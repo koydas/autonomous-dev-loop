@@ -273,7 +273,7 @@ ${waterfall(rows, { t0: trace.first_started_at, t1: trace.last_completed_at })}`
 export function renderTraceIndex(model) {
   const body = model.traces.map((t) => {
     const last = t.runs.at(-1);
-    return `<tr><td><a href="${traceHref('', t.trace_id)}">${e(itemLabel(t.item))}</a><br><span class="muted"><code>${e(t.trace_id.slice(0, 12))}</code></span></td><td class="num">${e(t.runs.length)}${t.runs_overflow ? ` (+${e(t.runs_overflow)})` : ''}</td><td>${e(time(t.first_started_at))}</td><td>${e(time(t.last_completed_at))}</td><td class="num">${e(formatDuration(t.lead_time_ms))}</td><td>${e(last?.workflow ?? '—')}</td><td>${statusHtml(null, last?.outcome)}</td></tr>`;
+    return `<tr><td><a href="${encodeURIComponent(t.trace_id)}.html">${e(itemLabel(t.item))}</a><br><span class="muted"><code>${e(t.trace_id.slice(0, 12))}</code></span></td><td class="num">${e(t.runs.length)}${t.runs_overflow ? ` (+${e(t.runs_overflow)})` : ''}</td><td>${e(time(t.first_started_at))}</td><td>${e(time(t.last_completed_at))}</td><td class="num">${e(formatDuration(t.lead_time_ms))}</td><td>${e(last?.workflow ?? '—')}</td><td>${statusHtml(null, last?.outcome)}</td></tr>`;
   }).join('');
   return pipelinePage('Work-item traces', `<h1>Work-item traces</h1>
 ${nav('../', model.months)}
@@ -424,6 +424,8 @@ ${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: 
 export function renderModels(models, model) {
   const seen = new Set();
   const sections = models.map((m) => {
+    // Anchors are per model (the eval pages know no provider): two providers of one model share it, and
+    // the cross-links land on the first.
     const anchor = modelAnchor(m.model);
     const id = seen.has(anchor) ? '' : ` id="${anchor}"`;
     seen.add(anchor);

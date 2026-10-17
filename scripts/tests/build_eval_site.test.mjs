@@ -541,3 +541,45 @@ test('CLI: --pipeline-dir builds both halves into --out', async () => {
   await fs.access(path.join(tmp, 'out', 'index.html'));
   await assert.rejects(promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(tmp, 'out2'), '--pipeline-dir', tmp, r1]), (err) => err.code === 1 && /No metrics\/ directory/.test(err.stderr));
 });
+
+// Every relative href of the built site resolves to a file of the same build (review of #221: the trace
+// index linked traces/traces/<id>.html).
+function brokenLinks(files) {
+  const missing = [];
+  for (const [file, content] of Object.entries(files)) {
+    if (!file.endsWith('.html')) continue;
+    for (const [, href] of content.matchAll(/href="([^"]+)"/g)) {
+      if (/^[a-z]+:/i.test(href) || href.startsWith('#')) continue;
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), href.split('#')[0]));
+      if (!(target in files)) missing.push(`${target} <- ${file}`);
+    }
+  }
+  return missing;
+}
+
+test('every relative link of a full build (eval + pipeline halves) resolves inside the build', async () => {
+  const records = [...pipelineRecords(), makeRecord({ runId: '703', start: PIPE_T0, prNumber: null, issueNumber: 12, events: [{ event: 'issue_validation.pass', meta: { issueNumber: 12 } }] })];
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-site-'));
+  const r1 = path.join(tmp, 'r1.json');
+  await fs.writeFile(r1, JSON.stringify({ ...results({ runId: 'e1' }), results: [] }));
+  const { files } = await buildEvalSite({ outDir: path.join(tmp, 'a'), resultFiles: [r1], pipelineDir: await metricsCheckout(records), log: quiet, generatedAt: GEN });
+  assert.ok(files['pipeline/traces/index.html'].includes('.html">'), 'the trace index has links to check');
+  assert.deepEqual(brokenLinks(files), []);
+  // The checker itself catches a broken link.
+  assert.deepEqual(brokenLinks({ 'a/b.html': '<a href="traces/x.html">' }), ['a/traces/x.html <- a/b.html']);
+});
+
+test('readPipelineDir never follows a symlinked month or traces directory', async () => {
+  const dir = await metricsCheckout(pipelineRecords());
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'outside-'));
+  await fs.writeFile(path.join(outside, '9-1.json'), '{}');
+  await fs.symlink(outside, path.join(dir, 'metrics', 'runs', '2026-09'));
+  await fs.rm(path.join(dir, 'metrics', 'traces'), { recursive: true });
+  await fs.symlink(outside, path.join(dir, 'metrics', 'traces'));
+  const logs = [];
+  const data = await readPipelineDir(dir, { log: (m) => logs.push(m) });
+  assert.deepEqual(data.records.map((r) => r.path), ['metrics/runs/2026-10/700-1.json', 'metrics/runs/2026-10/701-1.json']);
+  assert.deepEqual(data.traces, []);
+  assert.ok(logs.some((m) => /2026-09 is not a directory; skipped/.test(m)));
+  assert.ok(logs.some((m) => /traces is not a directory; skipped/.test(m)));
+});

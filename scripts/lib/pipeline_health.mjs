@@ -70,7 +70,8 @@ const WITHHELD_CAUSES = Object.freeze({
 function withheldCause(meta) {
   if (meta.withheld_from === 'APPROVE') return 'approve_cut';
   if (meta.withheld_from === 'REQUEST_CHANGES') return 'rc_unseen';
-  if (typeof meta.unreviewed_code_files === 'number' && meta.unreviewed_code_files > 0) return 'cut_unknown';
+  // Only a record written before the key existed is ambiguous; a present null means no backstop was involved.
+  if (!Object.hasOwn(meta, 'withheld_from') && typeof meta.unreviewed_code_files === 'number' && meta.unreviewed_code_files > 0) return 'cut_unknown';
   if (meta.evidence_state === 'missing') return 'evidence_missing';
   if (meta.evidence_state === 'stale') return 'evidence_stale';
   return 'other';

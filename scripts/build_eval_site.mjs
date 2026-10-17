@@ -88,7 +88,8 @@ export async function readPreviousSiteDir(dir) {
   return { scorecard, details };
 }
 
-// Regular files only: a symlink on the branch is never followed (ADR-0021).
+// Regular files and real directories only: a symlink on the branch (file or directory) is never
+// followed (ADR-0021).
 async function readRegular(file, log) {
   const st = await fs.lstat(file);
   if (!st.isFile()) {
@@ -98,14 +99,23 @@ async function readRegular(file, log) {
   return fs.readFile(file, 'utf8');
 }
 
-async function listJson(dir) {
+// Entries of a directory that is not a symlink; a missing one is empty.
+async function listDir(dir, log) {
+  let st;
   try {
-    return (await fs.readdir(dir)).filter((f) => f.endsWith('.json')).sort();
+    st = await fs.lstat(dir);
   } catch (err) {
     if (err.code === 'ENOENT') return [];
     throw err;
   }
+  if (!st.isDirectory()) {
+    log(`Warning: ${dir} is not a directory; skipped`);
+    return [];
+  }
+  return (await fs.readdir(dir)).sort();
 }
+
+const listJson = async (dir, log) => (await listDir(dir, log)).filter((f) => f.endsWith('.json'));
 
 /**
  * The pipeline inputs of a `metrics` branch checkout: `{ records, traces, runsJsonl }` with paths
@@ -123,20 +133,15 @@ export async function readPipelineDir(dir, { log = console.log } = {}) {
   }
   if (!st.isDirectory()) throw new Error(`${root} is not a directory`);
   const records = [];
-  let months = [];
-  try {
-    months = (await fs.readdir(path.join(root, 'runs'))).filter((m) => MONTH_RE.test(m)).sort();
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-  }
+  const months = (await listDir(path.join(root, 'runs'), log)).filter((m) => MONTH_RE.test(m));
   for (const month of months) {
-    for (const f of await listJson(path.join(root, 'runs', month))) {
+    for (const f of await listJson(path.join(root, 'runs', month), log)) {
       const text = await readRegular(path.join(root, 'runs', month, f), log);
       if (text != null) records.push({ path: `metrics/runs/${month}/${f}`, text });
     }
   }
   const traces = [];
-  for (const f of await listJson(path.join(root, 'traces'))) {
+  for (const f of await listJson(path.join(root, 'traces'), log)) {
     const text = await readRegular(path.join(root, 'traces', f), log);
     if (text != null) traces.push({ path: `metrics/traces/${f}`, text });
   }
