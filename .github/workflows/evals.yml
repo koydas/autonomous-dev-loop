@@ -169,10 +169,14 @@ jobs:
       actions: read
       pages: write
       id-token: write
-    # Pages hosts one site, also deployed by pipeline-site.yml: both deploy jobs read the live site and
-    # redeploy it, so they share one group (ADR-0027 amendment, 2026-10-17). Never cancelled; the
-    # workflow-level groups (evals-<ref>, pipeline-site) keep at most one job of each side in it, so
-    # GitHub's one-pending-per-group rule never cancels a pending eval publish.
+    # INTENTIONALLY SHARED with pipeline-site.yml's publish job — do not rename either side.
+    # Pages hosts one site per repository and each deploy replaces it whole. Both jobs read the live
+    # site, rebuild it and redeploy it: run concurrently, the later deploy would drop what the earlier
+    # one added. Distinct group names would allow exactly that race, so the two deploy jobs serialize
+    # on one group (ADR-0027 amendment, 2026-10-17). Only these two jobs join it (the eval job, which
+    # holds the LLM calls, does not), and it is never cancelled. The workflow-level groups (evals-<ref>,
+    # pipeline-site-<repo>) keep at most one job of each side in it, so GitHub's one-pending-per-group
+    # rule never cancels a pending eval publish. Pinned by workflow_gates.test.mjs.
     concurrency:
       group: pages-site-${{ github.repository }}
       cancel-in-progress: false

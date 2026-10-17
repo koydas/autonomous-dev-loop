@@ -46,6 +46,8 @@ jobs:
       contents: read
       pages: write
       id-token: write
+    # INTENTIONALLY SHARED with evals.yml's publish job (one Pages site, read-modify-redeploy): see the
+    # comment there. Do not rename.
     concurrency:
       group: pages-site-${{ github.repository }}
       cancel-in-progress: false
