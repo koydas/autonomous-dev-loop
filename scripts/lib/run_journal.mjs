@@ -1,12 +1,19 @@
 // Run journal (ADR-0040): every observability event of the run, kept in the trace file next to the
 // spans, plus a run envelope (workflow, run, trigger, actor, issue/PR, head SHA, LLM calls, links).
 // observability.mjs feeds it: log() → recordEvent(), createTracer() → attachJournal(). Never throws.
+// ADR-0041: the run is the root span of its work item's trace; each event carries the span_id of its
+// enclosing span (withSpan() context, else the open tracer stage, else the root); child spans opened
+// by withSpan() (LLM calls) are kept in `child_spans`.
 import fs from 'node:fs';
 import path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { scrubString, secretValues } from './run_record.mjs';
+import { newSpanId, payloadWorkItemHint, resolveWorkItem, SPAN_ID_RE } from './trace_context.mjs';
 
-export const TRACE_SCHEMA_VERSION = 1;
+export const TRACE_SCHEMA_VERSION = 2;
 export const JOURNAL_MAX_EVENTS = 500;
+// Child spans (withSpan) kept per trace, like the event cap: past it a span is counted, not kept.
+export const JOURNAL_MAX_SPANS = 500;
 export const JOURNAL_MAX_BYTES = 256 * 1024;
 // A single event over this size keeps its name, level and timing; its meta is replaced by its size.
 export const EVENT_MAX_BYTES = 8 * 1024;
@@ -18,7 +25,14 @@ const state = {
   overflow: { count: 0, bytes: 0 },
   flushing: false,
   failureReported: false,
+  rootSpanId: null,
+  stageStack: [], // span ids of the open tracer stages, innermost last
+  spans: [], // child spans opened in this process
+  spansOverflow: 0,
 };
+
+// The withSpan() context: concurrent LLM calls (eval workers) each keep their own span.
+const spanContext = new AsyncLocalStorage();
 
 const toInt = (v) => {
   const n = typeof v === 'number' ? v : Number.parseInt(String(v ?? ''), 10);
@@ -103,6 +117,8 @@ function readPayload(env) {
       inputs: raw?.inputs ? { issue_number: raw.inputs.issue_number } : undefined,
       after: raw?.after,
       sender: raw?.sender ? { type: raw.sender.type } : undefined,
+      // ADR-0041: numbers only — the PR body is parsed for closing references here, never kept.
+      work_item: payloadWorkItemHint(raw),
     };
   } catch {
     return null;
@@ -114,15 +130,22 @@ function readPayload(env) {
  * Span meta is scrubbed here like event meta: every tracer write goes through merge().
  */
 function merge(trace) {
-  const base = state.sink?.base ?? { events: [], overflow: { count: 0, bytes: 0 } };
+  const base = state.sink?.base ?? { events: [], overflow: { count: 0, bytes: 0 }, spans: [], spansOverflow: 0 };
   const events = [...base.events, ...state.events];
   const secrets = processSecrets();
+  const hints = [state.sink?.payload?.work_item, ...events.filter((e) => e?.event === 'trace.work_item').map((e) => e.meta)];
+  const item = resolveWorkItem({ repository: process.env.GITHUB_REPOSITORY, runId: process.env.GITHUB_RUN_ID ?? trace?.run_id, hints });
   return {
     ...trace,
     ...(Array.isArray(trace?.spans) && {
       spans: trace.spans.map((s) => (s && typeof s === 'object' ? { ...s, meta: scrubMeta(s.meta, secrets) } : s)),
     }),
     schema_version: TRACE_SCHEMA_VERSION,
+    trace_id: item?.trace_id ?? null,
+    item: item && { kind: item.kind, number: item.number, source: item.source, key: item.key },
+    root_span_id: rootSpanId(),
+    child_spans: [...(base.spans ?? []), ...state.spans].map((s) => ({ ...s, attributes: scrubMeta(s.attributes, secrets) })),
+    spans_overflow: { count: (base.spansOverflow ?? 0) + state.spansOverflow },
     envelope: buildEnvelope(process.env, state.sink?.payload ?? null, events),
     events,
     events_overflow: {
@@ -168,7 +191,7 @@ function flush() {
 export function recordEvent(line) {
   try {
     let event = JSON.parse(line);
-    event = { ...event, meta: scrubMeta(event.meta, processSecrets()) };
+    event = { ...event, span_id: currentSpanId(), meta: scrubMeta(event.meta, processSecrets()) };
     let bytes = Buffer.byteLength(JSON.stringify(event), 'utf8');
     if (bytes > EVENT_MAX_BYTES) {
       event = { ...event, meta: { _meta_dropped_bytes: bytes } };
@@ -205,6 +228,10 @@ export function attachJournal({ tracePath, skeleton }) {
       state.events = [];
       state.bytes = 0;
       state.overflow = { count: 0, bytes: 0 };
+      state.rootSpanId = null;
+      state.stageStack = [];
+      state.spans = [];
+      state.spansOverflow = 0;
     }
     let existing = null;
     try { existing = JSON.parse(fs.readFileSync(tracePath, 'utf8')); } catch { /* no trace yet */ }
@@ -216,6 +243,14 @@ export function attachJournal({ tracePath, skeleton }) {
     );
     if (foreign) existing = null;
     const baseEvents = Array.isArray(existing?.events) ? existing.events : [];
+    // An earlier step of the same job: its root span is this run's root, adopted by this process's events.
+    const baseRoot = typeof existing?.root_span_id === 'string' && SPAN_ID_RE.test(existing.root_span_id) ? existing.root_span_id : null;
+    if (baseRoot && state.rootSpanId && state.rootSpanId !== baseRoot) {
+      const old = state.rootSpanId;
+      for (const e of state.events) if (e.span_id === old) e.span_id = baseRoot;
+      for (const s of state.spans) if (s.parent_span_id === old) s.parent_span_id = baseRoot;
+    }
+    if (baseRoot) state.rootSpanId = baseRoot;
     state.sink = {
       tracePath,
       skeleton,
@@ -228,6 +263,8 @@ export function attachJournal({ tracePath, skeleton }) {
           count: Number(existing?.events_overflow?.count) || 0,
           bytes: Number(existing?.events_overflow?.bytes) || 0,
         },
+        spans: Array.isArray(existing?.child_spans) ? existing.child_spans.filter((s) => s && typeof s === 'object') : [],
+        spansOverflow: Number(existing?.spans_overflow?.count) || 0,
       },
     };
     try { fs.mkdirSync(path.dirname(tracePath), { recursive: true }); } catch { /* reported on write */ }
@@ -236,4 +273,88 @@ export function attachJournal({ tracePath, skeleton }) {
     // never propagate observability failures into business logic
   }
   return { merge };
+}
+
+/** The root span of this run (one per trace file; adopted from an earlier step of the same job). */
+export function rootSpanId() {
+  if (!state.rootSpanId) state.rootSpanId = newSpanId();
+  return state.rootSpanId;
+}
+
+/** The span an event logged now belongs to: withSpan() context, else innermost open stage, else root. */
+export function currentSpanId() {
+  return spanContext.getStore() ?? state.stageStack.at(-1) ?? rootSpanId();
+}
+
+/** Tracer stage spans (createTracer startSpan / endSpan) open and close the stage context. */
+export function enterStageSpan(spanId) {
+  if (typeof spanId === 'string' && state.stageStack.at(-1) !== spanId) state.stageStack.push(spanId);
+}
+
+export function exitStageSpan(spanId) {
+  state.stageStack = state.stageStack.filter((id) => id !== spanId);
+}
+
+const NOOP_SPAN = Object.freeze({ spanId: null, setAttributes() {}, end() {} });
+
+function openChildSpan(name, attributes) {
+  try {
+    const span = {
+      span_id: newSpanId(),
+      parent_span_id: currentSpanId(),
+      name: String(name),
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      duration_ms: null,
+      status: null,
+      attributes: { ...(attributes && typeof attributes === 'object' ? attributes : {}) },
+    };
+    const startMs = Date.now();
+    const kept = (state.sink?.base.spans.length ?? 0) + state.spans.length < JOURNAL_MAX_SPANS;
+    if (kept) state.spans.push(span);
+    else state.spansOverflow += 1;
+    if (kept) flush();
+    let ended = false;
+    return {
+      spanId: span.span_id,
+      setAttributes(extra) {
+        try { if (!ended && extra && typeof extra === 'object') Object.assign(span.attributes, extra); } catch { /* contained */ }
+      },
+      end({ status = 'ok', attributes: extra } = {}) {
+        try {
+          if (ended) return;
+          ended = true;
+          // Defaults only: an attribute already set (an `error.type` from the caller) is kept.
+          if (extra && typeof extra === 'object') span.attributes = { ...extra, ...span.attributes };
+          span.completed_at = new Date().toISOString();
+          span.duration_ms = Date.now() - startMs;
+          span.status = status === 'error' ? 'error' : 'ok';
+          if (kept) flush();
+        } catch { /* contained */ }
+      },
+    };
+  } catch {
+    return NOOP_SPAN;
+  }
+}
+
+/**
+ * Runs `fn(span)` inside a child span of the current one (ADR-0041): events logged during `fn`
+ * carry its span_id. `span.setAttributes()` adds attributes; the span ends `ok` when `fn` resolves,
+ * `error` (with `error.type`) when it throws — the error is rethrown unchanged. Tracing failures
+ * never reach `fn`'s result.
+ */
+export async function withSpan(name, attributes, fn) {
+  const span = openChildSpan(name, attributes);
+  const run = async () => {
+    try {
+      const result = await fn(span);
+      span.end();
+      return result;
+    } catch (err) {
+      span.end({ status: 'error', attributes: { 'error.type': err?.errorType ?? err?.name ?? 'Error' } });
+      throw err;
+    }
+  };
+  return span.spanId ? spanContext.run(span.spanId, run) : run();
 }

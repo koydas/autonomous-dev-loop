@@ -16,6 +16,7 @@
 
 import fs from 'node:fs/promises';
 import { estimateTokens } from './metrics.mjs';
+import { withSpan } from './observability.mjs';
 
 // ---------------------------------------------------------------------------
 // Dataset
@@ -267,7 +268,9 @@ export async function runSuite({ suite, cases, llmFor, repeats = 1, concurrency 
   const worker = async () => {
     while (next < jobs.length && !tripped) {
       const i = next++;
-      results[i] = await runOne(suite, jobs[i][0], jobs[i][1], llmFor, now, (q) => { tripped ??= q; });
+      // ADR-0041: one span per case × repeat; the LLM calls of the run are its children.
+      results[i] = await withSpan('eval.case', { 'adl.eval.suite': suite?.name ?? null, 'adl.eval.case_id': jobs[i][0]?.id ?? null, 'adl.eval.repeat': jobs[i][1] },
+        () => runOne(suite, jobs[i][0], jobs[i][1], llmFor, now, (q) => { tripped ??= q; }));
       onResult?.(results[i]);
     }
   };

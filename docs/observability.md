@@ -136,6 +136,18 @@ The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trac
 | `autofix.skipped`              | info / warn | ✓        | `reason` (`untrusted_comment`, info: before the tracer, stderr only \| `self_modification`, warn: the PR changes `auto_fix_pr.mjs`, comment posted (`url`) \| `approved`, info: no LLM call \| `no_changes`, warn: attempt consumed, `needs-human` applied, summary commented, `autofix_skip` metric \| `guardrail_rejected`, warn: same, with the rejection reason commented — write denylist, shrink guard, ADR-0029 write guard or ADR-0019 static rules; `rules` lists them), `attempt`, `prNumber`, `headSha` (approved only) — exit 0, nothing pushed (ADR-0028) |
 | `autofix.error`                | error  | ✓             | `error`, `attempt`, `prNumber`            |
 
+### `autofix_reset`
+
+Emitted by `scripts/reset_auto_fix.mjs` (`reset-auto-fix.yml`, ADR-0041): the reset joins the trace of the PR's work item.
+
+| Event                          | Level | `duration_ms` | Key `meta` fields |
+|--------------------------------|-------|---------------|-------------------|
+| `autofix_reset.start`          | info  | —             | `prNumber` |
+| `autofix_reset.labels_removed` | info  | —             | `prNumber`, `removed_labels` |
+| `autofix_reset.retriggered`    | info  | —             | `prNumber`, `label` — changes-requested removed and re-applied (new `labeled` event) |
+| `autofix_reset.complete`       | info  | ✓             | `prNumber`, `retrigger` |
+| `autofix_reset.error`          | error | ✓             | `prNumber`, `error` |
+
 ### `eval`
 
 Emitted by `run_evals.mjs` (ADR-0027).
@@ -205,6 +217,14 @@ Emitted by `commit_run_record.mjs` ("Commit metrics") for what a workflow step d
 | `workflow.pr_operation` | info        | —             | `prNumber`, `operation` (`created` \| `updated` \| `closed` \| `none`), `url` — `peter-evans/create-pull-request` outputs (code-generation) |
 | `workflow.push`         | info / warn | —             | `prNumber`, `outcome` (`success` \| `failure` \| `skipped`) — the auto-fix "Commit and push fixes" step; warn on failure |
 
+### `trace`
+
+Emitted by scripts that read a PR whose payload lacks its body or head ref (push-triggered `pr_review.mjs`, `reset_auto_fix.mjs`), so the run resolves the same work item as the others (ADR-0041).
+
+| Event              | Level | `duration_ms` | Key `meta` fields |
+|--------------------|-------|---------------|-------------------|
+| `trace.work_item`  | info  | —             | `prNumber`, `branchIssue` (`ai/issue-<n>` head ref, else null), `closingIssues` (issues the body closes, body order, ≤ 20) — numbers only, the body is never logged |
+
 ### `dependency_manifest`
 
 Emitted by `dependency_manifest.mjs` (#195, ADR-0023) in the review, code generation and auto-fix stages. The stage continues with no manifest.
@@ -243,17 +263,22 @@ Created incrementally as each stage starts and ends. Finalized (with `completed_
   "started_at": "<ISO8601>",
   "completed_at": "<ISO8601 | null>",
   "outcome": "success|partial|failed|null",
-  "schema_version": 1,
+  "schema_version": 2,
+  "trace_id": "<32 hex>", "item": { "kind": "issue|pr|run", "number": 12, "source": "issue_event|branch|closes|pr|run", "key": "owner/repo#issue-12" },
+  "root_span_id": "<16 hex>",
+  "child_spans": [{ "span_id": "<16 hex>", "parent_span_id": "<16 hex>", "name": "llm_call", "started_at": "…", "completed_at": "…", "duration_ms": 900, "status": "ok|error|null", "attributes": { } }],
+  "spans_overflow": { "count": 0 },
   "envelope": { "workflow": "…", "run_id": "…", "run_attempt": 1, "event_name": "…", "actor": "…", "actor_type": "bot|human|null",
                 "repository": "owner/repo", "issue_number": null, "pr_number": 12, "head_sha": "<sha | null>",
                 "run_url": "…", "issue_url": null, "pr_url": "…",
                 "links": [{ "event": "review.comment_posted", "url": "…" }],
                 "llm_calls": [{ "stage": "review", "provider": "groq", "model": "…", "fallback": false, "outcome": "answered|failed", "duration_ms": 900 }] },
-  "events": [ { "ts": "…", "run_id": "…", "stage": "…", "event": "…", "level": "…", "duration_ms": null, "meta": { } } ],
+  "events": [ { "ts": "…", "run_id": "…", "stage": "…", "event": "…", "level": "…", "duration_ms": null, "span_id": "<16 hex>", "meta": { } } ],
   "events_overflow": { "count": 0, "bytes": 0 },
   "spans": [
     {
       "stage": "<stage_name>",
+      "span_id": "<16 hex>", "parent_span_id": "<root_span_id>",
       "started_at": "<ISO8601>",
       "completed_at": "<ISO8601 | null>",
       "duration_ms": <number | null>,
@@ -297,7 +322,7 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 
 ## Public Run Record
 
-`metrics/runs/<YYYY-MM>/<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>.json` on the `metrics` branch: the dashboard's source. Written by `scripts/commit_run_record.mjs` (the "Commit metrics" step of `validate-issue`, `code-generation`, `pr-review` and `auto-fix-pr`) in **the same commit** as the run's `metrics/runs.jsonl` lines, with the same 3-attempt retry (ADR-0013, ADR-0040).
+`metrics/runs/<YYYY-MM>/<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>.json` on the `metrics` branch: the dashboard's source. Written by `scripts/commit_run_record.mjs` (the "Commit metrics" step of `validate-issue`, `code-generation`, `pr-review`, `auto-fix-pr` and — record only, no `runs.jsonl` line — `reset-auto-fix`) in **the same commit** as the run's `metrics/runs.jsonl` lines, with the same 3-attempt retry (ADR-0013, ADR-0040).
 
 ### Redaction contract
 
@@ -310,22 +335,30 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 | Strings | Already scrubbed against the producing step's env by the journal; scrubbed again against the committing step's env, then cut to 200 characters: every env value of 12+ characters except public run metadata (`GITHUB_REPOSITORY`, `GITHUB_SHA`, …, `*_MODEL`, `*_EFFORT`, `*_PROVIDER`, `RUN_RECORD_*`), and credential shapes (`ghp_…`, `github_pat_…`, `sk-ant-…`, `gsk_…`, `Bearer …`, JWTs, AWS keys). |
 | Values | Numbers, booleans, null; arrays of primitives (≤ 50 items); one level of flat map. Nested objects are dropped. |
 | URLs | Kept whole only on `GITHUB_SERVER_URL`, URL-safe characters, nothing to scrub; otherwise null. |
-| Size | ≤ 256 KiB per record; events past it are added to `events_overflow`. |
+| Span attributes (ADR-0041) | Kept per span name in `SPAN_ATTRIBUTE_ALLOWLIST`: `run`, `llm_call`, `eval.case`, each stage (its `SPAN_META_ALLOWLIST` keys as `adl.<snake_case>`), each side-effect span (its event's `EVENT_META_ALLOWLIST` keys). Span events keep their event's allowlist. Any other attribute, and every attribute of an unlisted span name, is dropped; same string scrub and cut. |
+| Size | ≤ 256 KiB per record; the OTLP block ≤ 128 KiB (spans past it counted in `spans_overflow.count`, span events in `spans_overflow.events`), events past the rest are added to `events_overflow`. |
 
-### Schema (`schema_version: 1`)
+### Schema (`schema_version: 2`)
 
 ```json
 {
-  "schema_version": 1,
-  "trace_schema_version": 1,
+  "schema_version": 2,
+  "trace_schema_version": 2,
   "run_id": "<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>",
+  "trace_id": "<32 hex | null>",
+  "item": { "kind": "issue|pr|run", "number": 12, "source": "…", "key": "owner/repo#issue-12" },
+  "root_span_id": "<16 hex | null>",
   "envelope": { "...": "as in the trace, validated" },
   "started_at": "<ISO8601 | null>", "completed_at": "<ISO8601 | null>", "outcome": "<string | null>",
-  "spans": [{ "stage": "…", "started_at": "…", "completed_at": "…", "duration_ms": 0, "outcome": "…", "meta": { } }],
-  "events": [{ "ts": "…", "stage": "…", "event": "…", "level": "info|warn|error", "duration_ms": null, "meta": { } }],
-  "events_overflow": { "count": 0, "bytes": 0 }
+  "spans": [{ "stage": "…", "span_id": "…", "parent_span_id": "…", "started_at": "…", "completed_at": "…", "duration_ms": 0, "outcome": "…", "meta": { } }],
+  "events": [{ "ts": "…", "stage": "…", "event": "…", "level": "info|warn|error", "duration_ms": null, "span_id": "…", "meta": { } }],
+  "events_overflow": { "count": 0, "bytes": 0 },
+  "spans_overflow": { "count": 0, "events": 0 },
+  "otlp": { "resourceSpans": [{ "resource": { "attributes": [] }, "scopeSpans": [{ "scope": { "name": "autonomous-dev-loop", "version": "1" }, "spans": [] }] }] }
 }
 ```
+
+Schema 1 (ADR-0040) is the same without `trace_id`, `item`, `root_span_id`, the span ids, `spans_overflow` and `otlp`. `readRunRecord()` (`run_record.mjs`) reads both: a v1 record gets its trace id from its envelope (issue, else PR) and `otlp: null`.
 
 A consumer must ignore unknown fields and branch on `schema_version`. `run_id` matches the `run_id` of the run's `runs.jsonl` records (ADR-0013).
 
@@ -334,6 +367,92 @@ A consumer must ignore unknown fields and branch on `schema_version`. `run_id` m
 - The first record for a `run_id` (run + attempt) wins: a record already on the branch is not rewritten; the `runs.jsonl` lines are still appended (report-time dedup, ADR-0013).
 - A run that never created a tracer (an untrusted auto-fix comment, a review with no open PR) writes no record. The `pr-review` evidence job's trace stays an artifact only.
 - Size: ~3–10 KB per record (10–40 events), ~600 runs/month at the current activity → **≈ 2–6 MB/month**; hard ceiling 256 KiB × runs. Records are kept 12 months; older `metrics/runs/<YYYY-MM>/` directories are removed by hand on the `metrics` branch (no automated pruning yet).
+
+---
+
+## End-to-End Trace (ADR-0041)
+
+One trace per **work item** — an issue, or a PR without an issue — links every run that touches it: validate-issue → code-generation → pr-review (each cycle) → auto-fix (each attempt) → reset-auto-fix. No context is passed between workflows: each run derives the same trace id from its own payload.
+
+### Trace identity
+
+`trace_id` = first 128 bits (32 hex, W3C trace-context) of SHA-256 of the item key `<owner>/<repo>#issue-<n>` (or `#pr-<n>`, `#run-<run_id>`). Resolved by `resolveWorkItem()` (`scripts/lib/trace_context.mjs`), first match wins:
+
+| Order | Source (`item.source`) | Where it is read |
+|---|---|---|
+| 1 | `issue_event` | `issues` payload (not a PR), `workflow_dispatch` `inputs.issue_number` |
+| 2 | `branch` | head ref `ai/issue-<n>`: `pull_request.head.ref`, push `ref`, or a `trace.work_item` event |
+| 3 | `closes` | the **first** issue the PR body closes (`Closes` / `Fixes` / `Resolves #n`, body order) |
+| 4 | `pr` | the PR number (payload, `inputs.pr_number`, `trace.work_item`) |
+| 5 | `run` | nothing else: the run is its own trace (scheduled evals, local runs) |
+
+The PR body is untrusted: only same-repository `#<digits>` after a closing keyword counts, in the first 64 KiB, at most 20 references; it is parsed when the payload is read and never kept. A PR body edited to close another issue moves the **later** runs to that issue's trace (earlier records stay where they are).
+
+### Span tree of a run
+
+| Span | Parent | Kind | Source |
+|---|---|---|---|
+| `run` (root) | — | internal | one per trace file (`root_span_id`; a later step of the same job adopts it) |
+| `<stage>` (`review`, `autofix`, `code_gen`, …) | `run` | internal | `createTracer().startSpan/endSpan`; a restarted stage keeps its id |
+| `llm_call` | enclosing stage | client | `callLLM()` via `withSpan()` |
+| `eval.case` | `eval` stage | internal | `runSuite()`: one per case × repeat; its LLM calls are children |
+| side effects (`review.comment_posted`, `autofix.attempt_labeled`, `workflow.push`, … — `SIDE_EFFECT_EVENTS` in `otlp_trace.mjs`) | enclosing span | client | the journaled event (start = `ts − duration_ms`) |
+| span events | enclosing span | — | every other event (`retry.wait`, `llm_fallback`, `llm_call`, `*.start`, …) |
+
+Each journal event carries `span_id`: the `withSpan()` context (AsyncLocalStorage, so concurrent eval workers do not mix), else the open stage, else the root. Span ids are 16 random hex; v1 traces get ids derived from run id + stage. Spans from different runs (different runners, different clocks) are ordered by start time only; the only cross-run duration is the item lead time of the trace index.
+
+### `llm_call` attributes
+
+| Attribute | Value |
+|---|---|
+| `gen_ai.operation.name` | `chat` |
+| `gen_ai.system` | provider that answered (`groq` \| `anthropic`); the primary when no provider answered |
+| `gen_ai.request.model` | model the stage asked for (primary config) |
+| `gen_ai.response.model` | model of the provider that answered (its config; the API response is not parsed) |
+| `gen_ai.request.max_tokens` | stage `max_tokens`, when set |
+| `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` | **estimates** (`estimateTokens`, chars / 4), flagged by `adl.usage.estimated: true` |
+| `adl.stage` | calling stage |
+| `adl.llm.fallback` / `adl.llm.fallback_from` | the fallback answered / the primary it replaced |
+| `adl.llm.providers` | `<provider>:<status \| skip reason>` per failed or skipped provider |
+| `adl.llm.input_budget_skipped` | providers skipped because the prompt was over their input budget |
+| `adl.llm.max_input_tokens` | the stage input budget passed to the call |
+| `error.type` | error class (`TRANSIENT`, `PERMANENT`, …) on a failed call; status `error` |
+
+Never an attribute: prompt, completion, file content, issue/PR title or body, env value — the allowlist has no key for them, and the record drops anything unlisted.
+
+### Storage
+
+- **Run record** (`metrics/runs/<YYYY-MM>/<run>-<attempt>.json`, schema 2): `trace_id`, `item` and `otlp` — an OTLP/JSON `ExportTraceServiceRequest` body (`resourceSpans → scopeSpans → spans`, attributes as `{ key, value: { stringValue | intValue | … } }`, nanosecond timestamps as strings). It can be POSTed as is to any OTLP/HTTP JSON endpoint (`/v1/traces`); `scripts/tests/otlp_trace.test.mjs` validates the shape against `scripts/tests/fixtures/otlp/minimal-trace.json`.
+- **Trace index** (`metrics/traces/<trace_id>.json`): written in the **same commit** as the record, same retry, same first-wins dedup on `run_id`:
+
+```json
+{
+  "schema_version": 1, "trace_id": "…", "item": { "kind": "issue", "number": 12, "source": "branch", "key": "owner/repo#issue-12" },
+  "first_started_at": "…", "last_completed_at": "…", "lead_time_ms": 5400000,
+  "runs": [{ "run_id": "123-1", "record_path": "metrics/runs/2026-10/123-1.json", "workflow": "Validate Issue", "event_name": "issues", "root_span_id": "…", "started_at": "…", "completed_at": "…", "outcome": "success" }],
+  "runs_overflow": 0
+}
+```
+
+  Runs sorted by start time, ≤ 500 (more are counted in `runs_overflow`). An index that cannot be parsed or names another trace is left untouched (`::warning::`), never rebuilt from one run; the record still lands.
+
+### Reading a trace
+
+```bash
+# trace id of an issue (or pr-<n>):
+node -e "import('./scripts/lib/trace_context.mjs').then(m => console.log(m.traceIdFor('owner/repo#issue-12')))"
+git fetch origin metrics
+git show origin/metrics:metrics/traces/<trace_id>.json | jq '.runs[] | {run_id, workflow, outcome, started_at}'
+# span tree of one run:
+git show origin/metrics:metrics/runs/2026-10/<run>-<attempt>.json \
+  | jq '.otlp.resourceSpans[0].scopeSpans[0].spans[] | {name, spanId, parentSpanId, status: .status.code, events: [.events[].name]}'
+# every LLM call of the item, with provider and estimated tokens:
+for p in $(git show origin/metrics:metrics/traces/<trace_id>.json | jq -r '.runs[].record_path'); do
+  git show "origin/metrics:$p" | jq -c '.otlp.resourceSpans[0].scopeSpans[0].spans[] | select(.name == "llm_call") | [.attributes[] | {(.key): (.value | to_entries[0].value)}] | add'
+done
+```
+
+All the run records of a trace concatenated (`spans` of each `otlp` block, same `traceId`) form the full item trace in any OTLP viewer (e.g. a local Jaeger `/v1/traces` import).
 
 ---
 

@@ -10,6 +10,7 @@ import { loadPrompt } from './lib/prompts.mjs';
 import { buildReviewPrompt, formatUnreviewedCodeNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
+import { prWorkItemHint } from './lib/trace_context.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
@@ -214,6 +215,9 @@ if (!prMetaRes.ok) throw new Error(`PR metadata fetch failed: ${prMetaRes.status
 if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
 
 const prMeta = await prMetaRes.json();
+// ADR-0041: a push-triggered review has no PR body or head ref in its payload; the work item of the
+// trace (branch ai/issue-<n>, else the first issue the body closes) comes from the PR itself. Numbers only.
+obsLog({ stage: 'review', event: 'trace.work_item', level: 'info', meta: prWorkItemHint(prMeta) });
 const rawDiff = await diffRes.text();
 
 // ADR-0028: one LLM review per head SHA. Read before the LLM call; the upsert below reuses it.

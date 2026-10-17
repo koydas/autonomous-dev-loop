@@ -75,6 +75,26 @@ cat <run_id>.json | jq '[.spans[] | select(.outcome == "failed")]'
 | Trace `outcome: "partial"` for a review run | Expected: verdict was `REQUEST_CHANGES`; auto-fix loop continues |
 | `duration_ms: null` on a span | `endSpan` was never called for that stage — check the step log for an uncaught exception before the terminal event |
 
+### Find the trace of an issue (ADR-0041)
+
+Every run touching a work item (issue, or PR without an issue) writes its record into one trace on the `metrics` branch: validate-issue, code-generation, every pr-review cycle, every auto-fix attempt, reset-auto-fix.
+
+```bash
+git fetch origin metrics
+TRACE=$(node -e "import('./scripts/lib/trace_context.mjs').then(m => console.log(m.traceIdFor('<owner>/<repo>#issue-<n>')))")
+# a PR that closes no issue and is not on ai/issue-<n>: '<owner>/<repo>#pr-<n>'
+git show "origin/metrics:metrics/traces/$TRACE.json" | jq '{lead_time_ms, runs: [.runs[] | {run_id, workflow, outcome, started_at, record_path}]}'
+# then one run's span tree:
+git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[0].spans[] | {name, parentSpanId, status: .status.code}'
+```
+
+| Symptom | Probable Cause |
+|---------|----------------|
+| A PR's runs are in `#pr-<n>`, not the issue's trace | Its branch is not `ai/issue-<n>` and its body closes no issue (`Closes #<n>`): add the keyword — later runs join the issue trace |
+| A run is missing from the index | It wrote no record (exit before its tracer: untrusted comment, no open PR), or "Commit metrics" warned (`Failed to commit metrics`); the record path is still `metrics/runs/<YYYY-MM>/<run>-<attempt>.json` |
+| `::warning::commit_run_record: the trace index is unreadable` | `metrics/traces/<id>.json` was edited by hand into invalid JSON: fix or delete it on `metrics`; the next run recreates it (earlier runs are re-listed only by hand) |
+| `spans_overflow.count > 0` in a record | Over 500 child spans in the run or the 128 KiB OTLP budget: the spans kept are the parents first; the event journal still has every event up to its own cap |
+
 ---
 
 ## Symptom → Probable Cause Mapping
@@ -283,6 +303,8 @@ git commit --allow-empty -m "re-trigger pr-review" && git push
 ### Reset the auto-fix attempt counter
 
 Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and the `autofix` checkpoint, then start a fresh run from attempt 1.
+
+Or dispatch **Reset Auto-Fix Counter** (`reset-auto-fix.yml`, `pr_number`, `retrigger`): `scripts/reset_auto_fix.mjs` removes the `auto-fix-attempt-N` labels and, with `retrigger`, re-applies `changes-requested`. The run uploads its trace and commits its record (and the trace index of the PR's work item) to `metrics` (ADR-0041).
 
 ### Manually approve and close the loop
 

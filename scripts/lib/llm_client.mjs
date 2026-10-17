@@ -2,7 +2,7 @@ import { callGroq } from './groq_client.mjs';
 import { callAnthropic } from './anthropic_client.mjs';
 import { PROVIDERS, detectProvider, detectFallbackProvider, loadProviderConfig } from './config.mjs';
 import { classifyError } from './error_taxonomy.mjs';
-import { log } from './observability.mjs';
+import { log, withSpan } from './observability.mjs';
 import { estimateTokens } from './metrics.mjs';
 import { assertInputBudget } from './token_budget.mjs';
 
@@ -20,7 +20,20 @@ const CONFIG_ERROR_STATUSES = new Set([400, 404]);
 // the primary's config: it loads its own key, model and budgets.
 // Optional: fallback: false pins the call to the primary (live evals: a fallback answer would be published
 // as the primary model's); onAnswer({ provider, model }) is told which provider answered.
+// ADR-0041: each call is an `llm_call` child span (OpenTelemetry GenAI attribute names, token counts
+// estimated and flagged so); retries and the fallback logged during the call carry its span_id.
 export async function callLLM(args) {
+  const attributes = {
+    'gen_ai.operation.name': 'chat',
+    'gen_ai.request.model': args.model ?? null,
+    'adl.stage': args.stage ?? 'generation',
+  };
+  if (Number.isInteger(args.maxTokens)) attributes['gen_ai.request.max_tokens'] = args.maxTokens;
+  if (Number.isInteger(args.maxInputTokens)) attributes['adl.llm.max_input_tokens'] = args.maxInputTokens;
+  return withSpan('llm_call', attributes, (span) => callProviders(args, span));
+}
+
+async function callProviders(args, span) {
   const primary = detectProvider();
   const fallback = PROVIDERS.find(p => p !== primary);
   const stage = args.stage ?? 'generation';
@@ -32,10 +45,30 @@ export async function callLLM(args) {
   const providerErrors = [];
   // ADR-0040: one llm_call (provider and model that answered) or llm_call_failed event per call.
   const startMs = Date.now();
-  const answeredBy = (provider, model, isFallback) =>
+  const inputTokensEst = estimateTokens(String(args.systemPrompt ?? '') + String(args.prompt ?? ''));
+  const providerOutcomes = () => providerErrors.map((e) => [e.provider, e.skipped ?? e.status ?? 'error'].join(':'));
+  const budgetSkipped = () => providerErrors.filter((e) => e.skipped === 'over_input_budget').map((e) => e.provider);
+  const answeredBy = (provider, model, isFallback, answer) => {
+    span.setAttributes({
+      'gen_ai.system': provider,
+      'gen_ai.response.model': model,
+      'gen_ai.usage.input_tokens': inputTokensEst,
+      'gen_ai.usage.output_tokens': estimateTokens(String(answer ?? '')),
+      'adl.usage.estimated': true,
+      'adl.llm.fallback': isFallback,
+      ...(isFallback && { 'adl.llm.fallback_from': primary, 'adl.llm.providers': providerOutcomes() }),
+      ...(budgetSkipped().length && { 'adl.llm.input_budget_skipped': budgetSkipped() }),
+    });
     log({ stage, event: 'llm_call', level: 'info', duration_ms: Date.now() - startMs, meta: { provider, model, fallback: isFallback } });
+  };
   const fail = () => {
-    const providers = providerErrors.map((e) => [e.provider, e.skipped ?? e.status ?? 'error'].join(':'));
+    const providers = providerOutcomes();
+    span.setAttributes({
+      'gen_ai.system': primary,
+      'adl.llm.providers': providers,
+      'error.type': errorType ?? 'unknown',
+      ...(budgetSkipped().length && { 'adl.llm.input_budget_skipped': budgetSkipped() }),
+    });
     log({ stage, event: 'llm_call_failed', level: 'warn', duration_ms: Date.now() - startMs, meta: { providers } });
     return Object.assign(new Error(`All providers failed: ${errors.join(', ')}`), { providerErrors });
   };
@@ -61,7 +94,7 @@ export async function callLLM(args) {
       : { provider: primary, status: null, skipped: 'over_input_budget' });
   }
   if (answered) {
-    answeredBy(primary, args.model ?? null, false);
+    answeredBy(primary, args.model ?? null, false, text);
     args.onAnswer?.({ provider: primary, model: args.model ?? null });
     return text;
   }
@@ -111,7 +144,7 @@ export async function callLLM(args) {
     providerErrors.push({ provider: fallback, status: httpStatus(error) });
     throw fail();
   }
-  answeredBy(fallback, fallbackConfig.model ?? null, true);
+  answeredBy(fallback, fallbackConfig.model ?? null, true, text);
   args.onAnswer?.({ provider: fallback, model: fallbackConfig.model ?? null });
   return text;
 }

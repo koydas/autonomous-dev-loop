@@ -6,11 +6,13 @@ import fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { log, createTracer } from '../lib/observability.mjs';
+import { log, createTracer, withSpan } from '../lib/observability.mjs';
 import {
   attachJournal, recordEvent, buildEnvelope,
   TRACE_SCHEMA_VERSION, JOURNAL_MAX_EVENTS, JOURNAL_MAX_BYTES, EVENT_MAX_BYTES,
 } from '../lib/run_journal.mjs';
+import { currentSpanId, rootSpanId, JOURNAL_MAX_SPANS } from '../lib/run_journal.mjs';
+import { traceIdFor, SPAN_ID_RE, TRACE_ID_RE } from '../lib/trace_context.mjs';
 import { redactTrace } from '../lib/run_record.mjs';
 
 let dir;
@@ -378,4 +380,145 @@ test('an unreadable GITHUB_EVENT_PATH leaves the payload fields null', () => {
     quiet(() => tracer.startSpan('s'));
   });
   assert.equal(read(id).envelope.pr_number, null);
+});
+
+// ---------------------------------------------------------------------------
+// ADR-0041: span ids, span context of events, child spans, work item
+// ---------------------------------------------------------------------------
+
+async function quietAsync(fn) {
+  const original = process.stderr.write;
+  process.stderr.write = () => true;
+  try { return await fn(); } finally { process.stderr.write = original; }
+}
+
+test('stage spans get a span id under the run root; events carry the span they were logged in', async () => {
+  const id = runId();
+  const tracer = createTracer({ runId: id, traceDir: dir });
+  quiet(() => {
+    log({ stage: 's', event: 'before.stage' });
+    tracer.startSpan('review');
+    log({ stage: 's', event: 'in.stage' });
+    tracer.startSpan('review', { again: true }); // a restarted stage keeps its span id
+    tracer.endSpan('review');
+    log({ stage: 's', event: 'after.stage' });
+  });
+  await tracer.finalize('success');
+  const trace = read(id);
+  assert.equal(trace.schema_version, 2);
+  assert.match(trace.root_span_id, SPAN_ID_RE);
+  const [stage] = trace.spans;
+  assert.match(stage.span_id, SPAN_ID_RE);
+  assert.equal(stage.parent_span_id, trace.root_span_id);
+  const spanOf = Object.fromEntries(trace.events.map((e) => [e.event, e.span_id]));
+  assert.deepEqual(spanOf, { 'before.stage': trace.root_span_id, 'in.stage': stage.span_id, 'after.stage': trace.root_span_id });
+  assert.equal(currentSpanId(), rootSpanId());
+});
+
+test('withSpan: nested child spans, events inside carry the innermost one, error ends the span and is rethrown', async () => {
+  const id = runId();
+  const tracer = createTracer({ runId: id, traceDir: dir });
+  let inner;
+  await quietAsync(async () => {
+    tracer.startSpan('autofix');
+    await withSpan('outer', { 'adl.stage': 'autofix' }, async (outer) => {
+      log({ stage: 's', event: 'in.outer' });
+      inner = await withSpan('llm_call', {}, async (span) => {
+        span.setAttributes({ 'gen_ai.system': 'groq' });
+        log({ stage: 's', event: 'in.inner' });
+        return span.spanId;
+      });
+      outer.setAttributes({ done: true });
+    });
+    const boom = Object.assign(new Error('boom'), { errorType: 'TRANSIENT' });
+    await assert.rejects(withSpan('llm_call', {}, async () => { throw boom; }), (err) => err === boom);
+    await assert.rejects(withSpan('llm_call', {}, async (span) => { span.setAttributes({ 'error.type': 'mine' }); throw new TypeError('x'); }));
+    tracer.endSpan('autofix');
+  });
+  await tracer.finalize('partial');
+  const trace = read(id);
+  const stage = trace.spans.find((s) => s.stage === 'autofix');
+  const mine = trace.child_spans.filter((s) => s.parent_span_id === stage.span_id || trace.child_spans.some((p) => p.span_id === s.parent_span_id && p.parent_span_id === stage.span_id));
+  const outer = mine.find((s) => s.name === 'outer');
+  const innerSpan = mine.find((s) => s.span_id === inner);
+  assert.equal(outer.parent_span_id, stage.span_id);
+  assert.equal(innerSpan.parent_span_id, outer.span_id);
+  assert.deepEqual([outer.status, innerSpan.status], ['ok', 'ok']);
+  assert.deepEqual(outer.attributes, { 'adl.stage': 'autofix', done: true });
+  assert.equal(trace.events.find((e) => e.event === 'in.inner').span_id, inner);
+  assert.equal(trace.events.find((e) => e.event === 'in.outer').span_id, outer.span_id);
+  const failed = mine.filter((s) => s.status === 'error');
+  assert.deepEqual(failed.map((s) => s.attributes['error.type']), ['TRANSIENT', 'mine'], 'the caller error.type is kept');
+  assert.ok(failed.every((s) => s.completed_at && s.duration_ms >= 0));
+});
+
+test('withSpan: concurrent calls (eval workers) keep their own span context', async () => {
+  const id = runId();
+  createTracer({ runId: id, traceDir: dir });
+  const tick = () => new Promise((r) => setImmediate(r));
+  const ids = await quietAsync(() => Promise.all(['a', 'b', 'c'].map((name) => withSpan('eval.case', { name }, async (span) => {
+    for (let i = 0; i < 3; i++) { await tick(); log({ stage: 'eval', event: `case.${name}` }); }
+    return span.spanId;
+  }))));
+  const trace = read(id);
+  ['a', 'b', 'c'].forEach((name, i) => {
+    const events = trace.events.filter((e) => e.event === `case.${name}`);
+    assert.equal(events.length, 3);
+    assert.ok(events.every((e) => e.span_id === ids[i]), `case ${name} events stay in its span`);
+  });
+});
+
+test(`span cap: past ${JOURNAL_MAX_SPANS} child spans, the rest is counted in spans_overflow and still runs`, async () => {
+  const id = runId();
+  const tracer = createTracer({ runId: id, traceDir: dir });
+  let ran = 0;
+  await quietAsync(async () => { for (let i = 0; i < JOURNAL_MAX_SPANS + 4; i++) await withSpan('llm_call', {}, async () => { ran += 1; }); });
+  await tracer.finalize('success');
+  const trace = read(id);
+  assert.equal(ran, JOURNAL_MAX_SPANS + 4, 'business logic always runs');
+  assert.equal(trace.child_spans.length, JOURNAL_MAX_SPANS);
+  assert.deepEqual(trace.spans_overflow, { count: 4 });
+});
+
+test('a later step of the same job adopts the run root and its child spans; a foreign trace contributes none', () => {
+  const id = runId();
+  const tracePath = path.join(dir, `${id}.json`);
+  const root = 'b'.repeat(16);
+  const child = { span_id: 'c'.repeat(16), parent_span_id: root, name: 'llm_call', status: 'ok', attributes: {} };
+  fs.writeFileSync(tracePath, JSON.stringify({ run_id: id, envelope: { run_id: '88', run_attempt: 1 }, root_span_id: root, spans: [], child_spans: [child], spans_overflow: { count: 2 }, events: [] }));
+  const trace = withEnv({ GITHUB_RUN_ID: '88', GITHUB_RUN_ATTEMPT: '1' }, () => {
+    quiet(() => log({ stage: 's', event: 'pre.attach' }));
+    createTracer({ runId: id, traceDir: dir });
+    quiet(() => log({ stage: 's', event: 'post.attach' }));
+    return read(id);
+  });
+  assert.equal(trace.root_span_id, root);
+  assert.ok(trace.events.every((e) => e.span_id === root), 'events of this process join the adopted root');
+  assert.deepEqual(trace.child_spans.map((s) => s.span_id), [child.span_id]);
+  assert.deepEqual(trace.spans_overflow, { count: 2 });
+
+  const foreignId = runId();
+  fs.writeFileSync(path.join(dir, `${foreignId}.json`), JSON.stringify({ envelope: { run_id: '1', run_attempt: 1 }, root_span_id: root, child_spans: [child] }));
+  const fresh = withEnv({ GITHUB_RUN_ID: '88', GITHUB_RUN_ATTEMPT: '1' }, () => { createTracer({ runId: foreignId, traceDir: dir }); return read(foreignId); });
+  assert.notEqual(fresh.root_span_id, root);
+  assert.deepEqual(fresh.child_spans, []);
+});
+
+test('the trace carries the work item and trace id: PR body parsed for numbers only, trace.work_item hints after it', () => {
+  const id = runId();
+  const payloadPath = path.join(dir, `event-${id}.json`);
+  fs.writeFileSync(payloadPath, JSON.stringify({ pull_request: { number: 8, head: { ref: 'feature/x' }, body: 'PRIVATE BODY text. Closes #5' } }));
+  const trace = withEnv({ ...ACTIONS_ENV, GITHUB_EVENT_PATH: payloadPath }, () => {
+    createTracer({ runId: id, traceDir: dir });
+    quiet(() => log({ stage: 'review', event: 'trace.work_item', meta: { prNumber: 8, branchIssue: 6, closingIssues: [] } }));
+    return read(id);
+  });
+  assert.deepEqual(trace.item, { kind: 'issue', number: 6, source: 'branch', key: `${ACTIONS_ENV.GITHUB_REPOSITORY}#issue-6` }, 'the PR head branch (hint) wins over the body');
+  assert.equal(trace.trace_id, traceIdFor(`${ACTIONS_ENV.GITHUB_REPOSITORY}#issue-6`));
+  assert.ok(!JSON.stringify(trace).includes('PRIVATE BODY'), 'the body is never kept');
+
+  const runOnly = runId();
+  const t2 = withEnv({ ...ACTIONS_ENV, GITHUB_EVENT_PATH: path.join(dir, 'missing.json') }, () => { createTracer({ runId: runOnly, traceDir: dir }); quiet(() => log({ stage: 'eval', event: 'eval.start' })); return read(runOnly); });
+  assert.equal(t2.item.kind, 'run', 'no item: the run is its own trace (evals)');
+  assert.match(t2.trace_id, TRACE_ID_RE);
 });

@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { attachJournal, recordEvent } from './run_journal.mjs';
+import { attachJournal, recordEvent, rootSpanId, enterStageSpan, exitStageSpan, withSpan } from './run_journal.mjs';
+import { newSpanId } from './trace_context.mjs';
+
+// ADR-0041: child span (LLM call, eval case) around an async function; see run_journal.mjs.
+export { withSpan };
 
 function safeStringify(obj) {
   try {
@@ -111,7 +115,10 @@ export function createTracer({ runId, issueNumber = null, traceDir }) {
 
         const trace = ensureTrace();
         const idx = trace.spans.findIndex(s => s.stage === stage);
-        const span = { stage, started_at: now, completed_at: null, duration_ms: null, outcome: null, meta };
+        // ADR-0041: a stage keeps one span id per run (a restarted stage reuses it), child of the run root.
+        const spanId = trace.spans[idx]?.span_id ?? newSpanId();
+        const span = { stage, span_id: spanId, parent_span_id: rootSpanId(), started_at: now, completed_at: null, duration_ms: null, outcome: null, meta };
+        enterStageSpan(spanId);
         if (idx >= 0) trace.spans[idx] = span;
         else trace.spans.push(span);
         writeTrace(trace);
@@ -131,12 +138,15 @@ export function createTracer({ runId, issueNumber = null, traceDir }) {
         const existing = idx >= 0 ? trace.spans[idx] : null;
         const span = {
           stage,
+          span_id: existing?.span_id ?? newSpanId(),
+          parent_span_id: existing?.parent_span_id ?? rootSpanId(),
           started_at: existing?.started_at ?? completedAt,
           completed_at: completedAt,
           duration_ms,
           outcome,
           meta: { ...(existing?.meta ?? {}), ...extraMeta },
         };
+        exitStageSpan(span.span_id);
         if (idx >= 0) trace.spans[idx] = span;
         else trace.spans.push(span);
         writeTrace(trace);
