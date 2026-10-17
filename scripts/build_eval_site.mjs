@@ -3,7 +3,7 @@
 /**
  * Build the eval dashboard (GitHub Pages) from live eval results.
  *
- *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [--fail-on-model-change] [results.json ...]
+ *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [--pipeline-dir <metrics checkout>] [--fail-on-model-change] [results.json ...]
  *   node scripts/build_eval_site.mjs --report [--site-url <deployed site>] results.json ...
  *
  * History is read back from the deployed site (--site-url: scorecard.json + runs/<id>.json) or
@@ -12,6 +12,10 @@
  * transient failure or a wrong URL never deploys a site without its history.
  * Runs that failed on error_rate (provider outage) and replays are left out, and so is a run whose model
  * is not the suite's published model (history per suite and model, ADR-0032 amendment).
+ * --pipeline-dir: a checkout of the `metrics` branch (its metrics/ directory); the pipeline views
+ * (pipeline/: activity feed, work-item traces, runs, health, models) are rebuilt from it on every build,
+ * never read back from the site. Pages hosts one site: the eval publish and the pipeline publish both run
+ * this one build, so each deploy carries both halves (ADR-0027 amendment, 2026-10-17).
  * --report builds nothing: it prints, per results file, model, scores, cost and review coverage next to
  * the suite's latest published run (best effort), and appends it to GITHUB_STEP_SUMMARY.
  */
@@ -25,6 +29,9 @@ import {
 } from './lib/eval_scorecard.mjs';
 import { buildSite } from './lib/eval_site.mjs';
 import { SUITES } from './lib/eval_suites.mjs';
+import { buildPipelineModel, MONTH_RE } from './lib/pipeline_model.mjs';
+import { computeHealth, modelUsage } from './lib/pipeline_health.mjs';
+import { buildPipelineSite } from './lib/pipeline_site.mjs';
 
 function retainedRunIds(scorecard) {
   return Object.values(scorecard.suites).flatMap((s) => (s.runs ?? []).map((r) => r.run_id));
@@ -81,6 +88,76 @@ export async function readPreviousSiteDir(dir) {
   return { scorecard, details };
 }
 
+// Regular files only: a symlink on the branch is never followed (ADR-0021).
+async function readRegular(file, log) {
+  const st = await fs.lstat(file);
+  if (!st.isFile()) {
+    log(`Warning: ${file} is not a regular file; skipped`);
+    return null;
+  }
+  return fs.readFile(file, 'utf8');
+}
+
+async function listJson(dir) {
+  try {
+    return (await fs.readdir(dir)).filter((f) => f.endsWith('.json')).sort();
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+/**
+ * The pipeline inputs of a `metrics` branch checkout: `{ records, traces, runsJsonl }` with paths
+ * relative to the checkout (metrics/runs/<YYYY-MM>/<run>.json, metrics/traces/<id>.json). A checkout
+ * without metrics/ aborts: the build would deploy a site without its pipeline half.
+ */
+export async function readPipelineDir(dir, { log = console.log } = {}) {
+  const root = path.join(dir, 'metrics');
+  let st;
+  try {
+    st = await fs.lstat(root);
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new Error(`No metrics/ directory in ${dir}: check out the metrics branch there (--pipeline-dir)`);
+    throw err;
+  }
+  if (!st.isDirectory()) throw new Error(`${root} is not a directory`);
+  const records = [];
+  let months = [];
+  try {
+    months = (await fs.readdir(path.join(root, 'runs'))).filter((m) => MONTH_RE.test(m)).sort();
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  for (const month of months) {
+    for (const f of await listJson(path.join(root, 'runs', month))) {
+      const text = await readRegular(path.join(root, 'runs', month, f), log);
+      if (text != null) records.push({ path: `metrics/runs/${month}/${f}`, text });
+    }
+  }
+  const traces = [];
+  for (const f of await listJson(path.join(root, 'traces'))) {
+    const text = await readRegular(path.join(root, 'traces', f), log);
+    if (text != null) traces.push({ path: `metrics/traces/${f}`, text });
+  }
+  let runsJsonl = '';
+  try {
+    runsJsonl = (await readRegular(path.join(root, 'runs.jsonl'), log)) ?? '';
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return { records, traces, runsJsonl };
+}
+
+// Pure: pipeline inputs + the scorecard being deployed → the pipeline/ pages.
+export function assemblePipeline({ pipeline, scorecard, generatedAt = null, log = () => {} }) {
+  const model = buildPipelineModel({ ...pipeline, log });
+  const files = buildPipelineSite({ model, health: computeHealth({ model, scorecard }), models: modelUsage(model.runs, scorecard), generatedAt });
+  return { files, model };
+}
+
+const siteBytes = (files) => Object.values(files).reduce((n, c) => n + Buffer.byteLength(c, 'utf8'), 0);
+
 // runs/<id>.json is keyed by run_id alone: two suites under one id would overwrite each other's detail.
 function assertRunIdsPerSuite(scorecard, publishable) {
   const owner = new Map(Object.entries(scorecard.suites).flatMap(([suite, s]) => (s.runs ?? []).map((r) => [r.run_id, suite])));
@@ -95,7 +172,8 @@ function assertRunIdsPerSuite(scorecard, publishable) {
 }
 
 // Pure: previous site state + new results → files to deploy.
-export function assembleSite({ previous, resultsList, generatedAt = new Date().toISOString() }) {
+// pipeline: readPipelineDir() output, or null for an eval-only site (local preview, tests).
+export function assembleSite({ previous, resultsList, pipeline = null, generatedAt = new Date().toISOString(), log = () => {} }) {
   const valid = partitionPublishable(resultsList);
   const { publishable, skipped: foreignModel } = partitionByPublishedModel(previous.scorecard, valid.publishable);
   const skipped = [...valid.skipped, ...foreignModel];
@@ -109,7 +187,9 @@ export function assembleSite({ previous, resultsList, generatedAt = new Date().t
   const retained = new Set(retainedRunIds(scorecard));
   for (const id of Object.keys(details)) if (!retained.has(id)) delete details[id];
   const thresholds = Object.fromEntries(Object.entries(SUITES).map(([name, s]) => [name, s.thresholds ?? {}]));
-  return { files: buildSite({ scorecard, details, thresholds, generatedAt }), scorecard, skipped };
+  const files = buildSite({ scorecard, details, thresholds, generatedAt, pipeline: pipeline != null });
+  const pipelineFiles = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }).files : {};
+  return { files: { ...files, ...pipelineFiles }, scorecard, skipped, pipelineFiles };
 }
 
 export async function writeSite(files, outDir) {
@@ -123,12 +203,13 @@ export async function writeSite(files, outDir) {
 // failOnModelChange: the run used the repo's configured provider (schedule, provider repo-variable), so a
 // model mismatch is drift (GROQ_MODEL bump, model retirement), not a measurement: fail instead of freezing
 // the history behind a notice. Re-baselining is #209.
-export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles, fetchImpl, allowEmpty = false, failOnModelChange = false, log = console.log }) {
+export async function buildEvalSite({ outDir, siteUrl, previousDir, pipelineDir, resultFiles, fetchImpl, allowEmpty = false, failOnModelChange = false, log = console.log, generatedAt }) {
   const previous = siteUrl
     ? await fetchPreviousSite(siteUrl, fetchImpl, { allowEmpty, log })
     : previousDir ? await readPreviousSiteDir(previousDir) : { scorecard: emptyScorecard(), details: {} };
   const resultsList = await Promise.all(resultFiles.map(async (f) => JSON.parse(await fs.readFile(f, 'utf8'))));
-  const { files, scorecard, skipped } = assembleSite({ previous, resultsList });
+  const pipeline = pipelineDir ? await readPipelineDir(pipelineDir, { log }) : null;
+  const { files, scorecard, skipped, pipelineFiles } = assembleSite({ previous, resultsList, pipeline, log, ...(generatedAt && { generatedAt }) });
   const actions = process.env.GITHUB_ACTIONS === 'true';
   for (const s of skipped) {
     if (s.kind === 'model_mismatch') {
@@ -148,7 +229,9 @@ export async function buildEvalSite({ outDir, siteUrl, previousDir, resultFiles,
   for (const [suite, { runs }] of Object.entries(scorecard.suites)) {
     log(`${suite}: ${runs.length} run(s) on the dashboard, latest ${runs[0]?.run_id} (${runs[0]?.passed ? 'pass' : 'fail'})`);
   }
-  log(`Eval dashboard written to ${outDir} (${Object.keys(files).length} files)`);
+  if (pipeline) log(`Pipeline views: ${pipeline.records.length} record(s), ${pipeline.traces.length} trace index(es), ${Object.keys(pipelineFiles).length} page(s), ${(siteBytes(pipelineFiles) / 1e6).toFixed(2)} MB`);
+  else log('No --pipeline-dir: eval pages only (the pipeline views are not built)');
+  log(`Eval dashboard written to ${outDir} (${Object.keys(files).length} files, ${(siteBytes(files) / 1e6).toFixed(2)} MB)`);
   return { files, scorecard, skipped };
 }
 
@@ -213,6 +296,7 @@ async function main() {
       out: { type: 'string' },
       'site-url': { type: 'string' },
       'previous-dir': { type: 'string' },
+      'pipeline-dir': { type: 'string' },
       'allow-empty': { type: 'boolean', default: false },
       report: { type: 'boolean', default: false },
       'fail-on-model-change': { type: 'boolean', default: false },
@@ -229,6 +313,7 @@ async function main() {
     outDir: values.out,
     siteUrl: values['previous-dir'] ? undefined : values['site-url'],
     previousDir: values['previous-dir'],
+    pipelineDir: values['pipeline-dir'],
     allowEmpty: values['allow-empty'],
     failOnModelChange: values['fail-on-model-change'],
     resultFiles: positionals,

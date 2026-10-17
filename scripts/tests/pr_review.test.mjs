@@ -1415,6 +1415,7 @@ test('pr_review (Groq) withholds an approval when code was cut from the reviewed
     assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
     assert.match(result.stderr, /"verdict":"WITHHELD"/);
     assert.match(result.stderr, /"unreviewed_code_files":1/);
+    assert.match(result.stderr, /"event":"review.verdict"[^\n]*"withheld_from":"APPROVE"/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -1440,6 +1441,7 @@ test('pr_review (Groq) withholds a REQUEST_CHANGES whose findings cite only code
     assert.doesNotMatch(JSON.parse(comment.body).body, /The model approved what it saw|tool evidence cannot confirm it/);
     assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
     assert.match(result.stderr, /"verdict":"WITHHELD"/);
+    assert.match(result.stderr, /"event":"review.verdict"[^\n]*"withheld_from":"REQUEST_CHANGES"/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -1495,6 +1497,7 @@ test('pr_review (Groq) still approves when the cut only removed documentation', 
     const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
     assert.equal(JSON.parse(review.body).event, 'APPROVE');
     assert.match(result.stderr, /"unreviewed_code_files":0/);
+    assert.match(result.stderr, /"event":"review.verdict"[^\n]*"withheld_from":null/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

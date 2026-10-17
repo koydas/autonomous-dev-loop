@@ -546,7 +546,8 @@ obsLog({
   event: 'review.verdict',
   level: 'info',
   duration_ms: reviewDurationMs,
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, unreviewed_code_files: unreviewedCodeFiles.length },
+  // withheld_from: the verdict the unseen-code backstop turned into WITHHELD (ADR-0038, #219), else null.
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode ? 'APPROVE' : withheldForUnseenFindings ? 'REQUEST_CHANGES' : null },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');

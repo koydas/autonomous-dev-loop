@@ -33,6 +33,11 @@ const compact = (n) => (n == null ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)
 const runFile = (runId) => `runs/${encodeURIComponent(runId)}`;
 // A run published before workflow_run_id existed has the workflow run ID as run_id; anything else
 // (a local EVAL_RUN_ID) has no workflow run to link.
+// Anchor of a model on the pipeline's models page (pipeline/models.html): the eval ↔ pipeline cross-link.
+export const modelAnchor = (model) => `model-${String(model ?? 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
+const modelHtml = (model, pipelineRoot) => (pipelineRoot == null
+  ? `<code>${escapeHtml(model)}</code>`
+  : `<a href="${pipelineRoot}pipeline/models.html#${modelAnchor(model)}"><code>${escapeHtml(model)}</code></a>`);
 const workflowRunId = (meta) => meta.workflow_run_id ?? (/^\d+$/.test(String(meta.run_id ?? '')) ? meta.run_id : null);
 
 function deltaHtml(current, previous) {
@@ -86,7 +91,7 @@ const STYLE = `
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
-  --good: #0ca30c; --critical: #d03b3b;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
@@ -107,7 +112,8 @@ h1 { font-size: 24px; margin: 0 0 4px; } h2 { font-size: 19px; margin: 32px 0 12
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
 .tile .label { color: var(--ink-2); font-size: 13px; } .tile .value { font-size: 22px; font-weight: 600; white-space: nowrap; }
 .delta { display: block; color: var(--ink-2); font-size: 13px; font-weight: 400; }
-.status { font-weight: 600; } .status-good { color: var(--good); } .status-critical { color: var(--critical); }
+.status { font-weight: 600; } .status-good { color: var(--good); } .status-critical { color: var(--critical); } .status-warning { color: var(--ink); }
+.status-warning::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warning); margin-right: 6px; }
 .table-wrap { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
@@ -123,19 +129,20 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--page); bo
 .ok { color: var(--good); } .ko { color: var(--critical); }
 `;
 
-function page(title, body, { depth = 0 } = {}) {
-  const root = depth ? '../' : '';
+// pipeline: the site also holds the pipeline views (build_eval_site.mjs --pipeline-dir): nav link.
+export function page(title, body, { depth = 0, pipeline = false, style = '' } = {}) {
+  const root = '../'.repeat(depth);
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<style>${STYLE}</style>
+<style>${STYLE}${style}</style>
 </head>
 <body>
 <main>
-<p class="muted"><a href="${root}index.html">Eval dashboard</a> · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
+<p class="muted"><a href="${root}index.html">Eval dashboard</a>${pipeline ? ` · <a href="${root}pipeline/index.html">Pipeline</a>` : ''} · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
 ${body}
 </main>
 </body>
@@ -218,7 +225,7 @@ ${lines}${labels}
 // Pages
 // ---------------------------------------------------------------------------
 
-function suiteSection(name, runs, thresholds = {}) {
+function suiteSection(name, runs, thresholds = {}, pipelineRoot = null) {
   const [run, last] = runs;
   const prev = last && (last.dataset_sha256 ?? null) === (run.dataset_sha256 ?? null) ? last : null;
   const tiles = [
@@ -238,11 +245,11 @@ function suiteSection(name, runs, thresholds = {}) {
   }).join('');
 
   const scoreNames = [...new Set(runs.flatMap((r) => Object.keys(r.scores ?? {})))];
-  const history = runs.map((r) => `<tr><td>${escapeHtml(day(r.ts))}</td><td><a href="${runFile(r.run_id)}.html">${escapeHtml(r.run_id)}</a></td><td><code>${escapeHtml(r.model)}</code></td><td><code>${escapeHtml((r.dataset_sha256 ?? '').slice(0, 8) || '—')}</code></td>${scoreNames.map((s) => `<td class="num">${escapeHtml(fmt(r.scores?.[s]))}</td>`).join('')}<td class="num">${escapeHtml(fmt(r.error_rate))}</td><td class="num">${escapeHtml(fmt(r.consistency))}</td><td>${r.passed ? '<span class="ok">✓</span>' : '<span class="ko">✕</span>'}</td></tr>`).join('');
+  const history = runs.map((r) => `<tr><td>${escapeHtml(day(r.ts))}</td><td><a href="${runFile(r.run_id)}.html">${escapeHtml(r.run_id)}</a></td><td>${modelHtml(r.model, pipelineRoot)}</td><td><code>${escapeHtml((r.dataset_sha256 ?? '').slice(0, 8) || '—')}</code></td>${scoreNames.map((s) => `<td class="num">${escapeHtml(fmt(r.scores?.[s]))}</td>`).join('')}<td class="num">${escapeHtml(fmt(r.error_rate))}</td><td class="num">${escapeHtml(fmt(r.consistency))}</td><td>${r.passed ? '<span class="ok">✓</span>' : '<span class="ko">✕</span>'}</td></tr>`).join('');
 
   return `<section>
 <h2><code>${escapeHtml(name)}</code> ${gateHtml(run.passed, run.failures)}</h2>
-<p class="sub">Last run <strong>${escapeHtml(day(run.ts))}</strong> · <a href="${runFile(run.run_id)}.html">run ${escapeHtml(run.run_id)}</a> · model <code>${escapeHtml(run.model)}</code> · ${escapeHtml(run.n_cases)} cases × ${escapeHtml(run.repeats)} repeats${last && !prev ? ' · <em>dataset changed since the previous run: no Δ shown</em>' : ''}</p>
+<p class="sub">Last run <strong>${escapeHtml(day(run.ts))}</strong> · <a href="${runFile(run.run_id)}.html">run ${escapeHtml(run.run_id)}</a> · model ${modelHtml(run.model, pipelineRoot)} · ${escapeHtml(run.n_cases)} cases × ${escapeHtml(run.repeats)} repeats${last && !prev ? ' · <em>dataset changed since the previous run: no Δ shown</em>' : ''}</p>
 <div class="tiles">${tiles}</div>
 ${thresholdRows ? `<h3>Thresholds</h3><div class="card table-wrap"><table><thead><tr><th>Metric</th><th>Gate</th><th class="num">Value</th><th>Status</th></tr></thead><tbody>${thresholdRows}</tbody></table></div>` : ''}
 <h3>Trend</h3>
@@ -252,14 +259,14 @@ ${thresholdRows ? `<h3>Thresholds</h3><div class="card table-wrap"><table><thead
 </section>`;
 }
 
-export function renderIndex(scorecard, { thresholds = {}, generatedAt } = {}) {
+export function renderIndex(scorecard, { thresholds = {}, generatedAt, pipeline = false } = {}) {
   const suites = Object.entries(scorecard.suites).filter(([, s]) => s.runs?.length);
   const body = suites.length
-    ? suites.map(([name, s]) => suiteSection(name, s.runs, thresholds[name])).join('\n')
+    ? suites.map(([name, s]) => suiteSection(name, s.runs, thresholds[name], pipeline ? '' : null)).join('\n')
     : '<div class="card">No live eval run recorded yet. Run <strong>Actions → Evals</strong> on the default branch with <code>publish</code> ticked.</div>';
   return page('Eval dashboard', `<h1>Eval dashboard</h1>
-<p class="sub">Offline evals of the LLM pipeline stages against labelled datasets (<a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/evals.md">docs</a>, <a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/adr/0027-offline-eval-harness.md">ADR-0027</a>). Last ${MAX_RUNS} live runs per suite; runs that failed on error_rate (provider outage) are left out.${generatedAt ? ` Updated ${escapeHtml(generatedAt)}.` : ''}</p>
-${body}`);
+<p class="sub">Offline evals of the LLM pipeline stages against labelled datasets (<a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/evals.md">docs</a>, <a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/adr/0027-offline-eval-harness.md">ADR-0027</a>). Last ${MAX_RUNS} live runs per suite; runs that failed on error_rate (provider outage) are left out.${generatedAt ? ` Updated ${escapeHtml(generatedAt)}.` : ''}${pipeline ? ' Pipeline runs, traces and health: <a href="pipeline/index.html">pipeline views</a>.' : ''}</p>
+${body}`, { pipeline });
 }
 
 function confusionTable(confusion = {}) {
@@ -270,7 +277,7 @@ function confusionTable(confusion = {}) {
   return `<h3>Confusion matrix</h3><div class="card table-wrap"><table><thead><tr><th>expected ↓ / predicted →</th>${predicted.map((p) => `<th class="num">${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-export function renderRun(detail) {
+export function renderRun(detail, { pipeline = false } = {}) {
   const { meta = {}, summary = {}, failures = [], results = [] } = detail;
   const scoreNames = Object.keys(summary.scores ?? {});
   const metrics = [
@@ -297,20 +304,20 @@ export function renderRun(detail) {
   }).join('');
 
   return page(`Eval run ${meta.run_id}`, `<h1>Run <code>${escapeHtml(meta.run_id)}</code> · <code>${escapeHtml(meta.suite)}</code> ${gateHtml(failures.length === 0, failures.map((f) => f.metric))}</h1>
-<p class="sub">${escapeHtml(meta.ts)} · model <code>${escapeHtml(meta.model)}</code> · ${escapeHtml(fmt(meta.repeats))} repeats · dataset <code>${escapeHtml(meta.dataset)}</code> (<code>${escapeHtml((meta.dataset_sha256 ?? '').slice(0, 12))}</code>)${workflowRunId(meta) ? ` · <a href="https://github.com/koydas/autonomous-dev-loop/actions/runs/${encodeURIComponent(workflowRunId(meta))}">workflow run</a>` : ''} · <a href="${encodeURIComponent(meta.run_id)}.json">results JSON</a></p>
+<p class="sub">${escapeHtml(meta.ts)} · model ${modelHtml(meta.model, pipeline ? '../' : null)} · ${escapeHtml(fmt(meta.repeats))} repeats · dataset <code>${escapeHtml(meta.dataset)}</code> (<code>${escapeHtml((meta.dataset_sha256 ?? '').slice(0, 12))}</code>)${workflowRunId(meta) ? ` · <a href="https://github.com/koydas/autonomous-dev-loop/actions/runs/${encodeURIComponent(workflowRunId(meta))}">workflow run</a>` : ''} · <a href="${encodeURIComponent(meta.run_id)}.json">results JSON</a></p>
 ${failures.length ? `<div class="card"><strong class="ko">Threshold failures</strong><ul>${failures.map((f) => `<li><code>${escapeHtml(f.metric)}</code>: ${escapeHtml(f.reason)}</li>`).join('')}</ul></div>` : ''}
 <h3>Metrics</h3><div class="card table-wrap"><table><tbody>${metrics}</tbody></table></div>
 ${confusionTable(summary.confusion)}
 <h3>Cases</h3>
-<div class="card table-wrap"><table><thead><tr><th></th><th>Case</th><th class="num">Repeat</th><th>Expected</th><th>Got</th>${scoreNames.map((s) => `<th class="num">${escapeHtml(s)}</th>`).join('')}<th class="num">ms</th><th>Error / output</th></tr></thead><tbody>${caseRows}</tbody></table></div>`, { depth: 1 });
+<div class="card table-wrap"><table><thead><tr><th></th><th>Case</th><th class="num">Repeat</th><th>Expected</th><th>Got</th>${scoreNames.map((s) => `<th class="num">${escapeHtml(s)}</th>`).join('')}<th class="num">ms</th><th>Error / output</th></tr></thead><tbody>${caseRows}</tbody></table></div>`, { depth: 1, pipeline });
 }
 
 // details: { [run_id]: full results JSON } for runs still on the scorecard; a run without
 // details keeps its history row but gets no detail page.
-export function buildSite({ scorecard, details = {}, thresholds = {}, generatedAt = null }) {
+export function buildSite({ scorecard, details = {}, thresholds = {}, generatedAt = null, pipeline = false }) {
   const files = {
     '.nojekyll': '',
-    'index.html': renderIndex(scorecard, { thresholds, generatedAt }),
+    'index.html': renderIndex(scorecard, { thresholds, generatedAt, pipeline }),
     'scorecard.json': JSON.stringify(scorecard, null, 2) + '\n',
     'scorecard.md': formatScorecard(scorecard),
   };
@@ -324,7 +331,7 @@ export function buildSite({ scorecard, details = {}, thresholds = {}, generatedA
       const detail = details[run.run_id];
       if (!detail) continue;
       files[`${runFile(run.run_id)}.json`] = JSON.stringify(detail) + '\n';
-      files[`${runFile(run.run_id)}.html`] = renderRun(detail);
+      files[`${runFile(run.run_id)}.html`] = renderRun(detail, { pipeline });
     }
   }
   return files;

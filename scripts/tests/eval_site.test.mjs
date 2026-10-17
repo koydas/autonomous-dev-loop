@@ -10,6 +10,8 @@ import {
   renderIndex,
   renderRun,
   buildSite,
+  modelAnchor,
+  page,
 } from '../lib/eval_site.mjs';
 import { emptyScorecard, addRun, toScorecardRun } from '../lib/eval_scorecard.mjs';
 
@@ -262,4 +264,26 @@ test('renderIndex and buildSite show several suites, each with its own gate, til
   assert.match(files['runs/rv1.html'], /<code>review<\/code>/);
   assert.match(files['runs/rv1.html'], /<th class="num">withheld<\/th>/);
   assert.ok(files['runs/v1.html']);
+});
+
+// ADR-0027 amendment (2026-10-17): the site also holds the pipeline views.
+test('buildSite with pipeline links the nav and every model to the pipeline models page', () => {
+  const b = results({ runId: 'b' });
+  const files = buildSite({ scorecard: scorecardOf(b), details: { b }, pipeline: true });
+  assert.match(files['index.html'], /<a href="index\.html">Eval dashboard<\/a> · <a href="pipeline\/index\.html">Pipeline<\/a>/);
+  assert.match(files['index.html'], /<a href="pipeline\/models\.html#model-groq-openai-gpt-oss-120b"><code>groq:openai\/gpt-oss-120b<\/code><\/a>/);
+  assert.match(files['index.html'], /pipeline views<\/a>/);
+  assert.match(files['runs/b.html'], /<a href="\.\.\/pipeline\/models\.html#model-groq-openai-gpt-oss-120b">/);
+  assert.match(files['runs/b.html'], /<a href="\.\.\/pipeline\/index\.html">Pipeline<\/a>/);
+  const plain = buildSite({ scorecard: scorecardOf(b), details: { b } });
+  assert.doesNotMatch(plain['index.html'] + plain['runs/b.html'], /pipeline\//);
+});
+
+test('modelAnchor is a slug; page() nests the root per depth and appends a page style', () => {
+  assert.equal(modelAnchor('openai/gpt-oss-120b'), 'model-openai-gpt-oss-120b');
+  assert.equal(modelAnchor('<x>"y'), 'model-x-y');
+  assert.equal(modelAnchor(undefined), 'model-unknown');
+  const html = page('T', '<p>b</p>', { depth: 2, pipeline: true, style: '.z{}' });
+  assert.match(html, /<a href="\.\.\/\.\.\/index\.html">Eval dashboard<\/a> · <a href="\.\.\/\.\.\/pipeline\/index\.html">Pipeline<\/a>/);
+  assert.match(html, /\.z\{\}<\/style>/);
 });
