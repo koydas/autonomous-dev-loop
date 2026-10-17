@@ -196,6 +196,7 @@ test('the record and the trace index of its work item are committed together; a 
     const first = await run({ port: server.address().port, cwd: s.cwd, env: { METRICS_FILE: s.metricsFile, MY_TOKEN: PLANTED } });
     assert.equal(first.code, 0, first.stderr);
     assert.match(first.stdout, new RegExp(`\\[trace index ${indexPath.replace(/[.]/g, '\\.')}\\]`));
+    assert.doesNotMatch(first.stdout, /::warning::/, 'a successful commit warns nothing');
     assert.equal(state.commits.length, 1);
     const record = JSON.parse(state.files['metrics/runs/2026-10/555-1.json']);
     assert.equal(record.schema_version, 2);
@@ -208,9 +209,29 @@ test('the record and the trace index of its work item are committed together; a 
     await fs.writeFile(path.join(s.traceDir, '555.json'), JSON.stringify({ ...TRACE, envelope: { ...TRACE.envelope, run_attempt: 2 } }));
     const second = await run({ port: server.address().port, cwd: s.cwd, env: { GITHUB_RUN_ATTEMPT: '2' } });
     assert.equal(second.code, 0, second.stderr);
+    assert.doesNotMatch(second.stdout, /::warning::/);
     const rerun = await run({ port: server.address().port, cwd: s.cwd, env: { GITHUB_RUN_ATTEMPT: '2' } });
     assert.match(rerun.stdout, /Nothing committed: record already stored/);
+    assert.doesNotMatch(rerun.stdout, /::warning::/);
     assert.deepEqual(JSON.parse(state.files[indexPath]).runs.map((r) => r.run_id), ['555-1', '555-2']);
+  } finally {
+    server.close();
+    await s.cleanup();
+  }
+});
+
+test('an unreadable trace index is a ::warning:: next to the success line; the record still lands', async () => {
+  const { traceIdFor } = await import('../lib/trace_context.mjs');
+  const indexPath = `metrics/traces/${traceIdFor('owner/repo#issue-7')}.json`;
+  const { server, state } = await startGitHub({ files: { [indexPath]: '{not json' } });
+  const s = await scratch({ trace: TRACE });
+  try {
+    const result = await run({ port: server.address().port, cwd: s.cwd, env: { MY_TOKEN: PLANTED } });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /::warning::commit_run_record: the trace index is unreadable; left untouched/);
+    assert.match(result.stdout, /Committed c1 \(metrics\/runs\/2026-10\/555-1\.json\)\n/);
+    assert.doesNotMatch(result.stdout, /Failed to commit/);
+    assert.equal(state.files[indexPath], '{not json');
   } finally {
     server.close();
     await s.cleanup();

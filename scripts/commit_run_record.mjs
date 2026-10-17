@@ -89,8 +89,8 @@ async function main() {
     newLines,
     record,
   });
-  if (result.committed) console.log(`Committed ${result.sha}${result.recordPath ? ` (${result.recordPath})` : ''}${result.indexPath ? ` [trace index ${result.indexPath}]` : ''}`);
   if (result.indexStatus === 'unreadable') warn('commit_run_record: the trace index is unreadable; left untouched');
+  if (result.committed) console.log(`Committed ${result.sha}${result.recordPath ? ` (${result.recordPath})` : ''}${result.indexPath ? ` [trace index ${result.indexPath}]` : ''}`);
   else if (result.skipped) console.log(`Nothing committed: ${result.reason}`);
   else warn(`Failed to commit metrics after 3 attempts; data may be lost (${result.reason})`);
 }

@@ -16,8 +16,7 @@ on:
 permissions:
   pull-requests: write
   issues: write
-  # The `metrics` branch only (Commit metrics step, ADR-0040).
-  contents: write
+  contents: read
 
 jobs:
   resolve:
@@ -38,6 +37,11 @@ jobs:
   reset:
     needs: resolve
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+      # The `metrics` branch only (Commit metrics step, ADR-0040, ADR-0041).
+      contents: write
     # Shared with pr-review and auto-fix-pr (ADR-0020): never reset labels mid auto-fix run.
     concurrency:
       group: pr-pipeline-${{ needs.resolve.outputs.head_ref }}

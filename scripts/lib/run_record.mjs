@@ -230,7 +230,8 @@ function redactAttributes(attributes, allowed, secrets) {
 function redactOtlp(trace, traceId, envelope, secrets) {
   const overflow = { count: 0, events: 0 };
   if (!traceId) return { otlp: null, overflow };
-  const { spans } = buildSpanTree(trace);
+  // The root span's attributes come from the validated envelope, like the record's own `envelope`.
+  const { spans } = buildSpanTree({ ...trace, envelope });
   const doc = toOtlpDocument({ resource: { 'adl.repository': envelope.repository }, spans: [] });
   const out = doc.resourceSpans[0].scopeSpans[0].spans;
   let used = Buffer.byteLength(JSON.stringify(doc), 'utf8');

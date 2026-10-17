@@ -546,3 +546,13 @@ test('commitRunRecord: an index read error retries the pass; an unreadable index
   assert.equal(corrupt.state.files[indexPath], '{not json');
   assert.ok('metrics/runs/2026-10/123-2.json' in corrupt.state.files);
 });
+
+test('schema 2: the run span takes its attributes from the validated envelope, not the raw one', () => {
+  const record = redactTrace(v2({ envelope: { ...trace().envelope, actor_type: 'admin', head_sha: 'not-a-sha', run_id: '12x', workflow: `wf ${PLANTED_SECRET}` } }), { env: ENV });
+  const root = attrs(otlpSpans(record).find((s) => s.name === 'run'));
+  assert.equal(root['adl.actor_type'], undefined, 'actor_type outside bot|human is dropped');
+  assert.equal(root['vcs.ref.head.revision'], undefined, 'a non-SHA head is dropped');
+  assert.equal(root['cicd.pipeline.run.id'], undefined, 'a non-numeric run id is dropped');
+  assert.equal(root['cicd.pipeline.name'], 'wf [redacted]');
+  assert.equal(root['vcs.change.id'], String(record.envelope.pr_number), 'OTLP intValue is a decimal string');
+});
