@@ -14,6 +14,7 @@ function makeResponse(body, status = 200) {
 afterEach(() => {
   delete globalThis.fetch;
   delete process.env.AI_PROVIDER;
+  for (const stage of ['VALIDATION', 'GENERATION', 'REVIEW', 'AUTOFIX']) delete process.env[`AI_PROVIDER_${stage}`];
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.GROQ_API_KEY;
 });
@@ -194,6 +195,46 @@ test('callLLM loads the fallback config for the stage it is given', async () => 
   await callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-4-7' });
   assert.equal(groqBody.max_tokens, parseInt(GROQ_MODEL_DEFAULTS.review_max_tokens, 10));
   assert.equal(groqBody.temperature, parseFloat(GROQ_MODEL_DEFAULTS.review_temperature));
+});
+
+// Per-stage provider (ADR-0032 amendment): the call's stage picks AI_PROVIDER_<STAGE> over AI_PROVIDER.
+test('callLLM routes each stage to its AI_PROVIDER_<STAGE>, other stages to AI_PROVIDER', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  process.env.AI_PROVIDER_REVIEW = 'anthropic';
+  const hits = [];
+  globalThis.fetch = async (url, opts) => {
+    hits.push(opts.headers['x-api-key'] ? 'anthropic' : 'groq');
+    return opts.headers['x-api-key']
+      ? makeResponse({ content: [{ type: 'text', text: 'a' }] })
+      : makeResponse({ choices: [{ message: { content: 'g' } }] });
+  };
+  const answered = [];
+  const onAnswer = (a) => answered.push(a.provider);
+  assert.equal(await callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-sonnet-5-5', onAnswer }), 'a');
+  assert.equal(await callLLM({ stage: 'validation', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT, onAnswer }), 'g');
+  assert.deepEqual(hits, ['anthropic', 'groq']);
+  assert.deepEqual(answered, ['anthropic', 'groq']);
+});
+
+test('callLLM per-stage primary falls back to the other provider with that provider\'s own stage config', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  process.env.AI_PROVIDER_AUTOFIX = 'groq';
+  let anthropicBody;
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) {
+      anthropicBody = JSON.parse(opts.body);
+      return makeResponse({ content: [{ type: 'text', text: 'fallback-ok' }] });
+    }
+    return makeResponse({ error: { message: 'model_not_found' } }, 404);
+  };
+  const result = await callLLM({ stage: 'autofix', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT });
+  assert.equal(result, 'fallback-ok');
+  assert.equal(anthropicBody.model, ANTHROPIC_MODEL_DEFAULTS.autofix);
+  assert.deepEqual(anthropicBody.output_config, { effort: GROQ_MODEL_DEFAULTS.anthropic_autofix_effort });
 });
 
 test('callLLM forwards responseFormat to the fallback call', async () => {

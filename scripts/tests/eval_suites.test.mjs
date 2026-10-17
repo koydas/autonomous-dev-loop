@@ -14,7 +14,8 @@ import { buildChangeClassificationContext } from '../lib/change_classifier.mjs';
 import { parseEvidence } from '../lib/review_evidence.mjs';
 import { GROQ_MODEL_DEFAULTS, loadLLMConfig } from '../lib/config.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
-import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage, liveCallArgs, createLiveLLM, buildLLM } from '../run_evals.mjs';
+import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage, liveCallArgs, createLiveLLM, buildLLM, applyEvalOverrides, liveModelId } from '../run_evals.mjs';
+import { partitionPublishable, partitionByPublishedModel, runCost } from '../lib/eval_scorecard.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const RUN_EVALS = path.join(REPO_ROOT, 'scripts', 'run_evals.mjs');
@@ -730,6 +731,12 @@ test('reviewInputBudget mirrors loadLLMConfig: stage key, then max_input_tokens,
   await withEnv({ AI_PROVIDER: 'anthropic' }, () => assert.equal(reviewInputBudget({ review_max_input_tokens: 'abc' }), null));
 });
 
+test('reviewInputBudget follows the review stage provider (AI_PROVIDER_REVIEW over AI_PROVIDER)', async () => {
+  await withEnv({ AI_PROVIDER: 'groq', AI_PROVIDER_REVIEW: 'anthropic', GROQ_API_KEY: 'gk', ANTHROPIC_API_KEY: 'ak' }, () => assert.equal(reviewInputBudget(), null));
+  await withEnv({ AI_PROVIDER: 'anthropic', AI_PROVIDER_REVIEW: 'groq', GROQ_API_KEY: 'gk', ANTHROPIC_API_KEY: 'ak' }, () =>
+    assert.equal(reviewInputBudget(), parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10)));
+});
+
 test('no_false_alarm applies to clean cases: approved with no High or Medium finding', () => {
   const { no_false_alarm } = reviewSuite.scorers;
   assert.equal(no_false_alarm({ verdict: 'REQUEST_CHANGES' }, { llm_verdict: 'APPROVED', review: '' }), null);
@@ -975,6 +982,111 @@ test('run_evals live: every call records the provider and model that answered, m
   const calls = saved.results.flatMap((r) => r.calls);
   assert.ok(calls.length >= 2);
   assert.ok(calls.every((c) => `${c.provider}:${c.model}` === saved.meta.model));
+});
+
+// ---------------------------------------------------------------------------
+// run_evals.mjs — Anthropic model / effort override for one run (evals.yml inputs, ADR-0032 amendment)
+// ---------------------------------------------------------------------------
+
+test('applyEvalOverrides maps EVAL_ANTHROPIC_MODEL / EVAL_ANTHROPIC_EFFORT onto the production variables', () => {
+  const env = { EVAL_ANTHROPIC_MODEL: ' claude-opus-5-5 ', EVAL_ANTHROPIC_EFFORT: 'HIGH', ANTHROPIC_MODEL: 'repo-var' };
+  assert.deepEqual(applyEvalOverrides(env), { model: 'claude-opus-5-5', effort: 'high' });
+  assert.equal(env.ANTHROPIC_MODEL, 'claude-opus-5-5');
+  assert.equal(env.ANTHROPIC_EFFORT, 'high');
+  const untouched = { EVAL_ANTHROPIC_MODEL: '', ANTHROPIC_MODEL: 'repo-var' };
+  assert.deepEqual(applyEvalOverrides(untouched), { model: null, effort: null });
+  assert.deepEqual(untouched, { EVAL_ANTHROPIC_MODEL: '', ANTHROPIC_MODEL: 'repo-var' }, 'empty input: models.yaml / repo variables apply');
+});
+
+test('liveModelId tags an effort override only', () => {
+  const config = { provider: 'anthropic', model: 'claude-sonnet-5-5', reasoningEffort: 'low' };
+  assert.equal(liveModelId(config), 'anthropic:claude-sonnet-5-5');
+  assert.equal(liveModelId(config, { model: 'claude-sonnet-5-5', effort: null }), 'anthropic:claude-sonnet-5-5');
+  assert.equal(liveModelId(config, { effort: 'low' }), 'anthropic:claude-sonnet-5-5+effort=low');
+  assert.equal(liveModelId({ ...config, reasoningEffort: undefined }, { effort: 'off' }), 'anthropic:claude-sonnet-5-5+effort=off');
+});
+
+// Every Anthropic request body is appended to anthropic-payloads.jsonl.
+async function writeAnthropicPayloadMock(dir) {
+  const file = path.join(dir, 'anthropic-mock.mjs');
+  const log = JSON.stringify(path.join(dir, 'anthropic-payloads.jsonl'));
+  await fs.writeFile(file, `
+import fs from 'node:fs';
+globalThis.fetch = async (url, opts) => {
+  if (!String(url).includes('anthropic')) throw new Error('unexpected provider: ' + url);
+  fs.appendFileSync(${log}, opts.body + '\\n');
+  return { ok: true, status: 200, text: async () => JSON.stringify({ stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: ${JSON.stringify(llmResponse({ valid: true }))} }] }) };
+};
+`);
+  return file;
+}
+
+const overrideEnv = (mock, extra) => ({
+  ANTHROPIC_API_KEY: 'sk-ant-key', GROQ_API_KEY: '', AI_PROVIDER: 'anthropic', AI_PROVIDER_VALIDATION: '', ANTHROPIC_MODEL: '', ANTHROPIC_EFFORT: '',
+  EVAL_ANTHROPIC_MODEL: '', EVAL_ANTHROPIC_EFFORT: '', EVAL_TOKEN_BUDGET: '', NODE_OPTIONS: `--import ${pathToFileURL(mock).href}`, ...extra,
+});
+const readPayloads = async (dir) => (await fs.readFile(path.join(dir, 'anthropic-payloads.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
+
+test('run_evals live: an Anthropic model + effort override reaches the payload and meta.model, never the published history', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const mock = await writeAnthropicPayloadMock(dir);
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--limit', '2', '--out-dir', dir], dir,
+    overrideEnv(mock, { EVAL_ANTHROPIC_MODEL: 'claude-opus-5-5', EVAL_ANTHROPIC_EFFORT: 'high' }));
+  assert.equal(code, 0, stderr);
+  const payloads = await readPayloads(dir);
+  assert.equal(payloads.length, 2);
+  for (const p of payloads) {
+    assert.equal(p.model, 'claude-opus-5-5');
+    assert.deepEqual(p.output_config, { effort: 'high' });
+    assert.equal('temperature' in p, false);
+    assert.equal('thinking' in p, false);
+  }
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.equal(saved.meta.model, 'anthropic:claude-opus-5-5+effort=high');
+  assert.ok(saved.results.flatMap((r) => r.calls).every((c) => `${c.provider}:${c.model}` === 'anthropic:claude-opus-5-5'));
+  // Not mixed models (the calls match meta.model's model), but never appended to a history of another meta.model:
+  // neither the Groq baseline nor the same model at its models.yaml effort.
+  assert.deepEqual(partitionPublishable([saved]).skipped, []);
+  for (const baseline of [`groq:${GROQ_MODEL_DEFAULTS.validation}`, 'anthropic:claude-opus-5-5']) {
+    const scorecard = { version: 1, suites: { validation: { runs: [{ run_id: 'base', model: baseline }] } } };
+    const { publishable, skipped } = partitionByPublishedModel(scorecard, [saved]);
+    assert.deepEqual(publishable, [], baseline);
+    assert.equal(skipped[0].kind, 'model_mismatch');
+  }
+  assert.equal(runCost({ meta: saved.meta, summary: saved.summary }).unpriced, undefined, 'priced on the base model');
+});
+
+test('run_evals live: a model-only override sends the model at the stage effort; meta.model names it', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const mock = await writeAnthropicPayloadMock(dir);
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--limit', '1', '--out-dir', dir], dir,
+    overrideEnv(mock, { EVAL_ANTHROPIC_MODEL: 'claude-sonnet-5-5', ANTHROPIC_MODEL: 'claude-opus-5-5' }));
+  assert.equal(code, 0, stderr);
+  const [payload] = await readPayloads(dir);
+  assert.equal(payload.model, 'claude-sonnet-5-5', 'the run input wins over vars.ANTHROPIC_MODEL');
+  assert.deepEqual(payload.output_config, { effort: GROQ_MODEL_DEFAULTS.anthropic_validation_effort });
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
+  assert.equal(saved.meta.model, 'anthropic:claude-sonnet-5-5');
+});
+
+test('run_evals live: an Anthropic override on a stage that runs on Groq fails before any call', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const mock = await writeAnthropicPayloadMock(dir);
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--limit', '1', '--out-dir', dir], dir,
+    overrideEnv(mock, { AI_PROVIDER: 'groq', GROQ_API_KEY: 'groq-key', EVAL_ANTHROPIC_EFFORT: 'low' }));
+  assert.equal(code, 1);
+  assert.match(stderr, /EVAL_ANTHROPIC_MODEL \/ EVAL_ANTHROPIC_EFFORT set, but the validation stage runs on groq: dispatch with provider anthropic/);
+  await assert.rejects(fs.readFile(path.join(dir, 'anthropic-payloads.jsonl')), { code: 'ENOENT' });
+});
+
+test('run_evals live: an effort override of off on a thinking-always-on model fails fast', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
+  const mock = await writeAnthropicPayloadMock(dir);
+  const { code, stderr } = await runEvals(['--suite', 'validation', '--limit', '1', '--out-dir', dir], dir,
+    overrideEnv(mock, { EVAL_ANTHROPIC_MODEL: 'claude-sonnet-5-5', EVAL_ANTHROPIC_EFFORT: 'off' }));
+  assert.equal(code, 1);
+  assert.match(stderr, /ANTHROPIC_EFFORT=off is not supported by claude-sonnet-5-5/);
+  await assert.rejects(fs.readFile(path.join(dir, 'anthropic-payloads.jsonl')), { code: 'ENOENT' });
 });
 
 // #178: only a top-level section heading ends a section.

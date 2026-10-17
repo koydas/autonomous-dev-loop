@@ -7,7 +7,8 @@ import { estimateTokens } from '../lib/metrics.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
 import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, detectFallbackProvider, loadLLMConfig, loadProviderConfig, GROQ_MODEL_DEFAULTS, ANTHROPIC_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
 
-const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL', 'GROQ_REASONING_EFFORT', 'ANTHROPIC_EFFORT'];
+const STAGE_PROVIDER_VARS = ['AI_PROVIDER_VALIDATION', 'AI_PROVIDER_GENERATION', 'AI_PROVIDER_REVIEW', 'AI_PROVIDER_AUTOFIX'];
+const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', ...STAGE_PROVIDER_VARS, 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL', 'GROQ_REASONING_EFFORT', 'ANTHROPIC_EFFORT'];
 const REQUIRED_VARS = ['ISSUE_NUMBER', 'ISSUE_TITLE', ...ALL_LLM_VARS];
 
 function setEnv(vars) {
@@ -94,6 +95,86 @@ test('detectProvider treats a blank AI_PROVIDER as unset', () => {
   assert.equal(detectProvider(), 'anthropic');
 });
 
+// Per-stage provider: AI_PROVIDER_<STAGE> over AI_PROVIDER (ADR-0032 amendment)
+
+function captureStderr(fn) {
+  const lines = [];
+  const origWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try { fn(); } finally { process.stderr.write = origWrite; }
+  return lines.filter(l => l.includes('provider_config_fallback')).map(l => JSON.parse(l));
+}
+
+test('detectProvider(stage): AI_PROVIDER_<STAGE> overrides AI_PROVIDER for that stage only', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'groq', AI_PROVIDER_REVIEW: 'Anthropic' });
+  assert.equal(detectProvider('review'), 'anthropic');
+  for (const stage of ['validation', 'generation', 'autofix']) assert.equal(detectProvider(stage), 'groq', stage);
+  assert.equal(detectProvider(), 'groq', 'no stage: the repo-wide provider');
+  assert.equal(loadLLMConfig('review').provider, 'anthropic');
+  assert.equal(loadLLMConfig('review').model, ANTHROPIC_MODEL_DEFAULTS.review);
+  assert.equal(loadLLMConfig('validation').provider, 'groq');
+  assert.equal(detectFallbackProvider('review'), 'groq', 'the fallback is the other provider of the stage');
+  assert.equal(detectFallbackProvider('validation'), 'anthropic');
+});
+
+test('detectProvider(stage): every stage reads its own variable', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic' });
+  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+    setEnv({ [`AI_PROVIDER_${stage.toUpperCase()}`]: 'groq' });
+    assert.equal(detectProvider(stage), 'groq', stage);
+    unsetEnv(`AI_PROVIDER_${stage.toUpperCase()}`);
+    assert.equal(detectProvider(stage), 'anthropic', stage);
+  }
+});
+
+test('detectProvider(stage): unset or blank per-stage variable follows AI_PROVIDER and the key-based default', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic', AI_PROVIDER_REVIEW: '  ' });
+  assert.equal(detectProvider('review'), 'anthropic');
+  unsetEnv('AI_PROVIDER', 'GROQ_API_KEY');
+  assert.equal(detectProvider('review'), 'anthropic', 'key-based default: only ANTHROPIC_API_KEY');
+});
+
+test('detectProvider ignores per-stage variables for an unknown stage', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER_EVAL: 'anthropic', AI_PROVIDER_REVIEW: 'anthropic' });
+  try {
+    assert.equal(detectProvider('eval'), 'groq');
+    assert.equal(detectProvider(undefined), 'groq');
+  } finally {
+    unsetEnv('AI_PROVIDER_EVAL');
+  }
+});
+
+test('detectProvider(stage): an invalid per-stage value yields to the repo-wide provider, warned once', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', AI_PROVIDER: 'anthropic', AI_PROVIDER_REVIEW: 'opus-once' });
+  const events = captureStderr(() => {
+    assert.equal(detectProvider('review'), 'anthropic');
+    assert.equal(detectProvider('review'), 'anthropic');
+  });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].level, 'warn');
+  assert.match(events[0].meta.message, /AI_PROVIDER_REVIEW "opus-once" is not groq or anthropic: using anthropic/);
+  assert.equal(events[0].meta.variable, 'AI_PROVIDER_REVIEW');
+  assert.equal(events[0].meta.provider, 'anthropic');
+});
+
+test('detectProvider(stage): a per-stage provider without its key yields to the one with a key, warned once', () => {
+  setEnv({ GROQ_API_KEY: 'groq-key', AI_PROVIDER_AUTOFIX: 'anthropic' });
+  const events = captureStderr(() => {
+    assert.equal(detectProvider('autofix'), 'groq');
+    assert.equal(detectProvider('autofix'), 'groq');
+  });
+  assert.equal(events.length, 1);
+  assert.match(events[0].meta.message, /AI_PROVIDER_AUTOFIX=anthropic but ANTHROPIC_API_KEY is not set: using groq/);
+  assert.equal(detectFallbackProvider('autofix'), null, 'no Anthropic key: no fallback');
+  assert.equal(loadLLMConfig('autofix').provider, 'groq');
+});
+
+test('detectProvider(stage): a per-stage provider without any key stays as set (the call fails on its missing key)', () => {
+  setEnv({ AI_PROVIDER_VALIDATION: 'anthropic' });
+  assert.equal(detectProvider('validation'), 'anthropic');
+  assert.throws(() => loadLLMConfig('validation'), /Missing required environment variable: ANTHROPIC_API_KEY/);
+});
+
 // detectFallbackProvider
 
 test('detectFallbackProvider returns anthropic when groq is primary and ANTHROPIC_API_KEY is set', () => {
@@ -163,13 +244,13 @@ test('loadConfigFromEnv returns full config with all vars set', () => {
   assert.equal(config.issueTitle, 'Fix bug');
   assert.equal(config.issueBody, 'Details');
   assert.equal(config.apiKey, 'sk-ant-123');
-  assert.equal(config.model, 'claude-opus-5-5');
+  assert.equal(config.model, 'claude-sonnet-5-5');
 });
 
 test('loadConfigFromEnv uses default Anthropic model when ANTHROPIC_MODEL not set', () => {
   setEnv({ ISSUE_NUMBER: '1', ISSUE_TITLE: 'T', ANTHROPIC_API_KEY: 'k' });
   const { model } = loadConfigFromEnv();
-  assert.equal(model, 'claude-opus-5-5');
+  assert.equal(model, 'claude-sonnet-5-5');
 });
 
 test('loadConfigFromEnv uses custom model when ANTHROPIC_MODEL is set', () => {
@@ -590,8 +671,38 @@ test('loadLLMConfig anthropic: per-stage model, effort and max_tokens from model
 test('loadLLMConfig anthropic: ANTHROPIC_EFFORT overrides every stage, off sends none', () => {
   setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic', ANTHROPIC_EFFORT: 'XHIGH' });
   assert.equal(loadLLMConfig('validation').reasoningEffort, 'xhigh');
-  setEnv({ ANTHROPIC_EFFORT: 'off' });
+  // `off` is for models that reject effort; the 5.5 stage defaults reject `off` (tested below).
+  setEnv({ ANTHROPIC_EFFORT: 'off', ANTHROPIC_MODEL: 'claude-haiku-4-5' });
   assert.equal(loadLLMConfig('review').reasoningEffort, undefined);
+});
+
+// Effort `off` sends no effort: on models that cannot disable thinking it would silently run their default.
+test('loadLLMConfig anthropic: ANTHROPIC_EFFORT=off is rejected for claude-opus-5-5 and claude-sonnet-5-5', () => {
+  for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5']) {
+    setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic', ANTHROPIC_EFFORT: 'OFF', ANTHROPIC_MODEL: model });
+    assert.throws(() => loadLLMConfig('review'),
+      new RegExp(`Invalid anthropic effort for stage "review": ANTHROPIC_EFFORT=off is not supported by ${model} \\(thinking cannot be disabled`));
+  }
+});
+
+test('loadLLMConfig anthropic: anthropic_<stage>_effort off is rejected with the models.yaml key, by the stage default model', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', AI_PROVIDER: 'anthropic' });
+  const saved = GROQ_MODEL_DEFAULTS.anthropic_generation_effort;
+  try {
+    GROQ_MODEL_DEFAULTS.anthropic_generation_effort = 'off';
+    assert.throws(() => loadLLMConfig('generation'),
+      new RegExp(`stage "generation": config/models\\.yaml anthropic_generation_effort=off is not supported by ${ANTHROPIC_MODEL_DEFAULTS.generation}`));
+    // The same key is accepted for a model that rejects effort itself.
+    setEnv({ ANTHROPIC_MODEL: 'claude-sonnet-4-5' });
+    assert.equal(loadLLMConfig('generation').reasoningEffort, undefined);
+  } finally {
+    GROQ_MODEL_DEFAULTS.anthropic_generation_effort = saved;
+  }
+});
+
+test('loadProviderConfig anthropic: the effort off rejection also guards the fallback config', () => {
+  setEnv({ ANTHROPIC_API_KEY: 'ant-key', GROQ_API_KEY: 'groq-key', ANTHROPIC_EFFORT: 'off', ANTHROPIC_MODEL: 'claude-opus-5-5' });
+  assert.throws(() => loadProviderConfig('anthropic', 'autofix'), /ANTHROPIC_EFFORT=off is not supported by claude-opus-5-5/);
 });
 
 test('loadLLMConfig anthropic: rejects an invalid effort', () => {

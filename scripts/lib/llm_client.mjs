@@ -34,9 +34,10 @@ export async function callLLM(args) {
 }
 
 async function callProviders(args, span) {
-  const primary = detectProvider();
-  const fallback = PROVIDERS.find(p => p !== primary);
   const stage = args.stage ?? 'generation';
+  // Per stage: AI_PROVIDER_<STAGE> over AI_PROVIDER (ADR-0032 amendment).
+  const primary = detectProvider(stage);
+  const fallback = PROVIDERS.find(p => p !== primary);
 
   const errors = [];
   // Per-provider outcome on the thrown error (err.providerErrors), for callers that must tell an exhausted
@@ -106,7 +107,7 @@ async function callProviders(args, span) {
     throw fail();
   }
 
-  if (detectFallbackProvider() !== fallback) {
+  if (detectFallbackProvider(stage) !== fallback) {
     errors.push(`${fallback}: skipped (no API key configured)`);
     providerErrors.push({ provider: fallback, status: null, skipped: 'no_api_key' });
     throw fail();

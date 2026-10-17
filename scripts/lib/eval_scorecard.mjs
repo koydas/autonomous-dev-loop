@@ -64,23 +64,34 @@ export function toScorecardRun({ meta, summary, failures, results }) {
   };
 }
 
-// USD per million tokens, list price (2026-10). Groq runs on the free tier: no cost line. Any other model
-// without an entry is reported as unpriced, never as free. anthropic_client.mjs does not return the API's usage, so cost is priced on the harness's
-// chars/4 estimate: input ignores the prompt cache (system prompt cached: over), output ignores thinking
-// tokens (effort high: under). Read it as an order of magnitude, never as the bill.
+// USD per million tokens, list price (2026-10): the one price table (eval report and dashboard cost line).
+// Groq runs on the free tier: no cost line. Any other model without an entry is reported as unpriced, never
+// as free. anthropic_client.mjs does not return the API's usage, so cost is priced on the harness's chars/4
+// estimate: input ignores the prompt cache (system prompt cached: over), output excludes thinking tokens
+// (under, more so at higher effort). Read it as an order of magnitude, never as the bill.
+// maxPromptTokens: the price holds up to that prompt size per call (Haiku 5.5: ≤ 100K); above it, unpriced.
 export const PRICES_USD_PER_MTOK = {
   'anthropic:claude-opus-5-5': { in: 4, out: 20 },
+  'anthropic:claude-sonnet-5-5': { in: 2, out: 10 },
+  'anthropic:claude-haiku-5-5': { in: 0.10, out: 0.50, maxPromptTokens: 100_000 },
 };
+export const COST_SOURCE = 'chars/4 estimate, thinking tokens excluded';
+
+// meta.model without the `+effort=<level>` tag an eval effort override adds (scripts/run_evals.mjs).
+export const baseModel = (model) => String(model ?? '').replace(/\+effort=[a-z]+$/, '');
 
 export function runCost({ meta, summary }) {
-  const model = String(meta?.model ?? '');
+  const model = baseModel(meta?.model);
   const price = PRICES_USD_PER_MTOK[model];
   const tokens = summary?.tokens_est;
   if (!tokens || model.startsWith('groq:')) return null;
-  if (!price) return { usd: null, per_call_usd: null, unpriced: model, source: 'chars/4 estimate' };
-  const usd = (tokens.in * price.in + tokens.out * price.out) / 1e6;
   const calls = summary.llm_calls ?? 0;
-  return { usd: Number(usd.toFixed(4)), per_call_usd: calls ? Number((usd / calls).toFixed(4)) : null, source: 'chars/4 estimate' };
+  if (!price) return { usd: null, per_call_usd: null, unpriced: model, source: COST_SOURCE };
+  if (price.maxPromptTokens && calls && tokens.in / calls > price.maxPromptTokens) {
+    return { usd: null, per_call_usd: null, unpriced: model, over_prompt_limit: price.maxPromptTokens, source: COST_SOURCE };
+  }
+  const usd = (tokens.in * price.in + tokens.out * price.out) / 1e6;
+  return { usd: Number(usd.toFixed(4)), per_call_usd: calls ? Number((usd / calls).toFixed(4)) : null, source: COST_SOURCE };
 }
 
 // Review coverage (ADR-0038), over the runs that produced an output: share whose diff was cut to the input
@@ -100,10 +111,10 @@ export function reviewCoverage(results) {
   };
 }
 
-// Calls answered by another provider:model than meta.model (`replay:` prefix ignored). A call without a
+// Calls answered by another provider:model than meta.model (`replay:` prefix and `+effort=` tag ignored). A call without a
 // recorded provider (results before ADR-0032's eval pinning) is no evidence either way.
 function foreignModels(results) {
-  const pinned = String(results.meta?.model ?? '').replace(/^replay:/, '');
+  const pinned = baseModel(String(results.meta?.model ?? '').replace(/^replay:/, ''));
   const answered = (results.results ?? []).flatMap((r) => r?.calls ?? []).filter((c) => c?.provider);
   return [...new Set(answered.map((c) => `${c.provider}:${c.model}`))].filter((m) => m !== pinned);
 }
@@ -173,6 +184,7 @@ export function formatDelta(current, previous) {
 
 export const formatCost = (c) => {
   if (!c) return '—';
+  if (c.over_prompt_limit) return `unpriced (\`${c.unpriced}\` list price holds up to ${c.over_prompt_limit} prompt tokens per call)`;
   if (c.unpriced) return `unpriced (\`${c.unpriced}\` not in PRICES_USD_PER_MTOK)`;
   return c.per_call_usd == null ? `$${c.usd}` : `$${c.usd} ($${c.per_call_usd} per call)`;
 };
