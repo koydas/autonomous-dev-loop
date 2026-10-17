@@ -103,6 +103,9 @@ git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[
 |---------|----------------|
 | `changelog-check` fails on a PR | PR modifies an entrypoint (`scripts/*.mjs`) or ADR (`docs/adr/NNNN-*.md`) without adding a line under `## [Unreleased]` in `CHANGELOG.md` — add the entry and push |
 | `changelog-check` fails with "Failed to get changed files" | Checkout step is missing `fetch-depth: 0`; ensure `changelog-check.yml` has `fetch-depth: 0` on the `actions/checkout` step |
+| Pipeline views (`pipeline/` on the dashboard) do not show the latest run | The run exited before its tracer (no record, ADR-0040), or `pipeline-site.yml` is still queued behind a deploy (`pages-site-<repo>` group). Check that the record is on the `metrics` branch, then **Actions → Pipeline site → Run workflow** |
+| `pipeline-site` or the `evals` publish job fails on "No metrics/ directory" or the `metrics` checkout | The `metrics` branch is missing (fresh fork or setup): "Commit metrics" never creates it (`branch metrics not found`). Create it once (`git push origin HEAD:refs/heads/metrics`); until then neither the eval publish nor `pipeline-site` deploys |
+| A run page says "Schema 1 record … flat" | Record written before ADR-0041: no span tree; its events are complete |
 | `validate-issue` never starts after issue open/edit | Missing `issues: write` permission on `GITHUB_TOKEN`; workflow file syntax error; branch protection blocking Actions |
 | Issue stays unlabelled after validation run | LLM API key missing or invalid; `manage_labels.mjs` failed to create labels (check for 403/404 in logs) |
 | `ready-for-dev` applied but `code-generation` never triggers | Workflow trigger mismatch (label name drift vs `config/labels.yaml`); `AI_PR_TOKEN` / `GITHUB_TOKEN` lacks `contents: write` |
@@ -167,6 +170,9 @@ Key steps to expand per workflow:
 ### `evals` (`evals.yml`)
 - **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly runs, one suite each, repeats 3: `validation` Mondays, `review` Wednesdays, 06:23 UTC (one suite × 3 fills most of the Groq TPD); a manual run's failed suite does not cancel the next
 - **publish → Build eval dashboard** — history read back from the site, the runs added (`<run_id>-<suite>`), runs skipped on `error_rate` as warnings; `eval-site-<run_id>` backup, then one Pages deploy. A 404 on `scorecard.json` fails a weekly run: it never sets `init_site`; re-run manually with `init_site` (first deploy) or `restore_run_id`
+
+### `pipeline-site` (`pipeline-site.yml`)
+- **publish → Build the dashboard** — after each pipeline workflow completes (`workflow_run`), a push to `metrics` or a dispatch: `Pipeline views: <n> record(s), <n> trace index(es), <n> page(s), <MB>` and the total site size (also in the step summary); a malformed record or index is a `Warning:` line and on the activity page, never a failure. A 404 on `scorecard.json` fails the job like an eval publish: dispatch with `init_site` only for a site that never had evals.
 
 ### `eval-replay` (`eval-replay.yml`)
 - **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 when a threshold the published numbers meet breaks (PR thresholds on both sides), or when the PR's code cannot run the replay (malformed dataset, suite crash); an unreachable dashboard, an unpublished suite or a changed dataset only warns

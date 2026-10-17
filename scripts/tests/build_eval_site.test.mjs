@@ -408,3 +408,178 @@ test('buildRunReport fails fast on a results file without meta.suite, before any
   await assert.rejects(buildRunReport({ resultFiles: [file], siteUrl: 'https://x.io', fetchImpl: impl }), /missing meta\.suite/);
   assert.deepEqual(calls, []);
 });
+
+// ---------------------------------------------------------------------------
+// Pipeline views (ADR-0027 amendment, 2026-10-17): one build, both halves
+// ---------------------------------------------------------------------------
+
+const { readPipelineDir, assemblePipeline } = await import('../build_eval_site.mjs');
+const { makeRecord, indexesOf } = await import('./fixtures/pipeline/records.mjs');
+const { recordPath } = await import('../lib/run_record.mjs');
+
+// A metrics-branch checkout on disk: records, their trace indexes, runs.jsonl.
+async function metricsCheckout(records, { jsonl = '{"type":"pr","run_id":"1-1"}\n' } = {}) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'metrics-'));
+  for (const r of records) {
+    const file = path.join(dir, recordPath(r));
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(r));
+  }
+  await fs.mkdir(path.join(dir, 'metrics', 'traces'), { recursive: true });
+  for (const { path: p, text } of indexesOf(records)) await fs.writeFile(path.join(dir, p), text);
+  await fs.writeFile(path.join(dir, 'metrics', 'runs.jsonl'), jsonl);
+  return dir;
+}
+
+const PIPE_T0 = Date.parse('2026-10-14T10:00:00Z');
+const pipelineRecords = () => [
+  makeRecord({ runId: '700', start: PIPE_T0, events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 7 } }] }),
+  makeRecord({ runId: '701', start: PIPE_T0 + 60000, workflow: 'Auto-Fix PR', stage: 'autofix', events: [{ event: 'autofix.push', meta: { prNumber: 7 } }] }),
+];
+const evalFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => !p.startsWith('pipeline/')));
+const pipelineFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => p.startsWith('pipeline/')));
+// The live site as a fetch stub: what fetchPreviousSite reads back.
+const siteFetch = (files) => async (url) => {
+  const rel = new URL(url).pathname.replace(/^\/site\//, '');
+  return files[decodeURIComponent(rel)] != null ? json(200, JSON.parse(files[decodeURIComponent(rel)])) : json(404, null);
+};
+const quiet = () => {};
+const GEN = '2026-10-17T00:00:00.000Z';
+
+test('readPipelineDir reads records by month, trace indexes and runs.jsonl; never follows a symlink', async () => {
+  const dir = await metricsCheckout(pipelineRecords());
+  await fs.mkdir(path.join(dir, 'metrics', 'runs', 'junk'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'metrics', 'runs', 'junk', '9-1.json'), '{}');
+  await fs.writeFile(path.join(dir, 'metrics', 'runs', '2026-10', 'notes.txt'), 'x');
+  await fs.symlink('/etc/hostname', path.join(dir, 'metrics', 'traces', 'link.json'));
+  const logs = [];
+  const data = await readPipelineDir(dir, { log: (m) => logs.push(m) });
+  assert.deepEqual(data.records.map((r) => r.path), ['metrics/runs/2026-10/700-1.json', 'metrics/runs/2026-10/701-1.json']);
+  assert.equal(data.traces.length, 1);
+  assert.match(data.runsJsonl, /"type":"pr"/);
+  assert.ok(logs.some((m) => /link\.json is not a regular file; skipped/.test(m)));
+});
+
+test('readPipelineDir: a checkout without metrics/ aborts; an empty metrics/ is an empty pipeline', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'metrics-'));
+  await assert.rejects(readPipelineDir(dir), /No metrics\/ directory in .*--pipeline-dir/);
+  await fs.writeFile(path.join(dir, 'metrics'), 'file');
+  await assert.rejects(readPipelineDir(dir), /is not a directory/);
+  const empty = await fs.mkdtemp(path.join(os.tmpdir(), 'metrics-'));
+  await fs.mkdir(path.join(empty, 'metrics'));
+  assert.deepEqual(await readPipelineDir(empty), { records: [], traces: [], runsJsonl: '' });
+});
+
+test('assemblePipeline renders the pipeline pages from the inputs and the deployed scorecard', () => {
+  const records = pipelineRecords();
+  const { files, model } = assemblePipeline({ pipeline: { records: records.map((r) => ({ path: recordPath(r), text: JSON.stringify(r) })), traces: indexesOf(records), runsJsonl: '' }, scorecard: emptyScorecard(), generatedAt: GEN });
+  assert.equal(model.runs.length, 2);
+  for (const p of ['pipeline/index.html', 'pipeline/health.html', 'pipeline/models.html', 'pipeline/traces/index.html', 'pipeline/feed/2026-10.html', 'pipeline/runs/700-1.html', 'pipeline/runs/701-1.html', `pipeline/traces/${model.traces[0].trace_id}.html`]) {
+    assert.ok(files[p], `missing ${p}`);
+  }
+});
+
+test('an eval-only build (new eval results, same metrics branch) preserves the pipeline half', async () => {
+  const pipelineDir = await metricsCheckout(pipelineRecords());
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-site-'));
+  const r1 = path.join(tmp, 'r1.json');
+  const r2 = path.join(tmp, 'r2.json');
+  await fs.writeFile(r1, JSON.stringify(results({ runId: 'e1' })));
+  await fs.writeFile(r2, JSON.stringify(results({ runId: 'e2', ts: '2026-10-05T10:00:00.000Z' })));
+  const first = await buildEvalSite({ outDir: path.join(tmp, 'a'), resultFiles: [r1], pipelineDir, log: quiet, generatedAt: GEN });
+  const second = await buildEvalSite({ outDir: path.join(tmp, 'b'), previousDir: path.join(tmp, 'a'), resultFiles: [r2], pipelineDir, log: quiet, generatedAt: GEN });
+  assert.deepEqual(second.scorecard.suites.validation.runs.map((r) => r.run_id), ['e2', 'e1'], 'the eval half took the new run');
+  const before = pipelineFiles(first.files);
+  const after = pipelineFiles(second.files);
+  assert.deepEqual(Object.keys(after).sort(), Object.keys(before).sort());
+  for (const [p, html] of Object.entries(before)) {
+    // Health and models also show the eval runs (tokens, cross-links): the rest is byte-identical.
+    if (p === 'pipeline/health.html' || p === 'pipeline/models.html') continue;
+    assert.equal(after[p], html, `${p} changed in an eval-only build`);
+  }
+  assert.match(after['pipeline/models.html'], /runs\/700-1\.html/);
+  assert.match(after['pipeline/models.html'], /\.\.\/runs\/e2\.html/);
+  assert.match(second.files['index.html'], /<a href="pipeline\/index\.html">Pipeline<\/a>/);
+  assert.equal(await fs.readFile(path.join(tmp, 'b', 'pipeline', 'runs', '701-1.html'), 'utf8'), before['pipeline/runs/701-1.html']);
+});
+
+test('a pipeline-only build (no eval result, history read back from the live site) preserves the eval half', async () => {
+  const records = pipelineRecords();
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-site-'));
+  const r1 = path.join(tmp, 'r1.json');
+  await fs.writeFile(r1, JSON.stringify(results({ runId: 'e1' })));
+  const first = await buildEvalSite({ outDir: path.join(tmp, 'a'), resultFiles: [r1], pipelineDir: await metricsCheckout(records), log: quiet, generatedAt: GEN });
+  // The metrics branch gains a run; the eval publish has nothing new.
+  const more = [...records, makeRecord({ runId: '702', start: PIPE_T0 + 120000, events: [{ event: 'review.verdict', meta: { verdict: 'WITHHELD', prNumber: 7 } }] })];
+  const logs = [];
+  const second = await buildEvalSite({ outDir: path.join(tmp, 'b'), siteUrl: 'https://x.io/site', fetchImpl: siteFetch(first.files), resultFiles: [], pipelineDir: await metricsCheckout(more), log: (m) => logs.push(m), generatedAt: GEN });
+  assert.deepEqual(evalFiles(second.files), evalFiles(first.files), 'every eval file is redeployed unchanged');
+  assert.ok(second.files['pipeline/runs/702-1.html'], 'the pipeline half took the new run');
+  assert.ok(logs.some((m) => /^Pipeline views: 3 record\(s\), 1 trace index\(es\), \d+ page\(s\), [\d.]+ MB$/.test(m)));
+  assert.ok(logs.some((m) => /^Eval dashboard written to .* \(\d+ files, [\d.]+ MB\)$/.test(m)));
+});
+
+test('a build without --pipeline-dir has no pipeline pages and no pipeline link (local preview)', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-site-'));
+  const r1 = path.join(tmp, 'r1.json');
+  await fs.writeFile(r1, JSON.stringify(results({ runId: 'e1' })));
+  const logs = [];
+  const { files } = await buildEvalSite({ outDir: path.join(tmp, 'a'), resultFiles: [r1], log: (m) => logs.push(m) });
+  assert.deepEqual(Object.keys(pipelineFiles(files)), []);
+  assert.doesNotMatch(files['index.html'], /pipeline\//);
+  assert.ok(logs.includes('No --pipeline-dir: eval pages only (the pipeline views are not built)'));
+});
+
+test('CLI: --pipeline-dir builds both halves into --out', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-site-'));
+  const r1 = path.join(tmp, 'r1.json');
+  await fs.writeFile(r1, JSON.stringify(results({ runId: 'e1' })));
+  const pipelineDir = await metricsCheckout(pipelineRecords());
+  const { stdout } = await promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(tmp, 'out'), '--pipeline-dir', pipelineDir, r1], { env: { ...process.env, GITHUB_ACTIONS: '' } });
+  assert.match(stdout, /Pipeline views: 2 record\(s\)/);
+  await fs.access(path.join(tmp, 'out', 'pipeline', 'runs', '700-1.html'));
+  await fs.access(path.join(tmp, 'out', 'index.html'));
+  await assert.rejects(promisify(execFile)(process.execPath, [SCRIPT, '--out', path.join(tmp, 'out2'), '--pipeline-dir', tmp, r1]), (err) => err.code === 1 && /No metrics\/ directory/.test(err.stderr));
+});
+
+// Every relative href of the built site resolves to a file of the same build (review of #221: the trace
+// index linked traces/traces/<id>.html).
+function brokenLinks(files) {
+  const missing = [];
+  for (const [file, content] of Object.entries(files)) {
+    if (!file.endsWith('.html')) continue;
+    for (const [, href] of content.matchAll(/href="([^"]+)"/g)) {
+      if (/^[a-z]+:/i.test(href) || href.startsWith('#')) continue;
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), href.split('#')[0]));
+      if (!(target in files)) missing.push(`${target} <- ${file}`);
+    }
+  }
+  return missing;
+}
+
+test('every relative link of a full build (eval + pipeline halves) resolves inside the build', async () => {
+  const records = [...pipelineRecords(), makeRecord({ runId: '703', start: PIPE_T0, prNumber: null, issueNumber: 12, events: [{ event: 'issue_validation.pass', meta: { issueNumber: 12 } }] })];
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-site-'));
+  const r1 = path.join(tmp, 'r1.json');
+  await fs.writeFile(r1, JSON.stringify({ ...results({ runId: 'e1' }), results: [] }));
+  const { files } = await buildEvalSite({ outDir: path.join(tmp, 'a'), resultFiles: [r1], pipelineDir: await metricsCheckout(records), log: quiet, generatedAt: GEN });
+  assert.ok(files['pipeline/traces/index.html'].includes('.html">'), 'the trace index has links to check');
+  assert.deepEqual(brokenLinks(files), []);
+  // The checker itself catches a broken link.
+  assert.deepEqual(brokenLinks({ 'a/b.html': '<a href="traces/x.html">' }), ['a/traces/x.html <- a/b.html']);
+});
+
+test('readPipelineDir never follows a symlinked month or traces directory', async () => {
+  const dir = await metricsCheckout(pipelineRecords());
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'outside-'));
+  await fs.writeFile(path.join(outside, '9-1.json'), '{}');
+  await fs.symlink(outside, path.join(dir, 'metrics', 'runs', '2026-09'));
+  await fs.rm(path.join(dir, 'metrics', 'traces'), { recursive: true });
+  await fs.symlink(outside, path.join(dir, 'metrics', 'traces'));
+  const logs = [];
+  const data = await readPipelineDir(dir, { log: (m) => logs.push(m) });
+  assert.deepEqual(data.records.map((r) => r.path), ['metrics/runs/2026-10/700-1.json', 'metrics/runs/2026-10/701-1.json']);
+  assert.deepEqual(data.traces, []);
+  assert.ok(logs.some((m) => /2026-09 is not a directory; skipped/.test(m)));
+  assert.ok(logs.some((m) => /traces is not a directory; skipped/.test(m)));
+});

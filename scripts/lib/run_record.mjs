@@ -47,7 +47,7 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'review.start': [...ID, 'model'],
   'review.llm_request': [...ID, 'model', 'input_tokens_est'],
   'review.llm_response': [...ID, 'output_tokens_est'],
-  'review.verdict': [...ID, 'verdict', 'evidence_state', 'evidence_override', 'unreviewed_code_files'],
+  'review.verdict': [...ID, 'verdict', 'evidence_state', 'evidence_override', 'unreviewed_code_files', 'withheld_from'],
   'review.skipped': [...ID, 'reason', 'headSha'],
   'review.error': ERR,
   'review.stale_refs_error': ERR,

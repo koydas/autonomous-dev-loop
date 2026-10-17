@@ -169,6 +169,17 @@ jobs:
       actions: read
       pages: write
       id-token: write
+    # INTENTIONALLY SHARED with pipeline-site.yml's publish job — do not rename either side.
+    # Pages hosts one site per repository and each deploy replaces it whole. Both jobs read the live
+    # site, rebuild it and redeploy it: run concurrently, the later deploy would drop what the earlier
+    # one added. Distinct group names would allow exactly that race, so the two deploy jobs serialize
+    # on one group (ADR-0027 amendment, 2026-10-17). Only these two jobs join it (the eval job, which
+    # holds the LLM calls, does not), and it is never cancelled. The workflow-level groups (evals-<ref>,
+    # pipeline-site-<repo>) keep at most one job of each side in it, so GitHub's one-pending-per-group
+    # rule never cancels a pending eval publish. Pinned by workflow_gates.test.mjs.
+    concurrency:
+      group: pages-site-${{ github.repository }}
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -187,6 +198,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+
+      # The pipeline views are rebuilt from the metrics branch (run records, trace indexes), never read
+      # back from the site: every deploy carries both halves. A failed checkout fails the deploy.
+      - name: Check out the metrics branch
+        uses: actions/checkout@v4
+        with:
+          ref: metrics
+          path: .metrics
+          persist-credentials: false
+          sparse-checkout: metrics
 
       # One artifact per suite; results files (<suite>-<runId>-<suite>.json) never collide. Each artifact's
       # history.jsonl does (last one wins); the build only reads *.json.
@@ -220,6 +241,7 @@ jobs:
           RESTORE_DIR: ${{ runner.temp }}/eval-site-restore
           RESULTS_DIR: ${{ runner.temp }}/eval-results
           SITE_DIR: ${{ runner.temp }}/eval-site
+          PIPELINE_DIR: ${{ github.workspace }}/.metrics
         run: |
           set -euo pipefail
           shopt -s nullglob globstar
@@ -229,7 +251,7 @@ jobs:
             echo "built=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          args=(--out "$SITE_DIR")
+          args=(--out "$SITE_DIR" --pipeline-dir "$PIPELINE_DIR")
           if [ -n "$RESTORE_RUN_ID" ]; then
             args+=(--previous-dir "$RESTORE_DIR")
           else
