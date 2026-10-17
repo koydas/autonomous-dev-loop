@@ -345,7 +345,7 @@ obsLog({ stage: 'review', event: 'review.evidence_assessed', level: 'info', meta
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
 // ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
-const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles } = buildReviewPrompt({
+const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
   staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
 });
@@ -381,8 +381,8 @@ const llmApproved = llmVerdict === 'APPROVED';
 const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
 const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
 // ADR-0038: an approval of a diff whose code was cut to the budget is withheld; a human reviews the rest.
-// So is a REQUEST_CHANGES whose findings all cite only cut code files (#219).
-const { verdict, reason: verdictReason } = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview);
+// So is a REQUEST_CHANGES whose findings all cite only cut code files (#219), unless a check failed.
+const { verdict, reason: verdictReason } = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview, { checksFailed: evidence.failing.length > 0, shownFiles });
 const withheldForUnreviewedCode = evidenceDecision.verdict === 'APPROVE' && verdict === 'WITHHELD';
 const withheldForUnseenFindings = evidenceDecision.verdict === 'REQUEST_CHANGES' && verdict === 'WITHHELD';
 const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES';

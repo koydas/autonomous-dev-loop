@@ -1446,6 +1446,26 @@ test('pr_review (Groq) withholds a REQUEST_CHANGES whose findings cite only code
   }
 });
 
+test('pr_review (Groq) keeps a REQUEST_CHANGES on a cut diff when a check failed, even if the finding cites only cut code (#220)', async () => {
+  const server = await startMockServer(makeHandler({ diffText: bigDiff(60000), groqContent: unseenFinding('src/big.js') }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile([EVIDENCE_FAIL]);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {
+      AI_PROVIDER: 'groq', GROQ_API_KEY: 'groq-key', GROQ_API_URL: `http://127.0.0.1:${server.address().port}/openai/v1/chat/completions`, GROQ_MAX_RETRIES: '0',
+      REVIEW_EVIDENCE_PATH: evidenceFile,
+    });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.match(result.stderr, /"verdict":"REQUEST_CHANGES"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
+  }
+});
+
 test('pr_review (Groq) keeps a REQUEST_CHANGES on a cut diff when a finding cites a file that was shown (#219)', async () => {
   const shown = 'diff --git a/src/small.js b/src/small.js\n--- a/src/small.js\n+++ b/src/small.js\n@@ -1 +1 @@\n-a\n+b\n';
   const server = await startMockServer(makeHandler({ diffText: shown + bigDiff(60000), groqContent: unseenFinding('src/small.js') }));

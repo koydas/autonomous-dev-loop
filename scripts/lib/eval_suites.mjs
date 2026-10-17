@@ -175,7 +175,7 @@ export const reviewSuite = {
       input.evidence === undefined ? { ok: false, reason: `no evidence file at ${path.join('evidence', 'review-evidence.json')}` } : parseEvidence(JSON.stringify(input.evidence)),
       { prHeadSha: input.head_sha ?? null, touchedPaths: findTouchedEvidencePaths(input.diff) },
     );
-    const { userPrompt, diffTruncated, bodyTruncated, unreviewedCodeFiles } = buildReviewPrompt({
+    const { userPrompt, diffTruncated, bodyTruncated, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
       systemPrompt: system,
       userPromptTemplate: user,
       rawDiff: input.diff,
@@ -196,6 +196,7 @@ export const reviewSuite = {
       decideVerdict(llmVerdict === 'APPROVED', evidence, { evidenceRequired: input.evidence !== undefined }),
       unreviewedCodeFiles,
       cleanReview,
+      { checksFailed: evidence.failing.length > 0, shownFiles },
     );
     return { verdict, llm_verdict: llmVerdict, reason, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview };
   },

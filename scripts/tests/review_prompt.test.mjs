@@ -312,3 +312,33 @@ test('formatUnseenFindingsNote names the cut files and says auto-fix is not trig
   assert.match(note, /`\.github\/workflows\/test\.yml`, `scripts\/lib\/span_export\.mjs`/);
   assert.match(note, /Auto-fix is not triggered/);
 });
+
+// #220 review: failing checks, ambiguous bare file names, a finding bullet that does not start with its severity.
+
+test('withholdOnUnreviewedCode never withholds a model REQUEST_CHANGES when a check failed', () => {
+  const failFinding = review('- **High** `npm test` FAIL: TypeError in scripts/lib/span_export.mjs:12');
+  assert.equal(withholdOnUnreviewedCode(RC, CUT, failFinding, { checksFailed: true }), RC);
+  assert.equal(withholdOnUnreviewedCode(RC, CUT, failFinding).verdict, 'WITHHELD', 'without failing checks the same review is withheld');
+});
+
+test('withholdOnUnreviewedCode keeps a REQUEST_CHANGES whose bare file name also names a shown file', () => {
+  const bare = review('- **High** off-by-one in `utils.mjs:4`');
+  assert.equal(withholdOnUnreviewedCode(RC, ['scripts/lib/utils.mjs'], bare, { shownFiles: ['scripts/utils.mjs'] }), RC);
+  assert.equal(withholdOnUnreviewedCode(RC, ['scripts/lib/utils.mjs'], bare, { shownFiles: ['scripts/other.mjs'] }).verdict, 'WITHHELD');
+  const full = review('- **High** off-by-one in `scripts/lib/utils.mjs:4`');
+  assert.equal(withholdOnUnreviewedCode(RC, ['scripts/lib/utils.mjs'], full, { shownFiles: ['scripts/utils.mjs'] }).verdict, 'WITHHELD', 'a full path is not ambiguous');
+});
+
+test('findingCitedFiles counts every top-level bullet as a finding, whatever comes first', () => {
+  const pathFirst = review('- `scripts/lib/visible.mjs:12` — **High** off-by-one', STRAY);
+  assert.deepEqual(findingCitedFiles(pathFirst), [['scripts/lib/visible.mjs'], ['.github/workflows/test.yml']]);
+  assert.equal(withholdOnUnreviewedCode(RC, CUT, pathFirst), RC, 'the shown-file finding is not dropped');
+  assert.deepEqual(findingCitedFiles(review(STRAY, '  - sub-point on `scripts/lib/span_export.mjs`')), [['.github/workflows/test.yml', 'scripts/lib/span_export.mjs']], 'a sub-bullet continues its finding');
+});
+
+test('buildReviewPrompt returns the files not cut as shownFiles', () => {
+  const raw = fileDiff('scripts/a.mjs', '+a') + fileDiff('scripts/b.mjs', '+'.padEnd(40000, 'b'));
+  const { unreviewedCodeFiles, shownFiles } = build({ rawDiff: raw, maxInputTokens: 3000 });
+  assert.deepEqual([unreviewedCodeFiles, shownFiles], [['scripts/b.mjs'], ['scripts/a.mjs']]);
+  assert.deepEqual(build().shownFiles, ['src/a.js']);
+});
