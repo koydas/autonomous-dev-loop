@@ -44,6 +44,26 @@ on:
           - repo-variable
           - groq
           - anthropic
+      # Measure a stage on another Anthropic model or effort (ADR-0032 amendment) without touching
+      # config/models.yaml or vars.ANTHROPIC_MODEL. The eval step only; schedule ignores both. The run's
+      # meta.model names the model (and `+effort=<level>` for an effort override): never the suite's
+      # published model, so it stays off the dashboard history (results artifact + step summary).
+      anthropic_model:
+        description: Anthropic model for this run only (empty = config/models.yaml / vars.ANTHROPIC_MODEL). The stage must run on anthropic
+        required: false
+        default: ''
+      anthropic_effort:
+        description: Anthropic effort for this run only (models-yaml = anthropic_<stage>_effort / vars.ANTHROPIC_EFFORT)
+        type: choice
+        required: true
+        default: models-yaml
+        options:
+          - models-yaml
+          - low
+          - medium
+          - high
+          - xhigh
+          - max
       publish:
         description: Add the run to the eval dashboard on GitHub Pages (default branch only)
         type: boolean
@@ -114,6 +134,11 @@ jobs:
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
           AI_PROVIDER: ${{ github.event_name != 'schedule' && inputs.provider != 'repo-variable' && inputs.provider || vars.AI_PROVIDER }}
+          # Per-stage providers as production reads them; an explicit provider input blanks them so it applies.
+          AI_PROVIDER_VALIDATION: ${{ (github.event_name == 'schedule' || inputs.provider == 'repo-variable') && vars.AI_PROVIDER_VALIDATION || '' }}
+          AI_PROVIDER_REVIEW: ${{ (github.event_name == 'schedule' || inputs.provider == 'repo-variable') && vars.AI_PROVIDER_REVIEW || '' }}
+          EVAL_ANTHROPIC_MODEL: ${{ github.event_name != 'schedule' && inputs.anthropic_model || '' }}
+          EVAL_ANTHROPIC_EFFORT: ${{ github.event_name != 'schedule' && inputs.anthropic_effort != 'models-yaml' && inputs.anthropic_effort || '' }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           GROQ_API_URL: ${{ vars.GROQ_API_URL }}
@@ -178,8 +203,8 @@ jobs:
       RESTORE_RUN_ID: ${{ github.event_name != 'schedule' && inputs.restore_run_id || '' }}
       # A run on the repo's configured provider whose model is not the suite's published one is drift
       # (GROQ_MODEL bump, model retirement): fail rather than freeze the history behind a notice (#209).
-      # A dispatch with an explicit provider is a measurement: notice only.
-      MODEL_CHANGE_FAILS: ${{ github.event_name == 'schedule' || inputs.provider == 'repo-variable' }}
+      # A dispatch with an explicit provider, Anthropic model or effort is a measurement: notice only.
+      MODEL_CHANGE_FAILS: ${{ github.event_name == 'schedule' || (inputs.provider == 'repo-variable' && inputs.anthropic_model == '' && inputs.anthropic_effort == 'models-yaml') }}
     steps:
       - uses: actions/checkout@v4
         with:

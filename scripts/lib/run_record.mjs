@@ -74,7 +74,7 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   llm_call_failed: ['providers'],
   llm_fallback: ['from', 'to', 'error_type', ...ERR],
   llm_fallback_disabled: ['from', 'error_type', ...ERR],
-  provider_config_fallback: ['ai_provider', 'provider'],
+  provider_config_fallback: ['variable', 'ai_provider', 'provider'],
   'dependency_manifest.package_json_ignored': ['path', 'reason'],
   'retry.wait': ['attempt', 'wait_ms', 'status', ...ERR],
   'workflow.pr_operation': [...ID, 'operation', 'url'],

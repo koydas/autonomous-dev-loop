@@ -23,10 +23,15 @@ export const GROQ_API_URL_DEFAULT = 'https://api.groq.com/openai/v1/chat/complet
 const ANTHROPIC_FALLBACK_MODEL = 'claude-opus-5-5';
 const ANTHROPIC_MAX_TOKENS_DEFAULT = 16000;
 const ANTHROPIC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// `off` sends no effort, which is not "thinking off": these models cannot disable thinking (`disabled` is a 400) and,
+// without an effort, run at their own default (Opus 5.5 medium, Sonnet 5.5 high). Rejected rather than silently run so.
+const THINKING_ALWAYS_ON_MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5']);
+
+const STAGES = ['validation', 'generation', 'review', 'autofix'];
 
 // anthropic_<stage> in config/models.yaml; ANTHROPIC_MODEL overrides every stage at runtime.
 export const ANTHROPIC_MODEL_DEFAULTS = Object.fromEntries(
-  ['validation', 'generation', 'review', 'autofix'].map(stage => [stage, GROQ_MODEL_DEFAULTS[`anthropic_${stage}`] ?? ANTHROPIC_FALLBACK_MODEL]),
+  STAGES.map(stage => [stage, GROQ_MODEL_DEFAULTS[`anthropic_${stage}`] ?? ANTHROPIC_FALLBACK_MODEL]),
 );
 
 export function requireEnv(name) {
@@ -51,38 +56,49 @@ function warnConfigOnce(message, meta) {
   log({ stage: 'config', event: 'provider_config_fallback', level: 'warn', meta: { message, ...meta } });
 }
 
-// Primary provider (ADR-0032). A bad AI_PROVIDER never fails the job: an unknown value falls back to the
-// key-based default, and a provider whose key is missing yields to the one that has a key. Both are logged.
-export function detectProvider() {
+// AI_PROVIDER (or AI_PROVIDER_<STAGE>) resolved to a provider. A bad value never fails the job: an unknown
+// value yields to `otherwise`, and a provider whose key is missing yields to the one that has a key. Both are logged.
+function resolveProvider(name, raw, otherwise) {
   const otherThan = (p) => PROVIDERS.find(x => x !== p);
-  const keyBased = hasKey('anthropic') && !hasKey('groq') ? 'anthropic' : DEFAULT_PROVIDER;
-  const raw = process.env.AI_PROVIDER?.trim();
-  if (!raw) return keyBased;
-
   const explicit = raw.toLowerCase();
   if (!PROVIDERS.includes(explicit)) {
-    warnConfigOnce(`AI_PROVIDER "${raw}" is not ${PROVIDERS.join(' or ')}: using ${keyBased}`, { ai_provider: raw, provider: keyBased });
-    return keyBased;
+    const provider = otherwise();
+    warnConfigOnce(`${name} "${raw}" is not ${PROVIDERS.join(' or ')}: using ${provider}`, { variable: name, ai_provider: raw, provider });
+    return provider;
   }
   if (!hasKey(explicit) && hasKey(otherThan(explicit))) {
     const other = otherThan(explicit);
-    warnConfigOnce(`AI_PROVIDER=${explicit} but ${PROVIDER_KEY_ENV[explicit]} is not set: using ${other}`, { ai_provider: raw, provider: other });
+    warnConfigOnce(`${name}=${explicit} but ${PROVIDER_KEY_ENV[explicit]} is not set: using ${other}`, { variable: name, ai_provider: raw, provider: other });
     return other;
   }
   return explicit;
 }
 
-// The provider that is not the primary one, when its API key is set; null otherwise (no fallback).
-export function detectFallbackProvider() {
-  const fallback = PROVIDERS.find(p => p !== detectProvider());
+function repoWideProvider() {
+  const keyBased = hasKey('anthropic') && !hasKey('groq') ? 'anthropic' : DEFAULT_PROVIDER;
+  const raw = process.env.AI_PROVIDER?.trim();
+  return raw ? resolveProvider('AI_PROVIDER', raw, () => keyBased) : keyBased;
+}
+
+// Primary provider (ADR-0032). With a stage, AI_PROVIDER_<STAGE> (VALIDATION, GENERATION, REVIEW, AUTOFIX)
+// overrides AI_PROVIDER for that stage only; an unknown per-stage value yields to the repo-wide provider.
+export function detectProvider(stage) {
+  const name = STAGES.includes(stage) ? `AI_PROVIDER_${stage.toUpperCase()}` : null;
+  const raw = name && process.env[name]?.trim();
+  return raw ? resolveProvider(name, raw, repoWideProvider) : repoWideProvider();
+}
+
+// The provider that is not the stage's primary one, when its API key is set; null otherwise (no fallback).
+export function detectFallbackProvider(stage) {
+  const fallback = PROVIDERS.find(p => p !== detectProvider(stage));
   return process.env[PROVIDER_KEY_ENV[fallback]]?.trim() ? fallback : null;
 }
 
 export function loadLLMConfig(stage = 'generation') {
-  return loadProviderConfig(detectProvider(), stage);
+  return loadProviderConfig(detectProvider(stage), stage);
 }
 
-// Config for one provider, independent of AI_PROVIDER: the fallback call needs its own key, model and budgets.
+// Config for one provider, independent of AI_PROVIDER(_<STAGE>): the fallback call needs its own key, model and budgets.
 export function loadProviderConfig(provider, stage = 'generation') {
   if (!PROVIDERS.includes(provider)) {
     throw new Error(`Unknown provider "${provider}" (must be ${PROVIDERS.join(' or ')})`);
@@ -100,9 +116,14 @@ export function loadProviderConfig(provider, stage = 'generation') {
       throw new Error(`Invalid anthropic max_tokens for stage "${stage}": ${rawMaxTokens} (must be a positive integer)`);
     }
 
-    // Sent as output_config.effort. ANTHROPIC_EFFORT overrides every stage; `off` sends none (model default).
-    let effort = process.env.ANTHROPIC_EFFORT?.trim().toLowerCase()
-      || (GROQ_MODEL_DEFAULTS[`anthropic_${stage}_effort`] ?? GROQ_MODEL_DEFAULTS.anthropic_effort);
+    // Sent as output_config.effort. ANTHROPIC_EFFORT overrides every stage; `off` sends none (model default),
+    // for models that reject effort (Sonnet 4.5, Haiku 4.5) only.
+    const envEffort = process.env.ANTHROPIC_EFFORT?.trim().toLowerCase();
+    let effort = envEffort || (GROQ_MODEL_DEFAULTS[`anthropic_${stage}_effort`] ?? GROQ_MODEL_DEFAULTS.anthropic_effort);
+    if (effort === 'off' && THINKING_ALWAYS_ON_MODELS.has(model)) {
+      const source = envEffort ? 'ANTHROPIC_EFFORT' : `config/models.yaml anthropic_${stage}_effort`;
+      throw new Error(`Invalid anthropic effort for stage "${stage}": ${source}=off is not supported by ${model} (thinking cannot be disabled; without an effort it runs at its default). Use low, medium, high, xhigh or max`);
+    }
     if (effort === 'off') effort = undefined;
     if (effort !== undefined && !ANTHROPIC_EFFORTS.includes(effort)) {
       throw new Error(`Invalid anthropic effort for stage "${stage}": ${effort} (must be ${ANTHROPIC_EFFORTS.join(', ')} or off)`);

@@ -248,6 +248,28 @@ test('callAnthropic sends no server-side fallback for other models or a custom A
   }
 });
 
+// The per-stage defaults (config/models.yaml): effort in output_config, no sampling parameter, no `thinking`
+// (adaptive when omitted), server-side refusal fallback where the model has one (Sonnet 5.5 yes, Haiku 5.5 no).
+test('callAnthropic payload for the Sonnet 5.5 and Haiku 5.5 stage defaults', async () => {
+  const sent = [];
+  globalThis.fetch = async (_url, opts) => {
+    sent.push({ body: JSON.parse(opts.body), headers: opts.headers });
+    return makeResponse({ stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: 'ok' }] });
+  };
+  assert.equal(await callAnthropic({ ...BASE_ARGS, model: 'claude-sonnet-5-5', reasoningEffort: 'medium' }), 'ok');
+  assert.equal(await callAnthropic({ ...BASE_ARGS, model: 'claude-haiku-5-5', reasoningEffort: 'low' }), 'ok');
+  const [sonnet, haiku] = sent;
+  assert.deepEqual(sonnet.body.output_config, { effort: 'medium' });
+  assert.deepEqual(haiku.body.output_config, { effort: 'low' });
+  for (const { body } of sent) {
+    assert.equal('temperature' in body, false);
+    assert.equal('thinking' in body, false);
+  }
+  assert.equal(sonnet.body.fallbacks, 'default');
+  assert.equal(sonnet.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+  assert.equal('fallbacks' in haiku.body, false);
+});
+
 test('callAnthropic does not retry a request that hit the fetch headers timeout', async () => {
   let calls = 0;
   globalThis.fetch = async () => {

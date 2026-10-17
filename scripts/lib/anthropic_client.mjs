@@ -7,7 +7,8 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // 529 = overloaded_error: transient, retried like 5xx.
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
 
-// Models accepting server-side refusal fallback (`fallbacks: "default"`), on the Claude API only.
+// Models accepting server-side refusal fallback (`fallbacks: "default"`), on the Claude API only. Haiku 5.5 has
+// none: its refusal fails the call and callLLM moves on to the other provider.
 const SERVER_FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-sonnet-5-5']);
 const SERVER_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
@@ -31,7 +32,8 @@ export async function callAnthropic({
   };
   // Opus 4.7+ / 5.x reject sampling parameters (400): sent only when a caller sets one explicitly.
   if (temperature !== undefined) payload.temperature = temperature;
-  // Anthropic effort (loadProviderConfig maps anthropic_<stage>_effort to reasoningEffort).
+  // Anthropic effort (loadProviderConfig maps anthropic_<stage>_effort to reasoningEffort). No `thinking`: omitted,
+  // Opus 5.5, Sonnet 5.5 and Haiku 5.5 run adaptive thinking; effort is the only depth control.
   if (reasoningEffort) payload.output_config = { effort: reasoningEffort };
 
   const headers = {
@@ -88,7 +90,8 @@ export async function callAnthropic({
     throw new Error(`Anthropic API response truncated (stop_reason: max_tokens, max_tokens: ${maxTokens}): raise anthropic_<stage>_max_tokens or lower the effort`);
   }
 
-  // Thinking blocks (adaptive thinking is on by default on Opus 5.x) precede the answer: take the first text block.
+  // Thinking blocks precede the answer: take the first text block. Not streamed, so a refusal rescued by the
+  // server-side fallback carries no partial text from the declined model.
   const content = Array.isArray(raw?.content) ? raw.content.find(block => block?.type === 'text')?.text : undefined;
   if (typeof content !== 'string' || content.trim() === '') {
     throw new Error(`Unexpected Anthropic API response format: expected a non-empty text content block (stop_reason: ${raw?.stop_reason ?? 'none'})`);

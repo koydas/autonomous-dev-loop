@@ -531,7 +531,7 @@ test('evals.yml publishes every suite of the run in one Pages deploy', () => {
 test('evals.yml provider input: a choice of the providers, defaulting to the repository variable', async () => {
   const { PROVIDERS } = await import('../lib/config.mjs');
   const text = evalsYml();
-  const input = text.slice(text.indexOf('      provider:'), text.indexOf('      publish:'));
+  const input = text.slice(text.indexOf('      provider:'), text.indexOf('      anthropic_model:'));
   assert.match(input, /type: choice/);
   assert.match(input, /default: repo-variable/);
   const options = [...input.slice(input.indexOf('options:')).matchAll(/^\s+- (\S+)$/gm)].map((m) => m[1]);
@@ -542,7 +542,7 @@ test('evals.yml passes the provider input as AI_PROVIDER to the eval step only, 
   const text = evalsYml();
   const expr = "AI_PROVIDER: ${{ github.event_name != 'schedule' && inputs.provider != 'repo-variable' && inputs.provider || vars.AI_PROVIDER }}";
   assert.equal([...text.matchAll(/^\s+AI_PROVIDER:/gm)].length, 1, 'one AI_PROVIDER, on the eval step');
-  assert.equal([...text.matchAll(/inputs\.provider\b/g)].length, 3, 'inputs.provider: the AI_PROVIDER expression and MODEL_CHANGE_FAILS only');
+  assert.equal([...text.matchAll(/inputs\.provider\b/g)].length, 5, 'inputs.provider: the AI_PROVIDER(_<STAGE>) expressions and MODEL_CHANGE_FAILS only');
   const step = evalsJobs().eval.split(/\n(?=      - )/).find((st) => st.includes('- name: Run eval suite'));
   assert.ok(step.includes(expr));
   assert.doesNotMatch(evalsJobs().publish, /AI_PROVIDER/);
@@ -551,10 +551,59 @@ test('evals.yml passes the provider input as AI_PROVIDER to the eval step only, 
 // Review of #208: a model change on the repo's configured provider is drift, never a silent notice (#209).
 test('evals.yml fails the publish on a model change for schedule and repo-variable runs only', () => {
   const publish = evalsJobs().publish;
-  assert.match(publish, /^      MODEL_CHANGE_FAILS: \$\{\{ github\.event_name == 'schedule' \|\| inputs\.provider == 'repo-variable' \}\}$/m);
+  assert.ok(publish.includes("      MODEL_CHANGE_FAILS: ${{ github.event_name == 'schedule' || (inputs.provider == 'repo-variable' && inputs.anthropic_model == '' && inputs.anthropic_effort == 'models-yaml') }}\n"),
+    'a dispatch with an explicit provider, Anthropic model or effort is a measurement: notice only');
   assert.equal([...evalsYml().matchAll(/^\s+MODEL_CHANGE_FAILS:/gm)].length, 1, 'no step may redefine MODEL_CHANGE_FAILS');
   assert.match(publish, /if \[ "\$MODEL_CHANGE_FAILS" = "true" \]; then args\+=\(--fail-on-model-change\); fi/);
   assert.equal([...evalsYml().matchAll(/--fail-on-model-change/g)].length, 1);
+});
+
+// ADR-0032 amendment: one manual run measures a stage on another Anthropic model or effort.
+test('evals.yml anthropic_model / anthropic_effort inputs: empty / models-yaml by default, efforts from config', async () => {
+  const text = evalsYml();
+  const model = text.slice(text.indexOf('      anthropic_model:'), text.indexOf('      anthropic_effort:'));
+  assert.match(model, /default: ''\n/);
+  assert.doesNotMatch(model, /type: choice/, 'free-form: any model id');
+  const effort = text.slice(text.indexOf('      anthropic_effort:'), text.indexOf('      publish:'));
+  assert.match(effort, /type: choice/);
+  assert.match(effort, /default: models-yaml\n/);
+  const options = [...effort.slice(effort.indexOf('options:')).matchAll(/^\s+- (\S+)$/gm)].map((m) => m[1]);
+  assert.deepEqual(options, ['models-yaml', 'low', 'medium', 'high', 'xhigh', 'max'], 'no `off`: the 5.5 stage models reject it');
+});
+
+test('evals.yml passes the Anthropic overrides to the eval step only, never on schedule', () => {
+  const text = evalsYml();
+  const step = evalsJobs().eval.split(/\n(?=      - )/).find((st) => st.includes('- name: Run eval suite'));
+  assert.ok(step.includes("          EVAL_ANTHROPIC_MODEL: ${{ github.event_name != 'schedule' && inputs.anthropic_model || '' }}\n"));
+  assert.ok(step.includes("          EVAL_ANTHROPIC_EFFORT: ${{ github.event_name != 'schedule' && inputs.anthropic_effort != 'models-yaml' && inputs.anthropic_effort || '' }}\n"));
+  assert.equal([...text.matchAll(/^\s+EVAL_ANTHROPIC_(MODEL|EFFORT):/gm)].length, 2, 'set once, on the eval step');
+  // The repository variables stay what production reads; the run input goes through EVAL_ANTHROPIC_*.
+  assert.ok(step.includes('          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}\n'));
+  assert.ok(step.includes('          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}\n'));
+  assert.equal([...text.matchAll(/inputs\.anthropic_model\b/g)].length, 2, 'the eval step and MODEL_CHANGE_FAILS only');
+  assert.equal([...text.matchAll(/inputs\.anthropic_effort\b/g)].length, 3, 'the eval step and MODEL_CHANGE_FAILS only');
+  assert.doesNotMatch(evalsJobs().publish, /EVAL_ANTHROPIC|ANTHROPIC_MODEL:/);
+});
+
+// Per-stage provider (ADR-0032 amendment): each production workflow passes its stage's AI_PROVIDER_<STAGE>.
+test('LLM workflows pass AI_PROVIDER_<STAGE> with AI_PROVIDER for the stages they run', () => {
+  const stages = {
+    'validate-issue.yml': ['VALIDATION'], 'code-generation.yml': ['GENERATION'], 'pr-review.yml': ['REVIEW'],
+    'auto-fix-pr.yml': ['AUTOFIX'], 'pr-evals.yml': ['VALIDATION', 'REVIEW'],
+  };
+  for (const [file, expected] of Object.entries(stages)) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, file), 'utf8');
+    const found = [...text.matchAll(/^\s+AI_PROVIDER_([A-Z]+): \$\{\{ vars\.AI_PROVIDER_\1 \}\}$/gm)].map((m) => m[1]);
+    assert.deepEqual(found, expected, file);
+    assert.match(text, /^\s+AI_PROVIDER: \$\{\{ vars\.AI_PROVIDER \}\}$/m, `${file}: the repo-wide provider stays the default`);
+  }
+});
+
+test('evals.yml: per-stage providers from the repository variables, blanked by an explicit provider input', () => {
+  const step = evalsJobs().eval.split(/\n(?=      - )/).find((st) => st.includes('- name: Run eval suite'));
+  for (const stage of ['VALIDATION', 'REVIEW']) {
+    assert.ok(step.includes(`          AI_PROVIDER_${stage}: \${{ (github.event_name == 'schedule' || inputs.provider == 'repo-variable') && vars.AI_PROVIDER_${stage} || '' }}\n`), stage);
+  }
 });
 
 test('evals.yml reports the run against the published baseline without API keys, never deciding the job', () => {

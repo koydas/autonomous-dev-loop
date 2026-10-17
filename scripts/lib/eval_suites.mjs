@@ -141,7 +141,7 @@ const loadReviewPrompts = () => (reviewPrompts ??= { system: loadPrompt('pr-revi
 // Same budget as loadLLMConfig('review').maxInputTokens: review_max_input_tokens, else max_input_tokens, on Groq;
 // none (12,000-char diff cap) on Anthropic. Not loadLLMConfig itself: it requires an API key, which a replay has not.
 export function reviewInputBudget(defaults = GROQ_MODEL_DEFAULTS) {
-  if (detectProvider() === 'anthropic') return null;
+  if (detectProvider('review') === 'anthropic') return null;
   const raw = defaults.review_max_input_tokens ?? defaults.max_input_tokens;
   if (raw === undefined) return null;
   const budget = parseInt(raw, 10);

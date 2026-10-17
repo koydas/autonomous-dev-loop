@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MAX_RUNS,
+  PRICES_USD_PER_MTOK,
+  baseModel,
   SCORECARD_START,
   SCORECARD_END,
   emptyScorecard,
@@ -341,7 +343,7 @@ test('partitionByPublishedModel: suites are independent, and a run without meta 
 
 test('runCost prices a known model on the chars/4 estimate, per run and per call', () => {
   const cost = runCost({ meta: { model: 'anthropic:claude-opus-5-5' }, summary: { tokens_est: { in: 1_000_000, out: 100_000 }, llm_calls: 4 } });
-  assert.deepEqual(cost, { usd: 6, per_call_usd: 1.5, source: 'chars/4 estimate' });
+  assert.deepEqual(cost, { usd: 6, per_call_usd: 1.5, source: 'chars/4 estimate, thinking tokens excluded' });
 });
 
 test('runCost is null on the Groq free tier or a summary without tokens; per call null without calls', () => {
@@ -374,10 +376,10 @@ test('toScorecardRun records cost and coverage; formatScorecard shows them, labe
   r.summary.llm_calls = 2;
   r.results = [{ output: { verdict: 'WITHHELD', diff_truncated: true, unreviewed_code_files: ['x.mjs'] } }];
   const run = toScorecardRun(r);
-  assert.deepEqual(run.cost_est, { usd: 0.008, per_call_usd: 0.004, source: 'chars/4 estimate' });
+  assert.deepEqual(run.cost_est, { usd: 0.008, per_call_usd: 0.004, source: 'chars/4 estimate, thinking tokens excluded' });
   assert.deepEqual(run.coverage, { n: 1, diff_truncated: 1, code_cut: 1, withheld: 1 });
   const md = formatScorecard(addRun(emptyScorecard(), 'review', run));
-  assert.match(md, /\| cost \(chars\/4 estimate\) \| \$0\.008 \(\$0\.004 per call\) \|/);
+  assert.match(md, /\| cost \(chars\/4 estimate, thinking tokens excluded\) \| \$0\.008 \(\$0\.004 per call\) \|/);
   assert.match(md, /\| diff cut \/ code cut \/ withheld \| 100% \/ 100% \/ 100% \(n=1\) \|/);
   const groq = formatScorecard(addRun(emptyScorecard(), 'validation', toScorecardRun(results())));
   assert.doesNotMatch(groq, /cost \(|diff cut/);
@@ -391,11 +393,36 @@ test('formatCost and formatCoverage render a dash for null', () => {
 
 test('runCost marks a model missing from the price table as unpriced, never as free', () => {
   const cost = runCost({ meta: { model: 'anthropic:claude-opus-5-5-snapshot' }, summary: { tokens_est: { in: 1, out: 1 }, llm_calls: 1 } });
-  assert.deepEqual(cost, { usd: null, per_call_usd: null, unpriced: 'anthropic:claude-opus-5-5-snapshot', source: 'chars/4 estimate' });
+  assert.deepEqual(cost, { usd: null, per_call_usd: null, unpriced: 'anthropic:claude-opus-5-5-snapshot', source: 'chars/4 estimate, thinking tokens excluded' });
   assert.equal(formatCost(cost), 'unpriced (`anthropic:claude-opus-5-5-snapshot` not in PRICES_USD_PER_MTOK)');
 });
 
+// One price table (Opus 5.5 $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50 per MTok up to a 100K prompt).
+test('runCost prices Sonnet 5.5 and Haiku 5.5 from PRICES_USD_PER_MTOK', () => {
+  const summary = { tokens_est: { in: 1_000_000, out: 100_000 }, llm_calls: 100 };
+  assert.deepEqual(runCost({ meta: { model: 'anthropic:claude-sonnet-5-5' }, summary }), { usd: 3, per_call_usd: 0.03, source: 'chars/4 estimate, thinking tokens excluded' });
+  assert.deepEqual(runCost({ meta: { model: 'anthropic:claude-haiku-5-5' }, summary }), { usd: 0.15, per_call_usd: 0.0015, source: 'chars/4 estimate, thinking tokens excluded' });
+  assert.deepEqual(Object.keys(PRICES_USD_PER_MTOK).sort(), ['anthropic:claude-haiku-5-5', 'anthropic:claude-opus-5-5', 'anthropic:claude-sonnet-5-5']);
+});
+
+test('runCost leaves Haiku 5.5 unpriced above its 100K-token prompt price tier', () => {
+  const cost = runCost({ meta: { model: 'anthropic:claude-haiku-5-5' }, summary: { tokens_est: { in: 200_001, out: 10 }, llm_calls: 2 } });
+  assert.deepEqual(cost, { usd: null, per_call_usd: null, unpriced: 'anthropic:claude-haiku-5-5', over_prompt_limit: 100000, source: 'chars/4 estimate, thinking tokens excluded' });
+  assert.equal(formatCost(cost), 'unpriced (`anthropic:claude-haiku-5-5` list price holds up to 100000 prompt tokens per call)');
+  assert.equal(runCost({ meta: { model: 'anthropic:claude-haiku-5-5' }, summary: { tokens_est: { in: 200_000, out: 0 }, llm_calls: 2 } }).usd, 0.02, 'at the limit: priced');
+});
+
+test('runCost and the mixed-model check read the model under an eval effort tag', () => {
+  assert.equal(baseModel('anthropic:claude-opus-5-5+effort=xhigh'), 'anthropic:claude-opus-5-5');
+  assert.equal(baseModel('groq:openai/gpt-oss-120b'), 'groq:openai/gpt-oss-120b');
+  assert.equal(runCost({ meta: { model: 'anthropic:claude-opus-5-5+effort=low' }, summary: { tokens_est: { in: 1_000_000, out: 0 }, llm_calls: 1 } }).usd, 4);
+  const tagged = { meta: { model: 'anthropic:claude-opus-5-5+effort=low', run_id: 'r' }, results: [{ calls: [{ provider: 'anthropic', model: 'claude-opus-5-5' }] }] };
+  assert.deepEqual(partitionPublishable([tagged]).publishable, [tagged]);
+  const other = { ...tagged, results: [{ calls: [{ provider: 'anthropic', model: 'claude-sonnet-5-5' }] }] };
+  assert.match(partitionPublishable([other]).skipped[0].reason, /calls answered by anthropic:claude-sonnet-5-5/);
+});
+
 test('formatCost omits the per-call part when there is no call', () => {
-  assert.equal(formatCost({ usd: 0, per_call_usd: null, source: 'chars/4 estimate' }), '$0');
-  assert.equal(formatCost({ usd: 2, per_call_usd: 1, source: 'chars/4 estimate' }), '$2 ($1 per call)');
+  assert.equal(formatCost({ usd: 0, per_call_usd: null, source: 'chars/4 estimate, thinking tokens excluded' }), '$0');
+  assert.equal(formatCost({ usd: 2, per_call_usd: 1, source: 'chars/4 estimate, thinking tokens excluded' }), '$2 ($1 per call)');
 });

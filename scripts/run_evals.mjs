@@ -98,14 +98,35 @@ export function createLiveLLM(suite, config) {
   };
 }
 
+// evals.yml workflow_dispatch inputs anthropic_model / anthropic_effort, for one run (never on schedule): applied as
+// ANTHROPIC_MODEL / ANTHROPIC_EFFORT so loadLLMConfig validates them as production would. Returns the overrides set.
+export function applyEvalOverrides(env = process.env) {
+  const model = env.EVAL_ANTHROPIC_MODEL?.trim() || null;
+  const effort = env.EVAL_ANTHROPIC_EFFORT?.trim().toLowerCase() || null;
+  if (model) env.ANTHROPIC_MODEL = model;
+  if (effort) env.ANTHROPIC_EFFORT = effort;
+  return { model, effort };
+}
+
+// meta.model of a live run. An effort override is part of it (`+effort=<level>`): the history is per suite and
+// meta.model (ADR-0032 amendment), so a run at another effort never lands in the baseline's history.
+export function liveModelId(config, overrides = {}) {
+  const effort = overrides.effort ? `+effort=${config.reasoningEffort ?? 'off'}` : '';
+  return `${config.provider}:${config.model}${effort}`;
+}
+
 export async function buildLLM(suite, replayFile) {
   if (replayFile) {
     const recorded = JSON.parse(await fs.readFile(replayFile, 'utf8'));
     return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, recorded };
   }
+  const overrides = applyEvalOverrides();
   const config = loadLLMConfig(suite.stage);
+  if ((overrides.model || overrides.effort) && config.provider !== 'anthropic') {
+    throw new Error(`EVAL_ANTHROPIC_MODEL / EVAL_ANTHROPIC_EFFORT set, but the ${suite.stage} stage runs on ${config.provider}: dispatch with provider anthropic`);
+  }
   const live = createLiveLLM(suite, config);
-  return { llmFor: () => live, model: `${config.provider}:${config.model}` };
+  return { llmFor: () => live, model: liveModelId(config, overrides) };
 }
 
 async function readHistory(file) {
