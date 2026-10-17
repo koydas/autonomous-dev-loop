@@ -280,6 +280,29 @@ jobs:
             --statements 80 \
             node --test scripts/tests/run_record.test.mjs
 
+      # ADR-0041: trace identity (untrusted PR text) and the OTLP span tree of the public record.
+      - name: Check trace_context coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/trace_context.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/trace_context.test.mjs
+
+      - name: Check otlp_trace coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/otlp_trace.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/otlp_trace.test.mjs
+
       # Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build).
       - name: Check build_eval_site coverage (≥80%)
         run: |

@@ -656,3 +656,92 @@ test('callLLM logs llm_call_failed with the skip reasons when no request was mad
   const { lines } = await captureStderr(() => assert.rejects(() => callLLM({ stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100, fallback: false })));
   assert.deepEqual(llmEvents(lines).map((e) => e.meta.providers), [['groq:over_input_budget', 'anthropic:disabled']]);
 });
+
+// ---------------------------------------------------------------------------
+// ADR-0041: each call is an llm_call child span; retries and the fallback are its span events
+// ---------------------------------------------------------------------------
+
+async function tracedCall(args, fn) {
+  const { createTracer } = await import('../lib/observability.mjs');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-span-'));
+  const tracer = createTracer({ runId: 'llm-span', traceDir: dir });
+  try {
+    await captureStderr(async () => {
+      tracer.startSpan('review');
+      await fn(() => callLLM(args));
+      tracer.endSpan('review');
+    });
+    const trace = JSON.parse(fs.readFileSync(path.join(dir, 'llm-span.json'), 'utf8'));
+    const stage = trace.spans.find((s) => s.stage === 'review');
+    // Calls of earlier tests (no tracer yet) are adopted by the journal like early events: keep this stage's.
+    return { trace, stage, llm: trace.child_spans.filter((s) => s.name === 'llm_call' && s.parent_span_id === stage.span_id) };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('callLLM: an llm_call span under the stage span, GenAI attributes, estimated tokens flagged, no prompt or answer', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async () => makeResponse({ choices: [{ message: { content: 'ANSWER-TEXT-SECRET '.repeat(4) } }] });
+  const { trace, stage, llm } = await tracedCall(
+    { stage: 'review', prompt: 'PROMPT-BODY-SECRET', systemPrompt: 'sys', apiKey: 'groq-key', model: 'gpt-x', apiUrl: GROQ_API_URL_DEFAULT, maxTokens: 512, maxInputTokens: 3000 },
+    (call) => call(),
+  );
+  assert.equal(llm.length, 1);
+  assert.equal(llm[0].parent_span_id, stage.span_id);
+  assert.equal(llm[0].status, 'ok');
+  assert.ok(llm[0].duration_ms >= 0 && llm[0].completed_at);
+  assert.deepEqual(llm[0].attributes, {
+    'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'gpt-x', 'adl.stage': 'review', 'gen_ai.request.max_tokens': 512, 'adl.llm.max_input_tokens': 3000,
+    'gen_ai.system': 'groq', 'gen_ai.response.model': 'gpt-x', 'gen_ai.usage.input_tokens': llm[0].attributes['gen_ai.usage.input_tokens'],
+    'gen_ai.usage.output_tokens': llm[0].attributes['gen_ai.usage.output_tokens'], 'adl.usage.estimated': true, 'adl.llm.fallback': false,
+  });
+  assert.ok(llm[0].attributes['gen_ai.usage.output_tokens'] > 0);
+  const callEvent = trace.events.filter((e) => e.event === 'llm_call').at(-1);
+  assert.equal(callEvent.span_id, llm[0].span_id, 'the llm_call event carries the span of its call');
+  const json = JSON.stringify(trace);
+  assert.ok(!json.includes('PROMPT-BODY-SECRET') && !json.includes('ANSWER-TEXT-SECRET'));
+});
+
+test('callLLM: retries and the fallback are logged inside the llm_call span; the answering provider is recorded', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async (_url, opts) => {
+    if (opts.headers['x-api-key']) throw new Error('network error');
+    return makeResponse({ choices: [{ message: { content: 'fallback-ok' } }] });
+  };
+  const { trace, llm } = await tracedCall(
+    { stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' },
+    (call) => withInstantTimers(call),
+  );
+  assert.equal(llm.length, 1);
+  const inSpan = trace.events.filter((e) => e.span_id === llm[0].span_id).map((e) => e.event);
+  assert.deepEqual([...new Set(inSpan)], ['retry.wait', 'llm_fallback', 'llm_call']);
+  assert.equal(llm[0].attributes['gen_ai.system'], 'groq');
+  assert.equal(llm[0].attributes['gen_ai.request.model'], 'claude-opus-5-5');
+  assert.equal(llm[0].attributes['gen_ai.response.model'], GROQ_MODEL_DEFAULTS.review);
+  assert.equal(llm[0].attributes['adl.llm.fallback'], true);
+  assert.equal(llm[0].attributes['adl.llm.fallback_from'], 'anthropic');
+  assert.equal(llm[0].attributes['adl.llm.providers'].length, 1);
+  assert.match(llm[0].attributes['adl.llm.providers'][0], /^anthropic:/, 'the primary that failed before the fallback answered');
+});
+
+test('callLLM: a failed call ends its span in error with error.type and the input-budget cut', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async () => { throw new Error('no request expected'); };
+  const { llm } = await tracedCall(
+    { stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key', model: 'm', apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100, fallback: false },
+    (call) => assert.rejects(call),
+  );
+  assert.equal(llm[0].status, 'error');
+  assert.equal(llm[0].attributes['gen_ai.system'], 'groq');
+  assert.deepEqual(llm[0].attributes['adl.llm.providers'], ['groq:over_input_budget', 'anthropic:disabled']);
+  assert.deepEqual(llm[0].attributes['adl.llm.input_budget_skipped'], ['groq']);
+  assert.equal(typeof llm[0].attributes['error.type'], 'string');
+});

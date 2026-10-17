@@ -185,3 +185,34 @@ test('an unparsable trace still commits the metrics lines, with a warning that l
     await s.cleanup();
   }
 });
+
+// ADR-0041: the trace index of the run's work item lands in the same commit; a second attempt joins it.
+test('the record and the trace index of its work item are committed together; a second run is appended once', async () => {
+  const { traceIdFor } = await import('../lib/trace_context.mjs');
+  const { server, state } = await startGitHub();
+  const s = await scratch({ trace: TRACE, metrics: '{"run_id":"555-1"}' });
+  const indexPath = `metrics/traces/${traceIdFor('owner/repo#issue-7')}.json`;
+  try {
+    const first = await run({ port: server.address().port, cwd: s.cwd, env: { METRICS_FILE: s.metricsFile, MY_TOKEN: PLANTED } });
+    assert.equal(first.code, 0, first.stderr);
+    assert.match(first.stdout, new RegExp(`\\[trace index ${indexPath.replace(/[.]/g, '\\.')}\\]`));
+    assert.equal(state.commits.length, 1);
+    const record = JSON.parse(state.files['metrics/runs/2026-10/555-1.json']);
+    assert.equal(record.schema_version, 2);
+    assert.equal(record.trace_id, traceIdFor('owner/repo#issue-7'));
+    assert.ok(record.otlp.resourceSpans[0].scopeSpans[0].spans.some((sp) => sp.name === 'code_gen'));
+    assert.ok(!JSON.stringify(record.otlp).includes(PLANTED) && !JSON.stringify(record.otlp).includes('private title'));
+    const index = JSON.parse(state.files[indexPath]);
+    assert.deepEqual(index.runs.map((r) => [r.run_id, r.record_path]), [['555-1', 'metrics/runs/2026-10/555-1.json']]);
+
+    await fs.writeFile(path.join(s.traceDir, '555.json'), JSON.stringify({ ...TRACE, envelope: { ...TRACE.envelope, run_attempt: 2 } }));
+    const second = await run({ port: server.address().port, cwd: s.cwd, env: { GITHUB_RUN_ATTEMPT: '2' } });
+    assert.equal(second.code, 0, second.stderr);
+    const rerun = await run({ port: server.address().port, cwd: s.cwd, env: { GITHUB_RUN_ATTEMPT: '2' } });
+    assert.match(rerun.stdout, /Nothing committed: record already stored/);
+    assert.deepEqual(JSON.parse(state.files[indexPath]).runs.map((r) => r.run_id), ['555-1', '555-2']);
+  } finally {
+    server.close();
+    await s.cleanup();
+  }
+});
