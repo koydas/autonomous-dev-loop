@@ -92,6 +92,7 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 - `scripts/tests/test_layout.test.mjs`: the placement check now requires the exact `npm test` glob (`scripts/tests/*.test.mjs`). It accepted any `*.test.*` under `scripts/tests/`, so `scripts/tests/foo.test.js` or `scripts/tests/sub/foo.test.mjs` passed the guard and never ran (review on #167).
 
 ### Added
+- Human-readable dashboard: `build_eval_site.mjs` adds pipeline outcome widgets to the overview; shared responsive navigation, evaluation cards, searchable execution and case lists, chronological flow drilldowns, and expandable metrics, journals and waterfalls preserve existing tables and JSON history. The issues view loads public open issues from GitHub, with explicit loading/error states and recorded-flow links; current issue state stays separate from historical job results. Mobile tables become labelled rows while matrices and waterfalls retain their axes. No production dependency or workflow permission changes.
 - `scripts/tests/test_layout.test.mjs`: `npm test` (and therefore the review evidence job) now fails when a tracked test file sits outside `scripts/tests/`, or when a test file there does not import `node:test` or uses the Jest API (`jest.*`, `expect()`). `npm test` only globs `scripts/tests/*.test.mjs`, so such files passed CI without running: auto-fix wrote one on koydas/autonomous-dev-loop#165 (`ecb6382`), and `test/output_writer.test.mjs` from #119 sat dead on `main`.
 
 ### Changed

@@ -31,6 +31,7 @@ import { buildSite } from './lib/eval_site.mjs';
 import { SUITES } from './lib/eval_suites.mjs';
 import { buildPipelineModel, MONTH_RE } from './lib/pipeline_model.mjs';
 import { computeHealth, modelUsage } from './lib/pipeline_health.mjs';
+import { pipelineOverview } from './lib/dashboard_ui.mjs';
 import { buildPipelineSite } from './lib/pipeline_site.mjs';
 
 function retainedRunIds(scorecard) {
@@ -193,7 +194,9 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   for (const id of Object.keys(details)) if (!retained.has(id)) delete details[id];
   const thresholds = Object.fromEntries(Object.entries(SUITES).map(([name, s]) => [name, s.thresholds ?? {}]));
   const files = buildSite({ scorecard, details, thresholds, generatedAt, pipeline: pipeline != null });
-  const pipelineFiles = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }).files : {};
+  const assembled = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }) : null;
+  const pipelineFiles = assembled?.files ?? {};
+  if (assembled) files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', pipelineOverview(assembled.model, 'pipeline/'));
   return { files: { ...files, ...pipelineFiles }, scorecard, skipped, pipelineFiles };
 }
 

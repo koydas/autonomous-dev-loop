@@ -7,6 +7,7 @@
  */
 
 import { formatScorecard, MAX_RUNS } from './eval_scorecard.mjs';
+import { DASHBOARD_STYLE, DASHBOARD_SCRIPT, dashboardHeader, evalOverview, suiteWidget } from './dashboard_ui.mjs';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -138,13 +139,16 @@ export function page(title, body, { depth = 0, pipeline = false, style = '' } = 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<style>${STYLE}${style}</style>
+<style>${STYLE}${DASHBOARD_STYLE}${style}</style>
 </head>
 <body>
-<main>
-<p class="muted"><a href="${root}index.html">Eval dashboard</a>${pipeline ? ` · <a href="${root}pipeline/index.html">Pipeline</a>` : ''} · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
+${dashboardHeader(root, pipeline)}
+<main id="main-content">
+<p class="muted legacy-nav"><a href="${root}index.html">Eval dashboard</a>${pipeline ? ` · <a href="${root}pipeline/index.html">Pipeline</a>` : ''} · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
 ${body}
+<footer class="page-footer">Dev loop monitor · Explore a summary, then open its details. All published data stays available through the original tables and JSON files.</footer>
 </main>
+${DASHBOARD_SCRIPT}
 </body>
 </html>
 `;
@@ -247,7 +251,7 @@ function suiteSection(name, runs, thresholds = {}, pipelineRoot = null) {
   const scoreNames = [...new Set(runs.flatMap((r) => Object.keys(r.scores ?? {})))];
   const history = runs.map((r) => `<tr><td>${escapeHtml(day(r.ts))}</td><td><a href="${runFile(r.run_id)}.html">${escapeHtml(r.run_id)}</a></td><td>${modelHtml(r.model, pipelineRoot)}</td><td><code>${escapeHtml((r.dataset_sha256 ?? '').slice(0, 8) || '—')}</code></td>${scoreNames.map((s) => `<td class="num">${escapeHtml(fmt(r.scores?.[s]))}</td>`).join('')}<td class="num">${escapeHtml(fmt(r.error_rate))}</td><td class="num">${escapeHtml(fmt(r.consistency))}</td><td>${r.passed ? '<span class="ok">✓</span>' : '<span class="ko">✕</span>'}</td></tr>`).join('');
 
-  return `<section>
+  return `<details class="detail-panel suite-details"><summary>${escapeHtml(labelSuite(name))} · Metrics, thresholds, trend & history</summary><section>
 <h2><code>${escapeHtml(name)}</code> ${gateHtml(run.passed, run.failures)}</h2>
 <p class="sub">Last run <strong>${escapeHtml(day(run.ts))}</strong> · <a href="${runFile(run.run_id)}.html">run ${escapeHtml(run.run_id)}</a> · model ${modelHtml(run.model, pipelineRoot)} · ${escapeHtml(run.n_cases)} cases × ${escapeHtml(run.repeats)} repeats${last && !prev ? ' · <em>dataset changed since the previous run: no Δ shown</em>' : ''}</p>
 <div class="tiles">${tiles}</div>
@@ -256,17 +260,25 @@ ${thresholdRows ? `<h3>Thresholds</h3><div class="card table-wrap"><table><thead
 <div class="card">${trendChart(`trend-${name}`, runs)}</div>
 <h3>History</h3>
 <div class="card table-wrap"><table><thead><tr><th>Date</th><th>Run</th><th>Model</th><th>Dataset</th>${scoreNames.map((s) => `<th class="num">${escapeHtml(s)}</th>`).join('')}<th class="num">error_rate</th><th class="num">consistency</th><th>Gate</th></tr></thead><tbody>${history}</tbody></table></div>
-</section>`;
+</section></details>`;
 }
+
+const labelSuite = (name) => String(name).replace(/_/g, ' ');
 
 export function renderIndex(scorecard, { thresholds = {}, generatedAt, pipeline = false } = {}) {
   const suites = Object.entries(scorecard.suites).filter(([, s]) => s.runs?.length);
   const body = suites.length
     ? suites.map(([name, s]) => suiteSection(name, s.runs, thresholds[name], pipeline ? '' : null)).join('\n')
     : '<div class="card">No live eval run recorded yet. Run <strong>Actions → Evals</strong> on the default branch with <code>publish</code> ticked.</div>';
-  return page('Eval dashboard', `<h1>Eval dashboard</h1>
+  return page('Eval dashboard', `<span class="eyebrow">Autonomous development / overview</span><h1>How is the dev loop doing?</h1>
+<p class="sub">See what worked, what needs attention, and follow an issue through its executions.</p>
+${pipeline ? '<!-- pipeline-overview -->' : ''}
+${evalOverview(suites)}
+<section id="evaluations"><div class="section-intro"><div><span class="eyebrow">Model quality</span><h2>Evaluations</h2><p>Latest result per suite. A passing gate means its required thresholds were met.</p></div></div>
+<div class="widget-grid">${suites.map(([name, s]) => suiteWidget(name, s.runs[0])).join('')}</div>
+<details class="detail-panel"><summary>About these results & retention</summary>
 <p class="sub">Offline evals of the LLM pipeline stages against labelled datasets (<a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/evals.md">docs</a>, <a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/adr/0027-offline-eval-harness.md">ADR-0027</a>). Last ${MAX_RUNS} live runs per suite; runs that failed on error_rate (provider outage) are left out.${generatedAt ? ` Updated ${escapeHtml(generatedAt)}.` : ''}${pipeline ? ' Pipeline runs, traces and health: <a href="pipeline/index.html">pipeline views</a>.' : ''}</p>
-${body}`, { pipeline });
+</details>${body}</section>`, { pipeline });
 }
 
 function confusionTable(confusion = {}) {
@@ -274,7 +286,7 @@ function confusionTable(confusion = {}) {
   if (!expected.length) return '';
   const predicted = [...new Set(expected.flatMap((e) => Object.keys(confusion[e])))];
   const rows = expected.map((e) => `<tr><th>${escapeHtml(e)}</th>${predicted.map((p) => `<td class="num">${escapeHtml(confusion[e][p] ?? 0)}</td>`).join('')}</tr>`).join('');
-  return `<h3>Confusion matrix</h3><div class="card table-wrap"><table><thead><tr><th>expected ↓ / predicted →</th>${predicted.map((p) => `<th class="num">${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<h3>Confusion matrix</h3><div class="card table-wrap"><table class="matrix"><thead><tr><th>expected ↓ / predicted →</th>${predicted.map((p) => `<th class="num">${escapeHtml(p)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 export function renderRun(detail, { pipeline = false } = {}) {
@@ -300,16 +312,20 @@ export function renderRun(detail, { pipeline = false } = {}) {
     const failing = r.error || Object.values(r.scores ?? {}).some((v) => v != null && v < 1);
     const raw = (r.calls ?? []).map((c, i) => `<p class="muted">call ${i + 1} · ${escapeHtml(fmt(c.latency_ms))} ms · ~${escapeHtml(fmt(c.tokens_in_est))} → ${escapeHtml(fmt(c.tokens_out_est))} tokens</p><pre>${escapeHtml(c.raw)}</pre>`).join('');
     const output = r.output ? `<p class="muted">parsed output</p><pre>${escapeHtml(JSON.stringify(r.output, null, 2))}</pre>` : '';
-    return `<tr><td>${failing ? '<span class="ko">✕</span>' : '<span class="ok">✓</span>'}</td><td><code>${escapeHtml(r.case_id)}</code><br><span class="muted">${escapeHtml((r.tags ?? []).join(', '))}</span></td><td class="num">${escapeHtml(r.repeat)}</td><td>${escapeHtml(fmt(r.expected_label))}</td><td>${escapeHtml(fmt(r.label))}</td>${scoreNames.map((s) => `<td class="num">${escapeHtml(fmt(r.scores?.[s]))}</td>`).join('')}<td class="num">${escapeHtml(fmt(r.duration_ms))}</td><td class="out">${escapeHtml(r.error ?? '')}${raw || output ? `<details><summary>model output</summary>${output}${raw}</details>` : ''}</td></tr>`;
+    return `<tr data-entry data-result="${failing ? 'failed' : 'success'}"><td>${failing ? '<span class="ko">✕</span>' : '<span class="ok">✓</span>'}</td><td><code>${escapeHtml(r.case_id)}</code><br><span class="muted">${escapeHtml((r.tags ?? []).join(', '))}</span></td><td class="num">${escapeHtml(r.repeat)}</td><td>${escapeHtml(fmt(r.expected_label))}</td><td>${escapeHtml(fmt(r.label))}</td>${scoreNames.map((s) => `<td class="num">${escapeHtml(fmt(r.scores?.[s]))}</td>`).join('')}<td class="num">${escapeHtml(fmt(r.duration_ms))}</td><td class="out">${escapeHtml(r.error ?? '')}${raw || output ? `<details><summary>model output</summary>${output}${raw}</details>` : ''}</td></tr>`;
   }).join('');
 
   return page(`Eval run ${meta.run_id}`, `<h1>Run <code>${escapeHtml(meta.run_id)}</code> · <code>${escapeHtml(meta.suite)}</code> ${gateHtml(failures.length === 0, failures.map((f) => f.metric))}</h1>
 <p class="sub">${escapeHtml(meta.ts)} · model ${modelHtml(meta.model, pipeline ? '../' : null)} · ${escapeHtml(fmt(meta.repeats))} repeats · dataset <code>${escapeHtml(meta.dataset)}</code> (<code>${escapeHtml((meta.dataset_sha256 ?? '').slice(0, 12))}</code>)${workflowRunId(meta) ? ` · <a href="https://github.com/koydas/autonomous-dev-loop/actions/runs/${encodeURIComponent(workflowRunId(meta))}">workflow run</a>` : ''} · <a href="${encodeURIComponent(meta.run_id)}.json">results JSON</a></p>
 ${failures.length ? `<div class="card"><strong class="ko">Threshold failures</strong><ul>${failures.map((f) => `<li><code>${escapeHtml(f.metric)}</code>: ${escapeHtml(f.reason)}</li>`).join('')}</ul></div>` : ''}
+<details class="detail-panel"><summary>All metrics & confusion matrix</summary>
 <h3>Metrics</h3><div class="card table-wrap"><table><tbody>${metrics}</tbody></table></div>
 ${confusionTable(summary.confusion)}
+</details>
 <h3>Cases</h3>
-<div class="card table-wrap"><table><thead><tr><th></th><th>Case</th><th class="num">Repeat</th><th>Expected</th><th>Got</th>${scoreNames.map((s) => `<th class="num">${escapeHtml(s)}</th>`).join('')}<th class="num">ms</th><th>Error / output</th></tr></thead><tbody>${caseRows}</tbody></table></div>`, { depth: 1, pipeline });
+<p class="sub">A case needs attention when it has an error or a measured score below 1. This is separate from the suite quality gate; cases explicitly excluded from gating remain outside that gate.</p>
+<div data-browser><div class="browse-toolbar"><label>Search cases<input type="search" data-search placeholder="Case, label, error…"></label><label>Result<select data-pick><option value="">All cases</option><option value="failed">Needs attention</option><option value="success">Full score</option></select></label><span data-count role="status"></span></div><p data-empty hidden>No matching cases.</p>
+<div class="card table-wrap"><table><thead><tr><th>Result</th><th>Case</th><th class="num">Repeat</th><th>Expected</th><th>Got</th>${scoreNames.map((s) => `<th class="num">${escapeHtml(s)}</th>`).join('')}<th class="num">ms</th><th>Error / output</th></tr></thead><tbody>${caseRows}</tbody></table></div></div>`, { depth: 1, pipeline });
 }
 
 // details: { [run_id]: full results JSON } for runs still on the scorecard; a run without
