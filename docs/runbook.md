@@ -1,5 +1,17 @@
 # Operator Runbook — Failure Triage
 
+## Reading the dashboard
+
+The overview separates **execution results** (whether a workflow job succeeded) from **evaluation gates** (whether the model met its quality thresholds). A successful execution does not imply that its PR was approved or merged. Click a success/failure widget to open the corresponding filtered executions.
+
+- **Issues & flows** shows open issues loaded from the public GitHub API, with labels and links to any recorded flow. This live list requires JavaScript and API access; rate limits or connectivity failures show an explicit message and a link to GitHub. Refresh retries the request. At most 1,000 GitHub items are fetched, with a visible notice if more remain. PRs returned by the issues API are excluded. Live titles are displayed only in the browser, never added to public run records.
+- **Recorded flows** keeps the latest known execution result for each issue or PR, independently of its current open/closed state. Open a flow for its chronological executions, then an execution for its journal and full span waterfall. Missing records remain visible and labelled.
+- **Executions** supports search and result filters. The technical action feed, month archives and every recorded event remain accessible in the expandable journal.
+- **Evaluations** presents the latest suite results as cards. Expand a suite for all metrics, thresholds, trends and history. Open a run to filter its cases and inspect parsed and raw model outputs; its results JSON remains unchanged. Case attention flags (error or score below 1) are separate from suite gates and do not change excluded-case policy.
+- **Health** groups delivery, reviews, auto-fix outcomes, providers, performance and token usage into expandable widgets. Tables and raw values remain available. On small screens ordinary tables become labelled rows; timing waterfalls and confusion matrices keep their axes and scroll within their panels.
+
+The site remains a static build using the existing `build_eval_site.mjs` command and Pages workflows. No new service or credential is required. Recorded information uses the existing retention window; the generation timestamp and retention notes are available in the overview's “About these results & retention” panel. Publishing still preserves `scorecard.json` and retained `runs/*.json` as its history store.
+
 ## Metrics System
 
 Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the `metrics` branch (not the default branch: `main` only takes changes through a pull request) by the "Commit metrics" step (`scripts/commit_run_record.mjs`, ADR-0013 amendments), in one commit with the run's redacted record `metrics/runs/<YYYY-MM>/<run_id>.json` (ADR-0040). Scripts write the run's records to `$RUNNER_TEMP/pipeline-metrics.jsonl` (`METRICS_FILE`), outside the checkout, and "Commit metrics" appends only those lines, so a `metrics/runs.jsonl` in the checked-out branch is never uploaded (ADR-0021).

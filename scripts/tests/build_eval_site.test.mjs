@@ -513,7 +513,11 @@ test('a pipeline-only build (no eval result, history read back from the live sit
   const more = [...records, makeRecord({ runId: '702', start: PIPE_T0 + 120000, events: [{ event: 'review.verdict', meta: { verdict: 'WITHHELD', prNumber: 7 } }] })];
   const logs = [];
   const second = await buildEvalSite({ outDir: path.join(tmp, 'b'), siteUrl: 'https://x.io/site', fetchImpl: siteFetch(first.files), resultFiles: [], pipelineDir: await metricsCheckout(more), log: (m) => logs.push(m), generatedAt: GEN });
-  assert.deepEqual(evalFiles(second.files), evalFiles(first.files), 'every eval file is redeployed unchanged');
+  const { 'index.html': beforeHome, ...beforeEval } = evalFiles(first.files);
+  const { 'index.html': afterHome, ...afterEval } = evalFiles(second.files);
+  assert.deepEqual(afterEval, beforeEval, 'every eval data file and detail page is redeployed unchanged');
+  assert.notEqual(afterHome, beforeHome, 'the homepage reflects the new pipeline execution');
+  assert.deepEqual(second.scorecard, first.scorecard, 'all evaluation history remains intact');
   assert.ok(second.files['pipeline/runs/702-1.html'], 'the pipeline half took the new run');
   assert.ok(logs.some((m) => /^Pipeline views: 3 record\(s\), 1 trace index\(es\), \d+ page\(s\), [\d.]+ MB$/.test(m)));
   assert.ok(logs.some((m) => /^Eval dashboard written to .* \(\d+ files, [\d.]+ MB\)$/.test(m)));
@@ -550,7 +554,7 @@ function brokenLinks(files) {
     if (!file.endsWith('.html')) continue;
     for (const [, href] of content.matchAll(/href="([^"]+)"/g)) {
       if (/^[a-z]+:/i.test(href) || href.startsWith('#')) continue;
-      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), href.split('#')[0]));
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), href.split(/[?#]/)[0]));
       if (!(target in files)) missing.push(`${target} <- ${file}`);
     }
   }

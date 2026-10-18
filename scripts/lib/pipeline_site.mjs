@@ -6,6 +6,7 @@
 import { escapeHtml, page, modelAnchor } from './eval_site.mjs';
 import { feedEntries } from './pipeline_model.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
+import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps } from './dashboard_ui.mjs';
 
 // The newest actions on pipeline/index.html; each month page holds at most MONTH_FEED_CAP (the run
 // pages keep every event).
@@ -133,9 +134,11 @@ export function renderFeedIndex(model, { generatedAt = null } = {}) {
 ${nav('', model.months)}
 <div class="tiles">${tiles}</div>
 ${warningsHtml(model)}
-<h2>Latest actions</h2>
+${pipelineOverview(model)}
+${executionBrowser(model)}
+<details class="detail-panel"><summary>All recorded actions · technical journal</summary><h2>Latest actions</h2>
 ${all.length > shown.length ? `<p class="note">The newest ${e(FEED_CAP)} of ${e(all.length)} actions; older ones are on the month pages and every run page.</p>` : ''}
-${feedTable(shown, '')}`, 1);
+${feedTable(shown, '')}</details>`, 1);
 }
 
 export function renderFeedMonth(model, month) {
@@ -224,11 +227,11 @@ export function renderRunPage(run, model) {
   return pipelinePage(`Run ${run.run_id}`, `<h1>Run <code>${e(run.run_id)}</code> ${statusHtml(null, run.outcome)}</h1>
 ${nav('../', model.months)}
 <p class="sub">${links || 'No link recorded.'}${trace ? ` · <a href="${traceHref('../', trace.trace_id)}">work-item trace (${e(itemLabel(trace.item))})</a>` : run.trace_id ? ' · <span class="muted">no trace index for this work item</span>' : ''}</p>
-<div class="card table-wrap"><table><tbody>${facts}</tbody></table></div>
+<details class="detail-panel"><summary>Execution context · workflow, actor & revision</summary><div class="card table-wrap"><table><tbody>${facts}</tbody></table></div></details>
 ${overflowHtml(run)}
-<h2>Spans</h2>
+<details class="detail-panel"><summary>Timing & span waterfall</summary><h2>Spans</h2>
 ${run.flat ? '<p class="note">Schema 1 record (ADR-0040): no span tree — the run and its stages are shown flat; the events below hold every action.</p>' : ''}
-${waterfall(spanRows(run), { t0: run.started_at, t1: run.completed_at })}
+${waterfall(spanRows(run), { t0: run.started_at, t1: run.completed_at })}</details>
 <h2>Events</h2>
 ${events}`, 2);
 }
@@ -266,8 +269,9 @@ ${nav('../', model.months)}
 </div>
 ${notes.map((n) => `<p class="note">${e(n)}</p>`).join('')}
 <p class="note">Runs are separate jobs on different runners: spans are placed by their own clocks, so offsets between runs are approximate (ADR-0041 §6).</p>
-<h2>Waterfall</h2>
-${waterfall(rows, { t0: trace.first_started_at, t1: trace.last_completed_at })}`, 2);
+<h2>Flow history</h2>${flowSteps(trace)}
+<details class="detail-panel"><summary>Full trace · Waterfall, spans, models & tokens</summary><h2>Waterfall</h2>
+${waterfall(rows, { t0: trace.first_started_at, t1: trace.last_completed_at })}</details>`, 2);
 }
 
 export function renderTraceIndex(model) {
@@ -278,7 +282,8 @@ export function renderTraceIndex(model) {
   return pipelinePage('Work-item traces', `<h1>Work-item traces</h1>
 ${nav('../', model.months)}
 <p class="sub">One trace per issue (or PR without an issue): every run that touched it, from <code>metrics/traces/&lt;trace_id&gt;.json</code> (ADR-0041).</p>
-${body ? `<div class="card table-wrap"><table><thead><tr><th>Work item</th><th class="num">Runs</th><th>First start</th><th>Last end</th><th class="num">Lead time</th><th>Last workflow</th><th>Last outcome</th></tr></thead><tbody>${body}</tbody></table></div>` : emptyCard('No trace index on the metrics branch yet.')}`, 2);
+${workItemBrowser(model)}
+<details class="detail-panel"><summary>All trace metadata · original table</summary>${body ? `<div class="card table-wrap"><table><thead><tr><th>Work item</th><th class="num">Runs</th><th>First start</th><th>Last end</th><th class="num">Lead time</th><th>Last workflow</th><th>Last outcome</th></tr></thead><tbody>${body}</tbody></table></div>` : emptyCard('No trace index on the metrics branch yet.')}</details>`, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -379,30 +384,30 @@ export function renderHealth(health, model) {
 ${nav('', model.months)}
 <p class="sub">${e(health.window.runs)} run record(s), ${e(health.window.traces)} work-item trace(s)${health.window.months.length ? `, ${e(health.window.months.at(-1))} → ${e(health.window.months[0])}` : ''}. Token counts are chars/4 estimates (ADR-0041 §3), not provider-measured usage.</p>
 
-<h2>Funnel</h2>
+<details class="detail-panel" open><summary>Delivery funnel · progress through the loop</summary><h2>Funnel</h2>
 <p class="sub">Issue work items that reached each stage (each stage counts items that also reached the previous one). PRs without an issue: ${e(funnel.pr_items.total)}, ${e(funnel.pr_items.approved)} approved.</p>
 ${hbars(funnelRows, { label: 'Funnel: issues validated, PR opened, approved, merged' })}
-${table(['Stage', { label: 'Work items', num: true }], funnel.stages.map((s) => [e(s.stage), e(s.count ?? 'not recorded')]))}
+${table(['Stage', { label: 'Work items', num: true }], funnel.stages.map((s) => [e(s.stage), e(s.count ?? 'not recorded')]))}</details>
 
-<h2>Reviews</h2>
+<details class="detail-panel" open><summary>Review decisions · approvals & changes needed</summary><h2>Reviews</h2>
 <div class="tiles">${tile('WITHHELD rate', pct(reviews.withheld_rate), `${reviews.verdicts.WITHHELD} of ${reviews.total} verdicts`)}${tile('APPROVE', compact(reviews.verdicts.APPROVE))}${tile('REQUEST_CHANGES', compact(reviews.verdicts.REQUEST_CHANGES))}${tile('REQUEST_CHANGES → WITHHELD (#220)', compact(reviews.rc_to_withheld), 'unseen-code backstop')}${tile('Reviews of a cut diff', compact(reviews.diff_cut.reviews), `${reviews.diff_cut.withheld} withheld (ADR-0038)`)}</div>
 <h3>WITHHELD causes</h3>
 ${causes.length ? hbars(causes.map((c) => ({ label: c.label.length > 40 ? `${c.label.slice(0, 39)}…` : c.label, value: c.count })), { label: 'WITHHELD verdicts by cause' }) : ''}
 ${table(['Cause', { label: 'Verdicts', num: true }], reviews.causes.map((c) => [e(c.label), e(c.count)]))}
 <h3>Review cycles per PR</h3>
 ${hbars(reviews.cycles_distribution.map((d) => ({ label: `${d.cycles} cycle${d.cycles > 1 ? 's' : ''}`, value: d.prs })), { label: 'Number of PRs by review cycles' })}
-${table(['PR', { label: 'Review cycles', num: true }], reviews.cycles_per_pr.slice(0, 30).map((r) => [`#${e(r.pr)}`, e(r.cycles)]))}
+${table(['PR', { label: 'Review cycles', num: true }], reviews.cycles_per_pr.slice(0, 30).map((r) => [`#${e(r.pr)}`, e(r.cycles)]))}</details>
 
-<h2>Auto-fix outcomes</h2>
+<details class="detail-panel"><summary>Auto-fix outcomes · fixes, skips & guardrails</summary><h2>Auto-fix outcomes</h2>
 ${hbars(autofixRows, { label: 'Auto-fix attempts by outcome' })}
 ${table(['Guardrail rule', { label: 'Rejections', num: true }], autofix.rules.map((r) => [`<code>${e(r.rule)}</code>`, e(r.count)]))}
-${autofix.legacy_counted ? `<p class="note">${e(autofix.legacy_counted)} outcome(s) from legacy <code>runs.jsonl</code> lines whose run has no record.</p>` : ''}
+${autofix.legacy_counted ? `<p class="note">${e(autofix.legacy_counted)} outcome(s) from legacy <code>runs.jsonl</code> lines whose run has no record.</p>` : ''}</details>
 
-<h2>LLM providers</h2>
+<details class="detail-panel"><summary>Providers · failures, fallbacks & rate limits</summary><h2>LLM providers</h2>
 <div class="tiles">${tile('LLM calls', compact(llm.calls))}${tile('Fallbacks', compact(llm.fallbacks), 'llm_fallback')}${tile('No provider answered', compact(llm.failed), 'llm_call_failed')}${tile('Fallback disabled', compact(llm.fallback_disabled))}${tile('Rate-limit waits', compact(llm.rate_limit_waits), 'retry.wait on 429')}${tile('Circuit-breaker trips', 'not recorded', 'eval runs only, see note')}</div>
 <p class="note">The circuit breaker is an eval-harness mechanism: a tripped eval run fails <code>error_rate</code>, is never added to the scorecard, and eval traces stay workflow artifacts (no record on the <code>metrics</code> branch). Its trips are in the Evals workflow logs (<code>eval.error</code>, <code>reason: provider_quota</code>).</p>
 
-<h2>Latency per stage</h2>
+</details><details class="detail-panel"><summary>Performance · latency & critical path</summary><h2>Latency per stage</h2>
 ${latency.length ? table(['Stage', { label: 'Runs', num: true }, { label: 'p50', num: true }, { label: 'p95', num: true }], latency.map((l) => [`<code>${e(l.stage)}</code>`, e(l.n), e(formatDuration(l.p50)), e(formatDuration(l.p95))])) : emptyCard('No stage span recorded.')}
 
 <h2>Critical path per work item</h2>
@@ -410,10 +415,10 @@ ${latency.length ? table(['Stage', { label: 'Runs', num: true }, { label: 'p50',
 ${criticalPathChart(cpSorted)}
 ${table(['Work item', { label: 'Runs', num: true }, { label: 'Lead time', num: true }, { label: 'Running', num: true }, { label: 'Waiting', num: true }], cpSorted.map((c) => [`<a href="${traceHref('', c.trace_id)}">${e(itemLabel(c.item))}</a>`, e(c.runs), e(formatDuration(c.lead_time_ms)), e(formatDuration(c.running_ms)), e(formatDuration(c.waiting_ms))]))}
 
-<h2>Groq tokens per day</h2>
+</details><details class="detail-panel"><summary>Token usage · daily estimates & quotas</summary><h2>Groq tokens per day</h2>
 <p class="sub">Estimated tokens (in + out) of Groq calls per UTC day over ${e(tokens.days.length)} days, pipeline runs by workflow and eval runs from the scorecard, against the ${e(compact(tokens.limit))} tokens-per-day free-tier limit. Groq counts real tokens and its prompt cache: the estimate is an approximation.</p>
 ${tokenChart(tokens)}
-${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: true }, { label: '% of TPD', num: true }, 'Eval cron'], tokenTable) : ''}`;
+${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: true }, { label: '% of TPD', num: true }, 'Eval cron'], tokenTable) : ''}</details>`;
   return pipelinePage('Pipeline health', body, 1);
 }
 
