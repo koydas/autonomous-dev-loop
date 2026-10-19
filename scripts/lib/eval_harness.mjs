@@ -2,7 +2,8 @@
  * Eval harness — runs a suite over a dataset and turns outcomes into metrics.
  *
  * A suite is a plain object (see eval_suites.mjs):
- *   { name, stage, dataset, run(input, { llm }), scorers, label?, expectedLabel?, thresholds? }
+ *   { name, stage, dataset, run(input, { llm, testCase }), scorers, label?, expectedLabel?, thresholds? }
+ * `testCase` is the whole dataset entry, for case-level fields outside the pinned `input` (review: `requires_cut`).
  *
  * A scorer is (expected, output, { error, calls }) → number in [0,1] | boolean | null (not applicable).
  *
@@ -210,7 +211,7 @@ async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) 
   let output = null;
   let error = null;
   try {
-    output = await suite.run(testCase.input, { llm });
+    output = await suite.run(testCase.input, { llm, testCase });
   } catch (err) {
     error = err.message;
   }

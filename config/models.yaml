@@ -88,6 +88,20 @@ anthropic_generation_max_tokens: 16000
 anthropic_review:                claude-sonnet-5-5
 anthropic_review_effort:         medium
 anthropic_review_max_tokens:     16000
+# Review diff cap on Anthropic (ADR-0038 amendment): no input budget, so the filtered diff is cut only past this many
+# chars, on a line / hunk boundary with the `… [diff cut: …]` marker. 200000 chars ≈ 50k estimated tokens: 5% of the 1M
+# context, ≤ $0.20 of input per review on claude-opus-5-5 ($4/MTok), ≤ $0.10 on claude-sonnet-5-5 ($2/MTok).
+# Groq ignores it: its diff is bounded by review_max_input_tokens. Default 200000 when the key is absent.
+anthropic_review_max_diff_chars: 200000
+
+# ── Review eval: cut of the requires_cut cases, per provider (ADR-0038 amendment) ───────────────────────────
+# A review case with `requires_cut: true` expects a verdict only a cut diff yields (WITHHELD for cut code, no finding
+# past the cut, a truncation note). On provider P it is cut with review_eval_cut_<P>_max_input_tokens (token budget fit)
+# or review_eval_cut_<P>_max_diff_chars (char cap): one of the two. Neither: P's production limits, and a case they
+# leave uncut is an errored run. Eval only: production never reads these keys.
+# 6300 on both = the Groq production budget: the incidents' own cut, the same prompt on both providers.
+review_eval_cut_groq_max_input_tokens:      6300
+review_eval_cut_anthropic_max_input_tokens: 6300
 anthropic_autofix:               claude-sonnet-5-5
 anthropic_autofix_effort:        medium
 anthropic_autofix_max_tokens:    16000

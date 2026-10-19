@@ -82,7 +82,7 @@ An `AI_PROVIDER` other than `groq`/`anthropic` (typo) silently resolved to Groq 
 - ✅ Δ, trend, the replay/PR-eval baseline and the ADR-0031 ratchet only ever compare runs of one model.
 - ✅ The comparison covers coverage (diff cut, WITHHELD) and cost, not only accuracy.
 - ⚠️ The cost line ignores the prompt cache (input over-estimated: the system prompt is cached) and thinking tokens (output under-estimated at effort `high`). An order of magnitude, not the bill; measured usage needs `anthropic_client.mjs` to return it.
-- ⚠️ On Anthropic the review prompt has no input budget but keeps the 12,000-char diff cap (`reviewInputBudget`), so `diff_truncated` can still be non-zero there.
+- ⚠️ On Anthropic the review prompt has no input budget but keeps the 12,000-char diff cap (`reviewInputBudget`), so `diff_truncated` can still be non-zero there. Superseded by the ADR-0038 amendment (2026-10-19): the Anthropic cap is `anthropic_review_max_diff_chars` (200,000), and eval cases that need a cut declare `requires_cut`.
 - ⚠️ Until #209 adds a re-baseline input, any model change on the configured provider (including #199 step 2) keeps that suite's weekly publish red: loud by design, but with no remedy except restoring the previous model.
 
 ## Amendment (2026-10-17): provider and model per stage; a model is adopted only once measured

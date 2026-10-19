@@ -5,7 +5,7 @@
  *   name           — registry key, used in report and history
  *   stage          — loadLLMConfig() stage the live LLM is bound to
  *   dataset        — JSONL path, one { id, tags?, input, expected } per line
- *   run            — (input, { llm }) → output; throwing counts as an errored run
+ *   run            — (input, { llm, testCase }) → output; throwing counts as an errored run (testCase: the whole entry)
  *   scorers        — { name: (expected, output, { error, calls }) → 0..1 | boolean | null }
  *   label          — output → class label (confusion matrix, consistency)
  *   expectedLabel  — expected → class label
@@ -20,7 +20,7 @@
 import path from 'node:path';
 import { validateIssue, VALIDATION_SYSTEM_PROMPT } from './issue_validator.mjs';
 import { loadPrompt } from './prompts.mjs';
-import { detectProvider, GROQ_MODEL_DEFAULTS } from './config.mjs';
+import { detectProvider, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './config.mjs';
 import { buildReviewPrompt, parseReviewVerdict, withholdOnUnreviewedCode } from './review_prompt.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, decideVerdict } from './review_evidence.mjs';
@@ -139,7 +139,8 @@ let reviewPrompts;
 const loadReviewPrompts = () => (reviewPrompts ??= { system: loadPrompt('pr-review-system'), user: loadPrompt('pr-review-user') });
 
 // Same budget as loadLLMConfig('review').maxInputTokens: review_max_input_tokens, else max_input_tokens, on Groq;
-// none (12,000-char diff cap) on Anthropic. Not loadLLMConfig itself: it requires an API key, which a replay has not.
+// none on Anthropic, whose diff is capped at anthropic_review_max_diff_chars instead (reviewDiffLimits). Not
+// loadLLMConfig itself: it requires an API key, which a replay has not.
 export function reviewInputBudget(defaults = GROQ_MODEL_DEFAULTS) {
   if (detectProvider('review') === 'anthropic') return null;
   const raw = defaults.review_max_input_tokens ?? defaults.max_input_tokens;
@@ -147,6 +148,47 @@ export function reviewInputBudget(defaults = GROQ_MODEL_DEFAULTS) {
   const budget = parseInt(raw, 10);
   if (isNaN(budget) || budget <= 0) throw new Error(`Invalid max_input_tokens for stage "review": ${raw} (must be a positive integer)`);
   return budget;
+}
+
+/**
+ * Cut applied to a `requires_cut` review case on `provider` (ADR-0038 amendment), from config/models.yaml:
+ * review_eval_cut_<provider>_max_input_tokens (token budget fit, like Groq production) or
+ * review_eval_cut_<provider>_max_diff_chars (char cap, like Anthropic production); at most one of the two.
+ * null when neither is set: the case then runs on the provider's production limits.
+ * @returns {{ maxInputTokens: number | null, maxDiffChars: number | null } | null}
+ */
+export function requiresCutLimits(provider, defaults = GROQ_MODEL_DEFAULTS) {
+  const key = (limit) => `review_eval_cut_${provider}_${limit}`;
+  const read = (limit) => {
+    const raw = defaults[key(limit)];
+    if (raw === undefined) return null;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value <= 0) throw new Error(`Invalid ${key(limit)}: ${raw} (must be a positive integer)`);
+    return value;
+  };
+  const maxInputTokens = read('max_input_tokens');
+  const maxDiffChars = read('max_diff_chars');
+  if (maxInputTokens != null && maxDiffChars != null) throw new Error(`Set one of ${key('max_input_tokens')} and ${key('max_diff_chars')}, not both`);
+  if (maxInputTokens == null && maxDiffChars == null) return null;
+  return { maxInputTokens, maxDiffChars };
+}
+
+/**
+ * Diff limits of one review case (ADR-0038 amendment). By default, production's: the stage provider's input budget
+ * (Groq) or diff cap (Anthropic, reviewMaxDiffChars). A case with `requires_cut: true` expects a verdict that only a
+ * cut diff yields (WITHHELD, a finding past the cut, a truncation note): it gets the stage provider's
+ * requiresCutLimits, else production's limits. reviewSuite.run errors the run when that leaves it uncut.
+ * Any other `requires_cut` value is a dataset error.
+ * @returns {{ maxInputTokens: number | null, maxDiffChars: number | null }}
+ */
+export function reviewDiffLimits(testCase, defaults = GROQ_MODEL_DEFAULTS) {
+  const requiresCut = testCase?.requires_cut;
+  if (requiresCut !== undefined && requiresCut !== true) {
+    throw new Error(`${testCase.id}: requires_cut must be true or absent, got ${JSON.stringify(requiresCut)}`);
+  }
+  const provider = detectProvider('review');
+  const forced = requiresCut ? requiresCutLimits(provider, defaults) : null;
+  return forced ?? { maxInputTokens: reviewInputBudget(defaults), maxDiffChars: reviewMaxDiffChars(provider, defaults) };
 }
 
 export const reviewSuite = {
@@ -169,8 +211,10 @@ export const reviewSuite = {
   // does not withhold approval. stale_refs / related_adrs / prompt_budget are precomputed, in the shapes
   // findStaleReferences / findRelatedAdrs / computePromptBudgetImpact return (the PR tree is not in the case),
   // and go through the same formatters as in pr_review.mjs. eval_suites.test.mjs pins the field parity.
-  async run(input, { llm }) {
+  // requires_cut (case level, outside the pinned input): see reviewDiffLimits.
+  async run(input, { llm, testCase }) {
     const { system, user } = loadReviewPrompts();
+    const { maxInputTokens, maxDiffChars } = reviewDiffLimits(testCase);
     const evidence = assessEvidence(
       input.evidence === undefined ? { ok: false, reason: `no evidence file at ${path.join('evidence', 'review-evidence.json')}` } : parseEvidence(JSON.stringify(input.evidence)),
       { prHeadSha: input.head_sha ?? null, touchedPaths: findTouchedEvidencePaths(input.diff) },
@@ -181,13 +225,18 @@ export const reviewSuite = {
       rawDiff: input.diff,
       prTitle: input.title,
       prBody: input.body || '(no description provided)',
-      maxInputTokens: reviewInputBudget(),
+      maxInputTokens,
+      maxDiffChars,
       evidence,
       dependencyManifestContext: formatDependencyManifestContext(input.dependencies),
       staleRefsContext: formatStaleRefsContext(input.stale_refs),
       relatedAdrs: input.related_adrs ?? [],
       promptBudgetContext: formatPromptBudgetContext(input.prompt_budget),
     });
+    // A requires_cut case left whole would score a verdict its expectation does not hold for: no LLM call, errored run.
+    if (testCase?.requires_cut && !diffTruncated) {
+      throw new Error(`${testCase.id}: requires_cut but not cut on ${detectProvider('review')}: set review_eval_cut_${detectProvider('review')}_max_input_tokens or _max_diff_chars in config/models.yaml`);
+    }
     const { cleanReview, verdict: llmVerdict } = parseReviewVerdict(await llm({ prompt: userPrompt, systemPrompt: system }));
     // Production fails closed on a missing verdict line; the eval counts it as an errored run instead,
     // so a format regression shows in error_rate rather than inflating request_changes recall.

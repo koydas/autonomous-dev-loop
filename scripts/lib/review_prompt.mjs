@@ -11,6 +11,10 @@ import { formatRelatedAdrsContext } from './related_adrs.mjs';
 export const MAX_RELATED_ADRS = 3;
 export const MAX_RELATED_ADRS_ON_BUDGET = 1;
 
+// Diff cap without an input budget when the caller passes no maxDiffChars: the former fixed cap, kept for callers
+// that do not resolve one (pr_review.mjs and the review suite pass reviewMaxDiffChars).
+const UNBUDGETED_MAX_DIFF_CHARS = 12000;
+
 // Prompt builder and verdict parser of the PR review stage, shared by pr_review.mjs and the
 // `review` eval suite (ADR-0027) so the eval measures the production code path, not a copy.
 
@@ -141,8 +145,9 @@ export function formatUnseenFindingsNote(unreviewedCodeFiles) {
 /**
  * Renders the review user prompt: diff + PR title/body + classification, automation-gate,
  * dependency-manifest and tool-evidence contexts, fitted to `maxInputTokens` (ADR-0028).
- * Groq (`maxInputTokens` set): the diff is bounded by the token budget. Anthropic (`null`) keeps
- * the 12,000-char cap. `diffTruncated` compares against the uncapped filtered diff, so the reviewer
+ * Groq (`maxInputTokens` set): the diff is bounded by the token budget, `maxDiffChars` is ignored. Anthropic
+ * (`null`): the diff is cut past `maxDiffChars` (reviewMaxDiffChars: anthropic_review_max_diff_chars, ADR-0038
+ * amendment; 12,000 when omitted), with the same boundary cut and marker. `diffTruncated` compares against the uncapped filtered diff, so the reviewer
  * is told when it saw a partial diff. Throws (no LLM call) when the fixed part alone is over budget.
  * Optional `staleRefsContext` (ADR-0035) and `promptBudgetContext` (ADR-0037) are fixed context like the dependency manifest;
  * `relatedAdrs` (ADR-0036) is dropped before the PR body or the diff is shrunk.
@@ -150,10 +155,10 @@ export function formatUnseenFindingsNote(unreviewedCodeFiles) {
  * of the filtered diff (shown in full, or tests / docs cut), for withholdOnUnreviewedCode.
  * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number, unreviewedCodeFiles: string[], shownFiles: string[] }}
  */
-export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [] }) {
+export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars = null, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [] }) {
   const orderedDiff = orderDiffForReview(rawDiff);
   const fullDiff = filterDiff(orderedDiff, Infinity);
-  const cappedDiff = maxInputTokens == null ? filterDiff(orderedDiff) : fullDiff;
+  const cappedDiff = maxInputTokens == null ? filterDiff(orderedDiff, maxDiffChars ?? UNBUDGETED_MAX_DIFF_CHARS) : fullDiff;
   const fit = (adrCount) => {
     const reviewContexts = `${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
     return fitReviewPrompt({

@@ -342,3 +342,40 @@ test('buildReviewPrompt returns the files not cut as shownFiles', () => {
   assert.deepEqual([unreviewedCodeFiles, shownFiles], [['scripts/b.mjs'], ['scripts/a.mjs']]);
   assert.deepEqual(build().shownFiles, ['src/a.js']);
 });
+
+// --- ADR-0038 amendment: provider-aware diff cap (maxDiffChars on a provider with no input budget) ---
+
+test('buildReviewPrompt without a budget caps the diff at maxDiffChars, with the boundary cut and marker', () => {
+  const lines = Array.from({ length: 3000 }, (_, i) => `+line ${String(i).padStart(4, '0')}`);
+  const raw = fileDiff('src/a.js', lines.join('\n'));
+  // 36k chars: past the former 12,000 cap, under a 50,000 one: shown whole.
+  const uncut = build({ rawDiff: raw, maxInputTokens: null, maxDiffChars: 50000 });
+  assert.equal(uncut.diffTruncated, false);
+  assert.deepEqual(uncut.unreviewedCodeFiles, []);
+  assert.ok(uncut.userPrompt.includes(raw.trimEnd()));
+  assert.doesNotMatch(uncut.userPrompt, /diff cut: /);
+  // Over the cap: cut on a whole line, marker names the partly shown file, the file is unreviewed (ADR-0038).
+  const cut = build({ rawDiff: raw, maxInputTokens: null, maxDiffChars: 20000 });
+  assert.equal(cut.diffTruncated, true);
+  const shown = cut.userPrompt.slice(cut.userPrompt.indexOf('diff --git'), cut.userPrompt.indexOf(']', cut.userPrompt.indexOf('… [diff cut: ')) + 1);
+  assert.ok(shown.length <= 20000 && shown.length > 12000, `${shown.length} chars`);
+  const kept = shown.split('\n').slice(0, -1);
+  assert.ok(raw.startsWith(`${kept.join('\n')}\n`), 'the shown diff is a prefix of whole lines');
+  assert.match(shown.split('\n').at(-1), new RegExp(`^… \\[diff cut: ${3004 - kept.length} more lines not shown, in src/a\\.js \\(partly shown\\)\\]$`));
+  assert.deepEqual(cut.unreviewedCodeFiles, ['src/a.js']);
+});
+
+test('buildReviewPrompt ignores maxDiffChars on a budgeted provider (Groq): the token budget alone bounds the diff', () => {
+  const raw = fileDiff('src/a.js', '+x'.repeat(40000));
+  const withCap = build({ rawDiff: raw, maxInputTokens: 3000, maxDiffChars: 500 });
+  const without = build({ rawDiff: raw, maxInputTokens: 3000 });
+  assert.equal(withCap.userPrompt, without.userPrompt);
+  const small = build({ rawDiff: fileDiff('src/a.js', '+'.padEnd(2000, 'y')), maxInputTokens: 6300, maxDiffChars: 500 });
+  assert.equal(small.diffTruncated, false, 'a cap below the diff does not cut it when a budget is set');
+});
+
+test('buildReviewPrompt without a budget and without maxDiffChars keeps the 12,000-char cap', () => {
+  const raw = fileDiff('scripts/a.mjs', '+'.padEnd(20000, 'y'));
+  assert.equal(build({ rawDiff: raw, maxInputTokens: null }).userPrompt, build({ rawDiff: raw, maxInputTokens: null, maxDiffChars: 12000 }).userPrompt);
+  assert.equal(build({ rawDiff: raw, maxInputTokens: null, maxDiffChars: null }).diffTruncated, true);
+});
