@@ -4,6 +4,11 @@ import { buildReviewPrompt, findingCitedFiles, findUnreviewedCodeFiles, formatUn
 import { cutDiffAtBoundary } from '../lib/file_filters.mjs';
 import { assessEvidence } from '../lib/review_evidence.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseFlatYaml } from '../lib/yaml.mjs';
+import { LOW_HEADROOM_RATIO, computePromptBudgetImpact, promptTokens } from '../lib/prompt_budget.mjs';
 
 const TEMPLATE = 'Title: {{issueTitle}}\nBody:\n{{issueBody}}\nDiff:\n{{diff}}';
 const SYSTEM = 'system';
@@ -378,4 +383,33 @@ test('buildReviewPrompt without a budget and without maxDiffChars keeps the 12,0
   const raw = fileDiff('scripts/a.mjs', '+'.padEnd(20000, 'y'));
   assert.equal(build({ rawDiff: raw, maxInputTokens: null }).userPrompt, build({ rawDiff: raw, maxInputTokens: null, maxDiffChars: 12000 }).userPrompt);
   assert.equal(build({ rawDiff: raw, maxInputTokens: null, maxDiffChars: null }).diffTruncated, true);
+});
+
+// #199: an untested PR-description claim is one Low advisory finding, never a REQUEST_CHANGES on its own, and
+// never raised without a visible changed test, on an empty or claim-free body, docs-only or past the cut. The
+// rule stays short (~120 tokens) and keeps the Groq review headroom above the ADR-0037 margin.
+test('pr-review-system.md bounds the untested-claim rule to a Low advisory, within the review headroom', () => {
+  const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const PROMPT = 'prompts/pr-review-system.md';
+  const system = readFileSync(resolve(ROOT, PROMPT), 'utf8');
+  const rule = system.split('\n').find((line) => line.startsWith('* Untested claim:'));
+  assert.ok(rule, 'untested-claim rule missing');
+  assert.match(rule, /PR-description sentence asserting changed runtime behavior/);
+  assert.match(rule, /a changed test file is visible and no visible test exercises it: one Low finding per claim, "Untested claim: <claim>", citing the implementing file:lines/);
+  assert.match(rule, /never above Low, never alone a REQUEST_CHANGES/);
+  assert.match(rule, /None when a visible test covers it, no such claim is made, `tests_expected` is false, or the tests are cut \(use "Not verified"\)/);
+  assert.ok(promptTokens(rule) <= 130, `rule is ~${promptTokens(rule)} tokens`);
+  // Placed with the test-coverage rules, after the has_test_file_changes judgment it refines.
+  assert.ok(system.indexOf(rule) > system.indexOf('`has_test_file_changes` is a coarse signal'));
+  // The existing obligations are untouched: missing tests stay >= MEDIUM, unseen content stays a Low note.
+  assert.match(system, /If `tests_expected` is true and `has_test_file_changes` is false, report at least MEDIUM severity/);
+  assert.match(system, /"Not verified \(diff truncated\): …", at most a Low "verify" note, never Medium or High, and never let it make the verdict REQUEST_CHANGES/);
+  const models = parseFlatYaml(readFileSync(resolve(ROOT, 'config/models.yaml'), 'utf8'));
+  const [impact] = computePromptBudgetImpact({
+    rawDiff: `diff --git a/${PROMPT} b/${PROMPT}\n--- a/${PROMPT}\n+++ b/${PROMPT}\n@@ -1 +1 @@\n-a\n+b\n`,
+    readBase: () => system.replace(`${rule}\n`, ''), readHead: (p) => readFileSync(resolve(ROOT, p), 'utf8'), models, logFn: () => {},
+  });
+  assert.equal(impact.stage, 'review');
+  assert.ok(impact.deltaTokens > 0 && impact.deltaTokens <= 130, `delta ${impact.deltaTokens}`);
+  assert.ok(impact.headroomTokens >= Math.ceil(impact.maxInputTokens * LOW_HEADROOM_RATIO), `${impact.headroomTokens} of ${impact.maxInputTokens}`);
 });

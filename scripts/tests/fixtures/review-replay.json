@@ -274,6 +274,51 @@
           "raw": "## 🔍 Automated Code Review\n\n**🧩 Change Classification**  \nType: mixed | Tests expected: yes — new automation modules and workflow changes.\n\n**✅ Summary**  \n- Adds `item_lineage.mjs` and `lineage_spans.mjs`, wires them into `eval-replay.yml`, and moves the reset-auto-fix heredoc into a script.  \n- Diff view is truncated; later hunks were not inspected.\n\n**⚠️ Issues Found**  \n- **Medium** Missing coverage for new module — File: `.github/workflows/test.yml` Lines: 292‑302 Root cause: `scripts/lib/lineage_spans.mjs` is added without a matching `c8 --check-coverage` step; only the `item_lineage` step is present. Fix: add a `Check lineage_spans coverage (≥80%)` step to `test.yml`.\n\n**🚀 Verdict**  \n**REQUEST_CHANGES**"
         }
       ]
+    },
+    {
+      "case_id": "incident-untested-claim-symlink-dir",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable module\n\n### ✅ Summary\nAdds `listExports(root)`, which lists the `.csv` files of each month directory and skips symlinks, with two unit tests.\n\n### ⚠️ Issues Found\n- [Low] Untested claim: a symlinked month directory is skipped — File: src/export/list_exports.mjs Lines: 8 Root cause: the `month.isDirectory()` filter implements the claim, but the tests only cover a symlinked `.csv` file. Fix: add a test that symlinks a month directory outside `root` and expects `[]`.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
+    },
+    {
+      "case_id": "incident-tested-claim-symlink-dir",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable module\n\n### ✅ Summary\nAdds `listExports(root)` with tests for the sorted listing, a symlinked `.csv` file and a symlinked month directory.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
+    },
+    {
+      "case_id": "clean-empty-body-no-claim",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `initials(displayName)` with tests for spacing and blank names. The PR has no description.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
+    },
+    {
+      "case_id": "docs-only-behavior-sentence",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: documentation | Tests expected: no — documentation only\n\n### ✅ Summary\nDocuments the 503 retries behind `UploadUnavailableError` in the uploader troubleshooting section.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
+    },
+    {
+      "case_id": "truncated-claim-tests-past-cut",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `backoffMs(attempt, baseMs)`, capped at `MAX_BACKOFF_MS`, and a table-driven test.\nNot verified (diff truncated): the `RangeError` test of test/backoff.test.mjs is past the cut.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
     }
   ]
 }
