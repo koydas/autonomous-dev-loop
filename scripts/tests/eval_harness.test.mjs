@@ -816,3 +816,106 @@ test('a swallowed quota error with an empty message (providerErrors only) still 
   assert.equal(results[1].skipped, true);
   assert.equal(summarize(results).error_rate, 1);
 });
+
+// ---------------------------------------------------------------------------
+// Replay of a breaker run (#211): provider_errors recorded on the failed call, reattached on replay
+// ---------------------------------------------------------------------------
+
+const REFUSED_ERROR = 'All providers failed: groq: HTTP 401, anthropic: HTTP 401';
+const refusedError = () => Object.assign(new Error(REFUSED_ERROR), {
+  providerErrors: [{ provider: 'groq', status: 401 }, { provider: 'anthropic', status: 401 }],
+});
+const pinnedTpdError = () => pinnedError(TPD_ERROR, 429);
+// Answers the first okCalls calls, then throws makeError() on every call.
+const failAfter = (okCalls, makeError) => {
+  let n = 0;
+  return () => async ({ prompt }) => {
+    if (n++ >= okCalls) throw makeError();
+    return prompt;
+  };
+};
+const breakerView = (results) => results.map((r) => [r.case_id, r.skipped ?? false, r.error, r.circuit_breaker?.quota ?? null]);
+
+for (const [kind, makeError, quota] of [
+  ['every provider refused', refusedError, 'every provider refused (groq 401, anthropic 401)'],
+  ['daily quota (TPD)', pinnedTpdError, 'tokens per day (TPD)'],
+]) {
+  for (const [stage, suite] of [['propagating', echoSuite], ['swallowing', swallowingSuite]]) {
+    test(`replay re-trips the breaker like the live run: ${kind}, ${stage} stage`, async () => {
+      const cases = ['a', 'b', 'c', 'd'].map(yesCase);
+      const live = await runSuite({ suite, cases, llmFor: failAfter(1, makeError), now: fixedClock() });
+      assert.equal(live[1].circuit_breaker.quota, quota);
+      assert.deepEqual(live.map((r) => r.skipped ?? false), [false, false, true, true]);
+      assert.ok(Array.isArray(live[1].calls[0].provider_errors), 'the failed call records provider_errors');
+
+      // Through JSON, as run_evals.mjs reads a results file back.
+      const recorded = JSON.parse(JSON.stringify(live));
+      const replayed = await runSuite({ suite, cases, llmFor: createReplayLLM(recorded), now: fixedClock() });
+      assert.deepEqual(breakerView(replayed), breakerView(live), 'same run trips, same runs skipped');
+      assert.deepEqual(replayed[1].calls, live[1].calls);
+
+      const liveSummary = summarize(live);
+      const replaySummary = summarize(replayed);
+      assert.deepEqual(replaySummary.circuit_breaker, liveSummary.circuit_breaker);
+      assert.equal(replaySummary.circuit_breaker.skipped_runs, 2);
+      assert.equal(replaySummary.error_rate, 1);
+      assert.deepEqual([replaySummary.llm_calls, replaySummary.tokens_est], [liveSummary.llm_calls, liveSummary.tokens_est]);
+      assert.deepEqual([liveSummary.llm_calls, liveSummary.tokens_est.in], [1, live[0].calls[0].tokens_in_est], 'the failed call is not usage');
+      const report = formatReport({ suite: 'echo', summary: replaySummary, failures: checkThresholds(replaySummary), results: replayed });
+      assert.match(report, /## ⛔ Circuit breaker: provider quota exhausted/);
+    });
+  }
+}
+
+test('a failed call records provider_errors as { provider, status, skipped? } and nothing else', async () => {
+  const llmFor = () => async () => {
+    throw Object.assign(new Error('All providers failed: groq: 503, anthropic: skipped (fallback disabled)'), {
+      providerErrors: [{ provider: 'groq', status: 503, message: 'not recorded' }, { provider: 'anthropic', status: null, skipped: 'disabled' }, null],
+    });
+  };
+  const [r] = await runSuite({ suite: echoSuite, cases: [yesCase('a')], llmFor });
+  assert.deepEqual(r.calls[0].provider_errors, [
+    { provider: 'groq', status: 503 },
+    { provider: 'anthropic', status: null, skipped: 'disabled' },
+    { provider: null, status: null },
+  ]);
+  assert.equal('circuit_breaker' in r, false, 'a 5xx is not a quota, live or recorded');
+});
+
+test('createReplayLLM reattaches provider_errors as providerErrors on a recorded failed call', async () => {
+  const llm = createReplayLLM([{ case_id: 'a', repeat: 0, calls: [
+    { raw: null, error: 'refused', provider_errors: [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: null, skipped: 'no_api_key' }] },
+    { raw: null, error: 'boom 500' },
+  ] }])('a#0');
+  const err = await llm().catch((e) => e);
+  assert.equal(err.message, 'refused');
+  assert.deepEqual(err.providerErrors, [{ provider: 'groq', status: 429 }, { provider: 'anthropic', status: null, skipped: 'no_api_key' }]);
+  assert.equal(detectQuotaExhaustion(err).provider, 'groq');
+  const bare = await llm().catch((e) => e);
+  assert.equal('providerErrors' in bare, false, 'no provider_errors recorded: message only');
+});
+
+test('a legacy record (failed call without provider_errors) replays without throwing, message-only', async () => {
+  const cases = ['a', 'b', 'c'].map(yesCase);
+  const live = await runSuite({ suite: swallowingSuite, cases, llmFor: failAfter(0, refusedError) });
+  const legacy = JSON.parse(JSON.stringify(live));
+  for (const r of legacy) for (const c of r.calls) delete c.provider_errors;
+  const replayed = await runSuite({ suite: swallowingSuite, cases, llmFor: createReplayLLM(legacy) });
+  // Documented legacy behavior (docs/evals.md): "every provider refused" is not visible in the message, so the
+  // breaker does not re-trip; the runs it skipped live are executed and rethrow their recorded skip message.
+  assert.equal('circuit_breaker' in summarize(replayed), false);
+  assert.equal(replayed[0].error, REFUSED_ERROR);
+  assert.equal(replayed[1].skipped, undefined);
+  assert.equal(replayed[1].error, live[1].error);
+  assert.equal(summarize(replayed).error_rate, 1);
+});
+
+test('provider_errors on failed calls changes neither llm_calls nor tokens_est', () => {
+  const answered = { raw: 'yes', latency_ms: 1, tokens_in_est: 7, tokens_out_est: 1 };
+  const failed = { raw: null, error: REFUSED_ERROR, latency_ms: null, tokens_in_est: 9, tokens_out_est: 0 };
+  const run = (calls) => ({ case_id: 'a', tags: [], repeat: 0, duration_ms: 1, error: REFUSED_ERROR, scores: {}, calls });
+  const withField = summarize([run([answered, { ...failed, provider_errors: [{ provider: 'groq', status: 401 }] }])]);
+  const without = summarize([run([answered, failed])]);
+  assert.deepEqual(withField, without);
+  assert.deepEqual([withField.llm_calls, withField.tokens_est], [1, { in: 7, out: 1 }]);
+});
