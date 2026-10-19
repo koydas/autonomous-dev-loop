@@ -6,13 +6,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag, reviewInputBudget } from '../lib/eval_suites.mjs';
+import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag, reviewInputBudget, reviewDiffLimits } from '../lib/eval_suites.mjs';
 import { filterCases, loadDataset, runSuite, summarize, checkThresholds } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
 import { buildChangeClassificationContext } from '../lib/change_classifier.mjs';
 import { parseEvidence } from '../lib/review_evidence.mjs';
-import { GROQ_MODEL_DEFAULTS, loadLLMConfig } from '../lib/config.mjs';
+import { GROQ_MODEL_DEFAULTS, loadLLMConfig, reviewMaxDiffChars } from '../lib/config.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
 import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage, liveCallArgs, createLiveLLM, buildLLM, applyEvalOverrides, liveModelId } from '../run_evals.mjs';
 import { partitionPublishable, partitionByPublishedModel, runCost } from '../lib/eval_scorecard.mjs';
@@ -418,10 +418,10 @@ const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
   : reviewText({ verdict: 'APPROVED' }));
 
 // Runs reviewSuite.run with a stub LLM; returns the output (or error) and the captured request.
-async function runReview(input, raw = reviewText({ verdict: 'APPROVED' })) {
+async function runReview(input, raw = reviewText({ verdict: 'APPROVED' }), testCase = undefined) {
   let request;
   try {
-    const output = await reviewSuite.run(input, { llm: async (args) => { request = args; return raw; } });
+    const output = await reviewSuite.run(input, { llm: async (args) => { request = args; return raw; }, testCase });
     return { output, request };
   } catch (error) {
     return { error, request };
@@ -621,8 +621,10 @@ test('reviewSuite.run propagates an LLM failure (errored run)', async () => {
   await assert.rejects(reviewSuite.run({ title: 'T', body: 'B', diff: SMALL_DIFF }, { llm: async () => { throw new Error('Groq 429'); } }), /Groq 429/);
 });
 
-test('reviewSuite.run follows the provider budget: Groq truncates to review_max_input_tokens, Anthropic keeps the 12,000-char cap', async () => {
-  const big = `diff --git a/src/big.js b/src/big.js\n--- /dev/null\n+++ b/src/big.js\n@@ -0,0 +1,900 @@\n${Array.from({ length: 900 }, (_, i) => `+export const value${i} = ${i} * 2; // padding line`).join('\n')}\n`;
+test('reviewSuite.run follows the provider limits: Groq truncates to review_max_input_tokens, Anthropic caps at anthropic_review_max_diff_chars', async () => {
+  const padding = (n) => Array.from({ length: n }, (_, i) => `+export const value${i} = ${i} * 2; // padding line`).join('\n');
+  const diffOf = (n) => `diff --git a/src/big.js b/src/big.js\n--- /dev/null\n+++ b/src/big.js\n@@ -0,0 +1,${n} @@\n${padding(n)}\n`;
+  const big = diffOf(900);
   const input = { title: 'T', body: 'B', diff: big };
   await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined, GROQ_API_KEY: undefined }, async () => {
     const { output, request } = await runReview(input);
@@ -630,10 +632,20 @@ test('reviewSuite.run follows the provider budget: Groq truncates to review_max_
     assert.ok(estimateTokens(request.systemPrompt + request.prompt) <= parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10));
   });
   await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: 'test-key', GROQ_API_KEY: undefined }, async () => {
+    // ≈ 45k chars: cut at 12,000 before the amendment, shown whole now.
     const { output, request } = await runReview(input);
-    assert.equal(output.diff_truncated, true);
-    assert.ok(request.prompt.includes(big.slice(0, 11000)));
-    assert.ok(!request.prompt.includes(big.slice(0, 12001)));
+    assert.equal(output.diff_truncated, false);
+    assert.ok(request.prompt.includes(big.trimEnd()));
+    // Past the configured cap (≈ 300k chars > 200,000): boundary cut with the marker, code withheld (ADR-0038).
+    const cap = reviewMaxDiffChars('anthropic');
+    const huge = diffOf(6000);
+    assert.ok(huge.length > cap);
+    const cut = await runReview({ title: 'T', body: 'B', diff: huge });
+    assert.equal(cut.output.diff_truncated, true);
+    assert.ok(cut.request.prompt.includes(huge.slice(0, cap - 1000)));
+    assert.ok(!cut.request.prompt.includes(huge.slice(0, cap + 1)));
+    assert.match(cut.request.prompt, /\n… \[diff cut: \d+ more lines not shown, in src\/big\.js \(partly shown\)\]\n/);
+    assert.deepEqual([cut.output.verdict, cut.output.unreviewed_code_files], ['WITHHELD', ['src/big.js']]);
   });
 });
 
@@ -1428,3 +1440,101 @@ for (const temperature of [0, 0.6, null, undefined]) {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// Provider-independent review cases (ADR-0038 amendment): requires_cut
+// ---------------------------------------------------------------------------
+
+const GROQ_ENV = { AI_PROVIDER: 'groq', AI_PROVIDER_REVIEW: undefined, GROQ_API_KEY: 'gk', ANTHROPIC_API_KEY: undefined };
+const ANTHROPIC_ENV = { AI_PROVIDER: 'anthropic', AI_PROVIDER_REVIEW: undefined, GROQ_API_KEY: undefined, ANTHROPIC_API_KEY: 'ak' };
+const CUT_TAGS = ['truncated', 'budget-cut'];
+
+test('reviewDiffLimits: production limits per provider by default, the Groq budget cut on every provider with requires_cut', async () => {
+  const budget = parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10);
+  await withEnv(GROQ_ENV, () => {
+    assert.deepEqual(reviewDiffLimits(undefined), { maxInputTokens: budget, maxDiffChars: null });
+    assert.deepEqual(reviewDiffLimits({ id: 'c' }), { maxInputTokens: budget, maxDiffChars: null });
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }), { maxInputTokens: budget, maxDiffChars: null });
+  });
+  await withEnv(ANTHROPIC_ENV, () => {
+    assert.deepEqual(reviewDiffLimits({ id: 'c' }), { maxInputTokens: null, maxDiffChars: reviewMaxDiffChars('anthropic') });
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }), { maxInputTokens: budget, maxDiffChars: null });
+    assert.deepEqual(reviewDiffLimits({ id: 'c' }, { anthropic_review_max_diff_chars: '30000' }), { maxInputTokens: null, maxDiffChars: 30000 });
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }, { review_max_input_tokens: '5000' }), { maxInputTokens: 5000, maxDiffChars: null });
+    assert.throws(() => reviewDiffLimits({ id: 'c', requires_cut: true }, {}), /c: requires_cut needs review_max_input_tokens/);
+  });
+  for (const bad of [false, 'yes', 1, null]) {
+    assert.throws(() => reviewDiffLimits({ id: 'c', requires_cut: bad }), /c: requires_cut must be true or absent/);
+  }
+});
+
+test('review dataset: requires_cut is declared exactly on the cases whose expectation needs the cut (truncated / budget-cut)', async () => {
+  const cases = await loadReviewCases();
+  const declared = cases.filter((c) => c.requires_cut !== undefined);
+  for (const c of declared) assert.equal(c.requires_cut, true, `${c.id}: requires_cut`);
+  assert.deepEqual(declared.map((c) => c.id).sort(), cases.filter((c) => CUT_TAGS.some((t) => c.tags.includes(t))).map((c) => c.id).sort());
+  assert.ok(declared.length >= 5);
+});
+
+test('review dataset: every case is provider-independent — a requires_cut case gets the same cut on Groq and Anthropic, any other case is never cut', async () => {
+  const cases = await loadReviewCases();
+  const runAll = (env) => withEnv(env, async () => Promise.all(cases.map(async (c) => [c.id, await runReview(c.input, undefined, c)])));
+  const groq = new Map(await runAll(GROQ_ENV));
+  const anthropic = new Map(await runAll(ANTHROPIC_ENV));
+  for (const c of cases) {
+    const [g, a] = [groq.get(c.id), anthropic.get(c.id)];
+    assert.equal(g.error, undefined, `${c.id}: ${g.error?.message}`);
+    assert.equal(a.error, undefined, `${c.id}: ${a.error?.message}`);
+    if (c.requires_cut) {
+      assert.equal(a.output.diff_truncated, true, `${c.id}: cut on Anthropic`);
+      assert.equal(a.request.prompt, g.request.prompt, `${c.id}: same prompt on both providers`);
+      assert.deepEqual(a.output.unreviewed_code_files, g.output.unreviewed_code_files, c.id);
+    } else {
+      assert.deepEqual([g.output.diff_truncated, a.output.diff_truncated, a.output.body_truncated], [false, false, false], `${c.id}: never cut`);
+      assert.deepEqual(a.output.unreviewed_code_files, [], c.id);
+    }
+  }
+});
+
+test('review dataset: the #187 and #219 incident shapes hold on Anthropic too (they did not under the 12,000-char cap)', async () => {
+  const byId = Object.fromEntries((await loadReviewCases()).map((c) => [c.id, c]));
+  await withEnv(ANTHROPIC_ENV, async () => {
+    const hunks = byId['incident-finding-on-cut-hunks'];
+    const cut = await runReview(hunks.input, undefined, hunks);
+    assert.deepEqual(cut.output.unreviewed_code_files, []);
+    assert.match(cut.request.prompt, /\+test\('nightly\.yml: the ingest job/);
+    assert.doesNotMatch(cut.request.prompt, /a manual run of digest|docs\/maintenance\.md b\//);
+    const code = byId['incident-clean-code-cut'];
+    const withheld = await runReview(code.input, undefined, code);
+    assert.deepEqual([withheld.output.verdict, withheld.output.unreviewed_code_files], ['WITHHELD', ['src/http/status_class.mjs']]);
+    for (const id of ['incident-cut-mid-step-name', 'incident-missing-step-in-cut']) {
+      const run = await runReview(byId[id].input, undefined, byId[id]);
+      assert.ok(run.output.unreviewed_code_files.includes('.github/workflows/test.yml'), id);
+      assert.match(run.request.prompt, /\n… \[diff cut: \d+ more lines not shown, in [^\n]*\.github\/workflows\/test\.yml(?! \(partly)[^\n]*\]\n/, id);
+      assert.doesNotMatch(run.request.prompt, /Check \w+ coverage/, id);
+      // Without requires_cut, Anthropic shows test.yml and its c8 steps: the incident does not reproduce.
+      const uncapped = await runReview(byId[id].input);
+      assert.equal(uncapped.output.diff_truncated, false, `${id}: whole diff under the Anthropic cap`);
+      assert.match(uncapped.request.prompt, /Check \w+ coverage/, id);
+    }
+    const truncated = byId['truncated-diff-visible-bug'];
+    const visible = await runReview(truncated.input, undefined, truncated);
+    assert.match(visible.request.prompt, /- diff_truncated: true/);
+    assert.match(visible.request.prompt, /headers\.get\('retry-after'\)\.trim\(\)/);
+  });
+});
+
+test('review limits parity: without requires_cut the suite uses the limits pr_review.mjs derives from loadLLMConfig, on each provider', async () => {
+  for (const env of [GROQ_ENV, ANTHROPIC_ENV]) {
+    await withEnv(env, () => {
+      const config = loadLLMConfig('review');
+      assert.deepEqual(reviewDiffLimits({ id: 'c' }), { maxInputTokens: config.maxInputTokens ?? null, maxDiffChars: reviewMaxDiffChars(config.provider) }, config.provider);
+    });
+  }
+  // pr_review.mjs derives maxDiffChars from the provider of its loadLLMConfig('review') and passes it to buildReviewPrompt.
+  const src = await fs.readFile(path.join(REPO_ROOT, 'scripts/pr_review.mjs'), 'utf8');
+  assert.match(src, /const \{ provider: llmProvider,[^}]*\} = loadLLMConfig\('review'\);/);
+  assert.match(src, /const maxDiffChars = reviewMaxDiffChars\(llmProvider\);/);
+  assert.ok((await buildReviewPromptFields('scripts/pr_review.mjs')).has('maxDiffChars'));
+  assert.ok((await buildReviewPromptFields('scripts/lib/eval_suites.mjs')).has('maxDiffChars'));
+});

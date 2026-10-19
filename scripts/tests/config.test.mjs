@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { estimateTokens } from '../lib/metrics.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
-import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, detectFallbackProvider, loadLLMConfig, loadProviderConfig, GROQ_MODEL_DEFAULTS, ANTHROPIC_MODEL_DEFAULTS, validateStartup } from '../lib/config.mjs';
+import { requireEnv, loadConfigFromEnv, buildDeterministicPrompt, detectProvider, detectFallbackProvider, loadLLMConfig, loadProviderConfig, GROQ_MODEL_DEFAULTS, ANTHROPIC_MODEL_DEFAULTS, validateStartup, reviewMaxDiffChars, ANTHROPIC_REVIEW_MAX_DIFF_CHARS_DEFAULT } from '../lib/config.mjs';
 
 const STAGE_PROVIDER_VARS = ['AI_PROVIDER_VALIDATION', 'AI_PROVIDER_GENERATION', 'AI_PROVIDER_REVIEW', 'AI_PROVIDER_AUTOFIX'];
 const ALL_LLM_VARS = ['ANTHROPIC_API_KEY', 'GROQ_API_KEY', 'AI_PROVIDER', ...STAGE_PROVIDER_VARS, 'ANTHROPIC_MODEL', 'GROQ_MODEL', 'GROQ_API_URL', 'ANTHROPIC_API_URL', 'GROQ_REASONING_EFFORT', 'ANTHROPIC_EFFORT'];
@@ -730,3 +730,20 @@ for (const stage of ['review', 'autofix']) {
     assert.equal(loadLLMConfig(stage).temperature, 0);
   });
 }
+
+test('reviewMaxDiffChars: anthropic_review_max_diff_chars on Anthropic, default when absent, none on Groq (ADR-0038 amendment)', () => {
+  assert.equal(reviewMaxDiffChars('anthropic'), Number(GROQ_MODEL_DEFAULTS.anthropic_review_max_diff_chars));
+  assert.equal(reviewMaxDiffChars('anthropic', { anthropic_review_max_diff_chars: '50000' }), 50000);
+  assert.equal(reviewMaxDiffChars('anthropic', {}), ANTHROPIC_REVIEW_MAX_DIFF_CHARS_DEFAULT);
+  assert.equal(ANTHROPIC_REVIEW_MAX_DIFF_CHARS_DEFAULT, 200000);
+  assert.equal(reviewMaxDiffChars('groq'), null);
+  assert.equal(reviewMaxDiffChars('groq', { anthropic_review_max_diff_chars: 'abc' }), null, 'never read on Groq');
+  for (const bad of ['abc', '0', '-5', '1.5', '']) {
+    assert.throws(() => reviewMaxDiffChars('anthropic', { anthropic_review_max_diff_chars: bad }), /Invalid anthropic_review_max_diff_chars/);
+  }
+});
+
+test('config/models.yaml: the Anthropic review diff cap stays well above the old 12,000 chars and within the 1M context', () => {
+  const cap = reviewMaxDiffChars('anthropic');
+  assert.ok(cap > 12000 && estimateTokens('x'.repeat(cap)) <= 1_000_000 * 0.1, `${cap}`);
+});

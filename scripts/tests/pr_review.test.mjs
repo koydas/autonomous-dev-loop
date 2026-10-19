@@ -1422,6 +1422,45 @@ test('pr_review (Groq) withholds an approval when code was cut from the reviewed
   }
 });
 
+// ADR-0038 amendment: Anthropic has no input budget; its diff is capped at anthropic_review_max_diff_chars, not 12,000 chars.
+test('pr_review (Anthropic) reviews a 60k-char diff whole: no cut marker, the approval is not withheld', async () => {
+  const diff = bigDiff(60000);
+  const server = await startMockServer(makeHandler({ diffText: diff, groqContent: 'Fine.\n\n### Verdict\nAPPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const { content } = JSON.parse(server.requests.find((r) => r.url === '/v1/messages').body).messages[0];
+    const text = typeof content === 'string' ? content : content.map((b) => b.text ?? '').join('');
+    assert.ok(text.includes(diff.trimEnd()), 'the whole diff is in the prompt');
+    assert.doesNotMatch(text, /diff cut: |- diff_truncated: true/);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+    assert.doesNotMatch(result.stderr, /review\.prompt_truncated/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review (Anthropic) past anthropic_review_max_diff_chars: boundary cut with the marker, approval withheld (ADR-0038)', async () => {
+  const cap = Number(MODELS.anthropic_review_max_diff_chars);
+  const server = await startMockServer(makeHandler({ diffText: bigDiff(cap + 20000), groqContent: 'Fine.\n\n### Verdict\nAPPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const body = server.requests.find((r) => r.url === '/v1/messages').body;
+    assert.match(body, /… \[diff cut: \d+ more lines not shown, in src\/big\.js \(partly shown\)\]/);
+    assert.ok(body.length < cap + 20000, 'the diff was cut');
+    assert.match(result.stderr, /"verdict":"WITHHELD"/);
+    assert.match(result.stderr, /"unreviewed_code_files":1/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
 // #219: a REQUEST_CHANGES whose every finding cites only code the cut hid is withheld, not sent to auto-fix.
 const unseenFinding = (file) => `### ⚠️ Issues Found\n- **High** Broken workflow syntax — File: \`${file}\` Lines: 280-281 Root cause: stray \`- n\`. Fix: remove it.\n\n### 🚀 Verdict\nREQUEST_CHANGES`;
 

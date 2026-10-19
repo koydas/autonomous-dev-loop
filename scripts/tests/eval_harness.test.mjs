@@ -160,6 +160,17 @@ test('runSuite passes the case/repeat key to llmFor', async () => {
   assert.deepEqual(keys, ['a#0', 'a#1']);
 });
 
+test('runSuite passes the whole case to run as testCase, for case-level fields outside input (requires_cut)', async () => {
+  const seen = [];
+  const suite = { ...echoSuite, run: async (input, { llm, testCase }) => { seen.push(testCase); return echoSuite.run(input, { llm }); } };
+  const cases = parseDataset('{"id":"a","requires_cut":true,"input":{"q":"yes"},"expected":{"answer":"yes"}}');
+  await runSuite({ suite, cases, llmFor: () => async ({ prompt }) => prompt });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].id, 'a');
+  assert.equal(seen[0].requires_cut, true);
+  assert.deepEqual(seen[0].input, { q: 'yes' });
+});
+
 // ---------------------------------------------------------------------------
 // Metrics
 // ---------------------------------------------------------------------------

@@ -88,6 +88,22 @@ export function detectProvider(stage) {
   return raw ? resolveProvider(name, raw, repoWideProvider) : repoWideProvider();
 }
 
+// ADR-0038 amendment: review diff cap of a provider with no input budget. Groq's diff is bounded by
+// review_max_input_tokens instead, so it has none (null).
+export const ANTHROPIC_REVIEW_MAX_DIFF_CHARS_DEFAULT = 200000;
+
+/** Review diff cap in chars for `provider`: anthropic_review_max_diff_chars on Anthropic (default 200000), null on Groq. */
+export function reviewMaxDiffChars(provider, defaults = GROQ_MODEL_DEFAULTS) {
+  if (provider !== 'anthropic') return null;
+  const raw = defaults.anthropic_review_max_diff_chars;
+  if (raw === undefined) return ANTHROPIC_REVIEW_MAX_DIFF_CHARS_DEFAULT;
+  const chars = Number(raw);
+  if (!Number.isInteger(chars) || chars <= 0) {
+    throw new Error(`Invalid anthropic_review_max_diff_chars: ${raw} (must be a positive integer)`);
+  }
+  return chars;
+}
+
 // The provider that is not the stage's primary one, when its API key is set; null otherwise (no fallback).
 export function detectFallbackProvider(stage) {
   const fallback = PROVIDERS.find(p => p !== detectProvider(stage));

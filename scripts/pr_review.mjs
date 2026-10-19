@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS } from './lib/config.mjs';
+import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
 import { buildReviewPrompt, formatUnreviewedCodeNote, formatUnseenFindingsNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
@@ -46,7 +46,9 @@ process.on('unhandledRejection', async (reason) => {
 const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
-const { apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens, maxInputTokens, reasoningEffort } = loadLLMConfig('review');
+const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens, maxInputTokens, reasoningEffort } = loadLLMConfig('review');
+// ADR-0038 amendment: Anthropic has no input budget, its diff is capped at anthropic_review_max_diff_chars instead.
+const maxDiffChars = reviewMaxDiffChars(llmProvider);
 const systemPrompt = loadPrompt('pr-review-system');
 const userPromptTemplate = loadPrompt('pr-review-user');
 
@@ -346,10 +348,10 @@ obsLog({ stage: 'review', event: 'review.evidence_assessed', level: 'info', meta
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
 // ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
 const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
-  systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, evidence, dependencyManifestContext,
+  systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars, evidence, dependencyManifestContext,
   staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
 });
-if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, unreviewedCodeFiles });
+if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, maxDiffChars, unreviewedCodeFiles });
 if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });
 if (diffTruncated || bodyTruncated || adrCount < relatedAdrs.length) {
   obsLog({ stage: 'review', event: 'review.prompt_truncated', level: 'warn', meta: { prNumber, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles.length, adrs_shown: adrCount, adrs_found: relatedAdrs.length, max_input_tokens: maxInputTokens } });
