@@ -174,3 +174,53 @@ test('transientHttpError does not retry 5xx for non-retry-safe requests', () => 
 test('transientHttpError still retries 429 for non-retry-safe requests (rejected before processing)', () => {
   assert.notEqual(transientHttpError(fakeResponse(429), 'ctx', { retrySafe: false }).retryable, false);
 });
+
+// #134: deterministic backoff and AbortError handling, node:test fake timers (no real waits).
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test('retryWithBackoff waits exactly 200/400/800 ms (baseDelayMs 200, maxAttempts 4, no jitter), then throws with no further delay', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let calls = 0;
+  const failure = Object.assign(new Error('upstream 503'), { status: 503 });
+  const run = retryWithBackoff(async () => { calls++; throw failure; }, { baseDelayMs: 200, maxAttempts: 4, jitter: false });
+  const outcome = run.then(() => 'resolved', (err) => err);
+  await settle();
+  assert.equal(calls, 1);
+  for (const delay of [200, 400, 800]) {
+    const before = calls;
+    t.mock.timers.tick(delay - 1);
+    await settle();
+    assert.equal(calls, before, `no attempt before ${delay} ms`);
+    t.mock.timers.tick(1);
+    await settle();
+    assert.equal(calls, before + 1, `next attempt at exactly ${delay} ms`);
+  }
+  assert.equal(await outcome, failure);
+  t.mock.timers.tick(60000);
+  await settle();
+  assert.equal(calls, 4, 'no fifth attempt');
+});
+
+test('retryWithBackoff counts a retryable AbortError as one failed attempt and retries it per policy', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let calls = 0;
+  const run = retryWithBackoff(async () => {
+    if (++calls === 1) throw Object.assign(new DOMException('This operation was aborted', 'AbortError'), { retryable: true });
+    return 'ok';
+  }, { baseDelayMs: 200, maxAttempts: 4, jitter: false });
+  await settle();
+  assert.equal(calls, 1);
+  t.mock.timers.tick(200);
+  assert.equal(await run, 'ok');
+  assert.equal(calls, 2);
+});
+
+test('retryWithBackoff exhausts maxAttempts on a persistent retryable AbortError and rethrows it', async () => {
+  let calls = 0;
+  const abort = new DOMException('This operation was aborted', 'AbortError');
+  await assert.rejects(
+    () => retryWithBackoff(async () => { calls++; throw abort; }, { ...FAST, maxAttempts: 3 }),
+    (err) => err === abort && err.name === 'AbortError',
+  );
+  assert.equal(calls, 3);
+});

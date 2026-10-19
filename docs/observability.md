@@ -199,6 +199,7 @@ Emitted by `llm_client.mjs` and `config.mjs` (ADR-0032). `stage` is the calling 
 | `llm_call_failed`          | warn          | ✓             | `providers` (`<provider>:<status \| skip reason>`) — no provider answered; the caller gets the error |
 | `llm_fallback`             | warn / error  | —             | `from`, `to`, `error_type`, `error` — the primary failed and the call goes to the other provider; `error` level when the primary's key or config is wrong (`PERMANENT`, 401/403) |
 | `llm_fallback_disabled`    | warn          | —             | `from`, `error_type`, `error` — the primary failed and the caller passed `fallback: false` (live evals) |
+| `llm_provider_error`       | warn          | —             | `provider`, `error_type`, `status` — the primary failed with a structured provider error code (Groq `error.code`, e.g. `json_validate_failed` on HTTP 400: the model's output failed `response_format` JSON validation); logged once, before `llm_fallback` / `llm_fallback_disabled` / the no-key skip. Code and HTTP status only, never the response body |
 | `provider_config_fallback` | warn          | —             | `message`, `variable`, `ai_provider`, `provider` — `variable` (`AI_PROVIDER` or `AI_PROVIDER_<STAGE>`) is unknown or names a provider without a key; logged once per process |
 
 ### `retry`

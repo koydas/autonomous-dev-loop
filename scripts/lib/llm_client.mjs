@@ -93,6 +93,11 @@ async function callProviders(args, span) {
     providerErrors.push(called
       ? { provider: primary, status: httpStatus(error) }
       : { provider: primary, status: null, skipped: 'over_input_budget' });
+    // A provider's structured error code (Groq `json_validate_failed`) names the failure more precisely than
+    // the status taxonomy. Logged once, before any fallback: code and status only, never the body.
+    if (typeof error.code === 'string' && httpStatus(error) != null) {
+      log({ stage, event: 'llm_provider_error', level: 'warn', meta: { provider: primary, error_type: error.code, status: error.status } });
+    }
   }
   if (answered) {
     answeredBy(primary, args.model ?? null, false, text);

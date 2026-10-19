@@ -395,3 +395,107 @@ test('callGroq sets status on HTTP errors', async () => {
     (err) => err.status === 404,
   );
 });
+
+// #150: Groq's structured error code on a response_format JSON validation failure.
+const JSON_VALIDATE_400 = { error: { code: 'json_validate_failed', message: 'invalid generated JSON' } };
+
+test('callGroq attaches code json_validate_failed, status 400, retryable false, after exactly one request', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse(JSON_VALIDATE_400, 400); };
+  await assert.rejects(() => callGroq(BASE_ARGS), (err) => {
+    assert.equal(err.code, 'json_validate_failed');
+    assert.equal(err.status, 400);
+    assert.equal(err.retryable, false);
+    return true;
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+}));
+
+test('callGroq keeps a 400 with a malformed (non-JSON) body non-retryable and without a code', withRecordedWaits(async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('<html>Bad Request</html>', 400); };
+  await assert.rejects(() => callGroq(BASE_ARGS), (err) => {
+    assert.equal(err.status, 400);
+    assert.equal(err.retryable, false);
+    assert.equal(err.code, undefined);
+    return true;
+  });
+  assert.equal(calls, 1);
+}));
+
+test('callGroq keeps any other 400 non-retryable: no code field, or a code that is not a plain identifier, is not attached', withRecordedWaits(async () => {
+  for (const body of [
+    { error: { message: 'unsupported parameter', type: 'invalid_request_error' } },
+    { error: { code: 'contains spaces and {"body":"text"}', message: 'x' } },
+    { error: { code: 42 } },
+  ]) {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return makeResponse(body, 400); };
+    await assert.rejects(() => callGroq(BASE_ARGS), (err) => {
+      assert.equal(err.retryable, false);
+      assert.equal(err.code, undefined, JSON.stringify(body));
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+}));
+
+test('callGroq still retries a 5xx whose body carries a code (the code does not change the retry policy)', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '1';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1 ? makeResponse({ error: { code: 'service_unavailable' } }, 503) : makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  assert.equal(await callGroq(BASE_ARGS), 'ok');
+  assert.equal(calls, 2);
+  assert.equal(waits.length, 1);
+}));
+
+// #134: failure injection on the current retry policy (GROQ_MAX_RETRIES default 3 → 4 attempts).
+for (const status of [500, 502, 503, 504]) {
+  test(`callGroq retries a persistent HTTP ${status} exactly maxAttempts (4) times, then throws`, withRecordedWaits(async (waits) => {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return makeResponse('upstream error', status); };
+    await assert.rejects(() => callGroq(BASE_ARGS), (err) => err.status === status && err.message.includes(`HTTP error ${status}`));
+    assert.equal(calls, 4);
+    assert.equal(waits.length, 3, 'one backoff between attempts, none after the last');
+  }));
+}
+
+test('callGroq retries a retryable AbortError (fetch aborted) as one failed attempt', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '3';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    if (++calls === 1) throw new DOMException('This operation was aborted', 'AbortError');
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  assert.equal(await callGroq(BASE_ARGS), 'ok');
+  assert.equal(calls, 2);
+  assert.equal(waits.length, 1);
+}));
+
+test('callGroq waits out Retry-After (3 s) on fake timers: no request before 3000 ms, the retry at 3000 ms', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  process.env.GROQ_MAX_RETRIES = '1';
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1 ? makeResponse('rate limited', 429, { 'Retry-After': '3' }) : makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  try {
+    const run = callGroq(BASE_ARGS);
+    await settle();
+    assert.equal(calls, 1);
+    t.mock.timers.tick(2999);
+    await settle();
+    assert.equal(calls, 1, 'no retry before Retry-After');
+    t.mock.timers.tick(1);
+    assert.equal(await run, '{}');
+    assert.equal(calls, 2);
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});

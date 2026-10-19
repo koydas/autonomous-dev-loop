@@ -786,3 +786,160 @@ test('callLLM: a failed call ends its span in error with error.type and the inpu
   assert.deepEqual(llm[0].attributes['adl.llm.input_budget_skipped'], ['groq']);
   assert.equal(typeof llm[0].attributes['error.type'], 'string');
 });
+
+// #150: Groq 400 json_validate_failed → structured diagnosis event, then the ADR-0032 fallback.
+const JSON_VALIDATE_BODY = { error: { code: 'json_validate_failed', message: 'invalid generated JSON' } };
+
+test('callLLM: Groq 400 json_validate_failed logs llm_provider_error (code + status only) before falling back to Anthropic with its own URL, key and stage model', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-fallback-key';
+  process.env.GROQ_API_KEY = 'groq-primary-key';
+  process.env.AI_PROVIDER = 'groq';
+  const requests = [];
+  globalThis.fetch = async (url, opts) => {
+    requests.push({ url, headers: opts.headers, body: JSON.parse(opts.body) });
+    if (url === GROQ_API_URL_DEFAULT) return makeResponse(JSON_VALIDATE_BODY, 400);
+    return makeResponse({ content: [{ type: 'text', text: 'anthropic-answer' }] });
+  };
+  const { result, lines } = await captureStderr(() => withInstantTimers(() => callLLM({
+    stage: 'generation', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-primary-key', model: 'openai/gpt-oss-120b',
+    apiUrl: GROQ_API_URL_DEFAULT,
+  })));
+  assert.equal(result, 'anthropic-answer');
+  assert.deepEqual(requests.map((r) => r.url), [GROQ_API_URL_DEFAULT, 'https://api.anthropic.com/v1/messages'], 'one Groq request, then Anthropic');
+  const anthropic = requests[1];
+  assert.equal(anthropic.headers['x-api-key'], 'sk-ant-fallback-key');
+  assert.equal(anthropic.headers.Authorization, undefined);
+  assert.equal(anthropic.body.model, ANTHROPIC_MODEL_DEFAULTS.generation);
+
+  const events = lines.filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+  const diagnosis = events.filter((e) => e.event === 'llm_provider_error');
+  assert.equal(diagnosis.length, 1);
+  assert.equal(diagnosis[0].stage, 'generation');
+  assert.deepEqual(diagnosis[0].meta, { provider: 'groq', error_type: 'json_validate_failed', status: 400 });
+  const names = events.map((e) => e.event);
+  assert.ok(names.indexOf('llm_provider_error') < names.indexOf('llm_fallback'), 'diagnosis logged before the fallback');
+  const line = lines.find((l) => l.includes('"llm_provider_error"'));
+  assert.ok(!line.includes('invalid generated JSON'), 'no response body');
+  assert.ok(!line.includes('groq-primary-key') && !line.includes('sk-ant-fallback-key'), 'no credentials');
+});
+
+test('callLLM: Groq json_validate_failed and an Anthropic failure both appear in the final error', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async (url) => (url === GROQ_API_URL_DEFAULT
+    ? makeResponse(JSON_VALIDATE_BODY, 400)
+    : makeResponse('{"type":"error","error":{"type":"invalid_request_error"}}', 400));
+  await assert.rejects(
+    () => captureStderr(() => callLLM({ stage: 'generation', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT })),
+    (err) => {
+      assert.match(err.message, /All providers failed: groq: Groq API HTTP error 400: .*json_validate_failed.*, anthropic: Anthropic API HTTP error 400/s);
+      assert.deepEqual(err.providerErrors, [{ provider: 'groq', status: 400 }, { provider: 'anthropic', status: 400 }]);
+      return true;
+    },
+  );
+});
+
+test('callLLM: a Groq 400 without a structured code logs no llm_provider_error and still falls back', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  let groqCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (url === GROQ_API_URL_DEFAULT) { groqCalls++; return makeResponse('not json at all', 400); }
+    return makeResponse({ content: [{ type: 'text', text: 'ok' }] });
+  };
+  const { result, lines } = await captureStderr(() => callLLM({ stage: 'generation', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT }));
+  assert.equal(result, 'ok');
+  assert.equal(groqCalls, 1);
+  assert.ok(!lines.some((l) => l.includes('"llm_provider_error"')));
+  const fallback = lines.filter((l) => l.includes('"llm_fallback"')).map((l) => JSON.parse(l))[0];
+  assert.equal(fallback.level, 'error', 'a 400 stays a configuration-level fallback');
+});
+
+test('callLLM: llm_provider_error is logged even when no fallback key is configured (explicit skip)', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async () => makeResponse(JSON_VALIDATE_BODY, 400);
+  const lines = [];
+  const origWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try {
+    await assert.rejects(
+      () => callLLM({ stage: 'generation', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT }),
+      /groq: Groq API HTTP error 400.*anthropic: skipped \(no API key configured\)/s,
+    );
+  } finally {
+    process.stderr.write = origWrite;
+  }
+  const events = lines.filter((l) => l.includes('"llm_provider_error"')).map((l) => JSON.parse(l));
+  assert.deepEqual(events.map((e) => e.meta), [{ provider: 'groq', error_type: 'json_validate_failed', status: 400 }]);
+});
+
+// #134: failure injection at callLLM level (ADR-0032: any primary failure falls back).
+test('callLLM: an Anthropic 401 primary is called once, then the Groq fallback with its own URL, key and stage model', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  const requests = [];
+  globalThis.fetch = async (url, opts) => {
+    requests.push({ url, headers: opts.headers, body: JSON.parse(opts.body) });
+    if (opts.headers['x-api-key']) return makeResponse('{"type":"error","error":{"type":"authentication_error"}}', 401);
+    return makeResponse({ choices: [{ message: { content: 'groq-answer' } }] });
+  };
+  const { result } = await captureStderr(() => withInstantTimers(() =>
+    callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })));
+  assert.equal(result, 'groq-answer');
+  assert.deepEqual(requests.map((r) => r.url), ['https://api.anthropic.com/v1/messages', GROQ_API_URL_DEFAULT]);
+  const groq = requests[1];
+  assert.equal(groq.headers.Authorization, 'Bearer groq-key');
+  assert.equal(groq.headers['x-api-key'], undefined);
+  assert.equal(groq.body.model, GROQ_MODEL_DEFAULTS.review);
+});
+
+test('callLLM: an Anthropic 401 primary without a Groq key ends in an explicit skip, one request', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('{"type":"error","error":{"type":"authentication_error"}}', 401); };
+  await assert.rejects(
+    () => captureStderr(() => callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })),
+    (err) => {
+      assert.match(err.message, /anthropic: Anthropic API HTTP error 401.*groq: skipped \(no API key configured\)/s);
+      assert.deepEqual(err.providerErrors, [{ provider: 'anthropic', status: 401 }, { provider: 'groq', status: null, skipped: 'no_api_key' }]);
+      return true;
+    },
+  );
+  assert.equal(calls, 1);
+});
+
+test('callLLM: a persistent Groq 503 exhausts exactly maxAttempts (4) before the single Anthropic fallback call', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    return url === GROQ_API_URL_DEFAULT ? makeResponse('upstream down', 503) : makeResponse({ content: [{ type: 'text', text: 'fallback-ok' }] });
+  };
+  const { result } = await captureStderr(() => withInstantTimers(() => callLLM({
+    stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT,
+  })));
+  assert.equal(result, 'fallback-ok');
+  assert.deepEqual(calls, [...Array(4).fill(GROQ_API_URL_DEFAULT), 'https://api.anthropic.com/v1/messages']);
+});
+
+test('callLLM: a persistent Anthropic 503 exhausts exactly maxAttempts (4) before the single Groq fallback call', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    calls.push(url);
+    return opts.headers['x-api-key'] ? makeResponse('overloaded', 503) : makeResponse({ choices: [{ message: { content: 'fallback-ok' } }] });
+  };
+  const { result } = await captureStderr(() => withInstantTimers(() =>
+    callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })));
+  assert.equal(result, 'fallback-ok');
+  assert.deepEqual(calls, [...Array(4).fill('https://api.anthropic.com/v1/messages'), GROQ_API_URL_DEFAULT]);
+});

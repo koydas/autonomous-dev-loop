@@ -113,6 +113,17 @@ test('a prompt body never survives: prompt-like meta keys are not allowlisted, u
   assert.deepEqual(record.spans[0].meta, { model: 'm' });
 });
 
+test('llm_provider_error keeps only provider, error_type and status: no body, no credential, no prompt', () => {
+  const record = redactTrace(trace({
+    events: [ev('llm_provider_error', {
+      provider: 'groq', error_type: 'json_validate_failed', status: 400,
+      error: `Groq API HTTP error 400: invalid generated JSON ${PLANTED_SECRET}`, body: PROMPT_BODY, apiKey: PLANTED_SECRET,
+    })],
+  }), { env: ENV });
+  assert.deepEqual(record.events[0].meta, { provider: 'groq', error_type: 'json_validate_failed', status: 400 });
+  assert.deepEqual(EVENT_META_ALLOWLIST.llm_provider_error, ['provider', 'error_type', 'status']);
+});
+
 test(`free-text fields are cut to ${MAX_STRING} characters after scrubbing`, () => {
   const long = `${'e'.repeat(150)} ${PLANTED_SECRET} ${'z'.repeat(400)}`;
   const record = redactTrace(trace({ events: [ev('review.error', { error: long })] }), { env: ENV });
