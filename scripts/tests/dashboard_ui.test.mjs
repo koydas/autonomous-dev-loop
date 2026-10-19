@@ -107,3 +107,44 @@ test('shared navigation respects depth and the progressive enhancements need no 
   assert.doesNotMatch(DASHBOARD_SCRIPT, /innerHTML|document\.write|<script src/);
   assert.doesNotThrow(() => new Script(DASHBOARD_SCRIPT.replace(/^<script>\n|\n<\/script>$/g, '')));
 });
+
+test('partial review exposes verdict, coverage and evidence without inventing the original verdict', () => {
+  const model = modelOf(makeRecord({ outcome: 'partial', events: [
+    { event: 'review.prompt_truncated', meta: { diff_truncated: true, unreviewed_code_files: 3 } },
+    { event: 'review.verdict', meta: { verdict: 'WITHHELD', evidence_state: 'available', unreviewed_code_files: 3 } },
+  ] }));
+  const html = executionBrowser(model);
+  assert.match(html, /Recorded outcome: partial/);
+  assert.match(html, /Review verdict: WITHHELD/);
+  assert.match(html, /CI evidence: available/);
+  assert.match(html, /Code files not fully reviewed: 3/);
+  assert.match(html, /Review diff truncated/);
+  assert.doesNotMatch(html, /Withheld from:/);
+  assert.match(pipelineOverview(model), /partial does not imply a failed job/);
+});
+
+test('decision cards distinguish approvals, changes, skips and human escalations', () => {
+  for (const verdict of ['APPROVE', 'REQUEST_CHANGES']) {
+    assert.match(executionBrowser(modelOf(makeRecord({ events: [{ event: 'review.verdict', meta: { verdict, unreviewed_code_files: 0 } }] }))), new RegExp(`Review verdict: ${verdict}`));
+  }
+  const html = executionBrowser(modelOf(makeRecord({ outcome: 'partial', events: [
+    { event: 'review.skipped', meta: { reason: 'already_reviewed' } },
+    { event: 'autofix.skipped', meta: { reason: 'no_changes' } },
+    { event: 'autofix.escalated', meta: { reason: 'no_changes' } },
+  ] })));
+  assert.match(html, /Review skipped: already_reviewed/);
+  assert.match(html, /Auto-fix skipped: no_changes/);
+  assert.match(html, /Human escalation: no_changes/);
+  assert.match(executionBrowser(modelOf(makeRecord())), /Decision and cause: Not recorded/);
+});
+
+test('decision facts escape metadata and prefer the latest verdict over earlier events', () => {
+  const html = executionBrowser(modelOf(makeRecord({ events: [
+    { event: 'review.verdict', meta: { verdict: 'APPROVE' } },
+    { event: 'review.verdict', meta: { verdict: HOSTILE, withheld_from: HOSTILE, evidence_state: HOSTILE } },
+    { event: 'autofix.escalated', meta: { reason: HOSTILE } },
+  ] })));
+  assert.doesNotMatch(html, /Review verdict: APPROVE/);
+  assert.match(html, /&lt;script&gt;/);
+  for (const raw of RAW_MARKERS) assert.ok(!html.includes(raw));
+});
