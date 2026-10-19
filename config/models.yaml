@@ -19,7 +19,9 @@
 # Max estimated input = floor((8000 - max_tokens) / 1.10), rounded down to the hundred:
 #   max_tokens 1024 → 6341 → 6300 ; max_tokens 4096 → 3549 → 3500.
 # <stage>_max_input_tokens bounds system + user prompt (autofix: user prompt only, see below).
-# A prompt over budget fails the job before any LLM call: it could only end in 413.
+# In callLLM, over-budget Groq requests fall back to Anthropic when its key is set.
+# Review prompt fitting can fail earlier, before callLLM and any provider fallback.
+# Without an available fallback, callLLM fails before an API call (avoids a Groq 413).
 # Raise these values on a higher Groq tier (more TPM) or when using Anthropic.
 
 validation:             openai/gpt-oss-120b
@@ -37,8 +39,10 @@ generation_max_tokens:  4096
 # issue and the injected files. An issue citing large files fails explicitly instead of 413.
 generation_max_input_tokens: 3500
 
+# Verdicts and patches favor low sampling variability, like validation and generation.
+# Temperature zero does not guarantee identical responses.
 review:                 openai/gpt-oss-120b
-review_temperature:     0.6
+review_temperature:     0
 review_reasoning_effort: low
 # A truncated review has no verdict line and fails closed to REQUEST_CHANGES.
 review_max_tokens:      1024
@@ -47,7 +51,7 @@ review_max_tokens:      1024
 review_max_input_tokens: 6300
 
 autofix:                openai/gpt-oss-120b
-autofix_temperature:    0.2
+autofix_temperature:    0
 autofix_reasoning_effort: low
 autofix_max_tokens:     4096
 # Bounds the user prompt only; the system prompt (auto-fix-system.md, ~583) comes on top.

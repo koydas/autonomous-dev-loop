@@ -722,3 +722,11 @@ test('loadLLMConfig anthropic: rejects an invalid max_tokens and defaults when t
     GROQ_MODEL_DEFAULTS.anthropic_review_max_tokens = saved;
   }
 });
+
+for (const stage of ['review', 'autofix']) {
+  test(`production ${stage} temperature remains zero`, () => {
+    setEnv({ GROQ_API_KEY: 'test-key', AI_PROVIDER: 'groq' });
+    assert.equal(Number(GROQ_MODEL_DEFAULTS[`${stage}_temperature`]), 0);
+    assert.equal(loadLLMConfig(stage).temperature, 0);
+  });
+}

@@ -1406,3 +1406,25 @@ test('replay is unaffected: recorded answers, no provider call, no API key neede
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
+
+for (const provider of ['groq', 'anthropic']) {
+  test(`buildLLM records effective temperature for ${provider}`, async () => {
+    await withEnv({ AI_PROVIDER: provider, AI_PROVIDER_REVIEW: provider, GROQ_API_KEY: 'k', ANTHROPIC_API_KEY: 'k' }, async () => {
+      const built = await buildLLM(reviewSuite);
+      assert.equal(built.temperature, provider === 'groq' ? 0 : null);
+    });
+  });
+}
+
+for (const temperature of [0, 0.6, null, undefined]) {
+  test(`buildLLM replay preserves recorded temperature ${temperature}`, async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'replay-temperature-'));
+    const file = path.join(tmp, 'review.json');
+    try {
+      await fs.writeFile(file, JSON.stringify({ meta: { model: 'groq:x', temperature }, results: [] }));
+      assert.equal((await buildLLM(reviewSuite, file)).temperature, temperature);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+}

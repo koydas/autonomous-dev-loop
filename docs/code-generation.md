@@ -331,10 +331,12 @@ The following modules also maintain **≥ 80% test coverage**, each enforced by 
 | Key | Default | Description |
 |---|---|---|
 | `<stage>` | `openai/gpt-oss-120b` | Groq model. `GROQ_MODEL` overrides every stage. |
-| `<stage>_temperature` | per stage | `0`–`2`. |
+| `<stage>_temperature` | `0` (all stages) | `0`–`2`. Zero reduces sampling variability for verdicts and patches; it does not guarantee identical responses. |
 | `<stage>_max_tokens` | `1024` (validation, review), `4096` (generation, autofix) | Output cap, reasoning tokens included. Prompt + this value must stay under the Groq TPM per request (8K on the free tier), or Groq returns 413. |
-| `<stage>_max_input_tokens` | `6300` (validation, review), `3500` (generation), `2500` (autofix, user prompt only) | Estimated input budget (chars/4). Rule: input × 1.10 + `<stage>_max_tokens` ≤ 8000 (the estimate runs ~3% low; `workflow_gates.test.mjs` enforces it). Review shrinks the diff, then the PR body, to fit; when the prompt still does not fit, Groq is skipped without a request (it would reject it): the Anthropic fallback takes the prompt if `ANTHROPIC_API_KEY` is set, otherwise the stage fails before any LLM call (ADR-0028 amendment, ADR-0032). |
+| `<stage>_max_input_tokens` | `6300` (validation, review), `3500` (generation), `2500` (autofix, user prompt only) | Estimated input budget (chars/4). Rule: input × 1.10 + `<stage>_max_tokens` ≤ 8000 (the estimate runs ~3% low; `workflow_gates.test.mjs` enforces it). Review shrinks the diff, then the PR body, to fit; if fixed context still exceeds the budget, prompt fitting fails before `callLLM`, without provider fallback. For requests that reach `callLLM`, an over-budget Groq prompt is skipped: Anthropic handles it if its key is set, otherwise the stage fails before any API call (ADR-0028 amendment, ADR-0032). |
 | `<stage>_reasoning_effort` | `low` | `low` \| `medium` \| `high`, sent as `reasoning_effort` only when set. `GROQ_REASONING_EFFORT` overrides every stage; `off` stops sending it (ADR-0025). |
+
+Review and auto-fix use temperature zero to reduce sampling variability in verdicts and patches. Input/output budgets are preserved to avoid reducing already constrained review and file context. This tuning does not establish a quality improvement; compare live evals before drawing that conclusion.
 
 Anthropic keys (ADR-0032):
 
@@ -437,3 +439,4 @@ The repository enforces a minimum test coverage policy through CI using `c8 --ch
 - **Groq client** (`scripts/lib/groq_client.mjs`)
 - **Output writer** (`scripts/lib/output_writer.mjs`)
 - **Review evidence** (`scripts/lib/review_evidence.mjs`)
+Live eval results record the effective temperature (`null` for Anthropic); PR eval threshold comparisons are advisory until a baseline with matching recorded temperature is available. Legacy results without the setting are treated as unknown.

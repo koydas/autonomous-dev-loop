@@ -118,7 +118,7 @@ export function liveModelId(config, overrides = {}) {
 export async function buildLLM(suite, replayFile) {
   if (replayFile) {
     const recorded = JSON.parse(await fs.readFile(replayFile, 'utf8'));
-    return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, recorded };
+    return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, temperature: recorded.meta?.temperature, recorded };
   }
   const overrides = applyEvalOverrides();
   const config = loadLLMConfig(suite.stage);
@@ -126,7 +126,7 @@ export async function buildLLM(suite, replayFile) {
     throw new Error(`EVAL_ANTHROPIC_MODEL / EVAL_ANTHROPIC_EFFORT set, but the ${suite.stage} stage runs on ${config.provider}: dispatch with provider anthropic`);
   }
   const live = createLiveLLM(suite, config);
-  return { llmFor: () => live, model: liveModelId(config, overrides) };
+  return { llmFor: () => live, model: liveModelId(config, overrides), temperature: config.temperature ?? null };
 }
 
 async function readHistory(file) {
@@ -179,7 +179,7 @@ async function main() {
     logStart({ cases: cases.length, tokens_est: estimate.tokens, tokens_est_per_run: estimate.per_run, tokens_est_source: estimate.source });
     const refusal = opts.replay ? null : checkTokenBudget(estimate, process.env.EVAL_TOKEN_BUDGET);
     if (refusal) throw new Error(`Eval ${suite.name} refused before any LLM call: ${refusal}`);
-    const { llmFor, model, recorded: replayed } = await buildLLM(suite, opts.replay);
+    const { llmFor, model, temperature, recorded: replayed } = await buildLLM(suite, opts.replay);
     if (replayed) opts.repeats = resolveReplayRepeats(replayed.meta, opts);
 
     const results = await runSuite({
@@ -202,7 +202,7 @@ async function main() {
     }
     const meta = {
       run_id: runId, ...(workflowRunId ? { workflow_run_id: workflowRunId } : {}),
-      ts: new Date().toISOString(), model, repeats: opts.repeats, dataset: suite.dataset, dataset_sha256: datasetSha256,
+      ts: new Date().toISOString(), model, temperature, repeats: opts.repeats, dataset: suite.dataset, dataset_sha256: datasetSha256,
     };
     const report = formatReport({ suite: suite.name, summary, failures, results, meta });
 
