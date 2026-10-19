@@ -60,7 +60,7 @@ test('a hostile string in every rendered field is escaped on every page', () => 
 
 test('empty states: no record, no trace, no LLM call', () => {
   const { files } = site([]);
-  assert.deepEqual(Object.keys(files).sort(), ['pipeline/health.html', 'pipeline/index.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
+  assert.deepEqual(Object.keys(files).sort(), ['pipeline/flows.html', 'pipeline/health.html', 'pipeline/index.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
   assert.match(files['pipeline/index.html'], /No run record on the <code>metrics<\/code> branch yet/);
   assert.match(files['pipeline/index.html'], /No pipeline action recorded in this period/);
   assert.match(files['pipeline/traces/index.html'], /No trace index on the metrics branch yet/);
@@ -198,4 +198,14 @@ test('health, models and run pages link to each other; the eval run pages are cr
   assert.match(renderHealth(computeHealth({ model }), model), /Pipeline health/);
   // Two models sharing an anchor: the first keeps the id.
   assert.equal((renderModels([{ key: 'a:m', model: 'm', calls: 0, failed: 0, fallback: 0, tokens: 0, runs: [], evals: [] }, { key: 'b:m', model: 'm', calls: 0, failed: 0, fallback: 0, tokens: 0, runs: [], evals: [] }], model).match(/id="model-m"/g) ?? []).length, 1);
+});
+
+test('flow map is generated with shared navigation, retained evidence and live merge enhancement', () => {
+  const { files } = site([makeRecord({ runId: '921' })]);
+  const html = files['pipeline/flows.html'];
+  assert.match(html, /Flow map<\/a>/);
+  assert.match(html, /data-flow-dashboard/);
+  assert.match(html, /runs\/921-1.html/);
+  assert.match(html, /data-merge-node/);
+  assert.match(html, /api.github.com\/repos\/koydas\/autonomous-dev-loop\/pulls/);
 });

@@ -175,7 +175,7 @@ export const DASHBOARD_SCRIPT = `<script>
 </script>`;
 
 export function dashboardHeader(root, pipeline) {
-  return `<a class="skip-link" href="#main-content">Skip to content</a><header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Dev loop <span class="muted">/ monitor</span></a><nav class="primary-nav" aria-label="Main navigation"><a href="${root}index.html">Overview</a>${pipeline ? `<a href="${root}pipeline/traces/index.html">Issues & flows</a><a href="${root}pipeline/index.html">Executions</a><a href="${root}pipeline/health.html">Health</a>` : ''}</nav><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">View repository →</a></div></header>`;
+  return `<a class="skip-link" href="#main-content">Skip to content</a><header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Dev loop <span class="muted">/ monitor</span></a><nav class="primary-nav" aria-label="Main navigation"><a href="${root}index.html">Overview</a>${pipeline ? `<a href="${root}pipeline/flows.html">Flow map</a><a href="${root}pipeline/traces/index.html">Issues & flows</a><a href="${root}pipeline/index.html">Executions</a><a href="${root}pipeline/health.html">Health</a>` : ''}</nav><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">View repository →</a></div></header>`;
 }
 
 export function evalOverview(suites) {
