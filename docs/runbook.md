@@ -265,6 +265,7 @@ No-ops: `rebaseline` on a run of the series' own model is appended as usual; a d
 | `eval_replay.error`, job red without a report | The PR's code cannot run the replay: malformed `evals/datasets/*.jsonl` (the error names file and line) or a suite module that throws on import. Run `node scripts/replay_evals_ci.mjs --site-url …` locally |
 | ⚪ "dashboard unreachable" or "not replayed" | Neutral (green job). Check the Pages site and the `EVAL_SITE_URL` repository variable; a suite with no live run yet needs one **Actions → Evals** run on `main` |
 | ⚠️ "Dataset changed since the run" | Expected after a dataset edit: thresholds are advisory until the next live run on `main` records the new hash |
+| Local `--replay` of a circuit-breaker run: no ⛔ section, `circuit_breaker` null, runs that were skipped live are executed | A results file recorded before #211: its failed calls carry no `provider_errors`, so replay is message-only. A daily quota (TPD/RPD) still re-trips (its message names it); "every provider refused" (401/403/429 on every provider) does not, and `error_rate` stays 1. Not a regression: re-record with a live run to get the breaker back on replay. Since #211 a failed call records `provider_errors` and `createReplayLLM` reattaches it, so the breaker trips at the same run with the same runs skipped ([details](evals.md#swallowed-llm-errors)). `eval-replay.yml` never meets one (a breaker run is never published) |
 
 ### `pr-evals`
 

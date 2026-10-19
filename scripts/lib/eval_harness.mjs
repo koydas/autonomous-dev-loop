@@ -12,7 +12,8 @@
  * it to record every call (latency, estimated tokens, raw response), which makes a
  * run replayable: re-scoring a recorded run costs no LLM call (createReplayLLM).
  * A call that threw is recorded too, as { raw: null, error }: the run is errored even when the stage
- * swallows the error, and a replay throws it again at the same position.
+ * swallows the error, and a replay throws it again at the same position. Its err.providerErrors, if any, is kept as
+ * provider_errors so the replayed error re-trips the circuit breaker like the live one.
  */
 
 import fs from 'node:fs/promises';
@@ -70,9 +71,17 @@ export function createRecordingLLM(llm, { now = Date.now } = {}) {
   };
 }
 
+// Per-provider outcome of a failed call (llm_client.mjs err.providerErrors), as recorded and as reattached on
+// replay: { provider, status, skipped? }. null when the error carries none (legacy record, non-callLLM error).
+const providerErrorsOf = (list) => (Array.isArray(list)
+  ? list.map((p) => ({ provider: p?.provider ?? null, status: p?.status ?? null, ...(p?.skipped ? { skipped: p.skipped } : {}) }))
+  : null);
+
 // recorded: results[] of a previous run. Calls are served per (case_id, repeat) in order.
-// A recorded failed call ({ error }) is rethrown in its place. Once a run's calls are exhausted, its
-// recorded error is rethrown (results recorded before failed calls were kept).
+// A recorded failed call ({ error, provider_errors? }) is rethrown in its place, with providerErrors reattached
+// so detectQuotaExhaustion decides as on the live run; without provider_errors (recorded before #211) it is
+// message-only. Once a run's calls are exhausted, its recorded error is rethrown, message-only (results
+// recorded before failed calls were kept).
 // A recorded provider is served again, so a replay keeps the evidence of who answered.
 export function createReplayLLM(recorded) {
   const queues = new Map();
@@ -83,7 +92,10 @@ export function createReplayLLM(recorded) {
     const entry = queues.get(key);
     if (!entry || entry.calls.length === 0) throw new Error(entry?.error ?? `Replay: no recorded call left for ${key}`);
     const call = entry.calls.shift();
-    if (call.error) throw new Error(call.error);
+    if (call.error) {
+      const providerErrors = providerErrorsOf(call.provider_errors);
+      throw Object.assign(new Error(call.error), providerErrors ? { providerErrors } : {});
+    }
     return call.provider ? { text: call.raw, provider: call.provider, model: call.model ?? null } : call.raw;
   };
 }
@@ -101,8 +113,8 @@ const DAILY_QUOTA = /\b(tokens|requests) per day \((TPD|RPD)\)/i;
 // else null. err.providerErrors (llm_client.mjs) carries per-provider statuses; a provider skipped without
 // a call (no API key, over its input budget, fallback disabled for a pinned eval) is neither evidence for
 // nor against a quota. Any other status (e.g. Anthropic 400 "not scoped to a workspace", a config error)
-// is not a quota. A bare message
-// (replay) is matched on its text only.
+// is not a quota. A replayed error carries the recorded providerErrors (createReplayLLM); a bare message
+// (legacy replay) is matched on its text only.
 export function detectQuotaExhaustion(err) {
   const message = String(err?.message ?? err ?? '');
   const daily = message.match(DAILY_QUOTA);
@@ -187,12 +199,14 @@ async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) 
         onQuota(q);
       }
       llmError ??= err;
+      const providerErrors = providerErrorsOf(err?.providerErrors);
       calls.push({
         raw: null,
         error: llmErrorMessage(err),
         latency_ms: null,
         tokens_in_est: estimateTokens(`${args.systemPrompt ?? ''}${args.prompt ?? ''}`),
         tokens_out_est: 0,
+        ...(providerErrors ? { provider_errors: providerErrors } : {}),
       });
       throw err;
     }
