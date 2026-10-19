@@ -464,7 +464,8 @@ for (const name of ['generation-system', 'auto-fix-system']) {
 
 // Runs scripts/generate_issue_change.mjs in a scratch repo against one mock server that answers
 // the Anthropic call with `changes` and records the GitHub calls.
-async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', issueBody = 'Add a helper.', issueLabels, aiOutput, githubStatus = 201 } = {}) {
+// llmFailures: the first N LLM requests answer 503 (transient), the next one succeeds.
+async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', issueBody = 'Add a helper.', issueLabels, aiOutput, githubStatus = 201, llmFailures = 0 } = {}) {
   const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smoke-gen-'));
   for (const [rel, content] of Object.entries(files)) {
     await fs.mkdir(path.dirname(path.join(repoDir, rel)), { recursive: true });
@@ -476,6 +477,11 @@ async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', i
     req.on('data', (d) => (body += d));
     req.on('end', () => {
       requests.push({ method: req.method, url: req.url, body });
+      if (req.url === '/v1/messages' && requests.filter((r) => r.url === '/v1/messages').length <= llmFailures) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end('{"type":"error","error":{"type":"api_error","message":"upstream unavailable"}}');
+        return;
+      }
       res.writeHead(req.url === '/v1/messages' ? 200 : githubStatus, { 'Content-Type': 'application/json' });
       res.end(req.url === '/v1/messages'
         ? JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(aiOutput ?? { summary: 'Add a helper', changes }) }] })
@@ -581,6 +587,23 @@ test('generation entrypoint: a patch that passes every guardrail is written and 
     assert.match(run.output, /generated_paths<<EOF\nsrc\/helper\.mjs\nEOF/);
     assert.doesNotMatch(run.output, /rejected=true/);
     assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: a transient LLM 503 is retried once and the second attempt\'s patch is written (#134)', async () => {
+  const run = await runGeneration(
+    [{ target_path: 'src/helper.mjs', file_content: 'export const helper = () => 1;\n' }],
+    { llmFailures: 1 },
+  );
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.equal(run.requests.filter((r) => r.url === '/v1/messages').length, 2, 'exactly two LLM attempts');
+    assert.equal(await run.readRepo('src/helper.mjs'), 'export const helper = () => 1;\n');
+    assert.match(run.output, /generated_paths<<EOF\nsrc\/helper\.mjs\nEOF/);
+    assert.match(run.result.stderr, /"event":"retry\.wait".*"status":503/);
+    assert.doesNotMatch(run.result.stderr, /"event":"llm_fallback"/);
   } finally {
     await fs.rm(run.repoDir, { recursive: true, force: true });
   }

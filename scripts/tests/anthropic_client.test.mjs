@@ -284,3 +284,61 @@ test('callAnthropic sets status on HTTP errors', async () => {
   mockFetch(makeResponse('bad request', 400));
   await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.status === 400);
 });
+
+// #134: failure injection on the current retry policy (default maxAttempts 4).
+function withRecordedWaits(fn) {
+  return async () => {
+    const waits = [];
+    const origSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (cb, ms) => { waits.push(ms); cb(); return {}; };
+    try {
+      await fn(waits);
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+    }
+  };
+}
+
+test('callAnthropic retries a 503 then returns the text of the successful response, after exactly two calls', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => (++calls === 1
+    ? makeResponse('{"type":"error","error":{"type":"api_error"}}', 503)
+    : makeResponse({ content: [{ type: 'text', text: 'recovered-text' }] }));
+  assert.equal(await callAnthropic(BASE_ARGS), 'recovered-text');
+  assert.equal(calls, 2);
+  assert.equal(waits.length, 1);
+}));
+
+test('callAnthropic throws after exactly maxAttempts (4) calls on a persistent 503', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('{"type":"error","error":{"type":"api_error"}}', 503); };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.status === 503 && err.retryable === true);
+  assert.equal(calls, 4);
+  assert.equal(waits.length, 3);
+}));
+
+test('callAnthropic makes exactly one call on a 401 (not retried)', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('{"type":"error","error":{"type":"authentication_error"}}', 401); };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.status === 401 && err.retryable === false && err.errorType === 'PERMANENT');
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+}));
+
+test('callAnthropic retries a retryable AbortError (no fetch-timeout cause) as one failed attempt', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    if (++calls === 1) throw new DOMException('This operation was aborted', 'AbortError');
+    return makeResponse({ content: [{ type: 'text', text: 'ok' }] });
+  };
+  assert.equal(await callAnthropic(BASE_ARGS), 'ok');
+  assert.equal(calls, 2);
+  assert.equal(waits.length, 1);
+}));
+
+test('callAnthropic rethrows a persistent AbortError after exactly maxAttempts (4) calls', withRecordedWaits(async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new DOMException('This operation was aborted', 'AbortError'); };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.name === 'AbortError');
+  assert.equal(calls, 4);
+}));

@@ -875,3 +875,71 @@ test('callLLM: llm_provider_error is logged even when no fallback key is configu
   const events = lines.filter((l) => l.includes('"llm_provider_error"')).map((l) => JSON.parse(l));
   assert.deepEqual(events.map((e) => e.meta), [{ provider: 'groq', error_type: 'json_validate_failed', status: 400 }]);
 });
+
+// #134: failure injection at callLLM level (ADR-0032: any primary failure falls back).
+test('callLLM: an Anthropic 401 primary is called once, then the Groq fallback with its own URL, key and stage model', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  const requests = [];
+  globalThis.fetch = async (url, opts) => {
+    requests.push({ url, headers: opts.headers, body: JSON.parse(opts.body) });
+    if (opts.headers['x-api-key']) return makeResponse('{"type":"error","error":{"type":"authentication_error"}}', 401);
+    return makeResponse({ choices: [{ message: { content: 'groq-answer' } }] });
+  };
+  const { result } = await captureStderr(() => withInstantTimers(() =>
+    callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })));
+  assert.equal(result, 'groq-answer');
+  assert.deepEqual(requests.map((r) => r.url), ['https://api.anthropic.com/v1/messages', GROQ_API_URL_DEFAULT]);
+  const groq = requests[1];
+  assert.equal(groq.headers.Authorization, 'Bearer groq-key');
+  assert.equal(groq.headers['x-api-key'], undefined);
+  assert.equal(groq.body.model, GROQ_MODEL_DEFAULTS.review);
+});
+
+test('callLLM: an Anthropic 401 primary without a Groq key ends in an explicit skip, one request', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('{"type":"error","error":{"type":"authentication_error"}}', 401); };
+  await assert.rejects(
+    () => captureStderr(() => callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })),
+    (err) => {
+      assert.match(err.message, /anthropic: Anthropic API HTTP error 401.*groq: skipped \(no API key configured\)/s);
+      assert.deepEqual(err.providerErrors, [{ provider: 'anthropic', status: 401 }, { provider: 'groq', status: null, skipped: 'no_api_key' }]);
+      return true;
+    },
+  );
+  assert.equal(calls, 1);
+});
+
+test('callLLM: a persistent Groq 503 exhausts exactly maxAttempts (4) before the single Anthropic fallback call', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    return url === GROQ_API_URL_DEFAULT ? makeResponse('upstream down', 503) : makeResponse({ content: [{ type: 'text', text: 'fallback-ok' }] });
+  };
+  const { result } = await captureStderr(() => withInstantTimers(() => callLLM({
+    stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT,
+  })));
+  assert.equal(result, 'fallback-ok');
+  assert.deepEqual(calls, [...Array(4).fill(GROQ_API_URL_DEFAULT), 'https://api.anthropic.com/v1/messages']);
+});
+
+test('callLLM: a persistent Anthropic 503 exhausts exactly maxAttempts (4) before the single Groq fallback call', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    calls.push(url);
+    return opts.headers['x-api-key'] ? makeResponse('overloaded', 503) : makeResponse({ choices: [{ message: { content: 'fallback-ok' } }] });
+  };
+  const { result } = await captureStderr(() => withInstantTimers(() =>
+    callLLM({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' })));
+  assert.equal(result, 'fallback-ok');
+  assert.deepEqual(calls, [...Array(4).fill('https://api.anthropic.com/v1/messages'), GROQ_API_URL_DEFAULT]);
+});

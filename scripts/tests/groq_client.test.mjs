@@ -452,3 +452,50 @@ test('callGroq still retries a 5xx whose body carries a code (the code does not 
   assert.equal(calls, 2);
   assert.equal(waits.length, 1);
 }));
+
+// #134: failure injection on the current retry policy (GROQ_MAX_RETRIES default 3 → 4 attempts).
+for (const status of [500, 502, 503, 504]) {
+  test(`callGroq retries a persistent HTTP ${status} exactly maxAttempts (4) times, then throws`, withRecordedWaits(async (waits) => {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return makeResponse('upstream error', status); };
+    await assert.rejects(() => callGroq(BASE_ARGS), (err) => err.status === status && err.message.includes(`HTTP error ${status}`));
+    assert.equal(calls, 4);
+    assert.equal(waits.length, 3, 'one backoff between attempts, none after the last');
+  }));
+}
+
+test('callGroq retries a retryable AbortError (fetch aborted) as one failed attempt', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '3';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    if (++calls === 1) throw new DOMException('This operation was aborted', 'AbortError');
+    return makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  assert.equal(await callGroq(BASE_ARGS), 'ok');
+  assert.equal(calls, 2);
+  assert.equal(waits.length, 1);
+}));
+
+test('callGroq waits out Retry-After (3 s) on fake timers: no request before 3000 ms, the retry at 3000 ms', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  process.env.GROQ_MAX_RETRIES = '1';
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1 ? makeResponse('rate limited', 429, { 'Retry-After': '3' }) : makeResponse({ choices: [{ message: { content: '{}' } }] });
+  };
+  try {
+    const run = callGroq(BASE_ARGS);
+    await settle();
+    assert.equal(calls, 1);
+    t.mock.timers.tick(2999);
+    await settle();
+    assert.equal(calls, 1, 'no retry before Retry-After');
+    t.mock.timers.tick(1);
+    assert.equal(await run, '{}');
+    assert.equal(calls, 2);
+  } finally {
+    delete process.env.GROQ_MAX_RETRIES;
+  }
+});
