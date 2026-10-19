@@ -344,3 +344,32 @@ incomplete-code count before retrying. Keep approval withheld for incomplete
 coverage, and inspect `no_changes` escalations rather than forcing a patch.
 See [the incident diagnosis and proposed fixes](dashboard-partial-diagnosis.md)
 for the 16–18 October sample, evidence limits and follow-up acceptance criteria.
+
+### Flow map dashboard
+
+Open **Flow map** in the dashboard navigation for one card per merged PR.
+Branch-based issue matching (`ai/issue-<n>`) requires a head owned by this
+repository; fork or deleted heads use recorded PR identity or local closing
+references instead, so a fork branch cannot attach an unrelated issue trace. Use
+**Refresh merged PRs** to reload GitHub merge facts; search matches visible card
+text, including PR/issue numbers, outcomes and models. The page reads up to the
+1,000 most recently updated closed PRs and states when that limit is reached.
+A merge is confirmed only by GitHub's `merged_at`, never by workflow success.
+
+Each card shows the canonical pipeline vertically on narrow screens, including
+missing stages in grey. Grey means **not recorded**, not skipped or failed.
+Expand review/auto-fix executions to inspect actors, models, duration, then follow
+**Agent trace, events & spans** for detailed debugging. **Full chronological flow**
+shows the actual execution order; stage arrows only show the canonical pipeline.
+
+PR identity joins retained records first, then the repository-owned `ai/issue-N` branch convention (`ai/issue-007` → issue 7, as in `branchIssue()`) or first same-repository closing reference in the PR body (up to 64 KiB).
+Unlinked issues and missing run records are explicit. Metrics cover the retained
+work-item trace, possibly spanning several PRs. They exclude history beyond the
+six-month record window and index overflows. Cost is a list-price token estimate,
+not a bill; Groq free-tier calls cost nothing and are listed apart, other unknown
+models/providers remain unpriced. Thinking tokens, cache
+adjustments and non-LLM infrastructure costs are excluded.
+
+If GitHub is unavailable or rate-limited, the status explains the failure and
+recorded flow cards remain available with merge status unknown. Without
+JavaScript the recorded evidence is still readable. See ADR-0042.

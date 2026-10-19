@@ -5,6 +5,7 @@
 // inline styles carry computed numbers only. No external script: the feed filter is inline.
 import { escapeHtml, page, modelAnchor } from './eval_site.mjs';
 import { feedEntries } from './pipeline_model.mjs';
+import { flowDashboard, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
 import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps } from './dashboard_ui.mjs';
 
@@ -453,6 +454,7 @@ ${sections || emptyCard('No LLM call or eval run recorded yet.')}`, 1);
  */
 export function buildPipelineSite({ model, health, models, generatedAt = null }) {
   const files = {
+    'pipeline/flows.html': pipelinePage('Flow map', flowDashboard(model) + FLOW_SCRIPT, 1).replace('</style>', FLOW_STYLE + '</style>'),
     'pipeline/index.html': renderFeedIndex(model, { generatedAt }),
     'pipeline/traces/index.html': renderTraceIndex(model),
     'pipeline/health.html': renderHealth(health, model),
