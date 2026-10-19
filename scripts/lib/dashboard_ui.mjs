@@ -198,11 +198,35 @@ export function pipelineOverview(model, root = '') {
   const runs = model.runs ?? [];
   const successful = runs.filter(r => r.outcome === 'success').length;
   const failed = runs.filter(r => r.outcome === 'failed').length;
-  return `<section aria-label="Pipeline summary"><div class="section-intro"><div><span class="eyebrow">Pipeline monitor</span><h2>What happened in the loop?</h2><p>Recorded executions in the retained window. A successful job does not imply an approved or merged PR.</p></div><a class="button-link" href="${root}traces/index.html">Issues & flows →</a></div><div class="summary-grid">${metric('Successful executions', successful, 'Jobs that completed successfully', root + 'index.html?result=success#executions', 'good')}${metric('Failed executions', failed, 'Inspect the failure and its trace', root + 'index.html?result=failed#executions', failed ? 'bad' : '')}${metric('Other results', runs.length - successful - failed, 'Partial, skipped or unknown', root + 'index.html#executions')}${metric('Work-item flows', model.traces?.length ?? 0, 'Issues and PRs with recorded traces', root + 'traces/index.html')}</div></section>`;
+  return `<section aria-label="Pipeline summary"><div class="section-intro"><div><span class="eyebrow">Pipeline monitor</span><h2>What happened in the loop?</h2><p>Recorded executions in the retained window. A successful job does not imply an approved or merged PR. Recorded outcomes mix execution and business decisions: partial does not imply a failed job. This is not an end-to-end success rate.</p></div><a class="button-link" href="${root}traces/index.html">Issues & flows →</a></div><div class="summary-grid">${metric('Successful executions', successful, 'Runs recorded as success; not an approval rate', root + 'index.html?result=success#executions', 'good')}${metric('Failed executions', failed, 'Inspect the failure and its trace', root + 'index.html?result=failed#executions', failed ? 'bad' : '')}${metric('Other results', runs.length - successful - failed, 'Partial, skipped or unknown', root + 'index.html#executions')}${metric('Work-item flows', model.traces?.length ?? 0, 'Issues and PRs with recorded traces', root + 'traces/index.html')}</div></section>`;
+}
+
+// Explain recorded facts without turning a business verdict into a job status.
+function executionFacts(run) {
+  const events = run.events ?? [];
+  const latest = (name) => events.filter(event => event.event === name).at(-1)?.meta;
+  const review = latest('review.verdict');
+  const skipped = latest('review.skipped');
+  const autofix = latest('autofix.skipped');
+  const escalation = latest('autofix.escalated');
+  const budget = latest('review.prompt_truncated');
+  const facts = [];
+  if (review) {
+    facts.push(`Review verdict: ${review.verdict ?? 'Not recorded'}`);
+    if (review.withheld_from) facts.push(`Withheld from: ${review.withheld_from}`);
+    if (review.evidence_state) facts.push(`CI evidence: ${review.evidence_state}`);
+  }
+  if (skipped) facts.push(`Review skipped: ${skipped.reason ?? 'Not recorded'}`);
+  if (autofix) facts.push(`Auto-fix skipped: ${autofix.reason ?? 'Not recorded'}`);
+  if (escalation) facts.push(`Human escalation: ${escalation.reason ?? 'Not recorded'}`);
+  const incomplete = review?.unreviewed_code_files ?? budget?.unreviewed_code_files;
+  if (Number.isSafeInteger(incomplete) && incomplete >= 0) facts.push(`Code files not fully reviewed: ${incomplete}`);
+  if (budget?.diff_truncated === true) facts.push('Review diff truncated');
+  return `<p>Recorded outcome: ${e(run.outcome ?? 'Not recorded')}</p><p>${facts.length ? facts.map(e).join(' · ') : 'Decision and cause: Not recorded'}</p>`;
 }
 
 export function executionBrowser(model, root = '') {
-  const cards = model.runs.map(run => `<article class="widget" data-entry data-result="${e(run.outcome || 'unknown')}"><div class="widget-head"><h3><a href="${runUrl(root, run)}">${e(run.workflow ?? 'Workflow')}</a></h3>${badge(run.outcome)}</div><p>${e(itemName(run.item))} · execution ${e(run.run_id)}</p><div class="widget-meta"><span>${e(date(run.started_at))}</span><span>${e(run.events.length)} actions</span><span>${e(run.event_name ?? 'Unknown trigger')}</span></div><div class="link-row"><a class="button-link" href="${runUrl(root, run)}">Inspect execution →</a>${model.tracesById?.has(run.trace_id) ? `<a class="button-link" href="${root}traces/${encodeURIComponent(run.trace_id)}.html">Full flow</a>` : ''}</div></article>`).join('');
+  const cards = model.runs.map(run => `<article class="widget" data-entry data-result="${e(run.outcome || 'unknown')}"><div class="widget-head"><h3><a href="${runUrl(root, run)}">${e(run.workflow ?? 'Workflow')}</a></h3>${badge(run.outcome)}</div><p>${e(itemName(run.item))} · execution ${e(run.run_id)}</p>${executionFacts(run)}<div class="widget-meta"><span>${e(date(run.started_at))}</span><span>${e(run.events.length)} actions</span><span>${e(run.event_name ?? 'Unknown trigger')}</span></div><div class="link-row"><a class="button-link" href="${runUrl(root, run)}">Inspect execution →</a>${model.tracesById?.has(run.trace_id) ? `<a class="button-link" href="${root}traces/${encodeURIComponent(run.trace_id)}.html">Full flow</a>` : ''}</div></article>`).join('');
   return `<section id="executions"><div class="section-intro"><div><h2>Executions</h2><p>One card per recorded workflow run. Search, filter, then inspect its actions and spans.</p></div></div>${cards ? browse('executions', cards, model.runs.length) : '<p class="notice">No executions recorded yet.</p>'}</section>`;
 }
 

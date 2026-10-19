@@ -2,7 +2,7 @@
 
 ## Reading the dashboard
 
-The overview separates **execution results** (whether a workflow job succeeded) from **evaluation gates** (whether the model met its quality thresholds). A successful execution does not imply that its PR was approved or merged. Click a success/failure widget to open the corresponding filtered executions.
+The overview separates **recorded outcomes** (which can mix execution status and business decisions) from **evaluation gates** (whether the model met its quality thresholds). A successful execution does not imply that its PR was approved or merged. Click a success/failure widget to open the corresponding filtered executions.
 
 - **Issues & flows** shows open issues loaded from the public GitHub API, with labels and links to any recorded flow. This live list requires JavaScript and API access; rate limits or connectivity failures show an explicit message and a link to GitHub. Refresh retries the request. At most 1,000 GitHub items are fetched, with a visible notice if more remain. PRs returned by the issues API are excluded. Live titles are displayed only in the browser, never added to public run records.
 - **Recorded flows** keeps the latest known execution result for each issue or PR, independently of its current open/closed state. Open a flow for its chronological executions, then an execution for its journal and full span waterfall. Missing records remain visible and labelled.
@@ -333,3 +333,14 @@ Or dispatch **Reset Auto-Fix Counter** (`reset-auto-fix.yml`, `pr_number`, `retr
 1. Remove `changes-requested` label from the PR.
 2. Apply `review-approved` label.
 3. Merge the PR through the normal GitHub merge UI.
+
+### Partial outcomes in the dashboard
+
+A recorded `partial` outcome can mean a withheld approval, requested changes,
+intentional review skip, or an auto-fix escalation. It is not a job failure rate.
+Execution cards show recorded decisions and causes separately; absent historical
+metadata is displayed as not recorded. Inspect the verdict, CI evidence and
+incomplete-code count before retrying. Keep approval withheld for incomplete
+coverage, and inspect `no_changes` escalations rather than forcing a patch.
+See [the incident diagnosis and proposed fixes](dashboard-partial-diagnosis.md)
+for the 16–18 October sample, evidence limits and follow-up acceptance criteria.
