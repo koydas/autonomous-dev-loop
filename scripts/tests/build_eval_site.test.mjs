@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  fetchPreviousSite, readPreviousSiteDir, assembleSite, writeSite, buildEvalSite, fetchPublishedBaseline, formatRunReport, buildRunReport,
+  fetchPreviousSite, readPreviousSiteDir, assembleSite, writeSite, buildEvalSite, fetchPublishedBaseline, formatRunReport, buildRunReport, loadSuiteDatasets,
 } from '../build_eval_site.mjs';
 import { emptyScorecard, addRun, toScorecardRun, MAX_RUNS } from '../lib/eval_scorecard.mjs';
 
@@ -586,4 +586,190 @@ test('readPipelineDir never follows a symlinked month or traces directory', asyn
   assert.deepEqual(data.traces, []);
   assert.ok(logs.some((m) => /2026-09 is not a directory; skipped/.test(m)));
   assert.ok(logs.some((m) => /traces is not a directory; skipped/.test(m)));
+});
+
+// ---------------------------------------------------------------------------
+// --rebaseline (#209, ADR-0032 amendment 2026-10-19)
+// ---------------------------------------------------------------------------
+
+const RB_IDS = ['c1', 'c2'];
+const RB_DATASETS = { review: { sha256: 'ds', ids: RB_IDS } };
+const OPUS = 'anthropic:claude-opus-5-5';
+const GROQ = 'groq:openai/gpt-oss-120b';
+
+// A review run that clears every review threshold on the two-case dataset above, each call answered by `model`.
+function reviewRun(runId, model, { ts = '2026-10-19T08:00:00Z', repeats = 1, ids = RB_IDS, sha = 'ds' } = {}) {
+  const [provider, ...name] = model.split(':');
+  return {
+    meta: { suite: 'review', run_id: runId, ts, model, repeats, dataset_sha256: sha },
+    summary: {
+      n_cases: ids.length, n_runs: ids.length * repeats, error_rate: 0, llm_calls: ids.length * repeats,
+      scores: { verdict_match: { mean: 1, n: ids.length } },
+      per_class: { request_changes: { recall: 1, support: 1 }, approve: { recall: 1, support: 1 } }, latency_ms: { p95: 1 },
+    },
+    failures: [],
+    results: ids.flatMap((id) => Array.from({ length: repeats }, (_, repeat) => ({
+      case_id: id, repeat, output: { verdict: 'APPROVE', diff_truncated: false, unreviewed_code_files: [] }, calls: [{ provider, model: name.join(':') }],
+    }))),
+  };
+}
+
+// Review series on Opus (two runs, published by manual dispatch), validation series on Groq.
+function opusSite() {
+  const runs = [reviewRun('o1', OPUS, { ts: '2026-10-15T00:00:00Z' }), reviewRun('o2', OPUS, { ts: '2026-10-16T00:00:00Z' })];
+  const val = results({ runId: 'v1' });
+  let scorecard = addRun(emptyScorecard(), 'validation', toScorecardRun(val));
+  for (const r of runs) scorecard = addRun(scorecard, 'review', toScorecardRun(r));
+  return { scorecard, details: { o1: runs[0], o2: runs[1], v1: val } };
+}
+
+test('rebaseline: an eligible run on another model replaces only its suite\'s history with a new series', () => {
+  const previous = opusSite();
+  const { scorecard, files, skipped, rebaseline } = assembleSite({ previous, resultsList: [reviewRun('g1', GROQ)], rebaseline: true, datasets: RB_DATASETS });
+  assert.deepEqual(scorecard.suites.review.runs.map((r) => [r.run_id, r.model]), [['g1', GROQ]]);
+  assert.deepEqual(scorecard.suites.validation, previous.scorecard.suites.validation, 'other suites untouched');
+  assert.deepEqual(skipped, []);
+  assert.deepEqual(rebaseline.rebaselined, [{ suite: 'review', run_id: 'g1', old_model: OPUS, new_model: GROQ, displaced_run_ids: ['o2', 'o1'] }]);
+  assert.deepEqual(rebaseline.refused, []);
+  assert.deepEqual(rebaseline.noops, [{ suite: 'validation', run_id: null, reason: 'no validation run in this build' }]);
+  assert.ok(files['runs/g1.json'] && files['runs/v1.json']);
+  assert.equal(files['runs/o1.json'], undefined, 'displaced run details leave the site (kept in the previous eval-site backup)');
+  assert.equal(JSON.parse(files['scorecard.json']).suites.review.runs.length, 1);
+});
+
+test('rebaseline off (default): the mismatch is skipped exactly as before and no rebaseline report is returned', () => {
+  const previous = opusSite();
+  const generatedAt = '2026-10-19T00:00:00Z';
+  const site = assembleSite({ previous, resultsList: [reviewRun('g1', GROQ)], generatedAt });
+  assert.equal(site.rebaseline, null);
+  assert.deepEqual(site.scorecard, previous.scorecard);
+  assert.equal(site.skipped[0].kind, 'model_mismatch');
+  assert.deepEqual(site, assembleSite({ previous, resultsList: [reviewRun('g1', GROQ)], datasets: RB_DATASETS, generatedAt }), 'datasets alone change nothing');
+});
+
+test('rebaseline: a same-model run is a no-op, appended as usual; an empty suite is a no-op the run starts', () => {
+  const previous = opusSite();
+  const same = assembleSite({ previous, resultsList: [reviewRun('o3', OPUS, { ts: '2026-10-19T00:00:00Z' })], rebaseline: true, datasets: RB_DATASETS });
+  assert.deepEqual(same.scorecard.suites.review.runs.map((r) => r.run_id), ['o3', 'o2', 'o1']);
+  assert.deepEqual(same.rebaseline.rebaselined, []);
+  assert.deepEqual(same.rebaseline.noops[0], { suite: 'review', run_id: 'o3', reason: `same model ${OPUS} as the published series` });
+  const first = assembleSite({ previous: empty(), resultsList: [reviewRun('g1', GROQ)], rebaseline: true, datasets: RB_DATASETS });
+  assert.deepEqual(first.scorecard.suites.review.runs.map((r) => r.run_id), ['g1']);
+  assert.deepEqual(first.rebaseline.noops, [{ suite: 'review', run_id: 'g1', reason: 'no published review series to replace' }]);
+});
+
+test('rebaseline: no run of the suite in the build leaves its history untouched', () => {
+  const previous = opusSite();
+  const val = results({ runId: 'v2', ts: '2026-10-19T00:00:00Z' });
+  const { scorecard, rebaseline } = assembleSite({ previous, resultsList: [val], rebaseline: true, datasets: RB_DATASETS });
+  assert.deepEqual(scorecard.suites.review, previous.scorecard.suites.review);
+  assert.deepEqual(scorecard.suites.validation.runs.map((r) => r.run_id), ['v2', 'v1']);
+  assert.deepEqual(rebaseline.noops.map((n) => n.suite), ['validation', 'review']);
+});
+
+test('rebaseline refuses a failed, mixed-model, provider-error, partial or unproven run and never resets history', () => {
+  const cases = {
+    'recorded threshold failure': (r) => { r.failures = [{ metric: 'per_class.approve.recall' }]; },
+    'threshold recomputed from SUITES': (r) => { r.summary.per_class.approve.recall = 0.5; },
+    'error_rate above 0': (r) => { r.summary.error_rate = 0.02; },
+    'errored case': (r) => { r.results[0].error = '429'; },
+    'circuit breaker': (r) => { r.summary.circuit_breaker = { provider: 'groq' }; },
+    'mixed models': (r) => { r.results[1].calls = [{ provider: 'anthropic', model: 'claude-opus-5-5' }]; },
+    'no provider evidence': (r) => { r.results[0].calls = [{ model: 'x' }]; },
+    'no answered call': (r) => { for (const x of r.results) x.calls = []; },
+    'filtered subset (--limit)': (r) => { r.results = r.results.slice(0, 1); },
+    'uneven repeats': (r) => { r.meta.repeats = 2; },
+    'other dataset content': (r) => { r.meta.dataset_sha256 = 'old'; },
+    'unknown case': (r) => { r.results[1].case_id = 'zz'; },
+    replay: (r) => { r.meta.model = `replay:${GROQ}`; },
+  };
+  for (const [name, mutate] of Object.entries(cases)) {
+    const previous = opusSite();
+    const run = reviewRun('g1', GROQ);
+    mutate(run);
+    let site;
+    try {
+      site = assembleSite({ previous, resultsList: [run], rebaseline: true, datasets: RB_DATASETS });
+    } catch (err) {
+      assert.match(err.message, /replay/, `${name}: only a replay may throw (toScorecardRun)`);
+      continue;
+    }
+    assert.equal(site.rebaseline.refused.length, 1, name);
+    assert.ok(site.rebaseline.refused[0].reasons.length, name);
+    assert.deepEqual(site.rebaseline.rebaselined, [], name);
+    assert.deepEqual(site.scorecard.suites.review, previous.scorecard.suites.review, `${name}: history intact`);
+  }
+});
+
+test('rebaseline refuses an unregistered suite, a suite whose dataset is not loaded, and a second new model in one build', () => {
+  const opus = opusSite();
+  const ghost = reviewRun('x1', GROQ);
+  ghost.meta.suite = 'ghost';
+  const previous = { ...opus, scorecard: addRun(opus.scorecard, 'ghost', toScorecardRun(reviewRun('x0', OPUS))) };
+  const site = assembleSite({ previous, resultsList: [ghost, reviewRun('g1', GROQ)], rebaseline: true });
+  assert.deepEqual(site.rebaseline.refused.map((r) => [r.suite, r.reasons.at(-1)]), [['ghost', 'unknown suite ghost'], ['review', 'dataset evals/datasets/review.jsonl not loaded']]);
+  const two = assembleSite({ previous: opusSite(), resultsList: [reviewRun('g1', GROQ), reviewRun('h1', 'anthropic:claude-sonnet-5-5', { ts: '2026-10-19T09:00:00Z' })], rebaseline: true, datasets: RB_DATASETS });
+  assert.deepEqual(two.rebaseline.refused.map((r) => r.reasons), [['review already re-baselined by run g1 in this build']]);
+});
+
+async function rebaselineFixture() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-'));
+  const backup = path.join(dir, 'backup');
+  await writeSite(assembleSite({ previous: opusSite(), resultsList: [] }).files, backup);
+  const content = RB_IDS.map((id) => JSON.stringify({ id, input: {}, expected: {} })).join('\n') + '\n';
+  await fs.mkdir(path.join(dir, 'root', 'evals', 'datasets'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'root', 'evals', 'datasets', 'review.jsonl'), content);
+  const sha = (await import('node:crypto')).createHash('sha256').update(content).digest('hex');
+  const write = async (run) => {
+    const file = path.join(dir, `${run.meta.run_id}.json`);
+    await fs.writeFile(file, JSON.stringify(run));
+    return file;
+  };
+  return { dir, backup, root: path.join(dir, 'root'), sha, write };
+}
+
+test('buildEvalSite rebaseline logs suite, old/new model and displaced runs, and passes --fail-on-model-change', async () => {
+  const { dir, backup, root, sha, write } = await rebaselineFixture();
+  const file = await write(reviewRun('g1', GROQ, { sha }));
+  const logs = [];
+  const out = path.join(dir, 'out');
+  const { scorecard } = await buildEvalSite({ outDir: out, previousDir: backup, resultFiles: [file], rebaseline: true, failOnModelChange: true, datasetRoot: root, log: (m) => logs.push(m) });
+  assert.deepEqual(scorecard.suites.review.runs.map((r) => r.run_id), ['g1']);
+  assert.ok(logs.some((l) => /rebaseline review: new series anthropic:claude-opus-5-5 → groq:openai\/gpt-oss-120b, started by run g1; displaced run\(s\): o2, o1/.test(l)), logs.join('\n'));
+  assert.ok(logs.includes('rebaseline validation: no-op (no validation run in this build)'));
+  await fs.access(path.join(out, 'runs', 'g1.json'));
+  // Without the flag, the same run on the configured provider is drift: nothing written.
+  await assert.rejects(buildEvalSite({ outDir: path.join(dir, 'out2'), previousDir: backup, resultFiles: [file], failOnModelChange: true, log: () => {} }), /model changed on the configured provider/);
+  await assert.rejects(fs.access(path.join(dir, 'out2')));
+});
+
+test('buildEvalSite rebaseline refused: ::error:: with the reasons, nothing written, even without --fail-on-model-change', async () => {
+  const { dir, backup, root, write } = await rebaselineFixture();
+  const file = await write(reviewRun('g1', GROQ)); // dataset_sha256 'ds' ≠ the fixture dataset
+  const logs = [];
+  const out = path.join(dir, 'out');
+  await assert.rejects(
+    buildEvalSite({ outDir: out, previousDir: backup, resultFiles: [file], rebaseline: true, datasetRoot: root, log: (m) => logs.push(m) }),
+    /rebaseline refused \(review: run g1\): no history is reset and nothing is published/,
+  );
+  assert.ok(logs.some((l) => /^(::error::|Error: )rebaseline review refused for run g1 \(groq:openai\/gpt-oss-120b, series anthropic:claude-opus-5-5\): dataset_sha256 ds is not the current evals\/datasets\/review\.jsonl/.test(l)), logs.join('\n'));
+  await assert.rejects(fs.access(out));
+});
+
+test('loadSuiteDatasets reads each registered suite\'s current dataset (sha256 + ids) and skips unknown suites', async () => {
+  const { root, sha } = await rebaselineFixture();
+  assert.deepEqual(await loadSuiteDatasets([reviewRun('g1', GROQ), { meta: { suite: 'ghost' } }, {}], root), { review: { sha256: sha, ids: RB_IDS } });
+  const real = await loadSuiteDatasets([results()]);
+  assert.match(real.validation.sha256, /^[0-9a-f]{64}$/);
+  assert.ok(real.validation.ids.length > 10);
+});
+
+test('build_eval_site CLI --rebaseline starts a new series from a full-dataset run of the repo\'s dataset', async () => {
+  const { dir, backup, write } = await rebaselineFixture();
+  const { review } = await loadSuiteDatasets([reviewRun('g1', GROQ)]);
+  const file = await write(reviewRun('g1', GROQ, { ids: review.ids, sha: review.sha256 }));
+  const out = path.join(dir, 'out');
+  const { stdout } = await promisify(execFile)(process.execPath, [SCRIPT, '--out', out, '--previous-dir', backup, '--fail-on-model-change', '--rebaseline', file]);
+  assert.match(stdout, /rebaseline review: new series/);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(out, 'scorecard.json'), 'utf8')).suites.review.runs.map((r) => r.run_id), ['g1']);
 });

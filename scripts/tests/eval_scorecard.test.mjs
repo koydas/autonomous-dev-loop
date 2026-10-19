@@ -21,6 +21,7 @@ import {
   recordRuns,
   partitionPublishable,
   partitionByPublishedModel,
+  rebaselineScorecard,
   runCost,
   reviewCoverage,
   formatCost,
@@ -425,4 +426,68 @@ test('runCost and the mixed-model check read the model under an eval effort tag'
 test('formatCost omits the per-call part when there is no call', () => {
   assert.equal(formatCost({ usd: 0, per_call_usd: null, source: 'chars/4 estimate, thinking tokens excluded' }), '$0');
   assert.equal(formatCost({ usd: 2, per_call_usd: 1, source: 'chars/4 estimate, thinking tokens excluded' }), '$2 ($1 per call)');
+});
+
+// #209: re-baseline. The suite gate (thresholds as registered, full dataset) is the caller's `gate`.
+const answered = (model, n = 2) => Array.from({ length: n }, (_, i) => ({ case_id: `c${i}`, calls: [{ provider: model.split(':')[0], model: model.split(':').slice(1).join(':') }] }));
+const pinnedRun = (opts) => ({ ...results(opts), results: answered(opts.model) });
+
+test('rebaselineScorecard replaces only the suite of an eligible run on another model and reports the displaced runs', () => {
+  let scorecard = addRun(emptyScorecard(), 'validation', toScorecardRun(results({ runId: 'a1', model: 'anthropic:x' })));
+  scorecard = addRun(scorecard, 'validation', toScorecardRun(results({ runId: 'a2', model: 'anthropic:x', ts: '2026-10-02T00:00:00Z' })));
+  scorecard = addRun(scorecard, 'review', toScorecardRun({ ...results({ runId: 'r0' }), meta: { ...results().meta, suite: 'review', run_id: 'r0' } }));
+  const run = pinnedRun({ runId: 'g1', model: 'groq:m', ts: '2026-10-05T00:00:00Z' });
+  const gateCalls = [];
+  const out = rebaselineScorecard(scorecard, [run], { gate: (r) => { gateCalls.push(r.meta.run_id); return []; } });
+  assert.deepEqual(out.scorecard.suites.validation.runs.map((r) => r.run_id), ['g1']);
+  assert.deepEqual(out.scorecard.suites.review, scorecard.suites.review);
+  assert.deepEqual(out.rebaselined, [{ suite: 'validation', run_id: 'g1', old_model: 'anthropic:x', new_model: 'groq:m', displaced_run_ids: ['a2', 'a1'] }]);
+  assert.deepEqual(out.noops, [{ suite: 'review', run_id: null, reason: 'no review run in this build' }]);
+  assert.deepEqual(gateCalls, ['g1']);
+  assert.equal(scorecard.suites.validation.runs.length, 2, 'input not mutated');
+});
+
+test('rebaselineScorecard: same model, empty suite and missing meta are no-ops; the gate is not consulted', () => {
+  const scorecard = addRun(emptyScorecard(), 'validation', toScorecardRun(results({ runId: 'g0' })));
+  const gate = () => assert.fail('gate called on a no-op');
+  const out = rebaselineScorecard(scorecard, [pinnedRun({ runId: 'g1', model: 'groq:m' }), {}], { gate });
+  assert.deepEqual(out.scorecard, scorecard);
+  assert.deepEqual(out.noops, [
+    { suite: 'validation', run_id: 'g1', reason: 'same model groq:m as the published series' },
+    { suite: null, run_id: null, reason: 'no published (unset suite) series to replace' },
+  ]);
+  assert.deepEqual(rebaselineScorecard(undefined, []).noops, []);
+});
+
+test('rebaselineScorecard refuses on its own checks and on the caller gate, keeping the history', () => {
+  const scorecard = addRun(emptyScorecard(), 'validation', toScorecardRun(results({ runId: 'a1', model: 'anthropic:x' })));
+  const variants = {
+    'failed thresholds: per_class.invalid.recall': (r) => { r.failures = [{ metric: 'per_class.invalid.recall' }]; },
+    'provider errors (error_rate 0.1, 0 errored or skipped run(s))': (r) => { r.summary.error_rate = 0.1; },
+    'provider errors (error_rate unset, 0 errored or skipped run(s))': (r) => { delete r.summary; },
+    'provider errors (error_rate 0, 1 errored or skipped run(s))': (r) => { r.results[0].skipped = true; },
+    'mixed models: calls answered by anthropic:x': (r) => { r.results[0].calls = [{ provider: 'anthropic', model: 'x' }]; },
+    'calls without a recorded provider: single model not proven': (r) => { r.results[0].calls = [{ model: 'm' }]; },
+    'no answered call': (r) => { r.results = r.results.map((x) => ({ ...x, calls: [{ error: 'boom' }] })); },
+    'meta.model unset': (r) => { delete r.meta.model; },
+    'replay run': (r) => { r.meta.model = 'replay:groq:m'; },
+    'gate says no': () => {},
+  };
+  for (const [reason, mutate] of Object.entries(variants)) {
+    const run = pinnedRun({ runId: 'g1', model: 'groq:m' });
+    mutate(run);
+    const gate = () => (reason === 'gate says no' ? ['gate says no'] : []);
+    const out = rebaselineScorecard(scorecard, [run], { gate });
+    assert.equal(out.refused.length, 1, reason);
+    assert.ok(out.refused[0].reasons.includes(reason), `${reason}: ${out.refused[0].reasons}`);
+    assert.equal(out.refused[0].current, 'anthropic:x');
+    assert.deepEqual(out.scorecard, scorecard, reason);
+  }
+});
+
+test('rebaselineScorecard: one new series per suite per build; a later run on yet another model is refused', () => {
+  const scorecard = addRun(emptyScorecard(), 'validation', toScorecardRun(results({ runId: 'a1', model: 'anthropic:x' })));
+  const out = rebaselineScorecard(scorecard, [pinnedRun({ runId: 'g1', model: 'groq:m' }), pinnedRun({ runId: 'h1', model: 'groq:n' })]);
+  assert.deepEqual(out.rebaselined.map((r) => r.run_id), ['g1']);
+  assert.deepEqual(out.refused.map((r) => [r.run_id, r.current, r.reasons]), [['h1', 'groq:m', ['validation already re-baselined by run g1 in this build']]]);
 });

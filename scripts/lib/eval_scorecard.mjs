@@ -158,6 +158,71 @@ export function partitionByPublishedModel(scorecard, resultsList) {
   return { publishable, skipped };
 }
 
+// Why a run cannot start a new series (#209): replay, recorded threshold failure, any provider error, or a
+// model that is not proven single. Stricter than partitionPublishable: every answered call must name its
+// provider:model, so results without that evidence never reset history.
+function rebaselineRefusals(results) {
+  const { model } = results.meta ?? {};
+  const reasons = [];
+  if (!model) reasons.push('meta.model unset');
+  else if (String(model).startsWith('replay:')) reasons.push('replay run');
+  const failed = (results.failures ?? []).map((f) => f.metric);
+  if (failed.length) reasons.push(`failed thresholds: ${failed.join(', ')}`);
+  const runs = results.results ?? [];
+  const errored = runs.filter((r) => r?.error || r?.skipped).length;
+  if (results.summary?.error_rate !== 0 || errored || results.summary?.circuit_breaker) {
+    reasons.push(`provider errors (error_rate ${results.summary?.error_rate ?? 'unset'}, ${errored} errored or skipped run(s))`);
+  }
+  const answered = runs.flatMap((r) => r?.calls ?? []).filter((c) => !c?.error);
+  const foreign = foreignModels(results);
+  if (foreign.length) reasons.push(`mixed models: calls answered by ${foreign.join(', ')}`);
+  if (!answered.length) reasons.push('no answered call');
+  else if (answered.some((c) => !c?.provider)) reasons.push('calls without a recorded provider: single model not proven');
+  return reasons;
+}
+
+/**
+ * Re-baseline (#209, ADR-0032 amendment 2026-10-19): an eligible run whose meta.model differs from the
+ * suite's published model replaces that suite's history with a one-run series; other suites are untouched.
+ * gate(results) → extra refusal reasons (the suite's unchanged ADR-0031 thresholds, full dataset), from the caller.
+ * Returns { scorecard, rebaselined: [{ suite, run_id, old_model, new_model, displaced_run_ids }],
+ * noops: [{ suite, run_id, reason }], refused: [{ suite, run_id, model, current, reasons }] }.
+ * A same-model run, a suite without a published series and a suite without a run in the batch are no-ops.
+ * One re-baseline per suite per batch: a later run on yet another model is refused.
+ */
+export function rebaselineScorecard(scorecard, resultsList, { gate = () => [] } = {}) {
+  const suites = { ...(scorecard?.suites ?? {}) };
+  const rebaselined = [];
+  const noops = [];
+  const refused = [];
+  const done = new Map();
+  for (const results of resultsList) {
+    const { suite, model, run_id: runId = null } = results.meta ?? {};
+    const current = suites[suite]?.runs?.[0]?.model;
+    if (!current) {
+      noops.push({ suite: suite ?? null, run_id: runId, reason: `no published ${suite ?? '(unset suite)'} series to replace` });
+    } else if (model === current) {
+      noops.push({ suite, run_id: runId, reason: `same model ${model} as the published series` });
+    } else if (done.has(suite)) {
+      refused.push({ suite, run_id: runId, model, current, reasons: [`${suite} already re-baselined by run ${done.get(suite)} in this build`] });
+    } else {
+      const reasons = [...rebaselineRefusals(results), ...gate(results)];
+      if (reasons.length) {
+        refused.push({ suite, run_id: runId, model, current, reasons });
+      } else {
+        rebaselined.push({ suite, run_id: runId, old_model: current, new_model: model, displaced_run_ids: suites[suite].runs.map((r) => r.run_id) });
+        suites[suite] = { runs: [toScorecardRun(results)] };
+        done.set(suite, runId);
+      }
+    }
+  }
+  const ran = new Set(resultsList.map((r) => r.meta?.suite));
+  for (const suite of Object.keys(scorecard?.suites ?? {})) {
+    if (!ran.has(suite)) noops.push({ suite, run_id: null, reason: `no ${suite} run in this build` });
+  }
+  return { scorecard: { ...scorecard, suites }, rebaselined, noops, refused };
+}
+
 // Returns a new scorecard; a run_id already present is replaced, not duplicated.
 export function addRun(scorecard, suite, run) {
   const previous = scorecard.suites[suite]?.runs ?? [];
