@@ -234,7 +234,7 @@ export const reviewSuite = {
     'per_class.request_changes.recall': { min: 0.8 },
     // Over-severity: a false REQUEST_CHANGES starts an auto-fix loop on a correct PR (support 8 → one case ≈ 12 pts).
     'per_class.approve.recall': { min: 0.6 },
-    // review_temperature is 0.6: looser than validation (temperature 0). Only measured with --repeats > 1.
+    // Historical threshold retained with the temperature-zero default; only measured with --repeats > 1.
     consistency: { min: 0.8, optional: true },
     error_rate: { max: 0.05 },
   },

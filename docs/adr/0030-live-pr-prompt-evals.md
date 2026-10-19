@@ -66,7 +66,7 @@ No `--scorecard`, no `publish` job, no Pages permission: the dashboard records t
 - ✅ The write token (comment, label) never shares a runner with the LLM keys.
 - ⚠️ A prompt change that needs a code change (new placeholder, new parser rule) cannot be measured: the PR is refused when it touches `scripts/` or `config/`, and a prompt referencing a placeholder the default branch does not fill is measured as-is (unfilled).
 - ⚠️ The PR's changed prompts replace the default branch's versions wholesale: if the default branch changed the same prompt since the PR's merge base, the comparison runs the PR's version without those changes. Rebase first.
-- ⚠️ With `repeats: 1` and review sampling at temperature > 0, a Δ of one case is noise; `repeats: 3` costs ≈ 35 min for `review`.
+- ⚠️ With `repeats: 1`, one flipped case moves verdict match by 1/cases. Groq review now defaults to temperature 0 (PR #225), which does not guarantee identical responses. Investigate small deltas with matched sampling settings before deciding whether more repeats are useful; `repeats: 3` costs ≈ 35 min for `review`.
 - ⚠️ The published baseline may be on another model or dataset revision; the comment says so but cannot remove the confound.
 - ⚠️ The prompt text sent to the provider is the PR's: a malicious prompt can make the model output anything, but the model has no tools, never sees a key, and only labels and escaped error strings reach the comment. The trusted labeler is the gate on spending TPM.
 - ⚠️ The `plan` job keeps its read-only token persisted in `.git/config` to fetch `refs/pull/<n>/head` of a private repository; it executes default-branch code only and holds no secret.

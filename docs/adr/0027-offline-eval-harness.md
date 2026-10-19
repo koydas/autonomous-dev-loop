@@ -28,7 +28,7 @@ The first suite is `validation` (15 cases, B1–B4 blockers + valid issues; dete
 ## Alternatives Considered
 
 - **External eval framework (promptfoo, OpenAI Evals, Braintrust)** — rejected for now: adds a dependency and a second config language, and would call prompts outside the production code path (`validateIssue`, `parseGroqResponse`), so it would not catch parser regressions. The JSONL + results format can be exported to one later.
-- **Run evals in `test.yml` on every PR** — rejected: spends tokens on every push and is non-deterministic (review stage runs at temperature 0.6). Replay mode can be added to CI cheaply instead.
+- **Run evals in `test.yml` on every PR** — rejected: spends tokens on every push and is non-deterministic (review used temperature 0.6 at the time; the current zero default still does not guarantee identical responses). Replay mode can be added to CI cheaply instead.
 - **LLM-as-judge scorers** — deferred: the first suite has a deterministic ground truth (valid / invalid). Generation and review suites will need it; a scorer is just a function, so a judge scorer fits the same contract (async scorers would be the only harness change).
 
 ## Consequences
@@ -112,7 +112,7 @@ The review stage decides what reaches the human merge gate and what starts auto-
 - **Label = final pipeline verdict** (`approve` / `request_changes` / `withheld`), not the model's raw verdict: what the pipeline acts on. Evidence cases (pass, fail, timeout) check the prompt + `decideVerdict` wiring; their final verdict is partly decided in code.
 - **Dataset:** 23 diffs (14 / 8 / 1). Real bugs, minimal buggy/clean pairs, docs-only and test-only diffs, an automation change that satisfies the prompt's three gates, prompt injection (PR body, code comment) and a truncated diff whose bug stays visible. Labels follow `prompts/pr-review-system.md`: an automation change without tests, docs and a coverage gate is a `REQUEST_CHANGES` by that prompt's rules, so most code cases sit outside the automation scope to keep the verdict about the bug.
 - **Scorers:** `verdict_match`, `flags_issue` (right reason: share of `must_flag` keywords found in Issues Found, plus `must_note` keywords anywhere outside the classification section; 0 when the model approved) and `no_false_alarm` (clean cases: approved without High/Medium findings). The last two are reported, not gated, like `blocker_match`.
-- **Gate:** `verdict_match ≥ 0.75`, `request_changes` recall ≥ 0.8, and, following the over-strictness gate of the `validation` amendment, `approve` recall ≥ 0.6. `consistency ≥ 0.8` is optional (temperature 0.6). `error_rate ≤ 0.05`; a review without a verdict line counts as an error, not as a fail-closed rejection.
+- **Gate:** `verdict_match ≥ 0.75`, `request_changes` recall ≥ 0.8, and, following the over-strictness gate of the `validation` amendment, `approve` recall ≥ 0.6. `consistency ≥ 0.8` is optional (only measured with repeats > 1); this historical threshold is retained with the temperature-zero default (PR #225). `error_rate ≤ 0.05`; a review without a verdict line counts as an error, not as a fail-closed rejection.
 - **Cost:** ≈ 66k estimated input tokens per repeat (≈ 2.9k per call); ≈ 11–12 min per repeat at 8K TPM with concurrency 1, ≈ 35–40 min for the workflow default of 3 repeats.
 
 Consequences:

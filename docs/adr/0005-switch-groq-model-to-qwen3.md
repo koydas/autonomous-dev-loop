@@ -50,3 +50,7 @@ Change `.github/workflows/pr-review.yml` from `on: pull_request` to `on: push: b
 - ✅ Review comments no longer expose internal model reasoning.
 - ⚠️ The `push` trigger runs the review script on every branch push, including branches without open PRs (handled by a silent exit 0).
 - ⚠️ Per-stage temperature keys must be added to `models.yaml` when a new pipeline stage is introduced.
+
+## Amendment (2026-10-19): Groq sampling defaults (PR #225)
+
+The table above records the original decision. Groq review and auto-fix now both default to temperature 0, alongside validation and generation, to reduce sampling variability in verdicts and patches. Zero does not guarantee identical responses or establish a measured quality improvement. Models, reasoning effort and token budgets are unchanged. Anthropic receives no temperature setting (ADR-0032).
