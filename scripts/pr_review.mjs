@@ -13,6 +13,7 @@ import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { prWorkItemHint } from './lib/trace_context.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { buildDependencyManifestContext } from './lib/dependency_manifest.mjs';
+import { lstatPrTreePath, readPrTreeFile, PR_TREE_MAX_BYTES } from './lib/pr_tree_reader.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
@@ -255,28 +256,24 @@ const prBody = prMeta.body || '(no description provided)';
 const dependencyManifestContext = await buildDependencyManifestContext(process.cwd());
 // ADR-0035 / ADR-0036: text searches over the PR tree (the working directory, data only per ADR-0023).
 // A listing or read error is logged as a warn event and yields no result; it never aborts the review.
-// The PR tree is untrusted: a symlink (to /dev/zero, or out of the tree) is never listed nor followed.
-// Every component is lstat'ed: a single lstat of the full path would follow a symlinked parent (config -> /etc).
-const pathKind = (p) => {
-  const parts = path.normalize(p).split(path.sep);
-  if (path.isAbsolute(p) || parts.includes('..')) return 'other';
-  let full = process.cwd();
-  for (const [i, part] of parts.entries()) {
-    full = path.join(full, part);
-    let st;
-    try {
-      st = fs.lstatSync(full);
-    } catch (err) {
-      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return 'missing';
-      throw err;
-    }
-    if (i < parts.length - 1 ? !st.isDirectory() : !st.isFile()) return 'other';
-  }
-  return 'file';
+// The PR tree is untrusted: a symlink (to /dev/zero, or out of the tree) is never listed nor followed,
+// and no file over PR_TREE_MAX_BYTES is read (shared reader, scripts/lib/pr_tree_reader.mjs; F22).
+// An oversized file is skipped like a non-regular one, with one review.file_skipped warn event.
+const repoRoot = process.cwd();
+const skippedLarge = new Set();
+const skipLarge = (p, size) => {
+  if (skippedLarge.has(p)) return;
+  skippedLarge.add(p);
+  obsLog({ stage: 'review', event: 'review.file_skipped', level: 'warn', meta: { path: p, reason: 'too_large', size, max_bytes: PR_TREE_MAX_BYTES } });
 };
 const isRegularFile = (p) => {
   try {
-    return pathKind(p) === 'file';
+    const kind = lstatPrTreePath(repoRoot, p);
+    if (kind.kind === 'file' && kind.size > PR_TREE_MAX_BYTES) {
+      skipLarge(p, kind.size);
+      return false;
+    }
+    return kind.kind === 'file';
   } catch {
     return false;
   }
@@ -284,10 +281,14 @@ const isRegularFile = (p) => {
 const repoFiles = {
   listFiles: () => execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0').filter((p) => p && isRegularFile(p)),
   readFile: (p) => {
-    const kind = pathKind(p);
-    if (kind === 'missing') throw Object.assign(new Error(`${p} does not exist`), { code: 'ENOENT' });
-    if (kind === 'other') throw Object.assign(new Error(`${p} is not a regular file`), { code: 'ENOTREG' });
-    return fs.readFileSync(path.join(process.cwd(), p), 'utf8');
+    const read = readPrTreeFile(repoRoot, p, { maxBytes: PR_TREE_MAX_BYTES });
+    if (read.kind === 'file') return read.content;
+    if (read.kind === 'missing') throw Object.assign(new Error(`${p} does not exist`), { code: 'ENOENT' });
+    if (read.kind === 'too_large') {
+      skipLarge(p, read.size);
+      throw Object.assign(new Error(`${p} is over ${PR_TREE_MAX_BYTES} bytes`), { code: 'EFBIG' });
+    }
+    throw Object.assign(new Error(`${p} is not a regular file`), { code: 'ENOTREG' });
   },
 };
 const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });

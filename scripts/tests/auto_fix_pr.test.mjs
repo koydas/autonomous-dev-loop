@@ -1258,12 +1258,13 @@ function diffFor(...files) {
   return files.map((f) => `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n@@ -1 +1 @@\n+changed\n`).join('');
 }
 
-async function runInRepo(files, handlerOpts) {
+async function runInRepo(files, handlerOpts, setup = null) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-guard-'));
   for (const [rel, content] of Object.entries(files)) {
     await fs.mkdir(path.dirname(path.join(tmpDir, rel)), { recursive: true });
     await fs.writeFile(path.join(tmpDir, rel), content);
   }
+  if (setup) await setup(tmpDir);
   const outputFile = path.join(tmpDir, 'github_output.txt');
   const server = await startMockServer(makeHandler(handlerOpts));
   const eventFile = await writeEventFile();
@@ -1376,6 +1377,88 @@ test('auto_fix_pr withholds a file over the size cap with an explicit marker ins
     assert.doesNotMatch(userMsg, /x{100}/, 'withheld file content must not be sent partially');
     assert.match(blockedComment(requests), /src\/big\.js`: file was withheld/);
     assert.equal(await read('src/big.js'), big);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// F02 (2026-10-19 audit), ADR-0023: a PR-branch file is read without following a symlink. The
+// symlink target holds a sentinel secret (as .git/config holds the persisted token).
+test('auto_fix_pr withholds a symlinked changed file: its target never reaches the prompt and a change to it is rejected', async () => {
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-outside-'));
+  const secret = 'SENTINEL-SECRET-extraheader-AUTHORIZATION-basic-xyz';
+  await fs.writeFile(path.join(outside, 'config'), `[http]\n\textraheader = ${secret}\n`);
+  const { result, requests, tmpDir } = await runInRepo({ 'src/app.js': 'a' }, {
+    diffBody: diffFor('src/app.js', 'src/leak.js'),
+    llmResponse: llmChanges([{ target_path: 'src/leak.js', file_content: 'overwritten' }]),
+  }, (dir) => fs.symlink(path.join(outside, 'config'), path.join(dir, 'src/leak.js')));
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const userMsg = JSON.parse(requests.find((r) => r.url === '/v1/messages').body).messages[0].content;
+    assert.ok(!userMsg.includes('SENTINEL-SECRET'), 'the symlink target is never sent to the LLM');
+    assert.match(userMsg, /### File withheld \(not a regular file in the PR tree\): src\/leak\.js — do NOT target this file/);
+    assert.ok(userMsg.includes('### Current file: src/app.js'), 'regular files are still shown');
+    const comment = blockedComment(requests);
+    assert.match(comment, /Patch Rejected[\s\S]*\*\*Rules:\*\* non_regular_target/);
+    assert.match(comment, /src\/leak\.js`: target is not a regular file in the PR tree \(symlink\)/);
+    assert.ok(!result.stderr.includes('SENTINEL-SECRET') && !result.stdout.includes('SENTINEL-SECRET'), 'never logged');
+    assert.deepEqual(appliedLabels(requests), ['auto-fix-attempt-1', 'needs-human']);
+    assert.match(result.stderr, /"event":"autofix\.file_withheld".*"level":"warn".*"path":"src\/leak\.js","reason":"symlink"/);
+    assert.match(result.stderr, /"event":"autofix\.prompt_budget".*"hidden_files":\["src\/leak\.js"\]/);
+    assert.equal(await fs.readFile(path.join(outside, 'config'), 'utf8'), `[http]\n\textraheader = ${secret}\n`);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr withholds a changed FIFO without blocking on it', { skip: process.platform === 'win32', timeout: 30000 }, async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { result, requests, tmpDir } = await runInRepo({}, {
+    diffBody: diffFor('src/pipe.js'),
+    llmResponse: llmChanges([{ target_path: 'src/new.js', file_content: 'export const n = 1;\n' }]),
+  }, async (dir) => {
+    await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+    execFileSync('mkfifo', [path.join(dir, 'src/pipe.js')]);
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const userMsg = JSON.parse(requests.find((r) => r.url === '/v1/messages').body).messages[0].content;
+    assert.match(userMsg, /File withheld \(not a regular file in the PR tree\): src\/pipe\.js/);
+    assert.match(result.stderr, /"event":"autofix\.file_withheld".*"reason":"not_regular_file"/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr rejects a change to a symlink that is not in the diff (pre-patch read)', async () => {
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-outside-'));
+  await fs.writeFile(path.join(outside, 'target.js'), 'keep me');
+  const { result, requests, tmpDir } = await runInRepo({ 'src/app.js': 'a' }, {
+    diffBody: diffFor('src/app.js'),
+    llmResponse: llmChanges([{ target_path: 'src/linked.js', file_content: 'overwritten' }]),
+  }, (dir) => fs.symlink(path.join(outside, 'target.js'), path.join(dir, 'src/linked.js')));
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(blockedComment(requests), /\*\*Rules:\*\* non_regular_target[\s\S]*src\/linked\.js`: target is not a regular file in the PR tree \(symlink\)/);
+    assert.doesNotMatch(result.stderr, /autofix\.file_withheld/, 'not a shown-file candidate');
+    assert.equal(await fs.readFile(path.join(outside, 'target.js'), 'utf8'), 'keep me');
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('auto_fix_pr rejects a change to an oversized file outside the diff as unshown, without reading it whole', async () => {
+  const big = 'y'.repeat(20000);
+  const { result, requests, read, tmpDir } = await runInRepo({ 'src/app.js': 'a', 'src/huge.js': big }, {
+    diffBody: diffFor('src/app.js'),
+    llmResponse: llmChanges([{ target_path: 'src/huge.js', file_content: 'y' }]),
+  });
+  try {
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.match(blockedComment(requests), /\*\*Rules:\*\* unshown_file[\s\S]*src\/huge\.js`: existing file was not shown/);
+    assert.equal(await read('src/huge.js'), big);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

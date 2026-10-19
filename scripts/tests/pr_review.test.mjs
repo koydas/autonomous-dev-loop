@@ -1816,6 +1816,51 @@ test('pr_review skips symlinked docs and ADRs in the stale-reference and related
   }
 });
 
+// F22 (2026-10-19 audit): no PR-tree file over PR_TREE_MAX_BYTES (1 MiB) is read. An oversized doc is
+// left out of the searches and an oversized config/models.yaml falls back to the defaults, each with a
+// review.file_skipped warn event; the review proceeds.
+test('pr_review skips oversized PR-tree files with a warn event and completes the review', async () => {
+  const removedLine = 'The review stage posts exactly one comment per head commit and edits it in place on a re-run.';
+  const oversized = `${removedLine}\n${'z'.repeat(1024 * 1024)}\n`;
+  const fixture = await makePrTree({
+    files: {
+      'scripts/review_stage.mjs': '// One comment per head.\n',
+      'docs/regular.md': `# Regular\n\n${removedLine}\n`,
+      'docs/huge.md': oversized,
+      'config/models.yaml': `review_max_input_tokens: 1234\n# ${'p'.repeat(1024 * 1024)}\n`,
+      'prompts/pr-review-system.md': 'old\n',
+    },
+  });
+  await fs.writeFile(path.join(fixture.tree, 'prompts/pr-review-system.md'), 'new prompt text\n');
+  const diffText = `diff --git a/scripts/review_stage.mjs b/scripts/review_stage.mjs\n--- a/scripts/review_stage.mjs\n+++ b/scripts/review_stage.mjs\n@@ -1,1 +1,1 @@\n-// ${removedLine}\n+// One comment per head.\n`
+    + 'diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -1,1 +1,1 @@\n-old\n+new\n';
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const skipped = result.stderr.split('\n').filter((l) => l.includes('"event":"review.file_skipped"')).map((l) => JSON.parse(l));
+    assert.deepEqual(skipped.map((e) => [e.level, e.meta.path, e.meta.reason]).sort(), [
+      ['warn', 'config/models.yaml', 'too_large'],
+      ['warn', 'docs/huge.md', 'too_large'],
+    ], 'one warn event per oversized file');
+    assert.ok(skipped.every((e) => e.meta.size > e.meta.max_bytes && e.meta.max_bytes === 1024 * 1024));
+    assert.doesNotMatch(result.stderr, /stale_refs_error|related_adrs_error/, 'an oversized file does not wipe either search');
+    assert.match(result.stderr, /"event":"review\.models_config_ignored".*"level":"warn"/);
+    assert.match(result.stderr, /"event":"review\.llm_request"/, 'the review reaches the LLM call');
+    const prompt = llmPrompt(server);
+    assert.match(prompt, /## Stale references[\s\S]*still referenced in: docs\/regular\.md:\d+/);
+    assert.ok(!prompt.includes('docs/huge.md'), 'the oversized doc is not searched');
+    assert.match(prompt, new RegExp(`review_max_input_tokens ${REVIEW_MAX_INPUT_TOKENS}\\b`), 'default budgets');
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'APPROVE');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
+  }
+});
+
 // ADR-0040: every side effect of a review is an observability event, journaled in the trace file with
 // the run envelope (provider/model per LLM call, comment and review URLs).
 test('pr_review journals its side effects and the run envelope in the trace file', async () => {

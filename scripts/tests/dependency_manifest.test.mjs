@@ -1,6 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -8,6 +9,7 @@ import {
   readPackageJsonDependencies,
   formatDependencyManifestContext,
   buildDependencyManifestContext,
+  MAX_PACKAGE_JSON_BYTES,
 } from '../lib/dependency_manifest.mjs';
 
 // ---------------------------------------------------------------------------
@@ -151,6 +153,25 @@ describe('readPackageJsonDependencies', () => {
     assert.equal(result, null);
     assert.equal(events.length, 1);
     await fs.rm(tree, { recursive: true, force: true });
+  });
+
+  // F22: an oversized package.json is ignored without being read.
+  test('returns null with a too_large warn event when package.json is over MAX_PACKAGE_JSON_BYTES', async () => {
+    const tree = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-manifest-large-'));
+    const pkg = JSON.stringify({ dependencies: { leak: '1' }, pad: 'x'.repeat(MAX_PACKAGE_JSON_BYTES) });
+    await fs.writeFile(path.join(tree, 'package.json'), pkg, 'utf8');
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(tree));
+    assert.equal(result, null);
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].meta, { path: 'package.json', reason: 'too_large' });
+    await fs.rm(tree, { recursive: true, force: true });
+  });
+
+  test('returns null with one warn event when package.json cannot be read', async (t) => {
+    t.mock.method(fsSync, 'lstatSync', () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); });
+    const { result, events } = await withWarnEvents(() => readPackageJsonDependencies(tmpDir));
+    assert.equal(result, null);
+    assert.deepEqual(events.map((e) => e.meta), [{ path: 'package.json', reason: 'EACCES' }]);
   });
 
   test('a missing package.json returns null without a warn event', async () => {

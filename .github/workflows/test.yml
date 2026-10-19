@@ -213,6 +213,17 @@ jobs:
             --statements 80 \
             node --test scripts/tests/stale_refs.test.mjs
 
+      - name: Check pr_tree_reader coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/pr_tree_reader.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/pr_tree_reader.test.mjs
+
       - name: Check related_adrs coverage (≥80%)
         run: |
           npx --yes c8 \

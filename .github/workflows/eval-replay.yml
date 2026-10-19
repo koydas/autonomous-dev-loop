@@ -28,6 +28,7 @@ on:
       - 'scripts/lib/trace_context.mjs'
       - 'scripts/lib/otlp_trace.mjs'
       - 'scripts/lib/dependency_manifest.mjs'
+      - 'scripts/lib/pr_tree_reader.mjs'
       - 'scripts/lib/file_filters.mjs'
       - 'scripts/lib/coverage_checker.mjs'
       - 'scripts/lib/change_classifier.mjs'
