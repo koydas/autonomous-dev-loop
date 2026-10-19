@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag, reviewInputBudget, reviewDiffLimits } from '../lib/eval_suites.mjs';
+import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, matchesFlag, reviewInputBudget, reviewDiffLimits, requiresCutLimits } from '../lib/eval_suites.mjs';
 import { filterCases, loadDataset, runSuite, summarize, checkThresholds } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
@@ -1449,22 +1449,52 @@ const GROQ_ENV = { AI_PROVIDER: 'groq', AI_PROVIDER_REVIEW: undefined, GROQ_API_
 const ANTHROPIC_ENV = { AI_PROVIDER: 'anthropic', AI_PROVIDER_REVIEW: undefined, GROQ_API_KEY: undefined, ANTHROPIC_API_KEY: 'ak' };
 const CUT_TAGS = ['truncated', 'budget-cut'];
 
-test('reviewDiffLimits: production limits per provider by default, the Groq budget cut on every provider with requires_cut', async () => {
+test('requiresCutLimits reads review_eval_cut_<provider>_max_input_tokens or _max_diff_chars, one of the two', () => {
+  assert.deepEqual(requiresCutLimits('groq'), { maxInputTokens: Number(GROQ_MODEL_DEFAULTS.review_eval_cut_groq_max_input_tokens), maxDiffChars: null });
+  assert.deepEqual(requiresCutLimits('anthropic'), { maxInputTokens: Number(GROQ_MODEL_DEFAULTS.review_eval_cut_anthropic_max_input_tokens), maxDiffChars: null });
+  assert.deepEqual(requiresCutLimits('anthropic', { review_eval_cut_anthropic_max_diff_chars: '12000' }), { maxInputTokens: null, maxDiffChars: 12000 });
+  assert.equal(requiresCutLimits('anthropic', {}), null);
+  assert.equal(requiresCutLimits('anthropic', { review_eval_cut_groq_max_input_tokens: '6300' }), null, 'another provider\'s key is not read');
+  assert.throws(() => requiresCutLimits('groq', { review_eval_cut_groq_max_input_tokens: '6300', review_eval_cut_groq_max_diff_chars: '9000' }), /Set one of review_eval_cut_groq_max_input_tokens and review_eval_cut_groq_max_diff_chars, not both/);
+  for (const bad of ['abc', '0', '-1', '2.5', '']) {
+    assert.throws(() => requiresCutLimits('anthropic', { review_eval_cut_anthropic_max_diff_chars: bad }), /Invalid review_eval_cut_anthropic_max_diff_chars/);
+  }
+});
+
+test('reviewDiffLimits: production limits by default; requires_cut takes the stage provider\'s configured cut, else production\'s', async () => {
   const budget = parseInt(GROQ_MODEL_DEFAULTS.review_max_input_tokens, 10);
   await withEnv(GROQ_ENV, () => {
     assert.deepEqual(reviewDiffLimits(undefined), { maxInputTokens: budget, maxDiffChars: null });
     assert.deepEqual(reviewDiffLimits({ id: 'c' }), { maxInputTokens: budget, maxDiffChars: null });
-    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }), { maxInputTokens: budget, maxDiffChars: null });
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }), requiresCutLimits('groq'));
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }, { review_max_input_tokens: '6300', review_eval_cut_groq_max_input_tokens: '4000' }), { maxInputTokens: 4000, maxDiffChars: null });
   });
   await withEnv(ANTHROPIC_ENV, () => {
     assert.deepEqual(reviewDiffLimits({ id: 'c' }), { maxInputTokens: null, maxDiffChars: reviewMaxDiffChars('anthropic') });
-    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }), { maxInputTokens: budget, maxDiffChars: null });
-    assert.deepEqual(reviewDiffLimits({ id: 'c' }, { anthropic_review_max_diff_chars: '30000' }), { maxInputTokens: null, maxDiffChars: 30000 });
-    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }, { review_max_input_tokens: '5000' }), { maxInputTokens: 5000, maxDiffChars: null });
-    assert.throws(() => reviewDiffLimits({ id: 'c', requires_cut: true }, {}), /c: requires_cut needs review_max_input_tokens/);
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }), requiresCutLimits('anthropic'));
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }, { review_eval_cut_anthropic_max_diff_chars: '12000' }), { maxInputTokens: null, maxDiffChars: 12000 });
+    // No key for the provider: its production limits (the run errors if they leave the case uncut).
+    assert.deepEqual(reviewDiffLimits({ id: 'c', requires_cut: true }, { anthropic_review_max_diff_chars: '30000' }), { maxInputTokens: null, maxDiffChars: 30000 });
+    assert.deepEqual(reviewDiffLimits({ id: 'c' }, { anthropic_review_max_diff_chars: '30000', review_eval_cut_anthropic_max_diff_chars: '100' }), { maxInputTokens: null, maxDiffChars: 30000 }, 'never applied without requires_cut');
   });
   for (const bad of [false, 'yes', 1, null]) {
     assert.throws(() => reviewDiffLimits({ id: 'c', requires_cut: bad }), /c: requires_cut must be true or absent/);
+  }
+});
+
+test('reviewSuite.run errors a requires_cut case its provider\'s limits leave whole, before any LLM call', async () => {
+  const c = (await loadReviewCases()).find((x) => x.id === 'incident-clean-code-cut');
+  const key = 'review_eval_cut_anthropic_max_input_tokens';
+  const saved = GROQ_MODEL_DEFAULTS[key];
+  delete GROQ_MODEL_DEFAULTS[key];
+  try {
+    await withEnv(ANTHROPIC_ENV, async () => {
+      const { error, request } = await runReview(c.input, undefined, c);
+      assert.match(error.message, /incident-clean-code-cut: requires_cut but not cut on anthropic: set review_eval_cut_anthropic_max_input_tokens or _max_diff_chars/);
+      assert.equal(request, undefined, 'no LLM call');
+    });
+  } finally {
+    GROQ_MODEL_DEFAULTS[key] = saved;
   }
 });
 
@@ -1476,7 +1506,7 @@ test('review dataset: requires_cut is declared exactly on the cases whose expect
   assert.ok(declared.length >= 5);
 });
 
-test('review dataset: every case is provider-independent — a requires_cut case gets the same cut on Groq and Anthropic, any other case is never cut', async () => {
+test('review dataset with the shipped config: a requires_cut case gets the same cut on Groq and Anthropic, any other case is never cut', async () => {
   const cases = await loadReviewCases();
   const runAll = (env) => withEnv(env, async () => Promise.all(cases.map(async (c) => [c.id, await runReview(c.input, undefined, c)])));
   const groq = new Map(await runAll(GROQ_ENV));
