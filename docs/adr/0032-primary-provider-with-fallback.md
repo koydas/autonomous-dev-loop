@@ -109,3 +109,25 @@ An `AI_PROVIDER` other than `groq`/`anthropic` (typo) silently resolved to Groq 
 - ⚠️ The new defaults are unmeasured. Until a stage's suite passes on its model, an Anthropic fallback there runs a model no gate has seen; Opus is one line away.
 - ⚠️ `vars.ANTHROPIC_MODEL` still overrides every stage (production included): set it only to pin one model everywhere.
 - ⚠️ The cost line stays an order of magnitude: chars/4, prompt cache and thinking tokens ignored.
+
+## Amendment (2026-10-19): explicit re-baseline of one suite's history (#209)
+
+**Context.** The 2026-10-14 amendment keeps one model per suite history and fails the publish on drift (`--fail-on-model-change`), with no way to accept a new model. The `review` series is `anthropic:claude-opus-5-5` (runs 38994398984 and 39000563980, published by manual dispatch), while production review runs on Groq: every Wednesday `review` cron runs on the configured provider, mismatches, and its publish fails. `init_site` (empty history on a 404) and `restore_run_id` (an older tree) are not a model acceptance.
+
+**Decision.**
+- `evals.yml` `workflow_dispatch` input `rebaseline` (boolean, default `false`), read once into the publish job as `REBASELINE: github.event_name == 'workflow_dispatch' && inputs.rebaseline`, passed as `--rebaseline` to `build_eval_site.mjs`. `schedule` never sets it; the eval job never sees it.
+- With it, `assembleSite` runs `rebaselineScorecard(scorecard, resultsList, { gate })` before `partitionByPublishedModel`: a run whose `meta.model` differs from its suite's published model replaces that suite's runs with itself, if eligible. Eligibility is checked from the results file (no recorded threshold failure, `error_rate` 0 with no errored / skipped case or breaker, every answered call carrying `provider:model` equal to `meta.model`, not a replay) and by the build (`gate`: `checkThresholds` against `SUITES[suite].thresholds` at the build's commit, `dataset_sha256` equal to the current dataset, every dataset case run `meta.repeats` times).
+- Other suites are untouched; one re-baseline per suite per build. Same model, no published series, or no run of the suite: logged no-op. A refused candidate is an `::error::` and fails the build before anything is written, so a flag without an eligible run can neither erase a suite nor deploy a new series.
+- The log names suite, old and new model, the new run and the displaced run IDs. Their trees stay in the previous deploy's `eval-site-<runId>` artifact (90-day retention, not archival); `restore_run_id` is the rollback.
+- Thresholds, datasets and exported signatures are unchanged: `assembleSite` / `buildEvalSite` take optional `rebaseline` / `datasets` / `datasetRoot`; `loadSuiteDatasets` and `rebaselineScorecard` are new.
+
+**Why not key history by suite + model.** Same reason as the 2026-10-14 amendment: every reader of `scorecard.json` v1 reads `suites[name].runs[0]`. A new series is still one series per suite; the readers follow it without change.
+
+**Why the gate is recomputed.** The results file is produced by the eval job; the publish job trusts it for scores, not for which thresholds were applied or which cases ran. Recomputing against the registry and the dataset at the build's commit means a filtered (`--tags` / `--limit`) or stale-dataset run never becomes a baseline, and the ratchet starts from a run that met the gates now in force.
+
+**Consequences.**
+- ✅ A model change on the configured provider has a remedy other than restoring the previous model: one manual dispatch, after which the weekly run publishes again.
+- ✅ Δ, trend, the replay / PR-eval baseline and the ratchet still compare one model; they restart from a run that passed every gate.
+- ⚠️ The displaced history leaves the live site; it survives only as the previous `eval-site-<runId>` artifact for 90 days.
+- ⚠️ A re-baseline costs a full live run of the suite (Groq free tier: one suite × 3 fills most of the TPD); it cannot reuse a past run's results artifact.
+- Supersedes the ⚠️ "Until #209 adds a re-baseline input" consequence of the 2026-10-14 amendment.

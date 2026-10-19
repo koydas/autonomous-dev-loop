@@ -153,6 +153,8 @@ git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[
 | `Invalid anthropic effort for stage "<stage>": ANTHROPIC_EFFORT=off is not supported by claude-opus-5-5` (or `config/models.yaml anthropic_<stage>_effort=off`, or `claude-sonnet-5-5`) | Opus 5.5 and Sonnet 5.5 cannot disable thinking; `off` would run their default effort. Set the named variable or key to `low` (or another level). `off` stays valid for models that reject effort (Sonnet 4.5, Haiku 4.5) |
 | An eval dispatch fails with `EVAL_ANTHROPIC_MODEL / EVAL_ANTHROPIC_EFFORT set, but the <stage> stage runs on groq` | The `anthropic_model` / `anthropic_effort` inputs only apply to an Anthropic run: re-dispatch with `provider: anthropic` |
 | `Anthropic API refused the request (stop_reason: refusal, category: …)` | A safety classifier declined the prompt, even after the server-side fallback (`fallbacks: "default"`) when the model supports it. The Groq fallback runs if `GROQ_API_KEY` is set. Recurring on a category: rephrase the prompt or issue (e.g. `cyber` on security-heavy diffs) |
+| The `evals` publish job fails with `model changed on the configured provider (<run_id>)` | The suite's published series is another model than the one the configured provider now runs (a `GROQ_MODEL` bump, a stage moved, or a series started by a measurement dispatch). Either restore the previous model, or accept the new one: [re-baseline](#evals) the suite |
+| The `evals` publish job fails with `rebaseline refused (<suite>: run <id>)` | The `::error::rebaseline <suite> refused …` line lists the reasons (failed threshold, provider errors, mixed models, partial run, stale dataset). Nothing was reset or deployed. Fix the cause (wait for the quota, fix the stage) and dispatch again |
 | Token permission drift | Workflows fail with 403; audit PAT/App token scopes and repository secret values |
 
 ---
@@ -184,7 +186,7 @@ Key steps to expand per workflow:
 
 ### `evals` (`evals.yml`)
 - **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly runs, one suite each, repeats 3: `validation` Mondays, `review` Wednesdays, 06:23 UTC (one suite × 3 fills most of the Groq TPD); a manual run's failed suite does not cancel the next
-- **publish → Build eval dashboard** — history read back from the site, the runs added (`<run_id>-<suite>`), runs skipped on `error_rate` as warnings; `eval-site-<run_id>` backup, then one Pages deploy. A 404 on `scorecard.json` fails a weekly run: it never sets `init_site`; re-run manually with `init_site` (first deploy) or `restore_run_id`
+- **publish → Build eval dashboard** — history read back from the site, the runs added (`<run_id>-<suite>`), runs skipped on `error_rate` as warnings; `eval-site-<run_id>` backup, then one Pages deploy. A 404 on `scorecard.json` fails a weekly run: it never sets `init_site`; re-run manually with `init_site` (first deploy) or `restore_run_id`. With `rebaseline`: `rebaseline <suite>: new series <old> → <new>, started by run <id>; displaced run(s): …` (`::notice::`), `rebaseline <suite>: no-op (…)`, or `::error::rebaseline <suite> refused … : <reasons>` and the job fails
 
 ### `pipeline-site` (`pipeline-site.yml`)
 - **publish → Build the dashboard** — after each pipeline workflow completes (`workflow_run`), a push to `metrics` or a dispatch: `Pipeline views: <n> record(s), <n> trace index(es), <n> page(s), <MB>` and the total site size (also in the step summary); a malformed record or index is a `Warning:` line and on the activity page, never a failure. A 404 on `scorecard.json` fails the job like an eval publish: dispatch with `init_site` only for a site that never had evals.
@@ -238,6 +240,21 @@ Key steps to expand per workflow:
 | `evidence` job fails with `checks.<name>.command` / `timeout_seconds` error | Fix `config/review-evidence.yaml` (each check needs a `command`; `timeout_seconds` must be a positive integer) and push |
 | A check reports `TIMEOUT` on every run | Raise `checks.<name>.timeout_seconds` or investigate the hang — timeouts never force `REQUEST_CHANGES`, so auto-fix will not address them |
 | Override persists although the check passes locally | Evidence runs with credential-like env vars and `GIT_CONFIG_*` stripped — a check that depends on one of them will fail in CI only; make it independent of those variables |
+
+### `evals`
+
+**Re-baseline a suite on a new model** (#209, ADR-0032 amendment 2026-10-19; rules in [docs/evals.md](evals.md#re-baseline)).
+
+Current case (2026-10-19): the `review` series is `anthropic:claude-opus-5-5` (runs 38994398984, 39000563980, both manual dispatches) while production review runs on Groq, so every Wednesday `review` cron fails its publish on the model change.
+
+1. **Which run to re-baseline with: a fresh dispatch on the configuration production uses**, not a past run (the publish only reads this dispatch's results). **Actions → Evals → Run workflow** on the default branch: `suite: review`, `provider: repo-variable`, `anthropic_model` empty, `anthropic_effort: models-yaml`, `repeats: 3`, `publish` on, `rebaseline` on, `init_site` off, `restore_run_id` empty. Run it on a day the Groq TPD is free (not the day of another suite's cron).
+2. **Before the publish, read the eval job:** green (every threshold passed) and an `error_rate` of 0 in the report. A red job, a provider error, a circuit breaker or a mixed-model run is refused: the publish fails with `::error::rebaseline review refused …`, nothing is reset or deployed, the live series stays. Fix the cause, then dispatch again.
+3. **Read the publish log:** `rebaseline review: new series anthropic:claude-opus-5-5 → groq:<model>, started by run <run_id>-review; displaced run(s): …`. Record the displaced run IDs and the run ID of the **last deploy before this one** (the newest earlier `evals` run with an `eval-site-<run_id>` artifact): that backup is the pre-rebaseline site. `validation` is untouched (`rebaseline validation: no-op …`).
+4. The next Wednesday cron appends to the new series. The replay gate and PR evals compare with it from now on.
+
+No-ops: `rebaseline` on a run of the series' own model is appended as usual; a dispatch whose eval job produced no results publishes nothing; `rebaseline` with `publish` off, or off the default branch, does nothing (no publish job).
+
+**Rollback** (within the 90-day retention of `eval-site-*`): dispatch with `restore_run_id: <last deploy before the rebaseline>` and `rebaseline` off. The history comes from that backup and the dispatch's own run is added on top, so pick a suite and provider whose model matches the restored series: e.g. `suite: validation`, `provider: repo-variable` (a `review` run on Groq would mismatch the restored Opus series and fail on `--fail-on-model-change`). Runs published after that backup leave the site (they stay in their own `eval-results-*` artifacts). After 90 days the displaced runs are gone; a rollback then means re-running the old model and re-baselining back.
 
 ### `eval-replay`
 

@@ -569,6 +569,23 @@ test('evals.yml fails the publish on a model change for schedule and repo-variab
   assert.equal([...evalsYml().matchAll(/--fail-on-model-change/g)].length, 1);
 });
 
+// #209: a new series (rebaseline) is an explicit manual request: off by default, never on schedule.
+test('evals.yml rebaseline input: boolean, default false, passed as --rebaseline on workflow_dispatch only', () => {
+  const text = evalsYml();
+  const input = text.slice(text.indexOf('      rebaseline:'), text.indexOf('\npermissions:'));
+  assert.match(input, /^      rebaseline:\n        description: [^\n]+\n        type: boolean\n        default: false\n$/);
+  assert.equal([...text.matchAll(/inputs\.rebaseline\b/g)].length, 1, 'read once, behind the dispatch guard');
+  const publish = evalsJobs().publish;
+  assert.ok(publish.includes("      REBASELINE: ${{ github.event_name == 'workflow_dispatch' && inputs.rebaseline }}\n"),
+    'schedule (empty inputs) and any other event never enable it');
+  assert.equal([...text.matchAll(/^\s+REBASELINE:/gm)].length, 1, 'no step may redefine REBASELINE');
+  assert.doesNotMatch(evalsJobs().eval, /REBASELINE|rebaseline/, 'the eval job (API keys) never sees it');
+  assert.match(publish, /if \[ "\$REBASELINE" = "true" \]; then args\+=\(--rebaseline\); fi/);
+  assert.equal([...text.matchAll(/--rebaseline/g)].length, 1, 'the build step only');
+  // --fail-on-model-change stays as is: the rebaseline accepts an eligible model change, it does not mute drift.
+  assert.match(publish, /if \[ "\$MODEL_CHANGE_FAILS" = "true" \]; then args\+=\(--fail-on-model-change\); fi\n\s+if \[ "\$REBASELINE" = "true" \]/);
+});
+
 // ADR-0032 amendment: one manual run measures a stage on another Anthropic model or effort.
 test('evals.yml anthropic_model / anthropic_effort inputs: empty / models-yaml by default, efforts from config', async () => {
   const text = evalsYml();

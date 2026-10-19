@@ -10,7 +10,7 @@ name: Evals
 # run, which goes stale without a regular one. Every registered suite once a week, repeats 3, one
 # suite per scheduled run: one suite × 3 fills most of the Groq free-tier 200k TPD, two in a row do
 # not fit (run 38271632735). On `schedule` every input is empty: the defaults below are explicit
-# (publish on, init_site off, no restore); workflow_gates.test.mjs pins them.
+# (publish on, init_site off, no restore, no rebaseline); workflow_gates.test.mjs pins them.
 on:
   schedule:
     # 06:23 UTC, off the hour (GitHub delays :00 schedules). One cron per suite, 48 h apart so a
@@ -76,6 +76,13 @@ on:
         description: Restore the dashboard history from the eval-site backup of this run ID instead of the live site
         required: false
         default: ''
+      # #209 (ADR-0032 amendment 2026-10-19): accept a new model for the suite. An eligible run (error-free,
+      # single model, full suite, passing the unchanged ADR-0031 thresholds) on another model than the
+      # suite's published one starts a new series for that suite only; a refused run fails the publish.
+      rebaseline:
+        description: Start a new history for the suite with this run's model (eligible run only, see docs/runbook.md)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -216,6 +223,8 @@ jobs:
       # (GROQ_MODEL bump, model retirement): fail rather than freeze the history behind a notice (#209).
       # A dispatch with an explicit provider, Anthropic model or effort is a measurement: notice only.
       MODEL_CHANGE_FAILS: ${{ github.event_name == 'schedule' || (inputs.provider == 'repo-variable' && inputs.anthropic_model == '' && inputs.anthropic_effort == 'models-yaml') }}
+      # A new series is an explicit manual choice, never a scheduled one (#209).
+      REBASELINE: ${{ github.event_name == 'workflow_dispatch' && inputs.rebaseline }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -284,6 +293,7 @@ jobs:
             if [ "$INIT_SITE" = "true" ]; then args+=(--allow-empty); fi
           fi
           if [ "$MODEL_CHANGE_FAILS" = "true" ]; then args+=(--fail-on-model-change); fi
+          if [ "$REBASELINE" = "true" ]; then args+=(--rebaseline); fi
           node scripts/build_eval_site.mjs "${args[@]}" "${results[@]}"
           echo "built=true" >> "$GITHUB_OUTPUT"
 

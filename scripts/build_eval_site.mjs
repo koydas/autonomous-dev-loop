@@ -3,7 +3,7 @@
 /**
  * Build the eval dashboard (GitHub Pages) from live eval results.
  *
- *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [--pipeline-dir <metrics checkout>] [--fail-on-model-change] [results.json ...]
+ *   node scripts/build_eval_site.mjs --out <dir> [--site-url <deployed site> [--allow-empty]] [--previous-dir <dir>] [--pipeline-dir <metrics checkout>] [--fail-on-model-change] [--rebaseline] [results.json ...]
  *   node scripts/build_eval_site.mjs --report [--site-url <deployed site>] results.json ...
  *
  * History is read back from the deployed site (--site-url: scorecard.json + runs/<id>.json) or
@@ -12,6 +12,9 @@
  * transient failure or a wrong URL never deploys a site without its history.
  * Runs that failed on error_rate (provider outage) and replays are left out, and so is a run whose model
  * is not the suite's published model (history per suite and model, ADR-0032 amendment).
+ * --rebaseline (manual only, #209): an eligible run (error-free, single model, full dataset, passing the suite's
+ * unchanged ADR-0031 thresholds) whose model differs from its suite's published one starts a new series for
+ * that suite; a refused candidate aborts the build, so nothing is deployed.
  * --pipeline-dir: a checkout of the `metrics` branch (its metrics/ directory); the pipeline views
  * (pipeline/: activity feed, work-item traces, runs, health, models) are rebuilt from it on every build,
  * never read back from the site. Pages hosts one site: the eval publish and the pipeline publish both run
@@ -21,18 +24,22 @@
  */
 
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
-  emptyScorecard, toScorecardRun, addRun, partitionPublishable, partitionByPublishedModel, formatCost, formatCoverage,
+  emptyScorecard, toScorecardRun, addRun, partitionPublishable, partitionByPublishedModel, rebaselineScorecard, formatCost, formatCoverage,
 } from './lib/eval_scorecard.mjs';
+import { checkThresholds, parseDataset } from './lib/eval_harness.mjs';
 import { buildSite } from './lib/eval_site.mjs';
 import { SUITES } from './lib/eval_suites.mjs';
 import { buildPipelineModel, MONTH_RE } from './lib/pipeline_model.mjs';
 import { computeHealth, modelUsage } from './lib/pipeline_health.mjs';
 import { pipelineOverview } from './lib/dashboard_ui.mjs';
 import { buildPipelineSite } from './lib/pipeline_site.mjs';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 function retainedRunIds(scorecard) {
   return Object.values(scorecard.suites).flatMap((s) => (s.runs ?? []).map((r) => r.run_id));
@@ -177,14 +184,42 @@ function assertRunIdsPerSuite(scorecard, publishable) {
   }
 }
 
+// The re-baseline gate the results file cannot vouch for itself: the suite's thresholds as registered now
+// (SUITES, never the recorded failures alone) and the full current dataset, every case × meta.repeats.
+// datasets: { [suite]: { sha256, ids } } (loadSuiteDatasets).
+function rebaselineGate(datasets) {
+  return (results) => {
+    const { suite, repeats = 1, dataset_sha256: sha } = results.meta;
+    const def = SUITES[suite];
+    if (!def) return [`unknown suite ${suite}`];
+    const reasons = checkThresholds(results.summary ?? {}, def.thresholds ?? {}).map((f) => `threshold ${f.metric}: ${f.reason}`);
+    const ds = datasets[suite];
+    if (!ds) return [...reasons, `dataset ${def.dataset} not loaded`];
+    if (sha !== ds.sha256) reasons.push(`dataset_sha256 ${sha ?? 'unset'} is not the current ${def.dataset}`);
+    const counts = new Map();
+    for (const r of results.results ?? []) counts.set(r?.case_id, (counts.get(r?.case_id) ?? 0) + 1);
+    const missing = ds.ids.filter((id) => !counts.has(id));
+    const extra = [...counts.keys()].filter((id) => !ds.ids.includes(id));
+    const uneven = ds.ids.filter((id) => counts.has(id) && counts.get(id) !== repeats);
+    if (missing.length || extra.length || uneven.length) {
+      reasons.push(`not the full suite: ${missing.length} of ${ds.ids.length} case(s) not run, ${extra.length} unknown, ${uneven.length} not run ${repeats} time(s)`);
+    }
+    return reasons;
+  };
+}
+
 // Pure: previous site state + new results → files to deploy.
 // pipeline: readPipelineDir() output, or null for an eval-only site (local preview, tests).
-export function assembleSite({ previous, resultsList, pipeline = null, generatedAt = new Date().toISOString(), log = () => {} }) {
+// rebaseline: apply rebaselineScorecard first (datasets: loadSuiteDatasets output); the returned `rebaseline`
+// lists what it did, or is null without the flag.
+export function assembleSite({ previous, resultsList, pipeline = null, generatedAt = new Date().toISOString(), log = () => {}, rebaseline = false, datasets = {} }) {
+  const rebase = rebaseline ? rebaselineScorecard(previous.scorecard, resultsList, { gate: rebaselineGate(datasets) }) : null;
+  const base = rebase?.scorecard ?? previous.scorecard;
   const valid = partitionPublishable(resultsList);
-  const { publishable, skipped: foreignModel } = partitionByPublishedModel(previous.scorecard, valid.publishable);
+  const { publishable, skipped: foreignModel } = partitionByPublishedModel(base, valid.publishable);
   const skipped = [...valid.skipped, ...foreignModel];
-  assertRunIdsPerSuite(previous.scorecard, publishable);
-  let scorecard = previous.scorecard;
+  assertRunIdsPerSuite(base, publishable);
+  let scorecard = base;
   const details = { ...previous.details };
   for (const results of publishable) {
     scorecard = addRun(scorecard, results.meta.suite, toScorecardRun(results));
@@ -197,7 +232,31 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   const assembled = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }) : null;
   const pipelineFiles = assembled?.files ?? {};
   if (assembled) files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', pipelineOverview(assembled.model, 'pipeline/'));
-  return { files: { ...files, ...pipelineFiles }, scorecard, skipped, pipelineFiles };
+  return { files: { ...files, ...pipelineFiles }, scorecard, skipped, pipelineFiles, rebaseline: rebase && { rebaselined: rebase.rebaselined, noops: rebase.noops, refused: rebase.refused } };
+}
+
+// The current dataset of each suite in the batch: sha256 of the file and case ids, as run_evals.mjs reads them.
+export async function loadSuiteDatasets(resultsList, root = REPO_ROOT) {
+  const datasets = {};
+  for (const suite of new Set(resultsList.map((r) => r.meta?.suite))) {
+    const def = SUITES[suite];
+    if (!def?.dataset) continue;
+    const content = await fs.readFile(path.join(root, def.dataset));
+    datasets[suite] = { sha256: createHash('sha256').update(content).digest('hex'), ids: parseDataset(content.toString('utf8'), def.dataset).map((c) => c.id) };
+  }
+  return datasets;
+}
+
+function logRebaseline({ rebaselined, noops, refused }, log, actions) {
+  for (const r of rebaselined) {
+    const msg = `rebaseline ${r.suite}: new series ${r.old_model} → ${r.new_model}, started by run ${r.run_id}; displaced run(s): ${r.displaced_run_ids.join(', ')} (the previous deploy's eval-site-<runId> backup keeps them for 90 days)`;
+    log(actions ? `::notice::${msg}` : `Notice: ${msg}`);
+  }
+  for (const n of noops) log(`rebaseline ${n.suite}: no-op (${n.reason})`);
+  for (const r of refused) {
+    const msg = `rebaseline ${r.suite} refused for run ${r.run_id} (${r.model ?? 'unset'}, series ${r.current}): ${r.reasons.join('; ')}`;
+    log(actions ? `::error::${msg}` : `Error: ${msg}`);
+  }
 }
 
 export async function writeSite(files, outDir) {
@@ -210,15 +269,23 @@ export async function writeSite(files, outDir) {
 
 // failOnModelChange: the run used the repo's configured provider (schedule, provider repo-variable), so a
 // model mismatch is drift (GROQ_MODEL bump, model retirement), not a measurement: fail instead of freezing
-// the history behind a notice. Re-baselining is #209.
-export async function buildEvalSite({ outDir, siteUrl, previousDir, pipelineDir, resultFiles, fetchImpl, allowEmpty = false, failOnModelChange = false, log = console.log, generatedAt }) {
+// the history behind a notice. rebaseline (#209): accept the new model for the suite instead, if eligible;
+// a refused candidate fails the build, so the flag never deploys a partial or an unproven series.
+export async function buildEvalSite({ outDir, siteUrl, previousDir, pipelineDir, resultFiles, fetchImpl, allowEmpty = false, failOnModelChange = false, rebaseline = false, datasetRoot = REPO_ROOT, log = console.log, generatedAt }) {
   const previous = siteUrl
     ? await fetchPreviousSite(siteUrl, fetchImpl, { allowEmpty, log })
     : previousDir ? await readPreviousSiteDir(previousDir) : { scorecard: emptyScorecard(), details: {} };
   const resultsList = await Promise.all(resultFiles.map(async (f) => JSON.parse(await fs.readFile(f, 'utf8'))));
   const pipeline = pipelineDir ? await readPipelineDir(pipelineDir, { log }) : null;
-  const { files, scorecard, skipped, pipelineFiles } = assembleSite({ previous, resultsList, pipeline, log, ...(generatedAt && { generatedAt }) });
+  const datasets = rebaseline ? await loadSuiteDatasets(resultsList, datasetRoot) : {};
+  const { files, scorecard, skipped, pipelineFiles, rebaseline: rebase } = assembleSite({ previous, resultsList, pipeline, log, rebaseline, datasets, ...(generatedAt && { generatedAt }) });
   const actions = process.env.GITHUB_ACTIONS === 'true';
+  if (rebase) {
+    logRebaseline(rebase, log, actions);
+    if (rebase.refused.length) {
+      throw new Error(`rebaseline refused (${rebase.refused.map((r) => `${r.suite}: run ${r.run_id}`).join(', ')}): no history is reset and nothing is published. Re-run with an eligible run (error-free, single model, full suite, passing thresholds)`);
+    }
+  }
   for (const s of skipped) {
     if (s.kind === 'model_mismatch') {
       const msg = `run ${s.run_id} not recorded: ${s.reason}`;
@@ -231,7 +298,7 @@ export async function buildEvalSite({ outDir, siteUrl, previousDir, pipelineDir,
   }
   const drift = failOnModelChange ? skipped.filter((s) => s.kind === 'model_mismatch') : [];
   if (drift.length) {
-    throw new Error(`model changed on the configured provider (${drift.map((s) => s.run_id).join(', ')}): the history is per suite and model, so nothing is published. Re-baseline the suite (#209) or restore the previous model`);
+    throw new Error(`model changed on the configured provider (${drift.map((s) => s.run_id).join(', ')}): the history is per suite and model, so nothing is published. Re-baseline the suite (workflow input rebaseline, #209) or restore the previous model`);
   }
   await writeSite(files, outDir);
   for (const [suite, { runs }] of Object.entries(scorecard.suites)) {
@@ -308,6 +375,7 @@ async function main() {
       'allow-empty': { type: 'boolean', default: false },
       report: { type: 'boolean', default: false },
       'fail-on-model-change': { type: 'boolean', default: false },
+      rebaseline: { type: 'boolean', default: false },
     },
   });
   if (values.report) {
@@ -324,6 +392,7 @@ async function main() {
     pipelineDir: values['pipeline-dir'],
     allowEmpty: values['allow-empty'],
     failOnModelChange: values['fail-on-model-change'],
+    rebaseline: values.rebaseline,
     resultFiles: positionals,
   });
 }
