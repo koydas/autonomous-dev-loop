@@ -107,6 +107,7 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0035) |
 | `review.related_adrs_error` | warn | — | `error` — file listing or ADR read failed; the review continues without related ADRs (ADR-0036) |
 | `review.prompt_budget_error` | warn | — | `error` — base (`git show`) or head read of a changed prompt failed; the review continues without the prompt budget block (ADR-0037) |
+| `review.file_skipped` | warn | — | `path`, `reason` (`too_large`), `size`, `max_bytes` — a PR-tree file is over `PR_TREE_MAX_BYTES` (1 MiB, `scripts/lib/pr_tree_reader.mjs`): it is never read, and is left out of the stale-reference / related-ADR searches or treated as unreadable by the prompt budget; one event per file, the review continues (F22) |
 | `review.models_config_ignored` | warn | — | `path`, `error` — the PR tree's `config/models.yaml` is not a regular file (symlink, FIFO, …) or cannot be read; the prompt budget uses the trusted defaults and the review continues (ADR-0023, ADR-0037) |
 
 ### `review_evidence`
@@ -128,6 +129,7 @@ The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trac
 | `autofix.start`                | info   | —             | `attempt`, `prNumber`                     |
 | `autofix.reset`                | info   | —             | `prNumber`, `removed_labels`, `removed_checkpoints` — trusted checkbox rerun |
 | `autofix.prompt_budget`        | info / warn | —        | `prNumber`, `attempt`, `input_budget`, `shown_files`, `hidden_files`, `skipped_files` (over `MAX_FILES`), `diff_truncated`, `feedback_truncated`; warn when anything was cut |
+| `autofix.file_withheld`        | warn   | —             | `prNumber`, `attempt`, `path`, `reason` (`symlink` \| `not_regular_file` \| `outside_tree`) — a changed file is not a regular file in the PR tree (symlink, directory, FIFO, device): it is never followed nor read, the prompt carries a `File withheld (not a regular file in the PR tree)` marker and a change to it is rejected (`non_regular_target`; ADR-0023, F02) |
 | `autofix.llm_request`          | info   | —             | `model`, `input_tokens_est`, `attempt`, `prNumber` |
 | `autofix.llm_response`         | info   | —             | `output_tokens_est`, `attempt`, `prNumber`|
 | `autofix.push`                 | info   | ✓             | `paths`, `attempt`, `prNumber` — files written; the git push is the workflow's (`workflow.push`) |

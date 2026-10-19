@@ -15,6 +15,7 @@ import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { normalizeRepoPath } from './lib/autofix_guard.mjs';
 import { findGuardrailViolations, guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
 import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
+import { readPrTreeFile } from './lib/pr_tree_reader.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 
@@ -387,25 +388,33 @@ const fileContentParts = [];
 const shownPaths = new Set();
 const hiddenPaths = new Set();
 let fileCharsLeft = fileBudget * 4;
+// The PR branch is data (ADR-0023, F02): read through the shared reader, never following a symlink
+// (-> .git/config, /proc/self/environ, /dev/zero) and never reading more than MAX_FILE_SIZE bytes.
+const withhold = (filePath, marker) => {
+  fileContentParts.push(marker);
+  hiddenPaths.add(normalizeRepoPath(filePath));
+  fileCharsLeft -= marker.length + 2;
+};
 for (const filePath of changedFiles.slice(0, MAX_FILES)) {
-  const absPath = path.resolve(repoRoot, filePath);
-  if (!absPath.startsWith(repoRoot + path.sep)) continue;
-  let content;
+  let read;
   try {
-    content = await fsPromises.readFile(absPath, 'utf8');
+    read = readPrTreeFile(repoRoot, filePath, { maxBytes: MAX_FILE_SIZE });
   } catch {
-    continue; // File deleted or unreadable — skip
+    continue; // Unreadable — skip
   }
-  const part = `### Current file: ${filePath}\n\`\`\`\n${content}\n\`\`\``;
-  if (content.length <= MAX_FILE_SIZE && part.length <= fileCharsLeft) {
+  if (read.kind === 'missing') continue; // File deleted — skip
+  if (read.kind === 'other') {
+    obsLog({ stage: 'autofix', event: 'autofix.file_withheld', level: 'warn', meta: { prNumber, attempt: nextAttempt, path: filePath, reason: read.reason } });
+    withhold(filePath, `### File withheld (not a regular file in the PR tree): ${filePath} — do NOT target this file`);
+    continue;
+  }
+  const part = read.kind === 'file' ? `### Current file: ${filePath}\n\`\`\`\n${read.content}\n\`\`\`` : null;
+  if (part !== null && part.length <= fileCharsLeft) {
     fileContentParts.push(part);
     shownPaths.add(normalizeRepoPath(filePath));
     fileCharsLeft -= part.length + 2;
   } else {
-    const marker = `### File withheld (too large for the context budget): ${filePath} — do NOT target this file`;
-    fileContentParts.push(marker);
-    hiddenPaths.add(normalizeRepoPath(filePath));
-    fileCharsLeft -= marker.length + 2;
+    withhold(filePath, `### File withheld (too large for the context budget): ${filePath} — do NOT target this file`);
   }
 }
 const fileContents =
@@ -518,24 +527,29 @@ let outputPaths;
 try {
   const validated = validateAiOutput(aiOutput);
   summary = validated.summary;
+  // Pre-patch content through the same reader (F02). A non-regular target (symlink, directory, FIFO,
+  // device) is rejected. A target over MAX_FILE_SIZE bytes was never shown (shown files are at most
+  // that), so its content is not needed: a non-null placeholder lets the write guard reject it as
+  // withheld / unshown, exactly as before, without an unbounded read.
   const existing = new Map();
+  const nonRegular = [];
   for (const { targetPath } of validated.changes) {
     const key = normalizeRepoPath(targetPath);
-    try {
-      existing.set(key, await fsPromises.readFile(path.resolve(repoRoot, key), 'utf8'));
-    } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-      existing.set(key, null);
+    const read = readPrTreeFile(repoRoot, key, { maxBytes: MAX_FILE_SIZE });
+    if (read.kind === 'other') {
+      nonRegular.push({ targetPath, rule: 'non_regular_target', reason: `target is not a regular file in the PR tree (${read.reason})` });
     }
+    existing.set(key, read.kind === 'file' ? read.content : read.kind === 'too_large' ? '' : null);
   }
-  const violations = findGuardrailViolations(validated.changes, {
+  const rejectedTargets = new Set(nonRegular.map((v) => normalizeRepoPath(v.targetPath)));
+  const violations = [...nonRegular, ...findGuardrailViolations(validated.changes.filter((c) => !rejectedTargets.has(normalizeRepoPath(c.targetPath))), {
     existing,
     shownPaths,
     hiddenPaths,
     dependencies,
     fileExists: (p) => fs.existsSync(path.resolve(repoRoot, p)),
     mentionText: reviewFeedback,
-  });
+  })];
   if (violations.length) throw guardrailErrorFor(violations);
   outputPaths = await writeGeneratedFiles(validated.changes);
 } catch (rejection) {
