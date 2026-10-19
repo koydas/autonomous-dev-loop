@@ -366,7 +366,8 @@ PR identity joins retained records first, then the repository-owned `ai/issue-N`
 Unlinked issues and missing run records are explicit. Metrics cover the retained
 work-item trace, possibly spanning several PRs. They exclude history beyond the
 six-month record window and index overflows. Cost is a list-price token estimate,
-not a bill; unknown models/providers remain unpriced. Thinking tokens, cache
+not a bill; Groq free-tier calls cost nothing and are listed apart, other unknown
+models/providers remain unpriced. Thinking tokens, cache
 adjustments and non-LLM infrastructure costs are excluded.
 
 If GitHub is unavailable or rate-limited, the status explains the failure and

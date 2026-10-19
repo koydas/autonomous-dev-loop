@@ -55,6 +55,20 @@ test('over-limit Haiku calls stay unpriced and a zero-token call costs zero', ()
  assert.match(html, /\$0.0000 USD \+ 1 unpriced call/);
 });
 
+test('Groq free-tier calls cost nothing and are never counted as unpriced', () => {
+ const html = flowDashboard({ traces: [trace([{ ...run, llm: [
+  { provider: 'groq', model: 'openai/gpt-oss-120b', tokens_in: 5000, tokens_out: 500 },
+  { provider: 'groq', model: 'openai/gpt-oss-120b' },
+ ] }])] });
+ assert.match(html, /LLM cost estimate: \$0.0000 USD \(2 Groq free-tier call\(s\) at no cost\)/);
+ assert.doesNotMatch(html, /unpriced/);
+ const mixed = flowDashboard({ traces: [trace([{ ...run, llm: [
+  { provider: 'groq', model: 'openai/gpt-oss-120b', tokens_in: 1, tokens_out: 1 },
+  { provider: 'other', model: 'unknown' },
+ ] }])] });
+ assert.match(mixed, /\$0.0000 USD \+ 1 unpriced call\(s\) \(1 Groq free-tier call\(s\) at no cost\)/);
+});
+
 // Execute the client join logic with recorded identities, without a browser/network.
 const joinSource = FLOW_SCRIPT.slice(FLOW_SCRIPT.indexOf('const branch ='), FLOW_SCRIPT.indexOf('const c = source'));
 const issueRecord = { dataset: { prs: '', issue: '7' } };

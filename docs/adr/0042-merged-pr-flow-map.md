@@ -14,7 +14,7 @@ Match PR numbers from normalized run envelopes and event metadata first, then th
 
 Always show validation, generation, preparation, review, auto-fix and merge. Missing evidence is grey and explicitly labelled. Repeated executions remain expandable, linking to existing agent journals and waterfalls. Arrows indicate canonical stage order, not execution causality; chronological traces remain authoritative.
 
-Use the shared model price table for recorded LLM call token estimates. Unknown pricing remains unpriced; no billing accuracy is claimed. Running and waiting use existing trace timing calculations.
+Use the shared model price table for recorded LLM call token estimates. Groq free-tier calls cost nothing (as in `eval_scorecard.mjs`); other unknown pricing remains unpriced; no billing accuracy is claimed. Running and waiting use existing trace timing calculations.
 
 ## Consequences
 
