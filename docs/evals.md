@@ -302,11 +302,11 @@ Cases reproduced from a production misjudgment (AGENTS.md → Eval Gates), tag `
 
 | Case | Source | Shape | Expected |
 |---|---|---|---|
-| `incident-untested-claim-symlink-dir` | PR #221 (head `266a71e`) | body: symlinked files **and month directories** are skipped; the changed test covers a symlinked file only | `APPROVE`, must_advise `untested claim\|not exercised\|no test covers` |
-| `incident-tested-claim-symlink-dir` | PR #221 (`c3c7325` added the directory test) | same diff, plus a visible test for the symlinked directory | `APPROVE`, must_not_flag `untested claim` |
-| `clean-empty-body-no-claim` | synthetic | empty PR body, small helper and its tests | `APPROVE`, must_not_flag `untested claim` |
-| `docs-only-behavior-sentence` | synthetic | docs-only PR whose body states runtime behavior (`tests_expected: false`) | `APPROVE`, must_not_flag `untested claim` |
-| `truncated-claim-tests-past-cut` | synthetic, `requires_cut` | code shown in full; the test of the `RangeError` claim is past the cut | `APPROVE` (only a test file is cut, so not withheld), must_not_flag `untested claim` |
+| `incident-untested-claim-symlink-dir` | PR #221 (head `266a71e`) | body: symlinked files **and month directories** are skipped; the changed test covers a symlinked file only | `APPROVE`, must_advise `untested claim\|not exercised\|no test covers` and `month director\|symlinked director` (the advisory must name the untested claim, not just any claim) |
+| `incident-tested-claim-symlink-dir` | PR #221 (`c3c7325` added the directory test) | same diff, plus a visible test for the symlinked directory | `APPROVE`, must_not_flag `untested claim\|not exercised\|no test covers` (the variants `must_advise` accepts) |
+| `clean-empty-body-no-claim` | synthetic | empty PR body, small helper and its tests | `APPROVE`, same must_not_flag |
+| `docs-only-behavior-sentence` | synthetic | docs-only PR whose body states runtime behavior (`tests_expected: false`) | `APPROVE`, same must_not_flag |
+| `truncated-claim-tests-past-cut` | synthetic, `requires_cut` | code shown in full; the test of the `RangeError` claim is past the cut | `APPROVE` (only a test file is cut, so not withheld), same must_not_flag |
 
 PR #221's reduction keeps the shape, not the bug: there the directory claim was also broken (fixed in `c3c7325`); here the implementation is correct (`readdir` `withFileTypes`, no `lstat`-then-read), so the only expected finding is the advisory. `truncated-claim-tests-past-cut` has no `must_note`: `flags_issue` scores 0 on any approval (existing semantics), so a truncation note on an `APPROVE` case cannot be scored yet. None of the five is `known-gap`: the replay cannot measure the prompt; a `run-evals` label run will.
 

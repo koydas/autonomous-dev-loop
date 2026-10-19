@@ -769,6 +769,19 @@ test('no_spurious_flag: no must_not_flag entry in Issues Found, at any severity 
   assert.equal(no_spurious_flag({ must_not_flag: ['untested claim'] }, null), false);
 });
 
+test('review dataset: untested-claim cases reject every variant the positive case accepts, which must name its claim (#199 review)', async () => {
+  const cases = filterCases(await loadReviewCases(), { tags: ['untested-claim'] });
+  const positive = cases.filter((c) => c.expected.must_advise);
+  assert.deepEqual(positive.map((c) => c.id), ['incident-untested-claim-symlink-dir']);
+  const [phrase, claim] = positive[0].expected.must_advise;
+  // A generic "Untested claim" about the already-tested file claim does not satisfy the claim entry.
+  assert.equal(matchesFlag('[Low] Untested claim: a symlinked .csv file is skipped', claim), false);
+  assert.equal(matchesFlag('[Low] Untested claim: a symlinked month directory is skipped', claim), true);
+  for (const c of cases.filter((x) => !x.expected.must_advise)) {
+    assert.deepEqual(c.expected.must_not_flag, [phrase], c.id);
+  }
+});
+
 test('advisory and no_spurious_flag leave the existing scorers unchanged on the same outputs (#199)', () => {
   const { flags_issue, no_false_alarm } = reviewSuite.scorers;
   const review = reviewText({ verdict: 'APPROVED', issues: ['[Low] Untested claim: x'] });
