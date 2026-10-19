@@ -212,12 +212,16 @@ export function compareSuite({ suite, results, published }) {
   // Same dataset: the published numbers as they are. Otherwise both sides on the common cases.
   const baseline = same ? recorded.summary : summarize(recorded.results.filter((r) => dataset.common.has(r.case_id)));
   const current = same ? results.summary : summarize(results.results.filter((r) => dataset.common.has(r.case_id)));
+  const temperatureKnown = (m) => m?.temperature === null ? String(m?.model).startsWith('anthropic:') : Number.isFinite(m?.temperature);
+  const sameTemperature = temperatureKnown(recorded.meta) && temperatureKnown(results.meta)
+    && recorded.meta.temperature === results.meta.temperature;
   const gate = classifyGate({
     replayFailures: prFailures,
     baselineFailures: same ? checkThresholds(recorded.summary, suite.thresholds) : [],
-    datasetStatus: dataset.status,
+    datasetStatus: sameTemperature ? dataset.status : 'unknown',
   });
   const notes = [];
+  if (!sameTemperature) notes.push(`temperature differs or is unknown (main ${recorded.meta?.temperature ?? 'unset/unknown'}, PR ${results.meta?.temperature ?? 'unset/unknown'}): thresholds advisory; use a matched baseline`);
   if (!same) notes.push(`dataset ${dataset.status === 'changed' ? 'changed since the published run' : 'hash missing on one side'}: Δ over the ${dataset.common.size} common case(s), thresholds advisory`);
   if ((recorded.meta?.model ?? null) !== (results.meta?.model ?? null)) notes.push(`model differs (main ${code(recorded.meta?.model ?? '?')}, PR ${code(results.meta?.model ?? '?')}): the Δ mixes prompt and model`);
   if ((recorded.meta?.repeats ?? 1) !== (results.meta?.repeats ?? 1)) notes.push(`repeats differ (main ${recorded.meta?.repeats ?? 1}, PR ${results.meta?.repeats ?? 1}): consistency is not comparable; case changes are matched on (case, repeat)`);
@@ -250,7 +254,7 @@ export const cell = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/\s+/g,
 export const PR_EVAL_DISCLAIMER = [
   '> **What this measures.** The suites ran live with this PR\'s `prompts/**` on top of the default branch\'s scripts, harness, config and datasets.',
   '> The baseline is the last live run published on the eval dashboard. This run is **not** published. With 1 repeat, one flipped case moves',
-  '> `verdict_match` by 1/cases and the review stage samples at temperature > 0: treat a Δ of one case as noise, re-run with `repeats: 3`.',
+  '> `verdict_match` by 1/cases. Temperature zero does not guarantee identical responses; investigate small deltas with matched sampling settings before deciding whether more repeats are useful.',
 ].join('\n');
 
 function formatSuite(r, siteUrl) {
@@ -271,7 +275,7 @@ function formatSuite(r, siteUrl) {
   const { blocking, preexisting, advisory } = r.gate;
   if (blocking.length) lines.push('**❌ Thresholds missed with the PR prompts (met on main)**', '', ...blocking.map((f) => `- ${code(f.metric)}: ${f.reason}`), '');
   if (preexisting.length) lines.push('**⚠️ Already failing in the published run**', '', ...preexisting.map((f) => `- ${code(f.metric)}: ${f.reason}`), '');
-  if (advisory.length) lines.push(`**⚠️ Threshold failures (advisory${r.published ? ', dataset differs' : ', no baseline'})**`, '', ...advisory.map((f) => `- ${code(f.metric)}: ${f.reason}`), '');
+  if (advisory.length) lines.push(`**⚠️ Threshold failures (advisory${r.published ? ', baseline settings or dataset differ/are unknown' : ', no baseline'})**`, '', ...advisory.map((f) => `- ${code(f.metric)}: ${f.reason}`), '');
   if (!blocking.length && !preexisting.length && !advisory.length) lines.push('All thresholds met.', '');
 
   if (!r.published) return lines;

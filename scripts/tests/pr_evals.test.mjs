@@ -311,7 +311,7 @@ const toySuite = { name: 'toy', thresholds: { 'scores.ok.mean': { min: 0.8 }, co
 const r = (case_id, ok, { repeat = 0, error = null } = {}) => ({
   case_id, repeat, error, label: error ? null : ok ? 'a' : 'b', expected_label: 'a', scores: { ok: error ? 0 : ok ? 1 : 0 }, duration_ms: 1, calls: [],
 });
-const resultsFile = (results, meta = {}) => ({ meta: { run_id: 'pr-1', model: 'groq:m', repeats: 1, dataset_sha256: 'h1', suite: 'toy', ...meta }, summary: summarize(results), results });
+const resultsFile = (results, meta = {}) => ({ meta: { run_id: 'pr-1', model: 'groq:m', temperature: 0, repeats: 1, dataset_sha256: 'h1', suite: 'toy', ...meta }, summary: summarize(results), results });
 const published = (results, meta = {}) => ({ recorded: { ...resultsFile(results, { run_id: '100', ts: '2026-10-05T10:00:00Z', ...meta }) } });
 const ids = ['c1', 'c2', 'c3', 'c4', 'c5'];
 const allOk = () => ids.map((id) => r(id, true));
@@ -370,7 +370,7 @@ test('compareSuite: a different model or repeat count is noted', () => {
   assert.match(rep.notes.join('\n'), /repeats differ \(main 2, PR 1\)/);
   const noMeta = compareSuite({ suite: toySuite, results: { ...resultsFile(allOk()), meta: undefined }, published: { recorded: { ...published(allOk()).recorded, meta: undefined } } });
   assert.equal(noMeta.dataset.status, 'unknown');
-  assert.deepEqual(noMeta.notes.length, 1, 'same (missing) model and repeats on both sides');
+  assert.deepEqual(noMeta.notes.length, 2, 'same (missing) model and repeats on both sides');
 });
 
 test('compareSuite: no published run still reports the PR numbers', () => {
@@ -460,7 +460,7 @@ test('formatPrEvalReport: no site URL, preexisting and advisory gates, no change
   assert.match(formatPrEvalReport({ plan: okPlan(), reports: [flips] }), /\*\*60 case run\(s\) change verdict\*\*[\s\S]*…and 10 more\./);
 
   const changed = compareSuite({ suite: toySuite, results: resultsFile(bad, { dataset_sha256: 'h2' }), published: published(allOk()) });
-  assert.match(formatPrEvalReport({ plan: okPlan(), reports: [changed] }), /Threshold failures \(advisory, dataset differs\)/);
+  assert.match(formatPrEvalReport({ plan: okPlan(), reports: [changed] }), /Threshold failures \(advisory, baseline settings or dataset differ\/are unknown\)/);
   const noBase = compareSuite({ suite: toySuite, results: resultsFile(bad), published: {} });
   assert.match(formatPrEvalReport({ plan: okPlan(), reports: [noBase] }), /Threshold failures \(advisory, no baseline\)/);
 });
@@ -580,3 +580,13 @@ test('every registered eval suite has a prompt prefix, and every prefix names a 
     assert.ok(fs.readdirSync(path.join(REPO_ROOT, 'prompts')).some((f) => `prompts/${f}`.startsWith(prefix)), `no prompt matches ${prefix}`);
   }
 });
+
+for (const temperature of [0.6, undefined, null]) {
+  test(`compareSuite: unmatched or unknown baseline temperature ${temperature} is advisory`, () => {
+    const rep = compareSuite({ suite: toySuite, results: resultsFile([r('c1', false)]), published: published(allOk(), { temperature }) });
+    assert.equal(rep.status, 'warn');
+    assert.deepEqual(rep.gate.blocking, []);
+    assert.ok(rep.gate.advisory.length);
+    assert.match(rep.notes.join(' '), /temperature differs or is unknown/);
+  });
+}
