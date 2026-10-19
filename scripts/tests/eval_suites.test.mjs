@@ -407,7 +407,8 @@ const reviewText = ({ verdict, issues = [], summary = 'Changes X.' }) => [
   '### 🚀 Verdict', verdict,
 ].join('\n');
 
-// Oracle reviewer: approves the clean cases, requests changes with every must_flag keyword otherwise.
+// Oracle reviewer: approves the clean cases (one Low finding per must_advise entry), requests changes with every
+// must_flag keyword otherwise.
 // For an evidence case the LLM verdict differs from the final one (WITHHELD comes from an approval).
 const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
   ? reviewText({
@@ -415,7 +416,7 @@ const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
     summary: ['Changes X.', ...(c.expected.must_note ?? []).map((n) => `Note: ${n.split('|')[0]}.`)].join('\n'),
     issues: (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: x Lines: 1 Root cause: r Fix: f`),
   })
-  : reviewText({ verdict: 'APPROVED' }));
+  : reviewText({ verdict: 'APPROVED', issues: (c.expected.must_advise ?? []).map((a) => `[Low] ${a.split('|')[0]}: x — File: x Lines: 1`) }));
 
 // Runs reviewSuite.run with a stub LLM; returns the output (or error) and the captured request.
 async function runReview(input, raw = reviewText({ verdict: 'APPROVED' }), testCase = undefined) {
@@ -724,6 +725,59 @@ test('flags_issue reads must_note outside the classification section, e.g. the t
   assert.equal(flags_issue({ must_note: ['truncat'] }, { llm_verdict: 'APPROVED', review }), 0);
 });
 
+test('advisory scores must_advise entries raised by a Low finding of Issues Found, at any verdict (#199)', () => {
+  const { advisory } = reviewSuite.scorers;
+  const low = '[Low] Untested claim: a symlinked month directory is skipped — File: src/x.mjs Lines: 8';
+  const approved = { llm_verdict: 'APPROVED', review: reviewText({ verdict: 'APPROVED', issues: [low] }) };
+  // Absent or empty field: not applicable.
+  assert.equal(advisory({ verdict: 'APPROVE' }, approved), null);
+  assert.equal(advisory({ verdict: 'APPROVE', must_advise: [] }, approved), null);
+  // Match, any alternative, case-insensitive; no match; a share over several entries.
+  assert.equal(advisory({ must_advise: ['untested claim|not exercised'] }, approved), 1);
+  assert.equal(advisory({ must_advise: ['no test covers|NOT EXERCISED'] }, approved), 0);
+  assert.equal(advisory({ must_advise: ['untested claim', 'retry count'] }, approved), 0.5);
+  // Any verdict: the same Low finding in a rejection counts too.
+  const rejected = { llm_verdict: 'REQUEST_CHANGES', review: reviewText({ verdict: 'REQUEST_CHANGES', issues: ['[High] null header', low] }) };
+  assert.equal(advisory({ must_advise: ['untested claim'] }, rejected), 1);
+  // A High or Medium finding with the keyword is no advisory; the keyword in Summary or classification neither.
+  for (const severity of ['High', 'Medium']) {
+    const review = reviewText({ verdict: 'REQUEST_CHANGES', issues: [`[${severity}] Untested claim: x`] });
+    assert.equal(advisory({ must_advise: ['untested claim'] }, { llm_verdict: 'REQUEST_CHANGES', review }), 0, severity);
+  }
+  const inSummary = reviewText({ verdict: 'APPROVED', summary: 'Untested claim: none here.', issues: ['[Low] nit'] });
+  assert.equal(advisory({ must_advise: ['untested claim'] }, { llm_verdict: 'APPROVED', review: inSummary }), 0);
+  // The finding's continuation lines belong to it; a bold Low finding is read too.
+  const multi = ['### ⚠️ Issues Found', '- **[Low]** Untested claim', '  not exercised by test/x.test.mjs', '- [Medium] other', '### 🚀 Verdict', 'APPROVED'].join('\n');
+  assert.equal(advisory({ must_advise: ['not exercised'] }, { llm_verdict: 'APPROVED', review: multi }), 1);
+  assert.equal(advisory({ must_advise: ['untested claim'] }, null), 0);
+});
+
+test('no_spurious_flag: no must_not_flag entry in Issues Found, at any severity and verdict (#199)', () => {
+  const { no_spurious_flag } = reviewSuite.scorers;
+  const clean = { llm_verdict: 'APPROVED', review: reviewText({ verdict: 'APPROVED', summary: 'No untested claim here.' }) };
+  assert.equal(no_spurious_flag({ verdict: 'APPROVE' }, clean), null);
+  assert.equal(no_spurious_flag({ verdict: 'APPROVE', must_not_flag: [] }, clean), null);
+  // No match (the Summary does not count) / match at Low, at High, on an approval and on a rejection.
+  assert.equal(no_spurious_flag({ must_not_flag: ['untested claim'] }, clean), true);
+  for (const [verdict, llm] of [['APPROVED', 'APPROVED'], ['REQUEST_CHANGES', 'REQUEST_CHANGES']]) {
+    for (const severity of ['Low', 'High']) {
+      const review = reviewText({ verdict, issues: [`[${severity}] Untested claim: x`] });
+      assert.equal(no_spurious_flag({ must_not_flag: ['untested claim'] }, { llm_verdict: llm, review }), false, `${verdict} ${severity}`);
+    }
+  }
+  assert.equal(no_spurious_flag({ must_not_flag: ['retry|untested claim'] }, { llm_verdict: 'APPROVED', review: reviewText({ verdict: 'APPROVED', issues: ['[Low] retry wording'] }) }), false);
+  assert.equal(no_spurious_flag({ must_not_flag: ['untested claim'] }, null), false);
+});
+
+test('advisory and no_spurious_flag leave the existing scorers unchanged on the same outputs (#199)', () => {
+  const { flags_issue, no_false_alarm } = reviewSuite.scorers;
+  const review = reviewText({ verdict: 'APPROVED', issues: ['[Low] Untested claim: x'] });
+  const out = { llm_verdict: 'APPROVED', review };
+  const expected = { verdict: 'APPROVE', must_advise: ['untested claim'], must_not_flag: ['other'] };
+  assert.equal(flags_issue(expected, out), null);
+  assert.equal(no_false_alarm(expected, out), true);
+});
+
 test('findingSeverities keeps reading Issues Found past a bold-only file group line (#177 review)', () => {
   const review = ['### ⚠️ Issues Found', '**scripts/foo.mjs**', '- [High] a', '**Fix:**', '- [Medium] b', '**🚀 Verdict**', 'REQUEST_CHANGES'].join('\n');
   assert.deepEqual(findingSeverities(review), ['high', 'medium']);
@@ -780,8 +834,12 @@ test('review suite end-to-end with an oracle reviewer meets every threshold', as
   assert.equal(summary.scores.verdict_match.mean, 1);
   assert.equal(summary.scores.flags_issue.mean, 1);
   assert.equal(summary.scores.no_false_alarm.mean, 1);
+  assert.equal(summary.scores.advisory.mean, 1);
+  assert.equal(summary.scores.no_spurious_flag.mean, 1);
   assert.deepEqual(checkThresholds(summary, reviewSuite.thresholds), []);
 });
+
+const UNTESTED_CLAIM_CASES = ['incident-untested-claim-symlink-dir', 'incident-tested-claim-symlink-dir', 'clean-empty-body-no-claim', 'docs-only-behavior-sentence', 'truncated-claim-tests-past-cut'];
 
 test('run_evals --suite review --replay scores the hand-written fixture through the production parser', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
@@ -817,13 +875,29 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
     assert.deepEqual([byId[id].output.llm_verdict, byId[id].label, byId[id].scores.no_false_alarm], ['REQUEST_CHANGES', 'withheld', 0], id);
     assert.match(byId[id].output.reason, /^every finding cites only code cut from the reviewed diff: .*\.github\/workflows\/test\.yml/);
   }
+  // #199 untested-claim cases: one Low advisory where no visible test exercises the claim, none elsewhere
+  // (supported claim, empty body, docs-only, tests past the cut).
+  assert.deepEqual([byId['incident-untested-claim-symlink-dir'].label, byId['incident-untested-claim-symlink-dir'].scores.advisory], ['approve', 1]);
+  for (const id of ['incident-tested-claim-symlink-dir', 'clean-empty-body-no-claim', 'docs-only-behavior-sentence', 'truncated-claim-tests-past-cut']) {
+    assert.deepEqual([byId[id].label, byId[id].scores.no_spurious_flag, byId[id].scores.no_false_alarm], ['approve', 1, 1], id);
+  }
+  assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 30 cases run, 29 gated: the known-gap case is counted only in summary.known_gap.
+  // 35 cases run, 34 gated: the known-gap case is counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
+    [35, 0.0294, 0.9118, 0.8667, 0.7895],
+  );
+  assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
+  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9333, 0.8667]);
+  // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
+  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id)));
+  assert.deepEqual(
+    [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
     [30, 0.0345, 0.8966, 0.8667, 0.7143],
   );
-  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9333, 0.8]);
+  assert.deepEqual([before.per_class.request_changes.recall, before.per_class.approve.recall], [0.9333, 0.8]);
+  assert.deepEqual([before.scores.advisory.n, before.scores.no_spurious_flag.n], [0, 0]);
   assert.deepEqual(
     [summary.known_gap.n_cases, summary.known_gap.error_rate, summary.known_gap.scores.verdict_match.mean, summary.known_gap.per_class.request_changes.recall],
     [1, 0, 0, 0],

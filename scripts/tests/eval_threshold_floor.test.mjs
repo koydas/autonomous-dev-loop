@@ -27,7 +27,7 @@ const FLOOR = {
     },
   },
   review: {
-    cases: 29,
+    cases: 34,
     thresholds: {
       'scores.verdict_match.mean': { min: 0.75 },
       'per_class.request_changes.recall': { min: 0.8 },
@@ -109,6 +109,11 @@ const PINNED = {
     "incident-clean-code-cut": ["withheld", "634e54f32f55"],
     "incident-cut-mid-step-name": ["withheld", "75c37e934634"],
     "incident-missing-step-in-cut": ["withheld", "c2b057607c25"],
+    "incident-untested-claim-symlink-dir": ["approve", "5d4cb27b9cb0"],
+    "incident-tested-claim-symlink-dir": ["approve", "6a0f1dd5b97a"],
+    "clean-empty-body-no-claim": ["approve", "e74a011dc1df"],
+    "docs-only-behavior-sentence": ["approve", "722511175605"],
+    "truncated-claim-tests-past-cut": ["approve", "875c4df1e00a"],
   },
 };
 

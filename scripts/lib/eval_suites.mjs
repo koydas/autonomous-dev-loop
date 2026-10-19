@@ -129,6 +129,18 @@ export function findingSeverities(review) {
   return [...issuesSection(review).matchAll(/^\s*[-*]\s*\**\[?\**(High|Medium|Low)\b/gim)].map((m) => m[1].toLowerCase());
 }
 
+// Finding bullets of Issues Found whose severity is Low, each with its continuation lines (#199 advisory scorer).
+const FINDING_START = /^\s*[-*]\s*\**\[?\**(High|Medium|Low)\b/i;
+function lowFindings(review) {
+  const findings = [];
+  for (const line of issuesSection(review).split('\n')) {
+    const severity = line.match(FINDING_START)?.[1];
+    if (severity) findings.push({ low: severity.toLowerCase() === 'low', text: line });
+    else if (findings.length && !isHeading(line)) findings.at(-1).text += `\n${line}`;
+  }
+  return findings.filter((f) => f.low).map((f) => f.text);
+}
+
 // must_flag entry: "a|b|c" — matched when the findings text contains any alternative (case-insensitive).
 export function matchesFlag(text, entry) {
   const haystack = String(text ?? '').toLowerCase();
@@ -195,10 +207,11 @@ export const reviewSuite = {
   name: 'review',
   stage: 'review',
   dataset: 'evals/datasets/review.jsonl',
-  // ≈ 3.93k chars/4 input per call (30 cases, system prompt ≈ 2.7k; the two #219 cases fill the 6.3k budget) × 1.34
-  // (validation's Groq-reported / chars/4 ratio) + output: ≈ 165k per repeat. Was 5300 (3.76k input, 28 cases) before
-  // the #219 cases, 4200 (2.9k input, 23 cases) before the first incident cases (docs/evals.md).
-  tokensPerRunEst: 5500,
+  // ≈ 4.15k chars/4 input per call (35 cases, system prompt ≈ 2.83k; the two #219 cases and the #199 cut case fill the
+  // 6.3k budget) × 1.34 (validation's Groq-reported / chars/4 ratio) + output: ≈ 200k per repeat. Was 5500 (4.02k input,
+  // 30 cases) before the #199 untested-claim cases, 5300 (3.76k input, 28 cases) before the #219 cases, 4200 (2.9k
+  // input, 23 cases) before the first incident cases (docs/evals.md).
+  tokensPerRunEst: 5700,
   // scripts/pr_review.mjs: the review is Markdown, so responseFormat null (json_object: Groq 400
   // "Failed to generate JSON"). No maxInputTokens: the prompt is fitted by buildReviewPrompt instead.
   llmCall: {
@@ -270,6 +283,22 @@ export const reviewSuite = {
     no_false_alarm: (expected, output) => {
       if (expected.verdict === 'REQUEST_CHANGES') return null;
       return output?.llm_verdict === 'APPROVED' && !findingSeverities(output.review).some((s) => s === 'high' || s === 'medium');
+    },
+    // Advisory findings (#199, e.g. "Untested claim: …"), any verdict: share of must_advise entries raised by a
+    // Low finding of Issues Found. A High or Medium finding with the keyword does not count: it is no advisory.
+    advisory: (expected, output) => {
+      const entries = Array.isArray(expected.must_advise) ? expected.must_advise : [];
+      if (entries.length === 0) return null;
+      const low = lowFindings(output?.review);
+      return entries.filter((entry) => low.some((finding) => matchesFlag(finding, entry))).length / entries.length;
+    },
+    // No entry of must_not_flag appears in Issues Found, at any severity and any verdict.
+    no_spurious_flag: (expected, output) => {
+      const entries = Array.isArray(expected.must_not_flag) ? expected.must_not_flag : [];
+      if (entries.length === 0) return null;
+      if (output == null) return false;
+      const issues = issuesSection(output?.review);
+      return !entries.some((entry) => matchesFlag(issues, entry));
     },
   },
 
