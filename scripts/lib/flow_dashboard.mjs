@@ -60,8 +60,8 @@ export const FLOW_SCRIPT = `<script>
    merged.sort((a,b) => Date.parse(b.merged_at) - Date.parse(a.merged_at));
    const fragment = document.createDocumentFragment();
    for (const pr of merged) {
-    // Match recorded PR identity first, then the same pipeline branch convention as tracing.
-    const branch = /^ai\\/issue-(\\d{1,9})$/.exec(pr.head?.ref || '');
+    // Match recorded PR identity first; only repository-owned heads supply branch hints.
+    const branch = pr.head?.repo?.full_name === 'koydas/autonomous-dev-loop' && /^ai\\/issue-(\\d{1,9})$/.exec(pr.head?.ref || '');
     const closing = /(?:^|[^\\w/])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[ \\t]*:?[ \\t]+#(\\d{1,9})\\b/i.exec(String(pr.body || '').slice(0, 65536));
     const issueHint = branch?.[1] || (closing && Number(closing[1]) > 0 ? String(Number(closing[1])) : '');
     const source = original.find(c => c.dataset.prs.split(',').includes(String(pr.number))) || (issueHint && original.find(c => c.dataset.issue === issueHint));
