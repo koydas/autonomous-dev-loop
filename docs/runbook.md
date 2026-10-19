@@ -362,7 +362,7 @@ Expand review/auto-fix executions to inspect actors, models, duration, then foll
 **Agent trace, events & spans** for detailed debugging. **Full chronological flow**
 shows the actual execution order; stage arrows only show the canonical pipeline.
 
-PR identity joins retained records first, then the repository-owned `ai/issue-N` branch convention or first same-repository closing reference in the PR body (up to 64 KiB).
+PR identity joins retained records first, then the repository-owned `ai/issue-N` branch convention (`ai/issue-007` → issue 7, as in `branchIssue()`) or first same-repository closing reference in the PR body (up to 64 KiB).
 Unlinked issues and missing run records are explicit. Metrics cover the retained
 work-item trace, possibly spanning several PRs. They exclude history beyond the
 six-month record window and index overflows. Cost is a list-price token estimate,

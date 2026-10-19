@@ -80,6 +80,13 @@ test('local pipeline branch matches its issue trace', () => {
  assert.equal(join({ ref: 'ai/issue-7', repo: { full_name: 'koydas/autonomous-dev-loop' } }), issueRecord);
 });
 
+test('zero-padded pipeline branches join the normalized issue; issue 0 is no hint (PR #226)', () => {
+ const repo = { full_name: 'koydas/autonomous-dev-loop' };
+ assert.equal(join({ ref: 'ai/issue-007', repo }), issueRecord);
+ assert.equal(join({ ref: 'ai/issue-0', repo }, '', [{ dataset: { prs: '', issue: '0' } }]), '');
+ assert.equal(join({ ref: 'ai/issue-0', repo }, 'Closes #007'), issueRecord);
+});
+
 test('fork branch cannot borrow a local issue trace (PR #226)', () => {
  assert.equal(join({ ref: 'ai/issue-7', repo: { full_name: 'someone/fork' } }), '');
 });
