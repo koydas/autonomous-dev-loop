@@ -7,7 +7,7 @@ import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import fs from 'node:fs/promises';
+import { appendOutputs } from './lib/github_output.mjs';
 import path from 'node:path';
 
 let tracer;
@@ -66,15 +66,8 @@ async function main() {
   log('Validation result', { valid: result.valid, score: result.score, blockers: result.blockers });
 
   if (process.env.GITHUB_OUTPUT) {
-    const output = [
-      `valid=${result.valid}`,
-      `score=${result.score}`,
-      `comment<<EOF`,
-      comment,
-      `EOF`,
-      '',
-    ].join('\n');
-    await fs.appendFile(process.env.GITHUB_OUTPUT, output, 'utf8');
+    // The comment embeds model text: random heredoc delimiter, written before valid/score (F04).
+    appendOutputs([['comment', comment], ['valid', result.valid], ['score', result.score]]);
     log('Exported workflow outputs: valid, score, comment');
   }
 

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs', 'trace_context.mjs', 'otlp_trace.mjs', 'pipeline_model.mjs', 'pipeline_health.mjs', 'pipeline_site.mjs', 'pr_tree_reader.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs', 'trace_context.mjs', 'otlp_trace.mjs', 'pipeline_model.mjs', 'pipeline_health.mjs', 'pipeline_site.mjs', 'pr_tree_reader.mjs', 'github_output.mjs'];
 
 // Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
 const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
@@ -76,6 +76,7 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['pipeline_model.mjs', 'pipeline_model.test.mjs'],
     ['pipeline_health.mjs', 'pipeline_health.test.mjs'],
     ['pipeline_site.mjs', 'pipeline_site.test.mjs'],
+    ['github_output.mjs', 'github_output.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
@@ -915,4 +916,25 @@ test('pipeline_health EVAL_CRONS mirror the evals.yml crons and their suites', a
   const cronSuites = evalsCronSuites();
   assert.deepEqual(Object.fromEntries(EVAL_CRONS.map((c) => [c.cron, c.suite])), cronSuites);
   for (const c of EVAL_CRONS) assert.equal(Number(c.cron.split(' ')[4]), c.weekday);
+});
+
+// Audit 2026-10-19 F04/F28: a fixed heredoc delimiter lets a value line close the block and forge outputs.
+test('no workflow writes a fixed heredoc delimiter to GITHUB_OUTPUT', () => {
+  for (const { name, text } of readWorkflows()) {
+    const fixed = [...text.matchAll(/<<\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/g)]
+      .filter((m) => /^\s*(echo|printf)\b/.test(text.slice(text.lastIndexOf('\n', m.index) + 1, m.index)));
+    assert.deepEqual(fixed.map((m) => m[0]), [], `${name} writes a fixed heredoc delimiter to an output file`);
+  }
+});
+
+test('code-generation.yml writes the issue body and title with a random delimiter, number/labels last', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'code-generation.yml'), 'utf8');
+  assert.ok(!text.includes('__DELIM__'), 'fixed __DELIM__ delimiter must be gone');
+  assert.match(text, /DELIM="ghadelim_\$\(openssl rand -hex 16\)"/);
+  const step = text.slice(text.indexOf('- name: Resolve issue data'), text.indexOf('- name: Download checkpoint artifact'));
+  assert.ok(!step.includes('${{ github.event.issue.body'), 'the body must never be interpolated into the script');
+  const order = ['echo "body<<$DELIM"', 'echo "title<<$DELIM"', 'echo "number=$NUMBER"', 'echo "labels=$LABELS"'].map((l) => step.indexOf(l));
+  assert.ok(order.every((i) => i >= 0), `missing output writes: ${order}`);
+  assert.deepEqual([...order].sort((x, y) => x - y), order, 'heredocs first, single-line control outputs last');
+  assert.equal((step.match(/echo "\$DELIM"/g) || []).length, 2, 'each heredoc closes with the random delimiter');
 });

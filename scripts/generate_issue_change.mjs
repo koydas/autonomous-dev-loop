@@ -14,6 +14,7 @@ import { writeCheckpoint } from './lib/checkpoint.mjs';
 import { decideGenerationBlocked, escalateBlocked, findDeterministicBlock, parseIssueLabels } from './lib/generation_blocked.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
+import { appendOutputs } from './lib/github_output.mjs';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -78,7 +79,7 @@ async function escalateRejection(rejection, { stage, stageStartMs, issueNumber }
   });
   obsLog({ stage, event: `${stage}.skipped`, level: 'warn', duration_ms: Date.now() - stageStartMs, meta: { reason: 'guardrail_rejected', rules, error: rejection.message } });
   tracer.endSpan(stage, { outcome: 'skipped', meta: { reason: 'guardrail_rejected', rules } });
-  if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, 'rejected=true\n', 'utf8');
+  appendOutputs([['rejected', true]]);
   log('Generated patch rejected by the guardrails', { rules: rules.join(', '), reason: rejection.message });
   await tracer.finalize('partial');
 }
@@ -114,7 +115,7 @@ async function blockIssue(blocked, { stageStartMs, issueNumber }) {
   });
   obsLog({ stage: 'code_gen', event: 'code_gen.skipped', level: 'warn', duration_ms: Date.now() - stageStartMs, meta: { ...meta, detail: blocked.reason } });
   tracer.endSpan('code_gen', { outcome: 'skipped', meta });
-  if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, 'blocked=true\n', 'utf8');
+  appendOutputs([['blocked', true]]);
   log('Issue blocked: no pull request opened', { source: blocked.source, reason: blocked.reason });
   await tracer.finalize('partial');
 }
@@ -252,13 +253,8 @@ async function main() {
   obsLog({ stage: 'pr_prepare', event: 'pr_prepare.complete', level: 'info', duration_ms: Date.now() - prPrepareStartMs, meta: { paths: outputPaths } });
   tracer.endSpan('pr_prepare', { outcome: 'success', meta: { paths: outputPaths } });
 
-  if (process.env.GITHUB_OUTPUT) {
-    await fs.appendFile(
-      process.env.GITHUB_OUTPUT,
-      `summary<<EOF\n${summary}\nEOF\ngenerated_paths<<EOF\n${outputPaths.join('\n')}\nEOF\n`,
-      'utf8',
-    );
-  }
+  // The summary is model text: random heredoc delimiter, written before generated_paths (F04).
+  appendOutputs([['summary', summary], ['generated_paths', outputPaths.join('\n')]]);
 
   log('Wrote generated changes', { paths: outputPaths.join(', ') });
   log('Exported workflow outputs: summary, generated_paths');
