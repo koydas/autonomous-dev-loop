@@ -395,3 +395,60 @@ test('callGroq sets status on HTTP errors', async () => {
     (err) => err.status === 404,
   );
 });
+
+// #150: Groq's structured error code on a response_format JSON validation failure.
+const JSON_VALIDATE_400 = { error: { code: 'json_validate_failed', message: 'invalid generated JSON' } };
+
+test('callGroq attaches code json_validate_failed, status 400, retryable false, after exactly one request', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse(JSON_VALIDATE_400, 400); };
+  await assert.rejects(() => callGroq(BASE_ARGS), (err) => {
+    assert.equal(err.code, 'json_validate_failed');
+    assert.equal(err.status, 400);
+    assert.equal(err.retryable, false);
+    return true;
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+}));
+
+test('callGroq keeps a 400 with a malformed (non-JSON) body non-retryable and without a code', withRecordedWaits(async () => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return makeResponse('<html>Bad Request</html>', 400); };
+  await assert.rejects(() => callGroq(BASE_ARGS), (err) => {
+    assert.equal(err.status, 400);
+    assert.equal(err.retryable, false);
+    assert.equal(err.code, undefined);
+    return true;
+  });
+  assert.equal(calls, 1);
+}));
+
+test('callGroq keeps any other 400 non-retryable: no code field, or a code that is not a plain identifier, is not attached', withRecordedWaits(async () => {
+  for (const body of [
+    { error: { message: 'unsupported parameter', type: 'invalid_request_error' } },
+    { error: { code: 'contains spaces and {"body":"text"}', message: 'x' } },
+    { error: { code: 42 } },
+  ]) {
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return makeResponse(body, 400); };
+    await assert.rejects(() => callGroq(BASE_ARGS), (err) => {
+      assert.equal(err.retryable, false);
+      assert.equal(err.code, undefined, JSON.stringify(body));
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+}));
+
+test('callGroq still retries a 5xx whose body carries a code (the code does not change the retry policy)', withRecordedWaits(async (waits) => {
+  process.env.GROQ_MAX_RETRIES = '1';
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls === 1 ? makeResponse({ error: { code: 'service_unavailable' } }, 503) : makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  };
+  assert.equal(await callGroq(BASE_ARGS), 'ok');
+  assert.equal(calls, 2);
+  assert.equal(waits.length, 1);
+}));

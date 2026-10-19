@@ -21,6 +21,18 @@ export const TPM_WINDOW_MS = 60000;
 
 // Groq answers 413 `rate_limit_exceeded` when the org-wide TPM budget is momentarily spent:
 // the same request passes once the window rolls. Any other 413 (payload too large) is final.
+// Groq's structured error code (`error.code`, e.g. `json_validate_failed`: the model's output failed
+// response_format JSON validation). Kept only when it is a plain identifier, so callLLM can log it
+// without echoing any other part of the response body.
+function providerErrorCode(rawText) {
+  try {
+    const code = JSON.parse(rawText)?.error?.code;
+    return typeof code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
 function isTpmRateLimit(status, rawText) {
   if (status === 429) return true;
   if (status !== 413) return false;
@@ -86,6 +98,8 @@ export async function callGroq({
       const err = new Error(`Groq API HTTP error ${response.status}: ${text}`);
       err.status = response.status;
       err.errorType = classifyError(String(response.status));
+      const code = providerErrorCode(text);
+      if (code) err.code = code;
       const tpmRateLimit = isTpmRateLimit(response.status, text);
       err.retryable = tpmRateLimit || RETRYABLE_STATUS_CODES.has(response.status);
       err.waitMs = parseWaitMs(text, response.headers) ?? (tpmRateLimit ? TPM_WINDOW_MS : null);
