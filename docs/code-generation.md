@@ -97,6 +97,14 @@ On blocked: nothing is written, the issue gets a `Code Generation: Blocked` comm
 
 To resume: merge the dependency or implement the protected part by hand, then remove `needs-human` and re-apply `ready-for-dev`.
 
+## Step Outputs (`GITHUB_OUTPUT`)
+
+Step outputs carry untrusted text: the validation comment and the generation / auto-fix `summary` (model output), the issue body and title. A heredoc with a fixed delimiter (`EOF`, `__DELIM__`) let a value line equal to it close the block and forge the following lines as outputs (`valid=true` dispatching code generation, an injected `fixed_paths` / `attempt_number`), or fail the step on a stray line (2026-10-19 audit F04, F28).
+
+- **Scripts** write every output through `scripts/lib/github_output.mjs` (`appendOutputs`): a value without a line break is `name=value`; any other value is a heredoc whose delimiter is `ghadelim_<uuid>`, drawn per write and redrawn while the value contains it; `\r\n` / lone `\r` become `\n`; an invalid name throws before anything is written. Multi-line values are written first and single-line control outputs (`valid`, `score`, `attempt_number`, `rejected`, `blocked`) last, so the runner's last-value-wins can only favour them. A single path in `generated_paths` / `fixed_paths` is written as `name=value` (same value for consumers).
+- **`code-generation.yml` → Resolve issue data** draws `DELIM="ghadelim_$(openssl rand -hex 16)"` per run for the issue `body` and `title` heredocs, then writes `number` and `labels`. The body is read by `gh` at runtime, never interpolated into the script. An issue body containing `__DELIM__` no longer fails the step.
+- `workflow_gates.test.mjs` fails on any workflow writing a fixed heredoc delimiter with `echo` / `printf`.
+
 ## Review and Auto-Fix Guardrails
 
 `prompts/pr-review-system.md` and `prompts/auto-fix-system.md` enforce the following beyond the base rubric:

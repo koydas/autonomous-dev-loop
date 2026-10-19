@@ -74,14 +74,19 @@ jobs:
           fi
           TITLE=$(gh issue view "$NUMBER" --repo "${{ github.repository }}" --json title -q '.title')
           LABELS=$(gh issue view "$NUMBER" --repo "${{ github.repository }}" --json labels -q '.labels | map(.name) | tojson')
+          # Issue text is untrusted: random heredoc delimiter per run, so a body line cannot close the
+          # block and forge outputs (audit F28); number/labels written last (last value wins).
+          DELIM="ghadelim_$(openssl rand -hex 16)"
           {
-            echo 'body<<__DELIM__'
+            echo "body<<$DELIM"
             gh issue view "$NUMBER" --repo "${{ github.repository }}" --json body -q '.body'
-            echo '__DELIM__'
+            echo "$DELIM"
+            echo "title<<$DELIM"
+            printf '%s\n' "$TITLE"
+            echo "$DELIM"
+            echo "number=$NUMBER"
+            echo "labels=$LABELS"
           } >> "$GITHUB_OUTPUT"
-          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
-          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
-          echo "labels=$LABELS" >> "$GITHUB_OUTPUT"
 
       - name: Download checkpoint artifact
         if: inputs.validate_run_id != ''

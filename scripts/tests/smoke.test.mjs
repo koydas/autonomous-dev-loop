@@ -28,6 +28,7 @@ import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, PROTECTED_WRI
 import { buildDeterministicPrompt } from '../lib/config.mjs';
 import { createTracer } from '../lib/observability.mjs';
 import { parseEvidenceConfig } from '../lib/review_evidence.mjs';
+import { parseGithubOutput } from './fixtures/parse_github_output.mjs';
 
 const ROOT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -584,7 +585,7 @@ test('generation entrypoint: a patch that passes every guardrail is written and 
   try {
     assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
     assert.match(await run.readRepo('src/helper.mjs'), /readFileSync/);
-    assert.match(run.output, /generated_paths<<EOF\nsrc\/helper\.mjs\nEOF/);
+    assert.equal(parseGithubOutput(run.output).generated_paths, 'src/helper.mjs');
     assert.doesNotMatch(run.output, /rejected=true/);
     assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
   } finally {
@@ -601,7 +602,7 @@ test('generation entrypoint: a transient LLM 503 is retried once and the second 
     assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
     assert.equal(run.requests.filter((r) => r.url === '/v1/messages').length, 2, 'exactly two LLM attempts');
     assert.equal(await run.readRepo('src/helper.mjs'), 'export const helper = () => 1;\n');
-    assert.match(run.output, /generated_paths<<EOF\nsrc\/helper\.mjs\nEOF/);
+    assert.equal(parseGithubOutput(run.output).generated_paths, 'src/helper.mjs');
     assert.match(run.result.stderr, /"event":"retry\.wait".*"status":503/);
     assert.doesNotMatch(run.result.stderr, /"event":"llm_fallback"/);
   } finally {
@@ -703,7 +704,7 @@ test('generation entrypoint: not blocked — a Markdown note without a bug/featu
   try {
     assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
     assert.equal(await run.readRepo('guides/setup.md'), '# Setup\n');
-    assert.match(run.output, /generated_paths<<EOF\nguides\/setup\.md\nEOF/);
+    assert.equal(parseGithubOutput(run.output).generated_paths, 'guides/setup.md');
     assert.doesNotMatch(run.output, /blocked=true/);
     assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
   } finally {

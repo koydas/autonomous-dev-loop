@@ -18,6 +18,7 @@ import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
 import { readPrTreeFile } from './lib/pr_tree_reader.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
+import { appendOutputs } from './lib/github_output.mjs';
 
 let tracer;
 
@@ -247,13 +248,7 @@ if (manualRerunRequested) {
     }
   }
   const removedCheckpointFiles = await cleanupCheckpointFiles(process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`);
-  if (process.env.GITHUB_OUTPUT) {
-    await fsPromises.appendFile(
-      process.env.GITHUB_OUTPUT,
-      `attempt_number=1\nsummary<<EOF\nManual auto-fix reset triggered via checkbox.\nEOF\n`,
-      'utf8',
-    );
-  }
+  appendOutputs([['summary', 'Manual auto-fix reset triggered via checkbox.'], ['attempt_number', 1]]);
   log('Manual auto-fix rerun requested via comment checkbox', { prNumber, removedLabels: attemptLabels.length, removedCheckpointFiles: removedCheckpointFiles.length });
   obsLog({ stage: 'autofix', event: 'autofix.reset', level: 'info', meta: { prNumber, removed_labels: attemptLabels, removed_checkpoints: removedCheckpointFiles.length } });
 }
@@ -567,13 +562,8 @@ obsLog({ stage: 'autofix', event: 'autofix.push', level: 'info', duration_ms: Da
 
 await applyAttemptLabel(nextAttempt);
 
-if (process.env.GITHUB_OUTPUT) {
-  await fsPromises.appendFile(
-    process.env.GITHUB_OUTPUT,
-    `fixed_paths<<EOF\n${outputPaths.join('\n')}\nEOF\nattempt_number=${nextAttempt}\nsummary<<EOF\n${summary}\nEOF\n`,
-    'utf8',
-  );
-}
+// The summary is model text: random heredoc delimiter, written before fixed_paths and attempt_number (F04).
+appendOutputs([['summary', summary], ['fixed_paths', outputPaths.join('\n')], ['attempt_number', nextAttempt]]);
 
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
 await writeCheckpoint(checkpointRunId, 'autofix', { prNumber, attempt: nextAttempt, outputPaths });

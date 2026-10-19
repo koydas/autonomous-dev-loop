@@ -347,6 +347,17 @@ jobs:
             --statements 80 \
             node --test scripts/tests/pipeline_site.test.mjs
 
+      - name: Check github_output coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/github_output.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/github_output.test.mjs
+
       # Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build).
       - name: Check build_eval_site coverage (≥80%)
         run: |
