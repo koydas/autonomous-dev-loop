@@ -6,7 +6,7 @@ import path from 'node:path';
 import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
-import { buildReviewPrompt, formatUnreviewedCodeNote, formatUnseenFindingsNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
+import { buildReviewPrompt, loadReviewSystemPrompt, formatUnreviewedCodeNote, formatUnseenFindingsNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { prWorkItemHint } from './lib/trace_context.mjs';
@@ -19,8 +19,8 @@ import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, i
 import { findStaleReferences, formatStaleRefsContext, formatStaleRefsSection } from './lib/stale_refs.mjs';
 import { findRelatedAdrs } from './lib/related_adrs.mjs';
 import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudgetSection } from './lib/prompt_budget.mjs';
-import { modelsFromContent } from './lib/layered_config.mjs';
-import { repoConfigFile, configRelPath } from './lib/roots.mjs';
+import { modelsFromContent, loadReviewGuidelines } from './lib/layered_config.mjs';
+import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -50,7 +50,9 @@ const eventPath = requireEnv('GITHUB_EVENT_PATH');
 const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature, maxTokens: llmMaxTokens, maxInputTokens, reasoningEffort } = loadLLMConfig('review');
 // ADR-0038 amendment: Anthropic has no input budget, its diff is capped at anthropic_review_max_diff_chars instead.
 const maxDiffChars = reviewMaxDiffChars(llmProvider);
-const systemPrompt = loadPrompt('pr-review-system');
+// ADR-0045: the rules, gates and budget impact written for this repository apply to this repository only.
+const selfTarget = isSelfTarget();
+const systemPrompt = loadReviewSystemPrompt({ self: selfTarget, guidelines: selfTarget ? '' : loadReviewGuidelines() });
 const userPromptTemplate = loadPrompt('pr-review-user');
 
 let event;
@@ -335,7 +337,7 @@ const prModelsOrDefaults = (content) => {
     return GROQ_MODEL_DEFAULTS;
   }
 };
-const promptBudget = computePromptBudgetImpact({
+const promptBudget = !selfTarget ? [] : computePromptBudgetImpact({
   rawDiff,
   readBase: (p) => {
     if (!mergeBase) throw new Error('PR base SHA unknown');
@@ -361,6 +363,7 @@ obsLog({ stage: 'review', event: 'review.evidence_assessed', level: 'info', meta
 const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars, evidence, dependencyManifestContext,
   staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
+  automationGates: selfTarget,
 });
 if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, maxDiffChars, unreviewedCodeFiles });
 if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });

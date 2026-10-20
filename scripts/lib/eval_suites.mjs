@@ -21,7 +21,7 @@ import path from 'node:path';
 import { validateIssue, VALIDATION_SYSTEM_PROMPT } from './issue_validator.mjs';
 import { loadPrompt } from './prompts.mjs';
 import { detectProvider, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './config.mjs';
-import { buildReviewPrompt, parseReviewVerdict, withholdOnUnreviewedCode } from './review_prompt.mjs';
+import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict, withholdOnUnreviewedCode } from './review_prompt.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, decideVerdict } from './review_evidence.mjs';
 import { formatStaleRefsContext } from './stale_refs.mjs';
@@ -148,7 +148,7 @@ export function matchesFlag(text, entry) {
 }
 
 let reviewPrompts;
-const loadReviewPrompts = () => (reviewPrompts ??= { system: loadPrompt('pr-review-system'), user: loadPrompt('pr-review-user') });
+const loadReviewPrompts = () => (reviewPrompts ??= { system: loadReviewSystemPrompt({ self: true }), user: loadPrompt('pr-review-user') });
 
 // Same budget as loadLLMConfig('review').maxInputTokens: review_max_input_tokens, else max_input_tokens, on Groq;
 // none on Anthropic, whose diff is capped at anthropic_review_max_diff_chars instead (reviewDiffLimits). Not
@@ -235,6 +235,7 @@ export const reviewSuite = {
     const { userPrompt, diffTruncated, bodyTruncated, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
       systemPrompt: system,
       userPromptTemplate: user,
+      automationGates: true, // the suites measure this repository's own review (ADR-0045)
       rawDiff: input.diff,
       prTitle: input.title,
       prBody: input.body || '(no description provided)',

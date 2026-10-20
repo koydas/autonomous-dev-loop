@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReviewPrompt, findingCitedFiles, findUnreviewedCodeFiles, formatUnreviewedCodeNote, formatUnseenFindingsNote, orderDiffForReview, parseReviewVerdict, withholdOnUnreviewedCode } from '../lib/review_prompt.mjs';
+import { assembleReviewSystemPrompt, loadReviewSystemPrompt, buildReviewPrompt, findingCitedFiles, findUnreviewedCodeFiles, formatUnreviewedCodeNote, formatUnseenFindingsNote, orderDiffForReview, parseReviewVerdict, withholdOnUnreviewedCode } from '../lib/review_prompt.mjs';
 import { cutDiffAtBoundary } from '../lib/file_filters.mjs';
 import { assessEvidence } from '../lib/review_evidence.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
@@ -412,4 +412,71 @@ test('pr-review-system.md bounds the untested-claim rule to a Low advisory, with
   assert.equal(impact.stage, 'review');
   assert.ok(impact.deltaTokens > 0 && impact.deltaTokens <= 130, `delta ${impact.deltaTokens}`);
   assert.ok(impact.headroomTokens >= Math.ceil(impact.maxInputTokens * LOW_HEADROOM_RATIO), `${impact.headroomTokens} of ${impact.maxInputTokens}`);
+});
+
+// ADR-0045: the review system prompt is a neutral core plus this repository's rules.
+const CORE = 'Intro for {{repository_kind}}.\n* a\n{{repository_rules_1}}\n* stale lead. {{repository_rules_2}}\n{{repository_rules_3}}\n* z';
+const RULES = 'R1 line one\n* R1 line two\n<!-- next -->\nR2 sentence.\n<!-- next -->\n* R3 bullet\n';
+
+test('assembleReviewSystemPrompt puts the repository rules back in place for this repository', () => {
+  assert.equal(
+    assembleReviewSystemPrompt(CORE, RULES, { self: true }),
+    'Intro for a Node.js automation repository.\n* a\nR1 line one\n* R1 line two\n* stale lead. R2 sentence.\n* R3 bullet\n* z',
+  );
+  // Guidelines are for other repositories only.
+  assert.ok(!assembleReviewSystemPrompt(CORE, RULES, { self: true, guidelines: 'ignored' }).includes('ignored'));
+});
+
+test('assembleReviewSystemPrompt names a placeholder the rules file has no block for', () => {
+  assert.throws(() => assembleReviewSystemPrompt('{{repository_rules_4}}', RULES, { self: true }), /references \{\{repository_rules_4\}\} but pr-review-repo-rules\.md has 3 block\(s\)/);
+});
+
+test('assembleReviewSystemPrompt gives another repository the neutral core, with no gap and no placeholder', () => {
+  const out = assembleReviewSystemPrompt(CORE, '', { self: false });
+  assert.equal(out, 'Intro for a software repository.\n* a\n* stale lead.\n* z');
+  assert.ok(!out.includes('{{') && !out.includes('R1'));
+});
+
+test('assembleReviewSystemPrompt appends the guidelines of another repository, trimmed, and ignores blank ones', () => {
+  const out = assembleReviewSystemPrompt(CORE, '', { self: false, guidelines: '\n* Keep the public API stable.\n' });
+  assert.match(out, /\* z\n\nRepository review guidelines \(supplied by the repository from its trusted default-branch configuration;[^)]*\):\n\n\* Keep the public API stable\.$/);
+  assert.equal(assembleReviewSystemPrompt(CORE, '', { self: false, guidelines: '  \n ' }), 'Intro for a software repository.\n* a\n* stale lead.\n* z');
+});
+
+test('the real prompts split cleanly: three placeholders in the core, three blocks in the rules, nothing left over', () => {
+  const PROMPTS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const core = readFileSync(resolve(PROMPTS_ROOT, 'prompts/pr-review-system.md'), 'utf8');
+  const rules = readFileSync(resolve(PROMPTS_ROOT, 'prompts/pr-review-repo-rules.md'), 'utf8');
+  assert.deepEqual([...core.matchAll(/\{\{repository_rules_(\d+)\}\}/g)].map((m) => m[1]), ['1', '2', '3']);
+  assert.equal([...core.matchAll(/\{\{repository_kind\}\}/g)].length, 1);
+  assert.equal(rules.split('\n<!-- next -->\n').length, 3);
+  const self = loadReviewSystemPrompt({ self: true });
+  assert.ok(!self.includes('{{') && !self.includes('<!--'));
+  for (const text of ['For PRs that modify generation/review/auto-fix automation', 'For gate (a),', 'For gate (b),', 'For gate (c), CI enforces', 'A hit alone is never a gate (b) finding; judge gate (b) from the diff as usual.']) {
+    assert.ok(self.includes(text), `this repository's review prompt lost: ${text}`);
+  }
+  assert.ok(self.length > core.length, 'the rules are put back');
+  assert.match(self, /^You are a senior engineer reviewing a pull request diff for a Node\.js automation repository\./);
+});
+
+test('another repository gets the review rules that hold anywhere, none of this repository\'s', () => {
+  const target = loadReviewSystemPrompt({ self: false });
+  assert.ok(!target.includes('{{') && !target.includes('<!--'));
+  assert.match(target, /^You are a senior engineer reviewing a pull request diff for a software repository\./);
+  for (const text of ['gate (a)', 'gate (b)', 'gate (c)', 'c8', 'docs/code-generation.md', 'scripts/lib/', 'Node.js']) {
+    assert.ok(!target.includes(text), `the neutral prompt still mentions ${text}`);
+  }
+  for (const text of ['Review only what is present in the provided diff', 'Allowed verdicts are only: APPROVED or REQUEST_CHANGES', 'Tool evidence:', 'Context-aware review:', 'Stale references']) {
+    assert.ok(target.includes(text), `the neutral prompt lost: ${text}`);
+  }
+  assert.match(loadReviewSystemPrompt({ self: false, guidelines: '* Be kind.' }), /Repository review guidelines[\s\S]*\* Be kind\.$/);
+});
+
+test('buildReviewPrompt leaves the automation-gate context out for another repository', () => {
+  const rawDiff = fileDiff('scripts/a.mjs', '+x');
+  assert.match(build({ rawDiff }).userPrompt, /Automation gates context:/);
+  assert.match(build({ rawDiff, automationGates: true }).userPrompt, /Automation gates context:/);
+  const off = build({ rawDiff, automationGates: false }).userPrompt;
+  assert.doesNotMatch(off, /Automation gates context:/);
+  assert.match(off, /Change classification context:/);
 });

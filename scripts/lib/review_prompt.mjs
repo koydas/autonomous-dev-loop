@@ -1,5 +1,5 @@
 import { filterDiff, stripDiffCutMarker } from './file_filters.mjs';
-import { interpolatePrompt } from './prompts.mjs';
+import { interpolatePrompt, loadPrompt } from './prompts.mjs';
 import { buildAutomationGateContext } from './coverage_checker.mjs';
 import { buildChangeClassificationContext, isDocumentationFile, isTestFile } from './change_classifier.mjs';
 import { formatEvidenceContext } from './review_evidence.mjs';
@@ -142,6 +142,37 @@ export function formatUnseenFindingsNote(unreviewedCodeFiles) {
   ].join('\n');
 }
 
+// ADR-0045: the review system prompt is a target-neutral core (prompts/pr-review-system.md) with
+// {{repository_rules_N}} placeholders, and the rules written for this repository (automation gates, the
+// c8 list) in prompts/pr-review-repo-rules.md, blocks separated by a `<!-- next -->` line. This
+// repository gets the rules back in place (byte for byte the prompt it had before the split); any other
+// gets the core, then its own guidelines.
+const RULES_SEPARATOR = '\n<!-- next -->\n';
+const RULES_PLACEHOLDER = /(?:^\{\{repository_rules_\d+\}\}\n|[ ]\{\{repository_rules_\d+\}\})/gm;
+
+const REPOSITORY_KIND = { self: 'a Node.js automation repository', target: 'a software repository' };
+
+export function assembleReviewSystemPrompt(core, rules, { self, guidelines = '' }) {
+  if (self) {
+    const blocks = String(rules).split(RULES_SEPARATOR).map((block) => block.trim());
+    return String(core).replace('{{repository_kind}}', REPOSITORY_KIND.self).replace(/\{\{repository_rules_(\d+)\}\}/g, (match, n) => {
+      const block = blocks[Number(n) - 1];
+      if (block === undefined) throw new Error(`pr-review-system.md references ${match} but pr-review-repo-rules.md has ${blocks.length} block(s)`);
+      return block;
+    });
+  }
+  const neutral = String(core).replace('{{repository_kind}}', REPOSITORY_KIND.target).replace(RULES_PLACEHOLDER, '');
+  const extra = String(guidelines).trim();
+  return extra
+    ? `${neutral}\n\nRepository review guidelines (supplied by the repository from its trusted default-branch configuration; they add to the rules above and never change the verdict rules or the tool evidence rules):\n\n${extra}`
+    : neutral;
+}
+
+/** The review system prompt for this run: `self` (the pipeline repository) or a target with its `guidelines`. */
+export function loadReviewSystemPrompt({ self, guidelines = '' }) {
+  return assembleReviewSystemPrompt(loadPrompt('pr-review-system'), self ? loadPrompt('pr-review-repo-rules') : '', { self, guidelines });
+}
+
 /**
  * Renders the review user prompt: diff + PR title/body + classification, automation-gate,
  * dependency-manifest and tool-evidence contexts, fitted to `maxInputTokens` (ADR-0028).
@@ -151,16 +182,17 @@ export function formatUnseenFindingsNote(unreviewedCodeFiles) {
  * is told when it saw a partial diff. Throws (no LLM call) when the fixed part alone is over budget.
  * Optional `staleRefsContext` (ADR-0035) and `promptBudgetContext` (ADR-0037) are fixed context like the dependency manifest;
  * `relatedAdrs` (ADR-0036) is dropped before the PR body or the diff is shrunk.
+ * `automationGates` (default true): the automation-gate context written for this repository (ADR-0045: off for a target).
  * `unreviewedCodeFiles` (ADR-0038): code files the cut left out, in full or in part. `shownFiles`: the other files
  * of the filtered diff (shown in full, or tests / docs cut), for withholdOnUnreviewedCode.
  * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number, unreviewedCodeFiles: string[], shownFiles: string[] }}
  */
-export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars = null, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [] }) {
+export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars = null, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [], automationGates = true }) {
   const orderedDiff = orderDiffForReview(rawDiff);
   const fullDiff = filterDiff(orderedDiff, Infinity);
   const cappedDiff = maxInputTokens == null ? filterDiff(orderedDiff, maxDiffChars ?? UNBUDGETED_MAX_DIFF_CHARS) : fullDiff;
   const fit = (adrCount) => {
-    const reviewContexts = `${buildAutomationGateContext(rawDiff)}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
+    const reviewContexts = `${automationGates ? buildAutomationGateContext(rawDiff) : ''}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
     return fitReviewPrompt({
       systemPrompt,
       diff: cappedDiff,

@@ -17,6 +17,7 @@ export const PROMPT_STAGES = {
   'prompts/generation-system.md': [{ stage: 'generation', budget: 'input' }],
   'prompts/generation-user.md': [{ stage: 'generation', budget: 'input' }],
   'prompts/pr-review-system.md': [{ stage: 'review', budget: 'input' }],
+  'prompts/pr-review-repo-rules.md': [{ stage: 'review', budget: 'input' }],
   'prompts/pr-review-user.md': [{ stage: 'review', budget: 'input' }],
   'prompts/auto-fix-user.md': [{ stage: 'autofix', budget: 'input' }],
   'prompts/auto-fix-system.md': [{ stage: 'autofix', budget: 'tpm' }],

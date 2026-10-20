@@ -1524,7 +1524,7 @@ test('auto_fix_pr blocks a test-file change that drops existing tests', async ()
 });
 
 // ADR-0040: auto-fix side effects (budget cut, LLM call, attempt label, escalation, skips) are journaled.
-async function runJournaled(handlerOpts, files = {}) {
+async function runJournaled(handlerOpts, files = {}, extraEnv = {}) {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-journal-'));
   for (const [rel, content] of Object.entries(files)) {
     await fs.mkdir(path.dirname(path.join(tmpDir, rel)), { recursive: true });
@@ -1533,7 +1533,7 @@ async function runJournaled(handlerOpts, files = {}) {
   const server = await startMockServer(makeHandler(handlerOpts));
   const eventFile = await writeEventFile();
   try {
-    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir, extraEnv: { GITHUB_RUN_ID: '777', GITHUB_OUTPUT: path.join(tmpDir, 'out.txt') } });
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir, extraEnv: { GITHUB_RUN_ID: '777', GITHUB_OUTPUT: path.join(tmpDir, 'out.txt'), ...extraEnv } });
     const trace = JSON.parse(await fs.readFile(path.join(tmpDir, 'observability', 'traces', '777.json'), 'utf8'));
     return { result, trace, find: (name) => trace.events.filter((e) => e.event === name) };
   } finally {
@@ -1579,6 +1579,24 @@ test('auto_fix_pr journals the self-modification skip and its comment', async ()
   const [skipped] = find('autofix.skipped');
   assert.equal(skipped.meta.reason, 'self_modification');
   assert.equal(find('llm_call').length, 0, 'no LLM call');
+});
+
+test('auto_fix_pr applies the self-modification skip to this repository only (ADR-0045)', async () => {
+  // Another repository: scripts/auto_fix_pr.mjs is just one of its files, so the run goes on (here: to the LLM call).
+  const other = await runJournaled(
+    { llmResponse: llmChanges([{ target_path: 'scripts/auto_fix_pr.mjs', file_content: 'export const a = 2;\n' }]), diffBody: diffFor('scripts/auto_fix_pr.mjs') },
+    { 'scripts/auto_fix_pr.mjs': 'export const a = 1;\n' },
+    { ADL_PIPELINE_REPOSITORY: 'koydas/autonomous-dev-loop', GITHUB_REPOSITORY: 'owner/repo' },
+  );
+  assert.equal(other.find('autofix.skipped').filter((e) => e.meta.reason === 'self_modification').length, 0);
+  assert.ok(other.find('llm_call').length >= 1, 'the fix reaches the LLM call');
+  // This repository, named explicitly: still skipped, no LLM call.
+  const self = await runJournaled(
+    { diffBody: diffFor('scripts/auto_fix_pr.mjs') }, {},
+    { ADL_PIPELINE_REPOSITORY: 'Owner/Repo', GITHUB_REPOSITORY: 'owner/repo' },
+  );
+  assert.equal(self.find('autofix.skipped')[0].meta.reason, 'self_modification');
+  assert.equal(self.find('llm_call').length, 0);
 });
 
 test('auto_fix_pr logs an untrusted issue_comment as a skip on stderr, before any trace', async () => {

@@ -62,6 +62,18 @@ export function repoConfigFile(name, env = process.env) {
   return dir ? join(dir, name) : pipelineDefaultFile(name);
 }
 
+/**
+ * True when the repository under work is the pipeline repository itself. The heuristics and review
+ * rules written for it (coverage gates, prompt budget impact, the auto-fix self-modification guard)
+ * apply only then (ADR-0045). ADL_PIPELINE_REPOSITORY is the `pipeline_repository` input of the
+ * reusable workflows; unset (every workflow today, a local run) means this repository.
+ */
+export function isSelfTarget(env = process.env) {
+  const pipelineRepository = (env.ADL_PIPELINE_REPOSITORY ?? '').trim();
+  if (!pipelineRepository) return true;
+  return pipelineRepository.toLowerCase() === (env.GITHUB_REPOSITORY ?? '').trim().toLowerCase();
+}
+
 /** Roots and config source, for `print_resolved_config.mjs` and run diagnostics. */
 export function describeRoots(env = process.env) {
   const configDir = targetConfigDir(env);
