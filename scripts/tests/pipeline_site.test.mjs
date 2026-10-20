@@ -269,3 +269,18 @@ test('cost: a window of unpriced calls only reads unpriced on the activity tile,
   assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">unpriced/);
   assert.doesNotMatch(files['pipeline/index.html'], /\$0\.0000/);
 });
+
+test('models: a model seen only in the eval scorecard has no pipeline cost (—), never free or $0', () => {
+  const scorecard = { suites: { review: { runs: [{ run_id: 'r1', model: 'claude-opus-5-5', ts: '2026-10-14T00:00:00Z', passed: true }, { run_id: 'r2', model: 'openai/gpt-oss-120b', ts: '2026-10-14T00:00:00Z', passed: true }] } } };
+  const model = buildPipelineModel({ records: [], traces: [] });
+  const html = renderModels(modelUsage(model.runs, scorecard), model);
+  assert.equal((html.match(/LLM cost<\/div><div class="value">—/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /free tier|\$0\.0000/);
+});
+
+test('health: a stage or workflow with no priced call shows no per-run mean', () => {
+  const { files } = site([makeRecord({ runId: '630', start: T0 })]);
+  const health = files['pipeline/health.html'];
+  assert.match(health, /<code>review<\/code><\/td><td class="num">1<\/td>.*?<td class="num">—<\/td><\/tr>/);
+  assert.doesNotMatch(health.slice(health.indexOf('Per stage')), /<td class="num">\$0\.0000<\/td>/);
+});

@@ -482,6 +482,8 @@ ${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: 
   return pipelinePage('Pipeline health', body, 1);
 }
 
+// A mean is shown only when the group has a priced call; otherwise it would read as a $0 cost.
+const perRun = (g) => (g.measured + g.estimated ? formatUsd(g.per_run_usd) : '—');
 const costRow = (label, g, extra = []) => [label, ...extra, e(g.calls), e(compact(g.tokens_in)), e(compact(g.cache_read)), e(compact(g.tokens_out)), e(costLine(g))];
 const COST_COLS = [{ label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Cache reads', num: true }, { label: 'Output', num: true }, 'Cost'];
 
@@ -497,9 +499,9 @@ export function costPanel(costs) {
 <p class="sub">${costSub(t)} The mean per work item counts work items with a trace index only.</p>
 <h3>Per stage</h3>
 ${stages.length ? hbars(stages.map((g) => ({ label: g.key, value: g.usd })), { label: 'LLM cost in USD per pipeline stage', format: formatUsd }) : ''}
-${table([{ label: 'Stage' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_stage.map((g) => [...costRow(`<code>${e(g.key)}</code>`, g, [e(g.runs)]), e(formatUsd(g.per_run_usd))]))}
+${table([{ label: 'Stage' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_stage.map((g) => [...costRow(`<code>${e(g.key)}</code>`, g, [e(g.runs)]), e(perRun(g))]))}
 <h3>Per workflow</h3>
-${table([{ label: 'Workflow' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_workflow.map((g) => [...costRow(e(g.key), g, [e(g.runs)]), e(formatUsd(g.per_run_usd))]))}
+${table([{ label: 'Workflow' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_workflow.map((g) => [...costRow(e(g.key), g, [e(g.runs)]), e(perRun(g))]))}
 <h3>Most expensive runs</h3>
 ${table([{ label: 'Run' }, 'Workflow', 'Work item', ...COST_COLS], costs.top_runs.map((r) => costRow(`<a href="${runHref('', r.run_id)}">${e(r.run_id)}</a><br><span class="muted">${e(time(r.started_at))}</span>`, r, [e(r.workflow ?? '—'), e(itemLabel(r.item))])))}
 <h3>Most expensive work items</h3>
@@ -523,7 +525,7 @@ export function renderModels(models, model) {
     const runs = m.runs.map((r) => `<a href="${runHref('', r)}">${e(r)}</a>`).join(', ');
     const evals = m.evals.map((ev) => `<a href="../runs/${encodeURIComponent(ev.run_id)}.html">${e(ev.suite)} ${e(ev.run_id)}</a> ${ev.passed ? '<span class="ok">✓</span>' : '<span class="ko">✕</span>'}`).join(', ');
     return `<section${id}><h2><code>${e(m.key)}</code></h2>
-<div class="tiles">${tile('Pipeline LLM calls', compact(m.calls))}${tile('Failed', compact(m.failed))}${tile('Fallback answers', compact(m.fallback))}${tile('Tokens', compact(m.tokens))}${tile('LLM cost', m.provider === 'groq' ? 'free tier' : m.calls && m.unpriced === m.calls ? 'unpriced' : formatUsd(m.usd), m.unpriced ? `${m.unpriced} unpriced call(s)` : '')}${tile('Eval runs', compact(m.evals.length))}</div>
+<div class="tiles">${tile('Pipeline LLM calls', compact(m.calls))}${tile('Failed', compact(m.failed))}${tile('Fallback answers', compact(m.fallback))}${tile('Tokens', compact(m.tokens))}${tile('LLM cost', costAmount(m.cost ?? sumCosts([])), m.unpriced ? `${m.unpriced} unpriced call(s)` : '')}${tile('Eval runs', compact(m.evals.length))}</div>
 <p class="sub">Pipeline runs: ${runs || '<span class="muted">none in the window</span>'}</p>
 <p class="sub">Eval runs: ${evals || '<span class="muted">none on the scorecard</span>'}</p></section>`;
   }).join('\n');

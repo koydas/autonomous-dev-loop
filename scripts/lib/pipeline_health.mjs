@@ -1,7 +1,7 @@
 // Health of the pipeline (ADR-0027 amendment): aggregates of the pipeline model (pipeline_model.mjs)
 // and of the eval scorecard the dashboard already holds. Pure. Token counts are provider-measured where
 // the record has them (ADR-0041 amendment), chars/4 estimates otherwise; the Groq quota chart counts both.
-import { callCost, sumCosts, addCosts } from './llm_cost.mjs';
+import { sumCosts, addCosts } from './llm_cost.mjs';
 
 export const GROQ_TPD = 200000;
 export const TOKEN_DAYS = 30;
@@ -276,7 +276,7 @@ export function modelUsage(runs, scorecard) {
   const models = new Map();
   const get = (provider, model) => {
     const key = `${provider ?? 'unknown'}:${model ?? 'unknown'}`;
-    if (!models.has(key)) models.set(key, { key, provider: provider ?? null, model: model ?? null, calls: 0, failed: 0, fallback: 0, tokens: 0, usd: 0, unpriced: 0, runs: [], evals: [] });
+    if (!models.has(key)) models.set(key, { key, provider: provider ?? null, model: model ?? null, calls: 0, failed: 0, fallback: 0, tokens: 0, usd: 0, unpriced: 0, cost: sumCosts([]), runs: [], evals: [] });
     return models.get(key);
   };
   for (const run of runs) {
@@ -287,9 +287,9 @@ export function modelUsage(runs, scorecard) {
       if (c.failed) m.failed += 1;
       if (c.fallback) m.fallback += 1;
       m.tokens += (c.tokens_in ?? 0) + (c.tokens_out ?? 0);
-      const cost = c.cost ?? callCost(c);
-      m.usd += cost.usd ?? 0;
-      if (cost.basis === 'unpriced') m.unpriced += 1;
+      m.cost = addCosts(m.cost, sumCosts([c]));
+      m.usd = m.cost.usd;
+      m.unpriced = m.cost.unpriced;
       if (!seen.has(m.key) && m.runs.length < 20) { m.runs.push(run.run_id); seen.add(m.key); }
     }
   }

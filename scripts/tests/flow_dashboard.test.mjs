@@ -192,3 +192,10 @@ test('an all-unpriced flow shows unpriced on its chip and executions, never $0',
  assert.match(html, /<span class="flow-cost-chip"[^>]*>unpriced<\/span>/);
  assert.match(html, /partial · 1\.2 s · unpriced<\/summary>/);
 });
+
+test('a repeated step with only Groq calls shows no per-execution mean', () => {
+ const groq = { ...run, llm: [{ provider: 'groq', model: 'openai/gpt-oss-120b', stage: 'review', pipeline_stage: 'review', tokens_in: 10, tokens_out: 1 }] };
+ const html = flowDashboard({ traces: [trace([groq, { ...groq, run_id: '125-1' }])] });
+ assert.match(html, /<p class="flow-step-cost" data-step-cost>LLM: \$0\.0000 USD \(2 Groq free-tier call\(s\) at no cost\) · 2 call\(s\) · 20 in \/ 2 out<\/p>/);
+ assert.doesNotMatch(html, /per execution/);
+});
