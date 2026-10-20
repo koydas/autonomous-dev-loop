@@ -76,6 +76,9 @@ async function callProviders(args, span) {
   const httpStatus = (error) => (Number.isInteger(error.status) ? error.status : null);
   let errorType;
   let status;
+  // Published for the fallback events instead of the message (ADR-0040 amendment, F01): the provider's
+  // structured code when it gave one, else the error class.
+  let providerCode;
   let called = false;
   let answered = false;
   let text;
@@ -89,6 +92,7 @@ async function callProviders(args, span) {
   } catch (error) {
     errorType = error.errorType ?? classifyError(String(error.status ?? ''));
     status = error.status;
+    if (typeof error.code === 'string') providerCode = error.code;
     errors.push(`${primary}: ${error.message}`);
     providerErrors.push(called
       ? { provider: primary, status: httpStatus(error) }
@@ -108,7 +112,7 @@ async function callProviders(args, span) {
   if (args.fallback === false) {
     errors.push(`${fallback}: skipped (fallback disabled)`);
     providerErrors.push({ provider: fallback, status: null, skipped: 'disabled' });
-    log({ stage, event: 'llm_fallback_disabled', level: 'warn', meta: { from: primary, error_type: errorType, error: errors[0] } });
+    log({ stage, event: 'llm_fallback_disabled', level: 'warn', meta: { from: primary, error_type: providerCode ?? errorType, status: status ?? null, error: errors[0] } });
     throw fail();
   }
 
@@ -140,7 +144,7 @@ async function callProviders(args, span) {
   // Any primary failure falls back. 401/403 means the primary's key is wrong: logged as an error
   // (GitHub annotation) so the misconfiguration stays visible while the fallback keeps the job running.
   const level = errorType === 'PERMANENT' || CONFIG_ERROR_STATUSES.has(status) ? 'error' : 'warn';
-  log({ stage, event: 'llm_fallback', level, meta: { from: primary, to: fallback, error_type: errorType, error: errors[0] } });
+  log({ stage, event: 'llm_fallback', level, meta: { from: primary, to: fallback, error_type: providerCode ?? errorType, status: status ?? null, error: errors[0] } });
   try {
     const call = { prompt: args.prompt, systemPrompt: args.systemPrompt };
     if ('responseFormat' in args) call.responseFormat = args.responseFormat;

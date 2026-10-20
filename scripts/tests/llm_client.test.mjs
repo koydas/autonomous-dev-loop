@@ -943,3 +943,31 @@ test('callLLM: a persistent Anthropic 503 exhausts exactly maxAttempts (4) befor
   assert.equal(result, 'fallback-ok');
   assert.deepEqual(calls, [...Array(4).fill('https://api.anthropic.com/v1/messages'), GROQ_API_URL_DEFAULT]);
 });
+
+// ADR-0040 amendment (F01): the fallback events carry the provider's code (else the taxonomy class) and
+// the HTTP status, which the public record keeps instead of the message.
+test('callLLM: llm_fallback carries error_type = the provider code and the HTTP status', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async (url) => (url === GROQ_API_URL_DEFAULT
+    ? makeResponse(JSON_VALIDATE_BODY, 400)
+    : makeResponse({ content: [{ type: 'text', text: 'ok' }] }));
+  const { lines } = await captureStderr(() => callLLM({ stage: 'generation', prompt: 'hi', systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b', apiUrl: GROQ_API_URL_DEFAULT }));
+  const fallback = lines.filter((l) => l.includes('"llm_fallback"')).map((l) => JSON.parse(l))[0];
+  assert.equal(fallback.meta.error_type, 'json_validate_failed');
+  assert.equal(fallback.meta.status, 400);
+});
+
+test('callLLM: llm_fallback_disabled carries the taxonomy class without a provider code, and a null status without an HTTP response', async () => {
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'groq';
+  globalThis.fetch = async () => makeResponse({ choices: [{ message: { content: 'ok' } }] });
+  const { lines } = await captureStderr(() => assert.rejects(() => callLLM({
+    stage: 'validation', prompt: 'x'.repeat(4000), systemPrompt: 'sys', apiKey: 'groq-key', model: 'openai/gpt-oss-120b',
+    apiUrl: GROQ_API_URL_DEFAULT, maxInputTokens: 100, fallback: false,
+  })));
+  const disabled = lines.filter((l) => l.includes('"llm_fallback_disabled"')).map((l) => JSON.parse(l))[0];
+  assert.equal(typeof disabled.meta.error_type, 'string');
+  assert.equal(disabled.meta.status, null);
+});

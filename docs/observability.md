@@ -75,7 +75,7 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `code_gen.complete`    | info   | ✓             | `changes_count`                           |
 | `code_gen.error`       | error  | ✓             | `error`; `reason: "blocked"`, `source` when the blocked escalation's GitHub calls failed (exit 1) |
 | `code_gen.escalated`   | warn   | —             | `during` (`code_gen` \| `pr_prepare`), `reason` (`guardrail_rejected` \| `blocked`), `rules` or `source`, `labels_added`, `labels_removed` (blocked: `ready-for-dev`), `url` (rejection comment) — the issue went back to a human |
-| `code_gen.skipped`     | warn   | ✓             | `reason: "guardrail_rejected"`, `rules`, `error` — `validateAiOutput()` rejected the patch (protected or unsafe path): issue commented, `needs-human`, `codegen_skip` metric, exit 0 with `rejected=true` (ADR-0019). `reason: "blocked"`, `source` (`denylist` \| `model` \| `notes_only`), `detail` — the issue cannot be implemented: no write, no PR, `ready-for-dev` → `needs-human`, issue commented with the reason and planned fix, `codegen_skip` metric (`reason: "blocked"`, `source`), exit 0 with `blocked=true` (ADR-0029 amendment) |
+| `code_gen.skipped`     | warn   | ✓             | `reason: "guardrail_rejected"`, `rules`, `error` — `validateAiOutput()` rejected the patch (protected or unsafe path): issue commented, `needs-human`, `codegen_skip` metric, exit 0 with `rejected=true` (ADR-0019). `reason: "blocked"`, `source` (`denylist` \| `model` \| `notes_only`), `detail` (the model's or denylist's reason; stderr and trace only, not in the public record: model output, F06) — the issue cannot be implemented: no write, no PR, `ready-for-dev` → `needs-human`, issue commented with the reason and planned fix, `codegen_skip` metric (`reason: "blocked"`, `source`), exit 0 with `blocked=true` (ADR-0029 amendment) |
 
 ### `pr_prepare`
 
@@ -199,8 +199,8 @@ Emitted by `llm_client.mjs` and `config.mjs` (ADR-0032). `stage` is the calling 
 |----------------------------|---------------|---------------|-------------------|
 | `llm_call`                 | info          | ✓             | `provider`, `model`, `fallback` — the provider and model that answered (ADR-0040); `stage` is the calling stage. Feeds `envelope.llm_calls` |
 | `llm_call_failed`          | warn          | ✓             | `providers` (`<provider>:<status \| skip reason>`) — no provider answered; the caller gets the error |
-| `llm_fallback`             | warn / error  | —             | `from`, `to`, `error_type`, `error` — the primary failed and the call goes to the other provider; `error` level when the primary's key or config is wrong (`PERMANENT`, 401/403) |
-| `llm_fallback_disabled`    | warn          | —             | `from`, `error_type`, `error` — the primary failed and the caller passed `fallback: false` (live evals) |
+| `llm_fallback`             | warn / error  | —             | `from`, `to`, `error_type` (the provider's code when it gave one, e.g. `rate_limit_exceeded`, `json_validate_failed`; else the error class), `status` (HTTP, or null), `error` (stderr and trace only) — the primary failed and the call goes to the other provider; `error` level when the primary's key or config is wrong (`PERMANENT`, 401/403) |
+| `llm_fallback_disabled`    | warn          | —             | `from`, `error_type`, `status`, `error` (stderr and trace only) — same fields as `llm_fallback`; the primary failed and the caller passed `fallback: false` (live evals) |
 | `llm_provider_error`       | warn          | —             | `provider`, `error_type`, `status` — the primary failed with a structured provider error code (Groq `error.code`, e.g. `json_validate_failed` on HTTP 400: the model's output failed `response_format` JSON validation); logged once, before `llm_fallback` / `llm_fallback_disabled` / the no-key skip. Code and HTTP status only, never the response body |
 | `provider_config_fallback` | warn          | —             | `message`, `variable`, `ai_provider`, `provider` — `variable` (`AI_PROVIDER` or `AI_PROVIDER_<STAGE>`) is unknown or names a provider without a key; logged once per process |
 
@@ -210,7 +210,7 @@ Emitted by `retry.mjs` before each wait of `retryWithBackoff` (GitHub API calls 
 
 | Event        | Level | `duration_ms` | Key `meta` fields |
 |--------------|-------|---------------|-------------------|
-| `retry.wait` | warn  | —             | `attempt`, `wait_ms`, `status` (HTTP, or null), `error` |
+| `retry.wait` | warn  | —             | `attempt`, `wait_ms`, `status` (HTTP, or null), `error_type` (`err.code`, else the error class, else the error name, e.g. `TypeError`), `error` (stderr and trace only) |
 
 ### `workflow`
 
@@ -337,10 +337,26 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 | Allowlist, not denylist | Event meta keeps only the keys listed for that event in `EVENT_META_ALLOWLIST`; an unlisted event keeps its name, level and timing with `meta: {}`. Span meta keeps `SPAN_META_ALLOWLIST`. Unknown top-level and envelope keys are dropped. |
 | Never stored | Prompts, raw model output, file contents, issue/PR titles and bodies, previews, stack traces, stderr tails, env, local paths. |
 | Strings | Already scrubbed against the producing step's env by the journal; scrubbed again against the committing step's env, then cut to 200 characters: every env value of 12+ characters except public run metadata (`GITHUB_REPOSITORY`, `GITHUB_SHA`, …, `*_MODEL`, `*_EFFORT`, `*_PROVIDER`, `RUN_RECORD_*`), and credential shapes (`ghp_…`, `github_pat_…`, `sk-ant-…`, `gsk_…`, `Bearer …`, JWTs, AWS keys). |
+| Provider errors (audit F01, F20) | A provider error message embeds the response body (Groq: organization id and service tier on a 429, the model's `failed_generation` on a 400 `json_validate_failed`). `retry.wait`, `llm_fallback`, `llm_fallback_disabled` and `llm_provider_error` publish `error_type` and `status` only, and every value of these four events is a finite number or an identifier (`[A-Za-z][A-Za-z0-9_.-]{0,63}`), else null. Everywhere: `error_type` is an identifier or null, `status` an HTTP status (100–599) or null. |
+| Free-text `error` | Sanitized before the string scrub, in event meta, span meta and OTLP `adl.error` alike (`sanitizeErrorText()`): cut at the first provider body marker — `HTTP error <status>: ` (the status is kept), `{"`, `: {` — and suffixed `[body omitted]`; then `org_…`, `Bearer <anything>`, `api_key=` / `x-api-key:` / `secret` / `password` / `authorization` values and key-shaped tokens (32+ characters mixing letters and digits) become `[redacted]`. An organization id (`org_` + 16+ characters) is scrubbed from every published string. |
 | Values | Numbers, booleans, null; arrays of primitives (≤ 50 items); one level of flat map. Nested objects are dropped. |
 | URLs | Kept whole only on `GITHUB_SERVER_URL`, URL-safe characters, nothing to scrub; otherwise null. |
 | Span attributes (ADR-0041) | Kept per span name in `SPAN_ATTRIBUTE_ALLOWLIST`: `run`, `llm_call`, `eval.case`, each stage (its `SPAN_META_ALLOWLIST` keys as `adl.<snake_case>`), each side-effect span (its event's `EVENT_META_ALLOWLIST` keys). Span events keep their event's allowlist. Any other attribute, and every attribute of an unlisted span name, is dropped; same string scrub and cut. |
 | Size | ≤ 256 KiB per record; the OTLP block ≤ 128 KiB (spans past it counted in `spans_overflow.count`, span events in `spans_overflow.events`), events past the rest are added to `events_overflow`. |
+
+**Free-text `error` per event** (ADR-0040 amendment 2026-10-20). Sanitized as above wherever it is kept.
+
+| Event | `error` published | Why |
+|---|---|---|
+| `retry.wait`, `llm_fallback`, `llm_fallback_disabled` | no — `error_type`, `status` | the message is the provider's HTTP error with its body |
+| `llm_provider_error` | no (never had it) | code and status only |
+| `issue_validation.fail`, `code_gen.error`, `review.error`, `autofix.error`, stage span meta (`error`, OTLP `adl.error`) | yes, sanitized | an unexpected exception: may be `callLLM`'s `All providers failed: <provider>: … HTTP error <status>: <body>`, cut at the body |
+| `pr_prepare.error`, `code_gen.skipped`, `pr_prepare.skipped` | yes, sanitized | our own message: write guard, static verifier or a GitHub API call |
+| `review.stale_refs_error`, `review.related_adrs_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
+| `autofix_reset.error` | yes, sanitized | our own message: a GitHub API call |
+| `trace_write_failed`, `start_span_failed`, `end_span_failed`, `trace_finalize_failed` | yes, sanitized | our own message: a trace-file write |
+| `review_evidence.error`, `eval.error`, `eval_replay.error`, `pr_evals.error`, `pr_evals_report.error` | no (not allowlisted: `meta: {}`) | out of the allowlist since ADR-0040 |
+
 
 ### Schema (`schema_version: 2`)
 

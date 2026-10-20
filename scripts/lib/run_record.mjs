@@ -3,7 +3,7 @@
 // redactTrace() is the only path from a trace file to the store: the site is public.
 // ADR-0041: schema 2 adds the work item, its trace id and the run's spans in OTLP JSON shape, and
 // metrics/traces/<trace_id>.json, the index of the runs of a trace, written in the same commit.
-import { buildSpanTree, toOtlpSpan, toOtlpDocument, attributeName, SIDE_EFFECT_EVENTS } from './otlp_trace.mjs';
+import { buildSpanTree, toOtlpSpan, toOtlpDocument, toOtlpValue, attributeName, SIDE_EFFECT_EVENTS } from './otlp_trace.mjs';
 import { TRACE_ID_RE, SPAN_ID_RE, ITEM_KINDS, workItem } from './trace_context.mjs';
 
 export const RECORD_SCHEMA_VERSION = 2;
@@ -22,6 +22,9 @@ export const RUNS_JSONL_PATH = 'metrics/runs.jsonl';
 const REDACTED = '[redacted]';
 const ID = ['prNumber', 'issueNumber', 'attempt'];
 const ERR = ['error'];
+// ADR-0040 amendment (F01, F20): a provider error is published as its code (or class) and HTTP status,
+// never as the message, which embeds the provider's response body (organization id, model output).
+const PROVIDER_ERR = ['error_type', 'status'];
 
 // Meta keys kept per event. An event not listed keeps its name, level and timing, with meta {}.
 // Never listed: prompts, raw model output, file contents, issue/PR titles and bodies, previews,
@@ -38,7 +41,8 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'code_gen.llm_response': ['output_tokens_est'],
   'code_gen.complete': ['changes_count'],
   'code_gen.error': [...ERR, 'reason', 'source'],
-  'code_gen.skipped': [...ERR, 'reason', 'rules', 'source', 'detail'],
+  // No `detail`: the model's blocked_reason, model output by construction (F06).
+  'code_gen.skipped': [...ERR, 'reason', 'rules', 'source'],
   'code_gen.escalated': ['during', 'reason', 'source', 'rules', 'labels_added', 'labels_removed', 'url'],
   'pr_prepare.start': ['changes_count'],
   'pr_prepare.complete': ['paths'],
@@ -74,12 +78,12 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'autofix.escalated': [...ID, 'reason', 'labels_added', 'url'],
   llm_call: ['provider', 'model', 'fallback'],
   llm_call_failed: ['providers'],
-  llm_fallback: ['from', 'to', 'error_type', ...ERR],
-  llm_fallback_disabled: ['from', 'error_type', ...ERR],
-  llm_provider_error: ['provider', 'error_type', 'status'],
+  llm_fallback: ['from', 'to', ...PROVIDER_ERR],
+  llm_fallback_disabled: ['from', ...PROVIDER_ERR],
+  llm_provider_error: ['provider', ...PROVIDER_ERR],
   provider_config_fallback: ['variable', 'ai_provider', 'provider'],
   'dependency_manifest.package_json_ignored': ['path', 'reason'],
-  'retry.wait': ['attempt', 'wait_ms', 'status', ...ERR],
+  'retry.wait': ['attempt', 'wait_ms', ...PROVIDER_ERR],
   'workflow.pr_operation': [...ID, 'operation', 'url'],
   'workflow.push': [...ID, 'outcome'],
   'trace.work_item': ['prNumber', 'branchIssue', 'closingIssues'],
@@ -141,7 +145,22 @@ const TOKEN_PATTERNS = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   /\b(Bearer|token|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi,
+  /\borg_[A-Za-z0-9]{16,}/g,
 ];
+
+// Where a provider response body starts in an error message (F01, F20): our clients append it after
+// `HTTP error <status>: ` (the status is kept), and any JSON object is cut. Everything after the
+// first marker is dropped, so model output placed anywhere in the body never reaches the record.
+const BODY_MARKERS = [/(\bHTTP error \d{3}):\s/, /\{"/, /: \{/];
+// Scrubbed from a free-text `error` on top of TOKEN_PATTERNS: organization ids, any bearer value,
+// `key=value` / `"key": "value"` credentials and key-shaped tokens (32+ chars mixing letters and digits).
+const ERROR_PATTERNS = [
+  [/\borg_[a-z0-9]+/gi, REDACTED],
+  [/\bBearer\s+\S+/gi, `Bearer ${REDACTED}`],
+  [/\b(api[_-]?key|x-api-key|secret|password|authorization)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, `$1$2${REDACTED}`],
+  [/(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])/g, REDACTED],
+];
+export const BODY_OMITTED = '[body omitted]';
 
 /** Env values to scrub, longest first (a value containing another is replaced whole). */
 export function secretValues(env = {}) {
@@ -159,6 +178,46 @@ export function scrubString(value, secrets = []) {
   for (const re of TOKEN_PATTERNS) s = s.replace(re, REDACTED);
   return s;
 }
+
+/**
+ * A free-text error message as it may be published (F01, F20): cut at the first provider body marker
+ * (`HTTP error <status>: `, `{"` — `{"error"` of Groq, `{"type":"error"` of Anthropic —, `: {`), then organization ids, bearer values, credential pairs
+ * and key-shaped tokens scrubbed. redactString() still applies after it (env values, cut).
+ */
+export function sanitizeErrorText(value) {
+  let s = String(value);
+  let cut = -1;
+  for (const re of BODY_MARKERS) {
+    const m = re.exec(s);
+    if (m) {
+      const at = m.index + (m[1]?.length ?? 0);
+      if (cut < 0 || at < cut) cut = at;
+    }
+  }
+  if (cut >= 0) s = `${s.slice(0, cut).trimEnd()} ${BODY_OMITTED}`;
+  for (const [re, replacement] of ERROR_PATTERNS) s = s.replace(re, replacement);
+  return s;
+}
+
+const IDENTIFIER_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+// Keys published in a bounded form in every event and span: `error` sanitized, `error_type` an
+// identifier (a provider code or an error class), `status` an HTTP status; anything else becomes null.
+const KEY_SANITIZERS = {
+  error: (v) => (typeof v === 'string' ? sanitizeErrorText(v) : v),
+  error_type: (v) => (typeof v === 'string' && IDENTIFIER_RE.test(v) ? v : null),
+  status: (v) => (Number.isInteger(v) && v >= 100 && v <= 599 ? v : null),
+};
+// The same sanitizers on the OTLP attribute names of those keys (adl.error, adl.error_type, adl.status).
+const ATTRIBUTE_SANITIZERS = Object.fromEntries(Object.entries(KEY_SANITIZERS).map(([k, f]) => [attributeName(k), f]));
+const sanitizeKey = (sanitizers, key, value) => (Object.hasOwn(sanitizers, key) ? sanitizers[key](value) : value);
+// The events about a provider error publish no free text at all (F01): any other value is a finite number
+// or an identifier (provider name, attempt), else null — an emitter cannot put a body in `from` either.
+export const PROVIDER_ERROR_EVENTS = Object.freeze(['retry.wait', 'llm_fallback', 'llm_fallback_disabled', 'llm_provider_error']);
+const structured = (v) => ((typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && IDENTIFIER_RE.test(v)) ? v : null);
+const eventSanitize = (event, sanitizers, key, value) => {
+  const v = sanitizeKey(sanitizers, key, value);
+  return PROVIDER_ERROR_EVENTS.includes(event) ? structured(v) : v;
+};
 
 /** Scrub, then truncate to MAX_STRING characters (scrubbing first: a cut secret would no longer match). */
 export function redactString(value, secrets = []) {
@@ -182,10 +241,11 @@ function redactValue(value, secrets, depth = 0) {
   return null;
 }
 
-function pick(meta, keys, secrets) {
+// `event`: the event name of event meta (null for span meta).
+function pick(meta, keys, secrets, event = null) {
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
   const out = {};
-  for (const key of keys) if (Object.hasOwn(meta, key)) out[key] = redactValue(meta[key], secrets);
+  for (const key of keys) if (Object.hasOwn(meta, key)) out[key] = redactValue(eventSanitize(event, KEY_SANITIZERS, key, meta[key]), secrets);
   return out;
 }
 
@@ -214,11 +274,12 @@ export function traceItem(trace, envelope) {
     ?? workItem(repo, 'run', envelope?.run_id, 'envelope');
 }
 
-function redactAttributes(attributes, allowed, secrets) {
+// `event`: the span event's name for span-event attributes (null for a span).
+function redactAttributes(attributes, allowed, secrets, event = null) {
   const out = {};
   for (const key of allowed) {
     if (!Object.hasOwn(attributes ?? {}, key)) continue;
-    const v = redactValue(attributes[key], secrets);
+    const v = redactValue(eventSanitize(event, ATTRIBUTE_SANITIZERS, key, attributes[key]), secrets);
     if (v !== null && v !== undefined) out[key] = v;
   }
   return out;
@@ -252,7 +313,7 @@ function redactOtlp(trace, traceId, envelope, secrets) {
     }
     for (const e of span.events) {
       const eventName = str(e.name, secrets) ?? 'event';
-      const [ev] = toOtlpSpan({ start: e.ts, events: [{ ...e, name: eventName, attributes: redactAttributes(e.attributes, eventAttributeAllowlist(eventName), secrets) }] }, traceId).events;
+      const [ev] = toOtlpSpan({ start: e.ts, events: [{ ...e, name: eventName, attributes: redactAttributes(e.attributes, eventAttributeAllowlist(eventName), secrets, eventName) }] }, traceId).events;
       const evSize = Buffer.byteLength(JSON.stringify(ev), 'utf8') + 1;
       if (used + size + evSize > MAX_OTLP_BYTES) { overflow.events += 1; continue; }
       encoded.events.push(ev);
@@ -359,7 +420,7 @@ export function redactTrace(trace, { env = {} } = {}) {
       level: ['info', 'warn', 'error'].includes(e?.level) ? e.level : null,
       duration_ms: num(e?.duration_ms),
       span_id: spanId(e?.span_id),
-      meta: pick(e?.meta, (name && Object.hasOwn(EVENT_META_ALLOWLIST, name)) ? EVENT_META_ALLOWLIST[name] : [], secrets),
+      meta: pick(e?.meta, (name && Object.hasOwn(EVENT_META_ALLOWLIST, name)) ? EVENT_META_ALLOWLIST[name] : [], secrets, name),
     };
     const size = Buffer.byteLength(JSON.stringify(event), 'utf8') + 1;
     if (bytes + size > MAX_RECORD_BYTES) {
@@ -371,6 +432,117 @@ export function redactTrace(trace, { env = {} } = {}) {
     bytes += size;
   }
   return record;
+}
+
+// ---------------------------------------------------------------------------
+// Re-redaction of stored records (ADR-0040 amendment: cleanup of F01/F06/F20 on the `metrics` branch)
+// ---------------------------------------------------------------------------
+
+function fromOtlpValue(v) {
+  if (!v || typeof v !== 'object') return null;
+  if (Object.hasOwn(v, 'stringValue')) return v.stringValue;
+  if (Object.hasOwn(v, 'boolValue')) return v.boolValue;
+  if (Object.hasOwn(v, 'intValue')) return Number(v.intValue);
+  if (Object.hasOwn(v, 'doubleValue')) return v.doubleValue;
+  if (Array.isArray(v.arrayValue?.values)) return v.arrayValue.values.map(fromOtlpValue);
+  if (Array.isArray(v.kvlistValue?.values)) {
+    return Object.fromEntries(v.kvlistValue.values.filter((a) => typeof a?.key === 'string').map((a) => [a.key, fromOtlpValue(a.value)]));
+  }
+  return null;
+}
+
+// Stored order is kept, so a record with nothing to redact is rewritten byte for byte.
+function repick(meta, keys, secrets, event = null) {
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return {};
+  return pick(meta, Object.keys(meta).filter((k) => keys.includes(k)), secrets, event);
+}
+
+function reAttributes(attributes, allowed, secrets, event = null) {
+  const out = [];
+  for (const a of Array.isArray(attributes) ? attributes : []) {
+    if (typeof a?.key !== 'string' || !allowed.includes(a.key)) continue;
+    const value = toOtlpValue(redactValue(eventSanitize(event, ATTRIBUTE_SANITIZERS, a.key, fromOtlpValue(a.value)), secrets));
+    if (value !== undefined) out.push({ key: a.key, value });
+  }
+  return out;
+}
+
+function deepRedact(value, secrets) {
+  if (typeof value === 'string') return redactString(value, secrets);
+  if (Array.isArray(value)) return value.map((v) => deepRedact(v, secrets));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, deepRedact(v, secrets)]));
+  return value;
+}
+
+/**
+ * A stored record (schema 1 or 2) with the current allowlists and sanitizers re-applied: event meta
+ * through EVENT_META_ALLOWLIST, span meta through SPAN_META_ALLOWLIST, OTLP span and span-event
+ * attributes through their allowlists, every string scrubbed and cut again (idempotent on a string
+ * already cut). Returns null for anything that is not a readable record; never adds a key.
+ */
+export function redactStoredRecord(raw, { env = {} } = {}) {
+  if (!raw || typeof raw !== 'object' || !READABLE_RECORD_VERSIONS.includes(raw.schema_version)) return null;
+  const secrets = secretValues(env);
+  const r = structuredClone(raw);
+  if (Array.isArray(r.events)) {
+    for (const e of r.events) {
+      if (!e || typeof e !== 'object') continue;
+      const name = typeof e.event === 'string' && Object.hasOwn(EVENT_META_ALLOWLIST, e.event) ? e.event : null;
+      e.meta = repick(e.meta, name ? EVENT_META_ALLOWLIST[name] : [], secrets, name);
+    }
+  }
+  if (Array.isArray(r.spans)) {
+    for (const s of r.spans) if (s && typeof s === 'object') s.meta = repick(s.meta, SPAN_META_ALLOWLIST, secrets);
+  }
+  for (const rs of Array.isArray(r.otlp?.resourceSpans) ? r.otlp.resourceSpans : []) {
+    for (const ss of Array.isArray(rs?.scopeSpans) ? rs.scopeSpans : []) {
+      for (const span of Array.isArray(ss?.spans) ? ss.spans : []) {
+        if (!span || typeof span !== 'object') continue;
+        const allowed = typeof span.name === 'string' && Object.hasOwn(SPAN_ATTRIBUTE_ALLOWLIST, span.name) ? SPAN_ATTRIBUTE_ALLOWLIST[span.name] : [];
+        span.attributes = reAttributes(span.attributes, allowed, secrets);
+        for (const ev of Array.isArray(span.events) ? span.events : []) {
+          if (ev && typeof ev === 'object') ev.attributes = reAttributes(ev.attributes, eventAttributeAllowlist(String(ev.name)), secrets, String(ev.name));
+        }
+      }
+    }
+  }
+  return deepRedact(r, secrets);
+}
+
+/**
+ * A metrics/runs.jsonl line (raw appendMetric() object, no allowlist) scrubbed in place of a
+ * redaction: every string scrubbed of credential shapes, an `error` value sanitized too; nothing cut.
+ */
+export function redactMetricsLine(value, secrets = []) {
+  const walk = (v, key) => {
+    if (typeof v === 'string') return scrubString(key === 'error' ? sanitizeErrorText(v) : v, secrets);
+    if (Array.isArray(v)) return v.map((x) => walk(x, null));
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x, k)]));
+    return v;
+  };
+  return walk(value, null);
+}
+
+/**
+ * String leaves of `before` missing from `after` (multiset): what a re-redaction removed or rewrote.
+ * The name of an OTLP attribute (`{ key, value }`) is not a leaf: only its value counts.
+ */
+export function countRedactedStrings(before, after) {
+  const leaves = (v, out = []) => {
+    if (typeof v === 'string') out.push(v);
+    else if (Array.isArray(v)) v.forEach((x) => leaves(x, out));
+    else if (v && typeof v === 'object') (typeof v.key === 'string' && 'value' in v ? [v.value] : Object.values(v)).forEach((x) => leaves(x, out));
+    return out;
+  };
+  const left = new Map();
+  for (const s of leaves(after)) left.set(s, (left.get(s) ?? 0) + 1);
+  let count = 0;
+  for (const s of leaves(before)) {
+    const n = left.get(s) ?? 0;
+    if (n > 0) left.set(s, n - 1);
+    else count += 1;
+  }
+  return count;
 }
 
 /**

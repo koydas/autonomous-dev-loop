@@ -61,3 +61,23 @@ Retention: a record is ~3–10 KB (measured 5.5 KB for a 16-event review); at ~6
 - ⚠️ Free-text fields (`error`, `reason`, `detail`) are published, scrubbed and cut to 200 characters: an error message quoting content would leak at most that much per field.
 - ⚠️ The `metrics` branch grows without automated pruning; same integrity caveat as the ADR-0013 amendment (any `contents: write` token can rewrite it).
 - ⚠️ Runs that exit before their tracer (untrusted auto-fix comment, review with no open PR) and the `pr-review` evidence job leave no record; the step after "Commit metrics" in `validate-issue` (dispatching code generation) is not journaled — the code-generation run records itself.
+
+## Amendment (2026-10-20): provider errors and model text out of the public record (audit F01, F06, F20)
+
+**Context.** The 2026-10-19 cross-cutting audit found that the "free-text fields are published, scrubbed and cut to 200 characters" consequence above was too permissive. `error` on `retry.wait`, `llm_fallback`, `llm_fallback_disabled` and the stage `*.error` events is the HTTP error message, which embeds the provider's response body: Groq 429 bodies name the organization (`org_…`) and service tier, and six records on `metrics` carry it (F01). For a Groq 400 `json_validate_failed`, the model output (`failed_generation`) follows the message and stayed out of the 200-character cut only by key order (F20). `code_gen.skipped.detail` is the model's `blocked_reason`, model output by construction (F06). The scrubber only knew env values and credential shapes — the same reason raw stderr was rejected (§ Alternatives).
+
+**Decision.**
+
+1. **Structured provider errors.** `retry.wait`, `llm_fallback`, `llm_fallback_disabled` publish `error_type` and `status` instead of `error` (`llm_provider_error` already did). `error_type` is the provider's structured code when it gave one (`err.code`, Groq `rate_limit_exceeded` / `json_validate_failed`), else the error class (taxonomy, or the error name for `retry.wait`); the emitters keep `error` for stderr and the trace artifact. Every value of these four events is published only as a finite number or an identifier, so no key of theirs can carry a body whatever the emitter puts in it. In every event, `error_type` is an identifier or null and `status` an HTTP status or null.
+2. **Sanitized free-text `error`.** Where `error` stays (stage errors that may wrap `callLLM`'s `All providers failed: …`, and messages from our own code — per-event list in `docs/observability.md`), `redactTrace()` applies `sanitizeErrorText()` before the scrub and cut, to event meta, span meta and OTLP `adl.error`: cut at the first body marker (`HTTP error <status>: ` keeping the status, `{"`, `: {`), then organization ids, any `Bearer` value, `key=value` credentials and key-shaped tokens scrubbed. `{"` rather than only `{"error"`: an Anthropic body starts with `{"type":"error"`. An organization id is also scrubbed from every string.
+3. **No `detail` on `code_gen.skipped`.** `source` and `reason` stay; no dashboard reader consumed `detail`. The same text remains in the issue comment, where the issue's audience already sees it.
+4. **Cleanup.** `scripts/redact_metrics_records.mjs` re-applies the current allowlists and sanitizer (`redactStoredRecord()`, `redactMetricsLine()`) to a local checkout of `metrics`, dry run by default, `--write` in place, no git or network; the operator commits (`docs/runbook.md`). History keeps the old blobs.
+
+**Consequences.**
+
+- ✅ No provider body, organization id or model output reaches the public record through `error` or `detail`; the contract is pinned by a test that feeds Groq 429, Groq 400 (`failed_generation` before and after the message) and Anthropic bodies through every event emitted under `scripts/`.
+- ✅ The dashboard feed shows `error_type` and `status` for the fallback and retry events.
+- ⚠️ Less diagnosis on the public site: the provider's message (e.g. "try again in 7.5s") is only in the job log and the trace artifact.
+- ⚠️ Over-redaction: an own-code message containing `{"` or `: {` loses its tail; a 32+ character token mixing letters and digits (e.g. a SHA) in an `error` becomes `[redacted]`.
+- ⚠️ The organization id stays in the `metrics` branch history and expired-later job logs; it is not a credential, so nothing is rotated.
+

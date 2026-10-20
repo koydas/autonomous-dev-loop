@@ -185,7 +185,8 @@ test('a secret held only by the producing step never reaches the record, though 
   const secret = 'llm-step-only-k3y-9876543210';
   withEnv({ LLM_STEP_API_KEY: secret }, () => {
     createTracer({ runId: id, traceDir: dir });
-    quiet(() => log({ stage: 'retry', event: 'retry.wait', level: 'warn', meta: { attempt: 1, error: `rejected key ${secret}` } }));
+    // autofix.error keeps its free-text `error` (retry.wait no longer publishes one: ADR-0040 amendment).
+    quiet(() => log({ stage: 'autofix', event: 'autofix.error', level: 'error', meta: { attempt: 1, error: `rejected key ${secret}` } }));
   });
   const committerEnv = { GITHUB_SERVER_URL: 'https://github.com', GH_TOKEN: 'ghs_committer_token_0123456789' };
   const record = JSON.stringify(redactTrace(read(id), { env: committerEnv }));
