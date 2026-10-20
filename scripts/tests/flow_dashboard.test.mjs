@@ -174,6 +174,10 @@ test('client script turns the merge icon to success only on a confirmed merge (#
  assert.ok(flow.indexOf("setIcon(c, 'success'") > flow.indexOf("m.state === 'merged'"));
  assert.match(flow, /setIcon\(c, 'skipped', 'Merge: closed without merge'/);
  assert.match(flow, /setIcon\(c, 'not-recorded', 'Merge: PR open'/);
+ // A merged PR appended without a recorded flow is a PR for the Kind filter (PR #242 review).
+ const appended = flow.slice(flow.indexOf("hasAttribute('data-append-merged')"));
+ assert.match(appended, /c\.dataset\.kind = 'pr'/);
+ assert.ok(appended.indexOf("c.dataset.kind = 'pr'") < appended.indexOf('cards.push(c)'));
  // A merged PR is never inferred from an open or unmerged closed one.
  const m = (pulls, prs = [7]) => runInNewContext(`${helpers} adlMergeOf(prs, '', pulls).state`, { pulls, prs });
  assert.equal(m([{ number: 7, state: 'closed', merged_at: null }]), 'closed');

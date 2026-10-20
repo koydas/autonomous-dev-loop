@@ -408,8 +408,12 @@ shows ⊘ "closed without merge", an open one ○ "PR open".
 Cards start collapsed. The summary shows the PR/issue title and one icon per
 step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge):
 ✓ success, ✗ failed, ⊘ skipped, ○ not recorded. A step's icon is the span
-outcome of its final execution by start time (undated runs rank first, so never
-final over a dated one; ties keep the earlier run in trace order). A failed
+outcome of its final execution, ordered by when each attempt ended: its last
+event of the step, including the workflow event that decides it
+(`workflow.push` for Auto-fix, `workflow.pr_operation` for PR preparation),
+else the run's completion, else its start. Overlapping runs (duplicate
+triggers) can finish out of start order. Undated runs rank first, so never
+final over a dated one; ties keep the earlier run in trace order. A failed
 review followed by an approval shows ✓ **with** ×3 and an aria-label "after 2
 failed or adverse attempt(s)"; the expanded step says "2 failed · recovered
 automatically" and lists every attempt. An amber ring marks a step whose span

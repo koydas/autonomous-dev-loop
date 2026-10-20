@@ -242,7 +242,7 @@ export const FLOW_SCRIPT = `${PR_STATES_SCRIPT}<script>
     if (box.hasAttribute('data-append-merged')) for (const pr of pulls.filter(p => p.merged_at).sort((a, b) => Date.parse(b.merged_at) - Date.parse(a.merged_at))) {
      if (claimed.has(pr.number) || (pr.hint && cards.some(c => c.dataset.issue === pr.hint && !c.dataset.prs))) continue;
      const c = box.querySelector('template').content.firstElementChild.cloneNode(true);
-     c.dataset.prs = String(pr.number); c.dataset.state = 'merged'; c.dataset.last = String(Date.parse(pr.merged_at) || '');
+     c.dataset.prs = String(pr.number); c.dataset.kind = 'pr'; c.dataset.state = 'merged'; c.dataset.last = String(Date.parse(pr.merged_at) || '');
      if (pr.hint) c.dataset.issue = pr.hint;
      const title = c.querySelector('[data-flow-title]'); title.replaceChildren();
      const a = document.createElement('a'); a.href = 'https://github.com/koydas/autonomous-dev-loop/pull/' + pr.number; a.textContent = 'PR #' + pr.number; title.append(a);
