@@ -31,7 +31,7 @@ Today three roots coincide and the code assumes it:
    - `review-evidence.yaml`: target only; missing means evidence is not required (existing `evidenceRequired` semantics).
    - The floor stays hard-coded and always active; the resolved `<config_dir>/` directory itself (not only its `protected-paths.yaml`) and `.autonomous-dev-loop/` join it, so a non-default `config_dir` such as this repository's `config` is protected as a whole. A target `protected_paths: []` removes nothing.
    - `scripts/print_resolved_config.mjs --json` reports roots and the source of each file.
-6. **Repository-specific heuristics** (`coverage_checker`, `prompt_budget`, `SELF_PATH`) apply only when the target is the pipeline repository. The review prompt is not modified; making them configurable is a follow-up.
+6. **Repository-specific heuristics and review prompt.** `coverage_checker`, `prompt_budget` and `SELF_PATH` apply only when the target is the pipeline repository. `prompts/pr-review-system.md` is split into a target-neutral core and a repository-rules part (this repository's documentation and c8 gate requirements) appended only for self-calls; the assembled prompt for this repository is byte-identical to today's (pinned by test, so eval-neutral, ADR-0031). On a target the core is used, plus an optional `<config_dir>/review-guidelines.md` read from the trusted configuration (decision 4). The `gate (c)` drift test follows the repository-rules part.
 7. **Labels.** `scripts/ensure_labels.mjs` creates every label of the resolved `labels.yaml` plus `auto-fix-attempt-1..N`, idempotently (`gh api --paginate`, REST fallback of ADR-0011). A `setup-labels.yml` template runs it through `workflow_dispatch`.
 8. **Security.**
    - `pull_request_target` is forbidden in workflows and templates (test) and refused at run time by the first job.
@@ -44,8 +44,8 @@ Today three roots coincide and the code assumes it:
 
 - A1: `vars.*` resolves to the caller's repository variables inside a cross-repository reusable workflow. Fallback: explicit string inputs for `AI_PROVIDER*` and model settings.
 - A2: `github.workflow` and `GITHUB_RUN_ID` are the caller's. Documented by GitHub; checked once manually in a scratch repository after the first reusable workflows land.
-- A4: `referenced_workflows` of the workflow run lists the called workflow with its `sha` and `ref` for a reusable workflow in another repository. Fallback if it does not: an explicit `pipeline_ref` input plus a mandatory consistency check against the caller; verified with A1 and A2.
-- A3: `koydas/autonomous-dev-loop` is public. If private, the repository must allow access from caller repositories and the second checkout needs a token (extra `pipeline_token` secret).
+- A3: `referenced_workflows` of the workflow run lists the called workflow with its `sha` and `ref` for a reusable workflow in another repository. Fallback if it does not: an explicit `pipeline_ref` input plus a mandatory consistency check against the caller; verified with A1 and A2.
+- A4: `koydas/autonomous-dev-loop` is public. If private, the repository must allow access from caller repositories and the second checkout needs a token (extra `pipeline_token` secret).
 
 ## Alternatives Considered
 
@@ -66,5 +66,6 @@ Today three roots coincide and the code assumes it:
 - ⚠️ Every caller job needs `actions: read` for the version lookup (added to the ceilings of validate-issue and reset-auto-fix).
 - ⚠️ Callers must grant the permission ceilings; a narrower caller fails at startup.
 - ⚠️ A target without `review-evidence.yaml` can get APPROVE without checks.
-- ⚠️ On a target, coverage, prompt-budget and review-prompt heuristics written for this repository are off or generic until made configurable.
+- ⚠️ On a target, the coverage and prompt-budget heuristics are off and the review uses the neutral core; repository-specific review rules come only from its own `review-guidelines.md`.
+- ⚠️ Trust boundary of self-calls is unchanged: on `push` GitHub takes the caller workflow (and, for `./` calls, the called one) from the pushed branch, as ADR-0023 already records for `pr-review.yml`. Both files sit under `.github/`, in the protected floor, so generation and auto-fix cannot write them; whoever can push a branch could before and still can. A pinned remote literal would not close it (the caller stays branch-controlled). Hardening (ruleset restricting branch pushes or requiring workflows) is a repository setting, outside this ADR.
 - ⚠️ Third-party actions inside the workflows are still referenced by tag, not SHA (separate follow-up).
