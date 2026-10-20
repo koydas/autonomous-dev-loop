@@ -223,3 +223,19 @@ test('overlapping attempts are ordered by their terminal event, not by start (PR
   assert.equal(attemptOf(run('5', 'review', 'success', 100), 'review').ended_at, 100);
   assert.equal(attemptOf(run('6', 'review', 'success', undefined), 'review').ended_at, null);
 });
+
+test('an attempt ends at its workflow-stage decision event: a late git push failure stays final (PR #242 review)', () => {
+  // Run 1 wrote its fix at t=2 but its git push failed at t=5; run 2 pushed successfully at t=3.
+  const failed = { ...run('1', 'autofix', 'success', 1, [{ event: 'autofix.push', ts: 2 }, { event: 'workflow.push', stage: 'workflow', ts: 5, meta: { outcome: 'failure' } }]), pr_number: 9 };
+  const pushed = { ...run('2', 'autofix', 'success', 1, [{ event: 'autofix.push', ts: 3 }, { event: 'workflow.push', stage: 'workflow', ts: 3, meta: { outcome: 'success' } }]), pr_number: 9 };
+  const j = stepJourney([failed, pushed], 'autofix');
+  assert.equal(j.final.run_id, '1');
+  assert.equal(j.final.ended_at, 5);
+  assert.equal(j.final.decision.key, 'push_failed');
+  assert.equal(j.recovered, false);
+  // The PR operation decides PR preparation the same way.
+  const pr = run('3', 'pr_prepare', 'success', 1, [{ event: 'pr_prepare.complete', ts: 2 }, { event: 'workflow.pr_operation', stage: 'workflow', ts: 7, meta: { operation: 'created' } }]);
+  assert.equal(attemptOf(pr, 'pr_prepare').ended_at, 7);
+  // A workflow event of another step does not move the end.
+  assert.equal(attemptOf(pr, 'review').ended_at, 1);
+});

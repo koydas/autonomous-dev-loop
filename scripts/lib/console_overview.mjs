@@ -26,8 +26,15 @@ export function statusBadge(d, root) {
 /**
  * Change of a value against the previous window: `{ text, tone }`. `better` is the direction that is good
  * (`up`, `down` or null for neutral); `points` compares rates in percentage points. No previous value: said.
+ * `zeroBase`: a previous 0 is a real, populated value (e.g. a free-tier-only window), not missing data; a
+ * change from it has no percentage and is stated as such.
  */
-export function delta(cur, prev, { better = null, points = false, days = 7 } = {}) {
+export function delta(cur, prev, { better = null, points = false, days = 7, zeroBase = false } = {}) {
+  if (!points && prev === 0 && zeroBase && cur != null) {
+    if (cur === 0) return { text: `= vs prior ${days} d`, tone: 'neutral', arrow: '' };
+    const up = cur > 0;
+    return { text: `${up ? 'up' : 'down'} from 0 vs prior ${days} d`, tone: better == null ? 'neutral' : (up === (better === 'up')) ? 'good' : 'bad', arrow: up ? '↑' : '↓' };
+  }
   if (cur == null || prev == null || (!points && prev === 0)) return { text: `no prior ${days} d data`, tone: 'unknown', arrow: '' };
   const d = points ? (cur - prev) * 100 : ((cur - prev) / prev) * 100;
   const r = Math.round(d);
@@ -93,7 +100,7 @@ export function kpiRow(w, root, hasWithheld) {
     kpi({ id: 'executions', ic: 'runs', href: `${root}index.html#executions`, value: String(c.runs), change: delta(c.runs, prevRuns, { days: w.days }), visual: segments(c), note: `<span class="tone-good">${e(c.progressed)} moved forward</span> · <span class="tone-warn">${e(c.adverse)} adverse</span> · <span class="tone-bad">${e(c.failed)} failed</span> · ${e(c.neutral)} no decision`, tone: c.failed ? 'bad' : 'neutral' }),
     kpi({ id: 'approve_rate', ic: 'rate', href: hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, value: pct(c.approve_rate), change: delta(c.approve_rate, has(p) ? p.approve_rate : null, { better: 'up', points: true, days: w.days }), visual: sparkline(w.series.map((s) => s.approve_rate), { tone: 'good', label: 'Approval rate per day' }), note: c.verdicts ? `${e(c.approve)} of ${e(c.verdicts)} verdicts · ${e(c.withheld)} withheld · ${e(c.request_changes)} changes requested` : 'No verdict recorded in the window', tone: c.approve_rate == null ? 'unknown' : c.approve_rate < 0.5 ? 'warn' : 'good' }),
     kpi({ id: 'run_duration', ic: 'time', href: `${root}health.html#performance`, value: duration(c.duration.mean), change: delta(c.duration.mean, p.duration.mean, { better: 'down', days: w.days }), visual: sparkline(w.series.map((s) => s.avg_ms), { tone: 'accent', label: 'Average run duration per day' }), note: c.duration.n ? `p95 ${e(duration(c.duration.p95))} · ${e(c.duration.n)} run(s)` : 'No timed run in the window', tone: 'neutral' }),
-    kpi({ id: 'llm_cost', ic: 'cost', href: `${root}health.html#cost`, value: costAmount(c.cost), change: comparableCost(c.cost) && comparableCost(p.cost) ? delta(c.cost.usd, p.cost.usd, { better: 'down', days: w.days }) : { text: c.cost.unpriced || p.cost.unpriced ? 'no change: unpriced calls make a side incomplete' : `no prior ${w.days} d data`, tone: 'unknown', arrow: '' }, visual: sparkline(w.series.map((s) => s.usd), { tone: 'info', label: 'LLM cost per day' }), note: c.cost.calls ? `${e(c.cost.calls)} call(s) · ${e(costBasis(c.cost) ?? (c.cost.free === c.cost.calls ? 'free tier only' : 'no priced call'))}${c.cost.unpriced ? ` · ${e(c.cost.unpriced)} unpriced, not counted` : ''} · list price` : 'No LLM call in the window', tone: 'neutral' }),
+    kpi({ id: 'llm_cost', ic: 'cost', href: `${root}health.html#cost`, value: costAmount(c.cost), change: comparableCost(c.cost) && comparableCost(p.cost) ? delta(c.cost.usd, p.cost.usd, { better: 'down', days: w.days, zeroBase: p.cost.calls > 0 }) : { text: c.cost.unpriced || p.cost.unpriced ? 'no change: unpriced calls make a side incomplete' : `no prior ${w.days} d data`, tone: 'unknown', arrow: '' }, visual: sparkline(w.series.map((s) => s.usd), { tone: 'info', label: 'LLM cost per day' }), note: c.cost.calls ? `${e(c.cost.calls)} call(s) · ${e(costBasis(c.cost) ?? (c.cost.free === c.cost.calls ? 'free tier only' : 'no priced call'))}${c.cost.unpriced ? ` · ${e(c.cost.unpriced)} unpriced, not counted` : ''} · list price` : 'No LLM call in the window', tone: 'neutral' }),
   ];
   return `<div class="kpi-grid4">${cards.join('')}</div>`;
 }

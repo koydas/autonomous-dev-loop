@@ -115,6 +115,18 @@ test('LLM cost change: never against a side with unpriced calls, and an all-unpr
   assert.match(card(kpiRow(win(sum({ calls: 1, estimated: 1, usd: 0.25 }), sum({ calls: 1, estimated: 1, usd: 0.5 })), '', false)), /↓ -50 % vs prior 7 d/);
   assert.match(card(kpiRow(win(sum({ calls: 3, free: 3 }), sum({ calls: 3, free: 3 })), '', false)), /3 call\(s\) · free tier only · list price/);
   assert.match(card(kpiRow(win(sum({ calls: 1, estimated: 1, usd: 0.25 }), sum({})), '', false)), /no prior 7 d data/);
+  // A free-tier-only previous window is a real $0, not missing data (PR #242 review).
+  assert.match(card(kpiRow(win(sum({ calls: 1, estimated: 1, usd: 0.25 }), sum({ calls: 3, free: 3 })), '', false)), /↑ up from 0 vs prior 7 d/);
+  assert.match(card(kpiRow(win(sum({ calls: 3, free: 3 }), sum({ calls: 3, free: 3 })), '', false)), /= vs prior 7 d/);
+});
+
+test('delta with a populated zero base: equal, up or down from 0, never a percentage', () => {
+  assert.deepEqual(delta(0, 0, { zeroBase: true }), { text: '= vs prior 7 d', tone: 'neutral', arrow: '' });
+  assert.deepEqual(delta(2, 0, { zeroBase: true, better: 'down', days: 14 }), { text: 'up from 0 vs prior 14 d', tone: 'bad', arrow: '↑' });
+  assert.deepEqual(delta(2, 0, { zeroBase: true }), { text: 'up from 0 vs prior 7 d', tone: 'neutral', arrow: '↑' });
+  assert.deepEqual(delta(-1, 0, { zeroBase: true, better: 'down' }), { text: 'down from 0 vs prior 7 d', tone: 'good', arrow: '↓' });
+  assert.equal(delta(null, 0, { zeroBase: true }).tone, 'unknown');
+  assert.equal(delta(1, 0).tone, 'unknown', 'without zeroBase a 0 base is still missing data');
 });
 
 test('duration chart: a day without a timed run is a gap in both lines (PR #242 review)', () => {

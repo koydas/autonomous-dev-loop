@@ -113,6 +113,9 @@ export function escalations(run) {
 
 const runsOfStep = (runs, step) => runs.filter((r) => r.stages.some((s) => s.stage === step) || r.events.some((e) => e.stage === step));
 
+// Workflow-stage events that decide a step (stepDecision): the PR operation, the git push of a fix.
+const TERMINAL_EVENTS = { pr_prepare: ['workflow.pr_operation'], autofix: ['workflow.push'] };
+
 /** One attempt: a run of the step, its execution status, its decision and the tone of both. */
 export function attemptOf(run, step) {
   const span = run.stages.filter((s) => s.stage === step).at(-1);
@@ -123,7 +126,7 @@ export function attemptOf(run, step) {
   const tone = status === 'failed' ? 'bad' : decision?.tone ?? (status === 'success' ? 'good' : status === 'skipped' ? 'neutral' : 'unknown');
   // When the attempt ended: its last event of the step (the decision is recorded last), else the run's
   // completion, else its start. Overlapping runs (duplicate triggers) finish out of start order.
-  const stepTs = run.events.filter((e) => e.stage === step && typeof e.ts === 'number').map((e) => e.ts);
+  const stepTs = run.events.filter((e) => (e.stage === step || TERMINAL_EVENTS[step]?.includes(e.event)) && typeof e.ts === 'number').map((e) => e.ts);
   const ended_at = stepTs.length ? Math.max(...stepTs) : run.completed_at ?? run.started_at ?? null;
   return {
     run_id: run.run_id, workflow: run.workflow, event_name: run.event_name, started_at: run.started_at, ended_at,
