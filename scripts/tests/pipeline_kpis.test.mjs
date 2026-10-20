@@ -55,7 +55,7 @@ test('overview indicators from runs and journeys', () => {
   assert.equal(o.reviews.runs_per_pr, 3);
   assert.equal(o.items.by_state.approved, 1);
   assert.equal(o.items.by_state.failed, 1);
-  assert.equal(o.items.by_state.no_data, 1);
+  assert.equal(o.items.by_state.no_data, 0, 'a trace without any loaded run is outside the retained window');
   assert.equal(o.items.needs_attention, 1);
   assert.deepEqual(o.recovery, { troubled: 2, recovered: 1 });
   assert.deepEqual(o.lead_time, { n: 2, p50: 1000, p90: 4000 });
@@ -117,4 +117,16 @@ test('windows: the latest N days against the N before, per-day series, providers
   const unpriced = providerBreakdown([run('u', { llm: [{ model: 'x' }] })]);
   assert.deepEqual([unpriced[0].provider, unpriced[0].usd_share, unpriced[0].call_share], ['unknown', null, 1]);
   for (const id of ['executions', 'run_duration', 'providers']) assert.ok(DEFINITIONS[id].limits);
+});
+
+test('journey aggregates cover the retained window only: an index older than the loaded months is left out (PR #242 review)', () => {
+  const recent = { trace_id: 'r', item: { kind: 'pr', number: 1 }, runs: [{ run: run('1', { events: verdict('APPROVE') }) }], lead_time_ms: 1000, running_ms: 500, waiting_ms: 500 };
+  // A trace index from before the window: its runs are listed but none is loaded; its indexed times stay on the index.
+  const old = { trace_id: 'o', item: { kind: 'pr', number: 2 }, runs: [{ run: null, run_id: '9-1' }, { run: null, run_id: '10-1' }], lead_time_ms: 99e6, running_ms: 1e6, waiting_ms: 98e6 };
+  const o = computeOverview({ model: { runs: recent.runs.map((r) => r.run) }, journeys: [recent, old].map(workItemJourney) });
+  assert.deepEqual(o.lead_time, { n: 1, p50: 1000, p90: 1000 });
+  assert.equal(o.running_share.value, 0.5);
+  assert.equal(o.items.by_state.no_data, 0);
+  assert.equal(o.items.by_state.approved, 1);
+  assert.match(DEFINITIONS.lead_time.population, /at least one loaded run record/);
 });

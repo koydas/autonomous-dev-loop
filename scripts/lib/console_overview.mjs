@@ -71,6 +71,9 @@ function segments(c) {
   return `<span class="segbar" role="img" aria-label="${e(RUN_CLASSES.map((k) => `${CLASS_LABEL[k]} ${c[k]}`).join(', '))}">${['progressed', 'adverse', 'failed', 'neutral'].filter((k) => c[k]).map((k) => `<span class="tone-${CLASS_TONE[k]}" style="width:${((c[k] / total) * 100).toFixed(2)}%"></span>`).join('')}</span>`;
 }
 
+// A cost is comparable only when every call is priced or free: an unpriced call makes the sum a lower bound.
+const comparableCost = (sum) => sum.calls > 0 && !sum.unpriced;
+
 /** The four indicators of one window. root: path to pipeline/. */
 export function kpiRow(w, root, hasWithheld) {
   const c = w.current, p = w.previous;
@@ -80,7 +83,7 @@ export function kpiRow(w, root, hasWithheld) {
     kpi({ id: 'executions', ic: 'runs', href: `${root}index.html#executions`, value: String(c.runs), change: delta(c.runs, prevRuns, { days: w.days }), visual: segments(c), note: `<span class="tone-good">${e(c.progressed)} moved forward</span> · <span class="tone-warn">${e(c.adverse)} adverse</span> · <span class="tone-bad">${e(c.failed)} failed</span> · ${e(c.neutral)} no decision`, tone: c.failed ? 'bad' : 'neutral' }),
     kpi({ id: 'approve_rate', ic: 'rate', href: hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, value: pct(c.approve_rate), change: delta(c.approve_rate, has(p) ? p.approve_rate : null, { better: 'up', points: true, days: w.days }), visual: sparkline(w.series.map((s) => s.approve_rate), { tone: 'good', label: 'Approval rate per day' }), note: c.verdicts ? `${e(c.approve)} of ${e(c.verdicts)} verdicts · ${e(c.withheld)} withheld · ${e(c.request_changes)} changes requested` : 'No verdict recorded in the window', tone: c.approve_rate == null ? 'unknown' : c.approve_rate < 0.5 ? 'warn' : 'good' }),
     kpi({ id: 'run_duration', ic: 'time', href: `${root}health.html#performance`, value: duration(c.duration.mean), change: delta(c.duration.mean, p.duration.mean, { better: 'down', days: w.days }), visual: sparkline(w.series.map((s) => s.avg_ms), { tone: 'accent', label: 'Average run duration per day' }), note: c.duration.n ? `p95 ${e(duration(c.duration.p95))} · ${e(c.duration.n)} run(s)` : 'No timed run in the window', tone: 'neutral' }),
-    kpi({ id: 'llm_cost', ic: 'cost', href: `${root}health.html#cost`, value: costAmount(c.cost), change: delta(c.cost.calls ? c.cost.usd : null, p.cost.calls ? p.cost.usd : null, { better: 'down', days: w.days }), visual: sparkline(w.series.map((s) => s.usd), { tone: 'info', label: 'LLM cost per day' }), note: c.cost.calls ? `${e(c.cost.calls)} call(s) · ${e(costBasis(c.cost) ?? 'free tier only')} · list price` : 'No LLM call in the window', tone: 'neutral' }),
+    kpi({ id: 'llm_cost', ic: 'cost', href: `${root}health.html#cost`, value: costAmount(c.cost), change: comparableCost(c.cost) && comparableCost(p.cost) ? delta(c.cost.usd, p.cost.usd, { better: 'down', days: w.days }) : { text: c.cost.unpriced || p.cost.unpriced ? 'no change: unpriced calls make a side incomplete' : `no prior ${w.days} d data`, tone: 'unknown', arrow: '' }, visual: sparkline(w.series.map((s) => s.usd), { tone: 'info', label: 'LLM cost per day' }), note: c.cost.calls ? `${e(c.cost.calls)} call(s) · ${e(costBasis(c.cost) ?? (c.cost.free === c.cost.calls ? 'free tier only' : 'no priced call'))}${c.cost.unpriced ? ` · ${e(c.cost.unpriced)} unpriced, not counted` : ''} · list price` : 'No LLM call in the window', tone: 'neutral' }),
   ];
   return `<div class="kpi-grid4">${cards.join('')}</div>`;
 }

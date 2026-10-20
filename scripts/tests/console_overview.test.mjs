@@ -90,3 +90,21 @@ test('indicators: change against the previous window, sparklines, providers; ok 
   assert.match(issueCards(failed.diagnosis, ''), /Affects 1 run\(s\)<\/span><span>Since: <span data-ts="\d+">/);
 });
 
+
+test('LLM cost change: never against a side with unpriced calls, and an all-unpriced window is not "free tier" (PR #242 review)', () => {
+  const sum = (o) => ({ usd: 0, calls: 0, measured: 0, estimated: 0, free: 0, unpriced: 0, tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, ...o });
+  const win = (cur, prev) => ({ days: 7, series: [], current: { runs: 1, failed: 0, adverse: 0, progressed: 1, neutral: 0, verdicts: 0, approve: 0, withheld: 0, request_changes: 0, approve_rate: null, duration: { n: 0, mean: null, p95: null }, cost: cur }, previous: { runs: 1, verdicts: 0, duration: { mean: null }, cost: prev } });
+  const card = (html) => html.slice(html.indexOf('data-kpi="llm_cost"'));
+  // Only unpriced calls now, priced calls before: no -100 % "improvement".
+  const unpriced = card(kpiRow(win(sum({ calls: 2, unpriced: 2 }), sum({ calls: 1, estimated: 1, usd: 0.5 })), '', false));
+  assert.match(unpriced, /<strong class="kpi-value">unpriced<\/strong>/);
+  assert.match(unpriced, /no change: unpriced calls make a side incomplete/);
+  assert.doesNotMatch(unpriced, /-100 %|free tier only/);
+  assert.match(unpriced, /2 call\(s\) · no priced call · 2 unpriced, not counted/);
+  // Mixed now (a lower bound): no change either.
+  assert.match(card(kpiRow(win(sum({ calls: 2, estimated: 1, unpriced: 1, usd: 0.1 }), sum({ calls: 1, estimated: 1, usd: 0.5 })), '', false)), /no change: unpriced calls make a side incomplete/);
+  // Fully priced on both sides: the change is shown; free tier only is named as such.
+  assert.match(card(kpiRow(win(sum({ calls: 1, estimated: 1, usd: 0.25 }), sum({ calls: 1, estimated: 1, usd: 0.5 })), '', false)), /↓ -50 % vs prior 7 d/);
+  assert.match(card(kpiRow(win(sum({ calls: 3, free: 3 }), sum({ calls: 3, free: 3 })), '', false)), /3 call\(s\) · free tier only · list price/);
+  assert.match(card(kpiRow(win(sum({ calls: 1, estimated: 1, usd: 0.25 }), sum({})), '', false)), /no prior 7 d data/);
+});
