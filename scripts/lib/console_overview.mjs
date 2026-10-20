@@ -45,9 +45,19 @@ export function sparkline(values, { tone = 'neutral', label = '' } = {}) {
   const max = Math.max(...pts.map(([, v]) => v)), min = Math.min(0, ...pts.map(([, v]) => v));
   const x = (i) => (i / Math.max(1, values.length - 1)) * W;
   const y = (v) => H - 3 - ((v - min) / ((max - min) || 1)) * (H - 8);
-  const line = pts.map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-  const area = `${x(pts[0][0]).toFixed(1)},${H} ${line} ${x(pts.at(-1)[0]).toFixed(1)},${H}`;
-  return `<svg class="spark tone-${tone}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${e(label)}"><polygon points="${area}" fill="var(--tone)" opacity=".14"/><polyline points="${line}" fill="none" stroke="var(--tone)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`;
+  // Contiguous runs of values: a null is a gap, never bridged by the line or the area.
+  const segments = [];
+  values.forEach((v, i) => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) { if (segments.at(-1)?.length) segments.push([]); return; }
+    if (!segments.length) segments.push([]);
+    segments.at(-1).push([i, v]);
+  });
+  const marks = segments.filter((seg) => seg.length).map((seg) => {
+    if (seg.length === 1) return `<circle cx="${x(seg[0][0]).toFixed(1)}" cy="${y(seg[0][1]).toFixed(1)}" r="2.5" fill="var(--tone)"/>`;
+    const line = seg.map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    return `<polygon points="${x(seg[0][0]).toFixed(1)},${H} ${line} ${x(seg.at(-1)[0]).toFixed(1)},${H}" fill="var(--tone)" opacity=".14"/><polyline points="${line}" fill="none" stroke="var(--tone)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+  return `<svg class="spark tone-${tone}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${e(label)}">${marks}</svg>`;
 }
 
 const ICON = {
@@ -105,15 +115,22 @@ export function durationChart(series) {
 }
 
 /** LLM providers of the window: cost and calls, with their shares. */
+// A provider's amount: free tier, unpriced, a lower bound (≥) when some of its calls are unpriced, or exact.
+const providerAmount = (p) => {
+  if (p.free === p.calls) return 'free tier';
+  if (!p.measured && !p.estimated) return 'unpriced';
+  return `${p.unpriced ? '≥ ' : ''}${formatUsd(p.usd)}`;
+};
+
 export function providerList(providers) {
   if (!providers.length) return '<p class="muted">No LLM call in the window.</p>';
-  return `<ol class="provider-list">${providers.map((p, i) => `<li><span class="rank">${i + 1}</span><span class="pname">${e(p.provider)}</span><span class="pcost">${e(p.free === p.calls ? 'free tier' : p.usd || p.measured || p.estimated ? formatUsd(p.usd) : 'unpriced')}</span><span class="pshare">${e(p.usd_share == null ? '—' : pct(p.usd_share))}</span><span class="pbar" role="img" aria-label="${e(`${pct(p.usd_share)} of cost, ${pct(p.call_share)} of calls`)}"><span style="width:${((p.usd_share ?? 0) * 100).toFixed(1)}%"></span></span><span class="pcalls muted">${e(p.calls)} call(s) · ${e(pct(p.call_share))} of calls</span></li>`).join('')}</ol>`;
+  return `<ol class="provider-list">${providers.map((p, i) => `<li><span class="rank">${i + 1}</span><span class="pname">${e(p.provider)}</span><span class="pcost">${e(providerAmount(p))}</span><span class="pshare">${e(p.usd_share == null ? '—' : pct(p.usd_share))}</span><span class="pbar" role="img" aria-label="${e(`${pct(p.usd_share)} of cost, ${pct(p.call_share)} of calls`)}"><span style="width:${((p.usd_share ?? 0) * 100).toFixed(1)}%"></span></span><span class="pcalls muted">${e(p.calls)} call(s) · ${e(pct(p.call_share))} of calls</span></li>`).join('')}</ol>`;
 }
 
 function windowBlock(w, root, hasWithheld, hidden) {
   const body = w.empty
     ? '<div class="panel"><p>No pipeline run recorded yet: no indicator to compute.</p></div>'
-    : `${kpiRow(w, root, hasWithheld)}<div class="chart-grid"><section class="panel"><h3>Pipeline results <a href="${root}index.html#executions">Executions →</a></h3>${trendChart({ days: w.series }, { W: 380, H: 210 })}</section><section class="panel"><h3>Duration trend <a href="${root}health.html#performance">Metrics →</a></h3>${durationChart(w.series)}</section><section class="panel"><h3>LLM providers (cost) <a href="${root}models.html">Models →</a></h3>${providerList(w.providers)}<p class="trend-note">List price, never a bill; Groq free tier at $0.</p></section></div>`;
+    : `${kpiRow(w, root, hasWithheld)}<div class="chart-grid"><section class="panel"><h3>Pipeline results <a href="${root}index.html#executions">Executions →</a></h3>${trendChart({ days: w.series }, { W: 380, H: 210 })}</section><section class="panel"><h3>Duration trend <a href="${root}health.html#performance">Metrics →</a></h3>${durationChart(w.series)}</section><section class="panel"><h3>LLM providers (cost) <a href="${root}models.html">Models →</a></h3>${providerList(w.providers)}<p class="trend-note">List price, never a bill; Groq free tier at $0.${w.providers.some((p) => p.unpriced) ? ' Some calls are unpriced: amounts marked ≥ are lower bounds and cost shares are not shown.' : ''}</p></section></div>`;
   return `<div data-window="${w.days}"${hidden ? ' hidden' : ''}>${body}</div>`;
 }
 

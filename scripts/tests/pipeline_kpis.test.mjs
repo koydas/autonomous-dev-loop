@@ -144,3 +144,9 @@ test('errored validations count as failed runs; unpriced days are gaps in the co
   assert.equal(w.series.at(-2).usd, null, 'mixed day: a lower bound is not plotted');
   assert.equal(w.series.at(-3).usd, 0.024);
 });
+
+test('provider cost shares are not shown when any call is unpriced (PR #242 review)', async () => {
+  const { providerBreakdown } = await import('../lib/pipeline_kpis.mjs');
+  const rows = providerBreakdown([run('m', { llm: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1000, tokens_out: 1000 }, { provider: 'other', model: 'x', tokens_in: 1, tokens_out: 1 }] })]);
+  assert.deepEqual(rows.map((r) => [r.provider, r.usd_share, r.call_share]), [['anthropic', null, 0.5], ['other', null, 0.5]]);
+});

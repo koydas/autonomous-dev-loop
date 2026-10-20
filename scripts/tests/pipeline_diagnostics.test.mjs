@@ -178,3 +178,13 @@ test('two reviews of one head are a duplicate even below the rate sample floor (
   // The rate rules still wait for their floor.
   assert.ok(!ids(d).includes('review-withheld'));
 });
+
+test('rejected issues are not repeated stage failures; errored validations are (PR #242 review)', () => {
+  const rejected = () => run({ stage: 'issue_validation', outcome: 'failed', events: [{ event: 'issue_validation.fail', level: 'warn', meta: { score: 40, blockers_count: 2 } }] });
+  const errored = () => run({ stage: 'issue_validation', outcome: 'failed', events: [{ event: 'issue_validation.fail', level: 'error', meta: { error: 'x' } }] });
+  const d = diagnose({ model: model([rejected(), rejected()]) });
+  assert.ok(!ids(d).includes('stage-failures-issue_validation'));
+  assert.notEqual(d.status, 'critical');
+  const e = diagnose({ model: model([errored(), errored(), rejected()]) });
+  assert.match(find(e, 'stage-failures-issue_validation').fact, /2 of 3 issue_validation span\(s\) closed as failed without a decision explaining it/);
+});

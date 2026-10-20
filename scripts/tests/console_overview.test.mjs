@@ -72,7 +72,13 @@ test('indicators: change against the previous window, sparklines, providers; ok 
   for (const [cur, prev] of [[1, null], [null, 1], [1, 0]]) assert.equal(delta(cur, prev).tone, 'unknown');
   assert.equal(delta(0.5, 0, { points: true }).tone, 'neutral', 'a 0 % rate is a base for points');
   // Sparklines: gaps for nulls, flat dashed line without two points.
-  assert.match(sparkline([1, null, 3], { label: 'x' }), /<polyline points="0\.0,[\d.]+ 200\.0,[\d.]+"/);
+  // A null is a gap: two isolated points, no line bridging them.
+  const gap = sparkline([1, null, 3], { label: 'x' });
+  assert.doesNotMatch(gap, /<polyline/);
+  assert.equal((gap.match(/<circle /g) ?? []).length, 2);
+  const split = sparkline([1, 2, null, 3, 4], { label: 'x' });
+  assert.equal((split.match(/<polyline /g) ?? []).length, 2, 'one line per contiguous run');
+  assert.equal((split.match(/<polygon /g) ?? []).length, 2, 'one area per contiguous run');
   assert.match(sparkline([null, 2], { label: 'x' }), /not enough data for a trend/);
   assert.match(sparkline([0, 0], { label: 'x' }), /polyline/);
   // Duration and providers.
@@ -80,6 +86,8 @@ test('indicators: change against the previous window, sparklines, providers; ok 
   assert.equal(durationChart([{ day: 'd', avg_ms: null, p95_ms: null }]), '<p class="muted">No timed run in the window.</p>');
   const prov = providerList([{ provider: 'anthropic', calls: 1, usd: 0.5, measured: 1, estimated: 0, free: 0, usd_share: 1, call_share: 0.25 }, { provider: 'groq', calls: 3, usd: 0, measured: 0, estimated: 0, free: 3, usd_share: 0, call_share: 0.75 }, { provider: 'x', calls: 1, usd: 0, measured: 0, estimated: 0, free: 0, usd_share: null, call_share: 0.1 }]);
   assert.match(prov, /anthropic<\/span><span class="pcost">\$0\.5000<\/span><span class="pshare">100 %/);
+  // Some calls unpriced: the amount is a lower bound.
+  assert.match(providerList([{ provider: 'anthropic', calls: 2, usd: 0.5, measured: 1, estimated: 0, free: 0, unpriced: 1, usd_share: null, call_share: 1 }]), /<span class="pcost">≥ \$0\.5000<\/span><span class="pshare">—/);
   assert.match(prov, /groq<\/span><span class="pcost">free tier<\/span>.*75 % of calls/s);
   assert.match(prov, /x<\/span><span class="pcost">unpriced<\/span><span class="pshare">—/);
   assert.equal(providerList([]), '<p class="muted">No LLM call in the window.</p>');

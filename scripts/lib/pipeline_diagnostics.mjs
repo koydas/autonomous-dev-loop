@@ -5,6 +5,7 @@
 // missing data is never read as the absence of a problem. Pure.
 import { eventSummary, safeUrl } from './pipeline_model.mjs';
 import { percentile } from './pipeline_health.mjs';
+import { attemptOf } from './pipeline_journey.mjs';
 
 // Rule thresholds: below them a pattern is not reported (too few cases to separate it from noise).
 export const RULES = Object.freeze({
@@ -50,10 +51,14 @@ function executionFailures(runs) {
       link: 'index.html?result=failed#executions',
     }));
   }
+  // A failed span explained by an adverse decision (a rejected issue) is a business outcome, not an execution
+  // failure: only spans without a decision, or with an error decision, count (as runClass() does).
   const byStage = new Map();
   for (const run of runs) {
     for (const s of run.stages) {
       if (s.outcome !== 'failed' || !s.stage) continue;
+      const { decision } = attemptOf(run, s.stage);
+      if (decision && decision.tone !== 'bad') continue;
       byStage.set(s.stage, [...(byStage.get(s.stage) ?? []), run]);
     }
   }
@@ -62,7 +67,7 @@ function executionFailures(runs) {
     const total = runs.filter((r) => r.stages.some((s) => s.stage === stage)).length;
     out.push(finding({
       id: `stage-failures-${stage}`, severity: 'critical', category: 'Execution', title: `Repeated failures at ${stage}`,
-      fact: `${list.length} of ${total} ${stage} span(s) closed as failed.`,
+      fact: `${list.length} of ${total} ${stage} span(s) closed as failed without a decision explaining it.`,
       impact: `${pct(list.length / total)} of ${stage} executions failed`, frequency: `${list.length} failure(s)`,
       runs: list.map((r) => r.run_id), evidence: evidenceOf(list.map((run) => ({ run, e: run.events.filter((e) => e.stage === stage && e.level !== 'info').at(-1) ?? null }))),
       link: 'index.html?result=failed#executions',

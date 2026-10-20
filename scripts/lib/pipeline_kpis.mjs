@@ -155,7 +155,9 @@ export function providerBreakdown(runs) {
   const rows = [...by.entries()].map(([provider, calls]) => ({ provider, ...sumCosts(calls) }));
   const usd = rows.reduce((t, r) => t + r.usd, 0);
   const calls = rows.reduce((t, r) => t + r.calls, 0);
-  return rows.map((r) => ({ ...r, usd_share: usd ? r.usd / usd : null, call_share: calls ? r.calls / calls : null }))
+  // An unpriced call anywhere makes the total a lower bound: no cost share is exact then.
+  const complete = rows.every((r) => !r.unpriced);
+  return rows.map((r) => ({ ...r, usd_share: usd && complete ? r.usd / usd : null, call_share: calls ? r.calls / calls : null }))
     .sort((a, b) => b.usd - a.usd || b.calls - a.calls || a.provider.localeCompare(b.provider));
 }
 
