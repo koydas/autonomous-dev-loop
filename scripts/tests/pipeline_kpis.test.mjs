@@ -130,3 +130,17 @@ test('journey aggregates cover the retained window only: an index older than the
   assert.equal(o.items.by_state.approved, 1);
   assert.match(DEFINITIONS.lead_time.population, /at least one loaded run record/);
 });
+
+test('errored validations count as failed runs; unpriced days are gaps in the cost series (PR #242 review)', async () => {
+  const { computeWindow } = await import('../lib/pipeline_kpis.mjs');
+  assert.equal(runClass(run('e', { stage: 'issue_validation', outcome: 'failed', events: [{ event: 'issue_validation.fail', level: 'error', meta: { error: 'boom' } }] })), 'failed');
+  const runs = [
+    run('a', { t: T, llm: [{ provider: 'anthropic', model: 'claude-unknown', tokens_in: 1, tokens_out: 1 }] }),
+    run('b', { t: T - DAY, llm: [{ provider: 'anthropic', model: 'claude-unknown', tokens_in: 1, tokens_out: 1 }, { provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1000, tokens_out: 1000 }] }),
+    run('c', { t: T - 2 * DAY, llm: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1000, tokens_out: 1000 }] }),
+  ];
+  const w = computeWindow({ model: { runs }, days: 7 });
+  assert.equal(w.series.at(-1).usd, null, 'all-unpriced day: not $0');
+  assert.equal(w.series.at(-2).usd, null, 'mixed day: a lower bound is not plotted');
+  assert.equal(w.series.at(-3).usd, 0.024);
+});

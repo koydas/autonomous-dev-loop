@@ -155,3 +155,16 @@ test('journeys of a real model: newest activity first, through the production re
   assert.deepEqual(list.map((j) => [j.item.number, j.state]), [[31, 'approved'], [30, 'withheld']]);
   assert.deepEqual(journeys(null), []);
 });
+
+test('a validation that threw is an execution failure, not a rejection of the issue (PR #242 review)', () => {
+  const errored = run('1', 'issue_validation', 'failed', 1, [{ event: 'issue_validation.fail', level: 'error', meta: { error: 'Groq API HTTP error 503', issueNumber: 7 } }], { outcome: 'failed' });
+  assert.deepEqual(stepDecision(errored, 'issue_validation'), { key: 'error', label: 'Validation error', tone: 'bad', reason: 'no verdict: the validation did not complete', url: null });
+  assert.equal(workItemJourney(trace([errored])).state, 'failed');
+  // Without a span (the run died before closing it) the error still fails the item.
+  const noSpan = { ...errored, stages: [] };
+  assert.equal(workItemJourney(trace([noSpan])).state, 'failed');
+  // An error event recorded at warn level but without a score is still no verdict.
+  assert.equal(stepDecision(run('2', 'issue_validation', 'failed', 1, [{ event: 'issue_validation.fail', meta: { error: 'x' } }]), 'issue_validation').key, 'error');
+  // A real rejection keeps its state.
+  assert.equal(workItemJourney(trace([run('3', 'issue_validation', 'failed', 1, [{ event: 'issue_validation.fail', level: 'warn', meta: { score: 40, blockers_count: 2 } }])])).state, 'rejected');
+});

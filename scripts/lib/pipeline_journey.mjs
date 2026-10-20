@@ -54,6 +54,8 @@ export function stepDecision(run, step) {
     const e = last(run, ['issue_validation.pass', 'issue_validation.fail']);
     if (!e) return null;
     if (e.event === 'issue_validation.pass') return { key: 'pass', label: 'Validated', tone: 'good', reason: null, url: null };
+    // validate_issue.mjs emits the same event at error level when validation throws (provider, parser): no verdict.
+    if (e.level === 'error' || (e.meta.error != null && e.meta.score == null)) return { key: 'error', label: 'Validation error', tone: 'bad', reason: 'no verdict: the validation did not complete', url: null };
     const parts = [e.meta.score != null ? `score ${e.meta.score}` : null, e.meta.blockers_count != null ? `${e.meta.blockers_count} blocker(s)` : null].filter(Boolean);
     return { key: 'fail', label: 'Rejected', tone: 'warn', reason: parts.join(', ') || null, url: null };
   }
@@ -144,7 +146,7 @@ function itemState(steps, escalated, runs) {
   // A rejection is the validation's decision even when its span is closed as failed (the run is partial).
   const validation = steps.find((s) => s.key === 'issue_validation');
   if (validation.final?.decision?.key === 'fail' && steps.every((s) => s.key === 'issue_validation' || !s.attempts.length)) return 'rejected';
-  const failedFinal = steps.some((s) => s.final?.status === 'failed') || runs.some((r) => r.outcome === 'failed' && !steps.some((s) => s.attempts.some((a) => a.run_id === r.run_id && a.status !== 'failed')));
+  const failedFinal = steps.some((s) => s.final?.status === 'failed' || s.final?.decision?.tone === 'bad') || runs.some((r) => r.outcome === 'failed' && !steps.some((s) => s.attempts.some((a) => a.run_id === r.run_id && a.status !== 'failed')));
   if (failedFinal) return 'failed';
   const review = steps.find((s) => s.key === 'review');
   const decisions = review.attempts.filter((a) => a.decision && a.decision.key !== 'skipped');

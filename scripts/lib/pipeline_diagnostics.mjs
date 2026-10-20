@@ -74,9 +74,11 @@ function executionFailures(runs) {
 function reviewFindings(runs) {
   const out = [];
   const verdicts = events(runs, 'review.verdict');
-  if (verdicts.length < RULES.minVerdicts) return out;
+  if (!verdicts.length) return out;
+  // The sample floor guards the rate rules only; duplicate heads and stuck PRs are counts.
+  const rated = verdicts.length >= RULES.minVerdicts;
   const withheld = verdicts.filter(({ e }) => e.meta.verdict === 'WITHHELD');
-  if (withheld.length / verdicts.length >= RULES.withheldShare) {
+  if (rated && withheld.length / verdicts.length >= RULES.withheldShare) {
     const fromApprove = withheld.filter(({ e }) => e.meta.withheld_from === 'APPROVE').length;
     const cut = withheld.filter(({ e }) => typeof e.meta.unreviewed_code_files === 'number' && e.meta.unreviewed_code_files > 0).length;
     out.push(finding({
@@ -88,7 +90,7 @@ function reviewFindings(runs) {
     }));
   }
   const truncated = events(runs, 'review.prompt_truncated').filter(({ e }) => e.meta.diff_truncated === true);
-  if (truncated.length / verdicts.length >= RULES.truncatedShare) {
+  if (rated && truncated.length / verdicts.length >= RULES.truncatedShare) {
     const unseen = truncated.map(({ e }) => e.meta.unreviewed_code_files).filter((n) => typeof n === 'number');
     const budgets = [...new Set(truncated.map(({ e }) => e.meta.max_input_tokens).filter((n) => typeof n === 'number'))];
     out.push(finding({

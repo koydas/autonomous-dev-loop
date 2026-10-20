@@ -39,7 +39,7 @@ export const DEFINITIONS = Object.freeze({
  */
 export function runClass(run) {
   const attempts = [...new Set(run.stages.map((s) => s.stage).filter(Boolean))].map((s) => attemptOf(run, s));
-  if (run.outcome === 'failed' || attempts.some((a) => a.status === 'failed' && !a.decision)) return 'failed';
+  if (run.outcome === 'failed' || attempts.some((a) => a.status === 'failed' && (!a.decision || a.decision.tone === 'bad'))) return 'failed';
   if (attempts.some((a) => a.tone === 'warn' || a.tone === 'bad')) return 'adverse';
   if (attempts.some((a) => a.tone === 'good')) return 'progressed';
   return 'neutral';
@@ -173,7 +173,7 @@ export function computeWindow({ model, journeys = [], days = 7 } = {}) {
   const previous = slice(runs, from - days * DAY_MS, from);
   const series = Array.from({ length: days }, (_, i) => {
     const s = slice(current.selected, from + i * DAY_MS, from + (i + 1) * DAY_MS);
-    return { day: day(from + i * DAY_MS), total: s.runs, failed: s.failed, adverse: s.adverse, progressed: s.progressed, neutral: s.neutral, approve_rate: s.approve_rate, verdicts: s.verdicts, avg_ms: s.duration.mean, p95_ms: s.duration.p95, usd: s.cost.calls ? s.cost.usd : null };
+    return { day: day(from + i * DAY_MS), total: s.runs, failed: s.failed, adverse: s.adverse, progressed: s.progressed, neutral: s.neutral, approve_rate: s.approve_rate, verdicts: s.verdicts, avg_ms: s.duration.mean, p95_ms: s.duration.p95, usd: s.cost.calls && !s.cost.unpriced ? s.cost.usd : null };
   });
   const strip = ({ selected, ...rest }) => rest;
   return {

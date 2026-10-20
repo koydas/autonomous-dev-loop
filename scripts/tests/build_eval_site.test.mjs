@@ -525,6 +525,9 @@ test('a pipeline-only build (no eval result, history read back from the live sit
   assert.match(afterHome, /<link rel="stylesheet" href="pipeline\/console\.css">/);
   assert.match(afterHome, /<span class="nav-badge" data-diag-badge>\d*<\/span>/);
   assert.match(afterHome, /data-generated="" data-ts="/);
+  assert.match(second.files['pipeline/index.html'], /data-generated="" data-ts="/);
+  assert.match(second.files['runs/e1.html'], /<span class="updated-dot" data-generated="" data-prefix="Updated "><\/span>/, 'eval detail pages carry no build-time fact');
+  assert.match(second.files['runs/e1.html'], /<span class="nav-badge" data-diag-badge><\/span>/);
   assert.match(afterHome, /<div class="side-filters"><p class="side-title">Filter pipelines/);
   assert.match(afterHome, /href="pipeline\/diagnostics\.html"/);
   assert.match(second.files['pipeline/console.css'], /\.kpi-grid4 \{/);

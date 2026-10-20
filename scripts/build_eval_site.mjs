@@ -242,10 +242,12 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
       .replace('</nav></aside>', () => `</nav><div class="side-filters">${pipelineFacets(assembled.console.journeys)}</div></aside>`);
   }
   // Header facts known only here: the build time ("Updated …") and, with pipeline views, the findings count.
+  // Only the home page and the pipeline pages carry them: eval detail pages stay byte-identical across
+  // pipeline-only builds (ADR-0027 amendment), so their header shows neither.
   const findings = assembled ? String(assembled.console.diagnosis.findings.filter((f) => f.severity !== 'info').length || '') : '';
   const all = { ...files, ...pipelineFiles };
   for (const [p, c] of Object.entries(all)) {
-    if (p.endsWith('.html')) all[p] = c.replace('data-generated=""', `data-generated="" data-ts="${escapeAttr(generatedAt)}"`).replace('<span class="nav-badge" data-diag-badge></span>', () => `<span class="nav-badge" data-diag-badge>${findings}</span>`);
+    if (p === 'index.html' || (p.startsWith('pipeline/') && p.endsWith('.html'))) all[p] = c.replace('data-generated=""', `data-generated="" data-ts="${escapeAttr(generatedAt)}"`).replace('<span class="nav-badge" data-diag-badge></span>', () => `<span class="nav-badge" data-diag-badge>${findings}</span>`);
   }
   return { files: all, scorecard, skipped, pipelineFiles: Object.fromEntries(Object.keys(pipelineFiles).map((k) => [k, all[k]])), rebaseline: rebase && { rebaselined: rebase.rebaselined, noops: rebase.noops, refused: rebase.refused } };
 }

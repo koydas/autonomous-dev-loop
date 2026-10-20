@@ -169,3 +169,12 @@ test('evidence is capped and keeps run, event, summary, PR and an https source l
   assert.deepEqual(Object.keys(f.evidence[0]).sort(), ['event', 'pr', 'run_id', 'summary', 'ts', 'url']);
   assert.match(f.evidence[0].summary, /verdict=WITHHELD/);
 });
+
+test('two reviews of one head are a duplicate even below the rate sample floor (PR #242 review)', () => {
+  const d = diagnose({ model: model([run({ trigger: 'pull_request', events: [verdict('WITHHELD')] }), run({ trigger: 'push', events: [verdict('WITHHELD')] })]) });
+  assert.ok(RULES.minVerdicts > 2);
+  assert.deepEqual(ids(d), ['review-duplicates']);
+  assert.equal(d.status, 'warning');
+  // The rate rules still wait for their floor.
+  assert.ok(!ids(d).includes('review-withheld'));
+});
