@@ -163,3 +163,50 @@ test('modelUsage joins pipeline LLM calls and eval runs per provider:model', () 
   assert.deepEqual(modelUsage([], null), []);
   assert.deepEqual(computeHealth().window, { months: [], runs: 0, traces: 0 });
 });
+
+// LLM cost of the window (llm_cost.mjs): per stage, workflow, day, top runs and work items.
+test('costs: total, per stage with a per-run mean, per workflow, per day, top runs and work items', () => {
+  const issue = { kind: 'issue', number: 50, source: 'branch' };
+  const opus = { provider: 'anthropic', model: 'claude-opus-5-5' };
+  const records = [
+    makeRecord({ runId: '20', workflow: 'Code Generation', stage: 'code_gen', prNumber: null, issueNumber: 50, item: issue, start: T0, ...opus, tokensIn: 100_000, tokensOut: 10_000, usage: { cacheRead: 0 } }),
+    makeRecord({ runId: '21', item: issue, start: T0 + 60000, ...opus, tokensIn: 50_000, tokensOut: 1000, usage: { cacheRead: 40_000 } }),
+    makeRecord({ runId: '22', item: issue, start: T0 + 86400000, ...opus, tokensIn: 50_000, tokensOut: 1000 }),
+    makeRecord({ runId: '23', prNumber: 60, start: T0, tokensIn: 5000, tokensOut: 500 }),
+  ];
+  const { costs } = computeHealth({ model: model(records) });
+  const usd = { 20: (100_000 * 4 + 10_000 * 20) / 1e6, 21: (10_000 * 4 + 40_000 * 0.2 + 1000 * 20) / 1e6, 22: (50_000 * 4 + 1000 * 20) / 1e6 };
+  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} ≈ ${b}`);
+  close(costs.total.usd, usd[20] + usd[21] + usd[22]);
+  assert.deepEqual([costs.total.calls, costs.total.measured, costs.total.estimated, costs.total.free, costs.runs], [4, 2, 1, 1, 4]);
+  assert.deepEqual(costs.by_stage.map((g) => [g.key, g.runs, g.calls]), [['code_gen', 1, 1], ['review', 3, 3]]);
+  close(costs.by_stage[1].per_run_usd, (usd[21] + usd[22]) / 3);
+  assert.deepEqual(costs.by_workflow.map((g) => g.key), ['Code Generation', 'PR Review']);
+  assert.deepEqual(costs.by_day.map((g) => [g.key, g.calls]), [['2026-10-14', 3], ['2026-10-15', 1]]);
+  assert.deepEqual(costs.top_runs.map((r) => r.run_id), ['20-1', '22-1', '21-1', '23-1']);
+  assert.equal(costs.items, 2);
+  assert.equal(costs.top_items[0].item.number, 50);
+  close(costs.top_items[0].usd, usd[20] + usd[21] + usd[22]);
+  close(costs.items_usd, costs.total.usd);
+});
+
+test('costs: a call without a stage outside a single-stage run is unattributed; no call → empty totals', () => {
+  const rec = makeRecord({ runId: '30', provider: 'anthropic', model: 'claude-opus-5-5' });
+  rec.spans.push({ ...rec.spans[0], stage: 'review_evidence' });
+  const llm = rec.otlp.resourceSpans[0].scopeSpans[0].spans.find((s) => s.name === 'llm_call');
+  llm.attributes = llm.attributes.filter((a) => a.key !== 'adl.stage');
+  const { costs } = computeHealth({ model: model([rec]) });
+  assert.deepEqual(costs.by_stage.map((g) => g.key), ['unattributed']);
+  const empty = computeHealth({ model: model([]) }).costs;
+  assert.deepEqual([empty.total.calls, empty.runs, empty.items, empty.by_stage.length, empty.top_runs.length], [0, 0, 0, 0, 0]);
+});
+
+test('modelUsage: list-price cost and unpriced calls per model', () => {
+  const runs = model([
+    makeRecord({ runId: '40', provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1000, tokensOut: 1000 }),
+    makeRecord({ runId: '41', provider: 'anthropic', model: 'claude-unknown' }),
+  ]).runs;
+  const byKey = Object.fromEntries(modelUsage(runs, null).map((m) => [m.key, m]));
+  assert.ok(Math.abs(byKey['anthropic:claude-opus-5-5'].usd - 0.024) < 1e-9);
+  assert.deepEqual([byKey['anthropic:claude-unknown'].usd, byKey['anthropic:claude-unknown'].unpriced], [0, 1]);
+});

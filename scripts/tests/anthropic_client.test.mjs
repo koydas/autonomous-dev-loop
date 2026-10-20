@@ -342,3 +342,42 @@ test('callAnthropic rethrows a persistent AbortError after exactly maxAttempts (
   await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.name === 'AbortError');
   assert.equal(calls, 4);
 }));
+
+// ADR-0041 amendment: the billed usage reaches the caller through onUsage, the return type stays text.
+test('anthropicUsage: whole prompt = uncached + cache read + cache write; output includes thinking', async () => {
+  const { anthropicUsage } = await import('../lib/anthropic_client.mjs');
+  assert.deepEqual(
+    anthropicUsage({ usage: { input_tokens: 100, cache_read_input_tokens: 4000, cache_creation_input_tokens: 50, output_tokens: 900 } }),
+    { input: 4150, output: 900, cache_read: 4000, cache_write: 50 },
+  );
+  assert.deepEqual(anthropicUsage({ usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: null } }), { input: 10, output: 2, cache_read: 0, cache_write: 0 });
+  assert.equal(anthropicUsage({}), null);
+  assert.equal(anthropicUsage({ usage: null }), null);
+  assert.equal(anthropicUsage({ usage: { input_tokens: '10', output_tokens: 2 } }), null);
+  assert.equal(anthropicUsage({ usage: { input_tokens: 10 } }), null);
+});
+
+test('callAnthropic reports the usage through onUsage and still returns the text', async () => {
+  mockFetch(makeResponse({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 12, output_tokens: 3, cache_read_input_tokens: 7 } }));
+  const seen = [];
+  assert.equal(await callAnthropic({ ...BASE_ARGS, onUsage: (u) => seen.push(u) }), 'ok');
+  assert.deepEqual(seen, [{ input: 19, output: 3, cache_read: 7, cache_write: 0 }]);
+});
+
+test('callAnthropic reports a billed refusal and a max_tokens truncation before throwing', async () => {
+  for (const stop of ['refusal', 'max_tokens']) {
+    mockFetch(makeResponse({ stop_reason: stop, content: [], usage: { input_tokens: 5, output_tokens: 16000 } }));
+    const seen = [];
+    await assert.rejects(() => callAnthropic({ ...BASE_ARGS, onUsage: (u) => seen.push(u) }));
+    assert.deepEqual(seen, [{ input: 5, output: 16000, cache_read: 0, cache_write: 0 }], stop);
+  }
+});
+
+test('callAnthropic without usage in the response, or without onUsage, is unchanged', async () => {
+  mockFetch(makeResponse({ content: [{ type: 'text', text: 'ok' }] }));
+  const seen = [];
+  assert.equal(await callAnthropic({ ...BASE_ARGS, onUsage: (u) => seen.push(u) }), 'ok');
+  assert.deepEqual(seen, []);
+  mockFetch(makeResponse({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }));
+  assert.equal(await callAnthropic(BASE_ARGS), 'ok');
+});

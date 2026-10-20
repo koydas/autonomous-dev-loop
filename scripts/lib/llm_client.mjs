@@ -20,8 +20,9 @@ const CONFIG_ERROR_STATUSES = new Set([400, 404]);
 // the primary's config: it loads its own key, model and budgets.
 // Optional: fallback: false pins the call to the primary (live evals: a fallback answer would be published
 // as the primary model's); onAnswer({ provider, model }) is told which provider answered.
-// ADR-0041: each call is an `llm_call` child span (OpenTelemetry GenAI attribute names, token counts
-// estimated and flagged so); retries and the fallback logged during the call carry its span_id.
+// ADR-0041: each call is an `llm_call` child span (OpenTelemetry GenAI attribute names; token counts
+// as the provider billed them, or estimated and flagged so when it reported none); retries and the
+// fallback logged during the call carry its span_id.
 export async function callLLM(args) {
   const attributes = {
     'gen_ai.operation.name': 'chat',
@@ -49,13 +50,23 @@ async function callProviders(args, span) {
   const inputTokensEst = estimateTokens(String(args.systemPrompt ?? '') + String(args.prompt ?? ''));
   const providerOutcomes = () => providerErrors.map((e) => [e.provider, e.skipped ?? e.status ?? 'error'].join(':'));
   const budgetSkipped = () => providerErrors.filter((e) => e.skipped === 'over_input_budget').map((e) => e.provider);
+  // Billed usage per provider, as the API reported it (onUsage); an estimate stands in when a provider gave none.
+  const usageOf = {};
+  const tracked = (provider, call) => ({ ...call, onUsage: (usage) => { usageOf[provider] = usage; } });
+  const usageAttributes = (usage, outputEst) => (usage
+    ? {
+      'gen_ai.usage.input_tokens': usage.input,
+      'gen_ai.usage.output_tokens': usage.output,
+      'gen_ai.usage.cache_read.input_tokens': usage.cache_read,
+      'gen_ai.usage.cache_creation.input_tokens': usage.cache_write,
+      'adl.usage.estimated': false,
+    }
+    : { 'gen_ai.usage.input_tokens': inputTokensEst, 'gen_ai.usage.output_tokens': outputEst, 'adl.usage.estimated': true });
   const answeredBy = (provider, model, isFallback, answer) => {
     span.setAttributes({
       'gen_ai.system': provider,
       'gen_ai.response.model': model,
-      'gen_ai.usage.input_tokens': inputTokensEst,
-      'gen_ai.usage.output_tokens': estimateTokens(String(answer ?? '')),
-      'adl.usage.estimated': true,
+      ...usageAttributes(usageOf[provider], estimateTokens(String(answer ?? ''))),
       'adl.llm.fallback': isFallback,
       ...(isFallback && { 'adl.llm.fallback_from': primary, 'adl.llm.providers': providerOutcomes() }),
       ...(budgetSkipped().length && { 'adl.llm.input_budget_skipped': budgetSkipped() }),
@@ -66,6 +77,8 @@ async function callProviders(args, span) {
     const providers = providerOutcomes();
     span.setAttributes({
       'gen_ai.system': primary,
+      // A billed answer that failed anyway (refusal, max_tokens truncation, empty text) still costs.
+      ...(usageOf[primary] && usageAttributes(usageOf[primary])),
       'adl.llm.providers': providers,
       'error.type': errorType ?? 'unknown',
       ...(budgetSkipped().length && { 'adl.llm.input_budget_skipped': budgetSkipped() }),
@@ -87,7 +100,7 @@ async function callProviders(args, span) {
     // without a request, so the fallback (Anthropic: no input budget) gets the prompt instead.
     assertInputBudget(stage, estimateTokens(args.systemPrompt + args.prompt), args.maxInputTokens);
     called = true;
-    text = await PROVIDER_CALLS[primary](args);
+    text = await PROVIDER_CALLS[primary](tracked(primary, args));
     answered = true;
   } catch (error) {
     errorType = error.errorType ?? classifyError(String(error.status ?? ''));
@@ -148,7 +161,7 @@ async function callProviders(args, span) {
   try {
     const call = { prompt: args.prompt, systemPrompt: args.systemPrompt };
     if ('responseFormat' in args) call.responseFormat = args.responseFormat;
-    text = await PROVIDER_CALLS[fallback]({ ...fallbackConfig, ...call });
+    text = await PROVIDER_CALLS[fallback](tracked(fallback, { ...fallbackConfig, ...call }));
   } catch (error) {
     errors.push(`${fallback}: ${error.message}`);
     providerErrors.push({ provider: fallback, status: httpStatus(error) });

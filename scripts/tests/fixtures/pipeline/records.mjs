@@ -18,12 +18,14 @@ const sid = (n) => n.toString(16).padStart(16, '0');
 
 /**
  * A v2 record of one run: a stage span, an llm_call child span and the given events (all within the
- * stage). `hostile` puts HOSTILE in every free-text field the redaction keeps.
+ * stage). `hostile` puts HOSTILE in every free-text field the redaction keeps. `usage` ({ cacheRead,
+ * cacheWrite }) makes the call's tokens provider-measured instead of estimated.
  */
 export function makeRecord({
   runId = '100', attempt = 1, workflow = 'PR Review', stage = 'review', start = Date.parse('2026-10-16T10:00:00Z'),
   durationMs = 4000, prNumber = 7, issueNumber = null, item = null, outcome = 'success', events = [], provider = 'groq',
   model = 'openai/gpt-oss-120b', tokensIn = 1000, tokensOut = 100, hostile = false, llmStatus = 'ok', repository = 'koydas/autonomous-dev-loop',
+  usage = null,
 } = {}) {
   const h = (v) => (hostile ? HOSTILE : v);
   const root = sid(Number(runId) * 10 + 1);
@@ -50,7 +52,8 @@ export function makeRecord({
       span_id: llmId, parent_span_id: stageId, name: 'llm_call', started_at: iso(start + 100), completed_at: iso(start + 600), duration_ms: 500, status: llmStatus,
       attributes: {
         'gen_ai.operation.name': 'chat', 'gen_ai.system': h(provider), 'gen_ai.request.model': h(model), 'gen_ai.response.model': h(model),
-        'gen_ai.usage.input_tokens': tokensIn, 'gen_ai.usage.output_tokens': tokensOut, 'adl.usage.estimated': true, 'adl.stage': h(stage),
+        'gen_ai.usage.input_tokens': tokensIn, 'gen_ai.usage.output_tokens': tokensOut, 'adl.usage.estimated': !usage, 'adl.stage': h(stage),
+        ...(usage && { 'gen_ai.usage.cache_read.input_tokens': usage.cacheRead ?? 0, 'gen_ai.usage.cache_creation.input_tokens': usage.cacheWrite ?? 0 }),
       },
     }],
     events: events.map((e, i) => ({

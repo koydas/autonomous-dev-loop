@@ -66,14 +66,16 @@ export function toScorecardRun({ meta, summary, failures, results }) {
 
 // USD per million tokens, list price (2026-10): the one price table (eval report and dashboard cost line).
 // Groq runs on the free tier: no cost line. Any other model without an entry is reported as unpriced, never
-// as free. anthropic_client.mjs does not return the API's usage, so cost is priced on the harness's chars/4
-// estimate: input ignores the prompt cache (system prompt cached: over), output excludes thinking tokens
-// (under, more so at higher effort). Read it as an order of magnitude, never as the bill.
+// as free. Eval runs are priced on the harness's chars/4 estimate: input ignores the prompt cache (system
+// prompt cached: over), output excludes thinking tokens (under, more so at higher effort). Read it as an
+// order of magnitude, never as the bill. Pipeline calls with provider-measured usage (llm_cost.mjs) are not.
 // maxPromptTokens: the price holds up to that prompt size per call (Haiku 5.5: ≤ 100K); above it, unpriced.
+// cacheRead / cacheWrite: prompt-cache reads and 5-minute cache writes (1.25 × in), priced only on
+// provider-measured usage (llm_cost.mjs). Haiku 5.5's cache read is assumed at 0.1 × in.
 export const PRICES_USD_PER_MTOK = {
-  'anthropic:claude-opus-5-5': { in: 4, out: 20 },
-  'anthropic:claude-sonnet-5-5': { in: 2, out: 10 },
-  'anthropic:claude-haiku-5-5': { in: 0.10, out: 0.50, maxPromptTokens: 100_000 },
+  'anthropic:claude-opus-5-5': { in: 4, out: 20, cacheRead: 0.20, cacheWrite: 5 },
+  'anthropic:claude-sonnet-5-5': { in: 2, out: 10, cacheRead: 0.20, cacheWrite: 2.5 },
+  'anthropic:claude-haiku-5-5': { in: 0.10, out: 0.50, cacheRead: 0.01, cacheWrite: 0.125, maxPromptTokens: 100_000 },
 };
 export const COST_SOURCE = 'chars/4 estimate, thinking tokens excluded';
 

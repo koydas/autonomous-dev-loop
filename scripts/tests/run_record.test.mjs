@@ -401,6 +401,14 @@ test('schema 2: trace id and item recomputed from the repository, kind and numbe
   assert.deepEqual(record.spans_overflow, { count: 0, events: 0 });
 });
 
+test('schema 2: measured usage and its prompt-cache split survive the redaction (ADR-0041 amendment)', () => {
+  const measured = { 'gen_ai.system': 'anthropic', 'gen_ai.usage.input_tokens': 3040, 'gen_ai.usage.output_tokens': 700, 'gen_ai.usage.cache_read.input_tokens': 3000, 'gen_ai.usage.cache_creation.input_tokens': 0, 'adl.usage.estimated': false };
+  const base = v2();
+  const record = redactTrace({ ...base, child_spans: [{ ...base.child_spans[0], attributes: measured }] }, { env: ENV });
+  const llm = otlpSpans(record).find((s) => s.name === 'llm_call');
+  assert.deepEqual(attrs(llm), { ...measured, 'gen_ai.usage.input_tokens': '3040', 'gen_ai.usage.output_tokens': '700', 'gen_ai.usage.cache_read.input_tokens': '3000', 'gen_ai.usage.cache_creation.input_tokens': '0' });
+});
+
 test('schema 2: the OTLP block holds the span tree with parent ids, GenAI attributes and span events', () => {
   const record = redactTrace(v2(), { env: ENV });
   const spans = otlpSpans(record);

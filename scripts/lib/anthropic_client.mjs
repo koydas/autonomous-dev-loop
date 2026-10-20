@@ -14,6 +14,21 @@ const SERVER_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 const FETCH_TIMEOUT_CODES = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 
+const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+
+/**
+ * The response's billed `usage` → `{ input, output, cache_read, cache_write }`, or null without one.
+ * `input` is the whole prompt (uncached + cache read + cache write), as `gen_ai.usage.input_tokens`;
+ * `output` includes the thinking tokens.
+ */
+export function anthropicUsage(raw) {
+  const u = raw?.usage;
+  if (u === null || typeof u !== 'object' || !Number.isSafeInteger(u.input_tokens) || !Number.isSafeInteger(u.output_tokens)) return null;
+  const cacheRead = count(u.cache_read_input_tokens);
+  const cacheWrite = count(u.cache_creation_input_tokens);
+  return { input: count(u.input_tokens) + cacheRead + cacheWrite, output: count(u.output_tokens), cache_read: cacheRead, cache_write: cacheWrite };
+}
+
 export async function callAnthropic({
   prompt,
   systemPrompt,
@@ -23,6 +38,7 @@ export async function callAnthropic({
   temperature,
   maxTokens = 16000,
   reasoningEffort,
+  onUsage,
 }) {
   const payload = {
     model,
@@ -78,6 +94,10 @@ export async function callAnthropic({
   } catch (err) {
     throw new Error('Anthropic API returned non-JSON response', { cause: err });
   }
+
+  // Before the refusal / truncation checks: a 200 is billed whether or not it yields an answer.
+  const usage = anthropicUsage(raw);
+  if (usage) onUsage?.(usage);
 
   // A refusal is HTTP 200: fail so callLLM moves on to the fallback provider.
   if (raw?.stop_reason === 'refusal') {

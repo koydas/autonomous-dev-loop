@@ -1,6 +1,7 @@
 // Health of the pipeline (ADR-0027 amendment): aggregates of the pipeline model (pipeline_model.mjs)
-// and of the eval scorecard the dashboard already holds. Pure. Token counts are the records'
-// chars/4 estimates (ADR-0041 §3), never the provider's measured usage.
+// and of the eval scorecard the dashboard already holds. Pure. Token counts are provider-measured where
+// the record has them (ADR-0041 amendment), chars/4 estimates otherwise; the Groq quota chart counts both.
+import { callCost, sumCosts, addCosts } from './llm_cost.mjs';
 
 export const GROQ_TPD = 200000;
 export const TOKEN_DAYS = 30;
@@ -221,12 +222,61 @@ function groqTokens(runs, scorecard) {
   return { days, workflows, limit: GROQ_TPD };
 }
 
+export const COST_TOP = 10;
+const STEP_ORDER = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'autofix'];
+
+/**
+ * LLM cost of the window (llm_cost.mjs, list price): the total, per pipeline stage (with the runs that
+ * spent it, for a per-run mean), per workflow, per UTC day (last TOKEN_DAYS days with a call), and the
+ * COST_TOP most expensive runs and work items. A call without a stage counts under `unattributed`.
+ */
+function costs(runs, traces) {
+  const groups = { stage: new Map(), workflow: new Map(), day: new Map() };
+  const add = (map, key, calls, runId) => {
+    const g = map.get(key) ?? { ids: new Set(), sum: sumCosts([]) };
+    g.sum = addCosts(g.sum, sumCosts(calls));
+    g.ids.add(runId);
+    map.set(key, g);
+  };
+  for (const run of runs) {
+    if (!run.llm.length) continue;
+    const byStage = new Map();
+    for (const c of run.llm) {
+      const stage = c.pipeline_stage ?? (run.stages.length === 1 && run.stages[0].stage ? run.stages[0].stage : 'unattributed');
+      byStage.set(stage, [...(byStage.get(stage) ?? []), c]);
+      const ts = c.ts ?? run.started_at;
+      if (ts != null) add(groups.day, day(ts), [c], run.run_id);
+    }
+    for (const [stage, calls] of byStage) add(groups.stage, stage, calls, run.run_id);
+    add(groups.workflow, run.workflow ?? 'unknown', run.llm, run.run_id);
+  }
+  const rows = (map) => [...map.entries()].map(([key, { ids, sum }]) => ({ key, ...sum, runs: ids.size, per_run_usd: sum.usd / ids.size }));
+  const rank = (k) => (STEP_ORDER.includes(k) ? STEP_ORDER.indexOf(k) : STEP_ORDER.length);
+  const priced = runs.filter((r) => r.llm.length);
+  const items = traces.map((t) => {
+    const loaded = t.runs.map((r) => r.run).filter(Boolean);
+    return { trace_id: t.trace_id, item: t.item, runs: loaded.length, ...sumCosts(loaded.flatMap((r) => r.llm)) };
+  }).filter((t) => t.calls);
+  const byUsd = (a, b) => b.usd - a.usd || b.calls - a.calls;
+  return {
+    total: sumCosts(runs.flatMap((r) => r.llm)),
+    runs: priced.length,
+    items: items.length,
+    items_usd: items.reduce((t, it) => t + it.usd, 0),
+    by_stage: rows(groups.stage).sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key)),
+    by_workflow: rows(groups.workflow).sort((a, b) => b.usd - a.usd || a.key.localeCompare(b.key)),
+    by_day: rows(groups.day).sort((a, b) => a.key.localeCompare(b.key)).slice(-TOKEN_DAYS),
+    top_runs: priced.map((r) => ({ run_id: r.run_id, workflow: r.workflow, item: r.item, started_at: r.started_at, ...r.cost })).sort(byUsd).slice(0, COST_TOP),
+    top_items: items.sort(byUsd).slice(0, COST_TOP),
+  };
+}
+
 /** Every provider:model seen in the pipeline's LLM calls or in the eval scorecard, for the cross-link page. */
 export function modelUsage(runs, scorecard) {
   const models = new Map();
   const get = (provider, model) => {
     const key = `${provider ?? 'unknown'}:${model ?? 'unknown'}`;
-    if (!models.has(key)) models.set(key, { key, provider: provider ?? null, model: model ?? null, calls: 0, failed: 0, fallback: 0, tokens: 0, runs: [], evals: [] });
+    if (!models.has(key)) models.set(key, { key, provider: provider ?? null, model: model ?? null, calls: 0, failed: 0, fallback: 0, tokens: 0, usd: 0, unpriced: 0, runs: [], evals: [] });
     return models.get(key);
   };
   for (const run of runs) {
@@ -237,6 +287,9 @@ export function modelUsage(runs, scorecard) {
       if (c.failed) m.failed += 1;
       if (c.fallback) m.fallback += 1;
       m.tokens += (c.tokens_in ?? 0) + (c.tokens_out ?? 0);
+      const cost = c.cost ?? callCost(c);
+      m.usd += cost.usd ?? 0;
+      if (cost.basis === 'unpriced') m.unpriced += 1;
       if (!seen.has(m.key) && m.runs.length < 20) { m.runs.push(run.run_id); seen.add(m.key); }
     }
   }
@@ -266,5 +319,6 @@ export function computeHealth({ model, scorecard = null } = {}) {
     latency: latency(runs),
     critical_path: criticalPath(model?.traces ?? []),
     tokens: groqTokens(runs, scorecard),
+    costs: costs(runs, model?.traces ?? []),
   };
 }

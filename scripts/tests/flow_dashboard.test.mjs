@@ -61,6 +61,7 @@ test('Groq free-tier calls cost nothing and are never counted as unpriced', () =
   { provider: 'groq', model: 'openai/gpt-oss-120b' },
  ] }])] });
  assert.match(html, /LLM cost estimate: \$0.0000 USD \(2 Groq free-tier call\(s\) at no cost\)/);
+ assert.match(html, /<span class="flow-cost-chip"[^>]*>free tier<\/span>/, 'Groq-only flow: free tier, not $0');
  assert.doesNotMatch(html, /unpriced/);
  const mixed = flowDashboard({ traces: [trace([{ ...run, llm: [
   { provider: 'groq', model: 'openai/gpt-oss-120b', tokens_in: 1, tokens_out: 1 },
@@ -160,4 +161,28 @@ test('client script turns the merge icon to success only on a confirmed merge (#
  assert.ok(FLOW_SCRIPT.indexOf('const mergeIcon') > FLOW_SCRIPT.indexOf("'Merged · ' + pr.merged_at"));
  assert.match(FLOW_STYLE, /\.flow-status \{ display:flex; flex-wrap:wrap;/);
  assert.match(FLOW_STYLE, /\.flow-node summary, \.flow-summary \{ min-height:44px;/);
+});
+
+test('each step shows its own LLM cost, each execution its amount, the summary a cost chip', () => {
+ const opus = { provider: 'anthropic', model: 'claude-opus-5-5' };
+ const review = { ...run, run_id: '200-1', llm: [{ ...opus, stage: 'review', pipeline_stage: 'review', tokens_in: 1000, tokens_out: 1000, estimated: false, cache_read: 0 }] };
+ const review2 = { ...review, run_id: '201-1' };
+ const autofix = { ...run, run_id: '202-1', stages: [{ stage: 'autofix' }], llm: [{ ...opus, tokens_in: 10_000, tokens_out: 0 }] };
+ const html = flowDashboard({ traces: [trace([review, review2, autofix])] });
+ assert.match(html, /<span class="flow-cost-chip"[^>]*>\$0\.0880<\/span>/);
+ assert.match(html, /<strong>Review<\/strong><p>2 execution\(s\)<\/p><p class="flow-step-cost" data-step-cost>LLM: \$0\.0480 USD · 2 call\(s\) · 2\.0k in \/ 2\.0k out · \$0\.0240 per execution<\/p>/);
+ assert.match(html, /<strong>Auto-fix<\/strong><p>1 execution\(s\)<\/p><p class="flow-step-cost" data-step-cost>LLM: \$0\.0400 USD · 1 call\(s\) · 10\.0k in \/ 0 out<\/p>/, 'a call without a stage goes to the run\'s only stage');
+ assert.match(html, /partial · 1\.2 s · \$0\.0240<\/summary>/);
+ assert.match(html, /1000 input \/ 1000 output tokens \(measured\) · \$0\.0240/);
+ assert.match(html, /10000 input \/ 0 output tokens \(estimated\) · \$0\.0400/);
+ assert.match(html, /provider-measured tokens where recorded, chars\/4 estimate for older records; list price, never a bill/);
+ assert.doesNotMatch(html.slice(html.indexOf('<strong>Validation')), /^<strong>Validation<\/strong><p>Not recorded<\/p><p class="flow-step-cost"/);
+});
+
+test('cost note names the basis: measured only, estimated only; cache reads are shown per call', () => {
+ const measured = flowDashboard({ traces: [trace([{ ...run, llm: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 5000, tokens_out: 10, estimated: false, cache_read: 4000 }] }])] });
+ assert.match(measured, /provider-measured tokens, thinking and prompt cache included; list price, never a bill/);
+ assert.match(measured, /5000 input \(4000 from cache\)/);
+ const estimated = flowDashboard({ traces: [trace([{ ...run, llm: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1, tokens_out: 1 }] }])] });
+ assert.match(estimated, /chars\/4 token estimate, excludes thinking and cache adjustments; list price, never a bill/);
 });

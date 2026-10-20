@@ -209,3 +209,53 @@ test('flow map is generated with shared navigation, retained evidence and live m
   assert.match(html, /data-merge-node/);
   assert.match(html, /api.github.com\/repos\/koydas\/autonomous-dev-loop\/pulls/);
 });
+
+// LLM cost on the run, trace, feed, health and models pages.
+test('cost: run page per call, waterfall column, trace per stage and run, feed tile, health panel, models tile', () => {
+  const issue = { kind: 'issue', number: 70, source: 'branch' };
+  const records = [
+    makeRecord({ runId: '600', workflow: 'Code Generation', stage: 'code_gen', prNumber: null, issueNumber: 70, item: issue, start: T0, provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 100_000, tokensOut: 10_000, usage: { cacheRead: 90_000, cacheWrite: 1000 } }),
+    makeRecord({ runId: '601', item: issue, start: T0 + 60000, tokensIn: 5000, tokensOut: 500 }),
+    makeRecord({ runId: '602', item: issue, start: T0 + 120000, provider: 'anthropic', model: 'claude-unknown' }),
+  ];
+  const { files } = site(records);
+  const run = files['pipeline/runs/600-1.html'];
+  // 9k uncached × $4 + 90k read × $0.20 + 1k write × $5 + 10k out × $20 = $0.259
+  assert.match(run, /LLM cost · tokens &amp; USD per call|LLM cost · tokens & USD per call/);
+  assert.match(run, /\$0\.2590/);
+  assert.match(run, /<td class="num">90\.0k<\/td><td class="num">1\.0k<\/td>/, 'cache reads and writes per call');
+  assert.match(run, /provider-measured tokens/);
+  assert.match(run, /<th class="num">Cost<\/th>/, 'waterfall cost column');
+  assert.match(run, /90\.0k cached/);
+  assert.match(files['pipeline/runs/601-1.html'], /free tier/);
+  assert.match(files['pipeline/runs/602-1.html'], /unpriced/);
+  const trace = Object.entries(files).find(([p, html]) => /^pipeline\/traces\/[0-9a-f]{32}\.html$/.test(p) && html.includes('issue #70'))[1];
+  assert.match(trace, /LLM cost · per stage &amp; per run|LLM cost · per stage & per run/);
+  assert.match(trace, /<code>code_gen<\/code>/);
+  assert.match(trace, /<code>code_gen<\/code><\/td><td class="num">1<\/td>.*?<td>\$0\.2590 USD<\/td>/);
+  assert.match(trace, /<code>review<\/code><\/td><td class="num">2<\/td>.*?\$0\.0000 USD \+ 1 unpriced call\(s\) \(1 Groq free-tier call\(s\) at no cost\)/);
+  assert.match(trace, /LLM cost<\/div><div class="value">\$0\.2590/, 'trace tile');
+  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">\$0\.2590/);
+  assert.match(files['pipeline/index.html'], /LLM \$0\.2590 · 1 call\(s\)/, 'execution card');
+  const health = files['pipeline/health.html'];
+  assert.match(health, /LLM cost · per stage, run &amp; work item|LLM cost · per stage, run & work item/);
+  assert.match(health, /aria-label="LLM cost in USD per pipeline stage/);
+  assert.match(health, /Most expensive runs/);
+  assert.match(health, /href="runs\/600-1\.html"/);
+  assert.match(health, /Mean per work item<\/div><div class="value">\$0\.2590/);
+  assert.match(health, /provider-measured tokens \(prompt cache priced apart/);
+  assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">\$0\.2590/);
+  assert.match(files['pipeline/models.html'], /1 unpriced call\(s\)/);
+  assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">free tier/);
+});
+
+test('cost: no LLM call → empty cost states', () => {
+  const rec = makeRecord({ runId: '610', start: T0 });
+  rec.otlp.resourceSpans[0].scopeSpans[0].spans = rec.otlp.resourceSpans[0].scopeSpans[0].spans.filter((s) => s.name !== 'llm_call');
+  rec.envelope.llm_calls = [];
+  rec.events = [];
+  const { files } = site([rec]);
+  assert.match(files['pipeline/runs/610-1.html'], /No LLM call in this run/);
+  assert.match(files['pipeline/health.html'], /No LLM call recorded in the window/);
+  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">—/);
+});

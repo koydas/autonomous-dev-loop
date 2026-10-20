@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs', 'trace_context.mjs', 'otlp_trace.mjs', 'pipeline_model.mjs', 'pipeline_health.mjs', 'pipeline_site.mjs', 'pr_tree_reader.mjs', 'github_output.mjs'];
+const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs', 'trace_context.mjs', 'otlp_trace.mjs', 'pipeline_model.mjs', 'pipeline_health.mjs', 'pipeline_site.mjs', 'pr_tree_reader.mjs', 'github_output.mjs', 'llm_cost.mjs'];
 
 // Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
 const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
@@ -77,6 +77,7 @@ test('test.yml pairs each coverage gate with its dedicated test file', () => {
     ['pipeline_health.mjs', 'pipeline_health.test.mjs'],
     ['pipeline_site.mjs', 'pipeline_site.test.mjs'],
     ['github_output.mjs', 'github_output.test.mjs'],
+    ['llm_cost.mjs', 'llm_cost.test.mjs'],
   ];
   for (const [lib, testFile] of pairs) {
     assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
