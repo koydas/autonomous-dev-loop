@@ -168,3 +168,15 @@ test('a validation that threw is an execution failure, not a rejection of the is
   // A real rejection keeps its state.
   assert.equal(workItemJourney(trace([run('3', 'issue_validation', 'failed', 1, [{ event: 'issue_validation.fail', level: 'warn', meta: { score: 40, blockers_count: 2 } }])])).state, 'rejected');
 });
+
+test('a failed run superseded by a later success of the same step does not fail the item (PR #242 review)', () => {
+  const failedReview = { ...run('1', 'review', 'failed', 1000), outcome: 'failed', pr_number: 9 };
+  const j = workItemJourney(trace([failedReview, verdictRun('2', 2000, 'APPROVE')], { kind: 'pr', number: 9 }));
+  assert.equal(j.state, 'approved');
+  assert.equal(j.attention, false);
+  assert.deepEqual(j.recovered_steps, ['review']);
+  // The failed run is still the final attempt: the item stays failed.
+  assert.equal(workItemJourney(trace([verdictRun('1', 1000, 'APPROVE'), { ...run('2', 'review', 'not-a-status', 2000), outcome: 'failed' }], { kind: 'pr', number: 9 })).state, 'failed');
+  // A failed run that attempted no step fails the item.
+  assert.equal(workItemJourney(trace([verdictRun('1', 1000, 'APPROVE'), { ...run('2', null, null, 2000), outcome: 'failed' }], { kind: 'pr', number: 9 })).state, 'failed');
+});

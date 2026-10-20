@@ -116,3 +116,13 @@ test('LLM cost change: never against a side with unpriced calls, and an all-unpr
   assert.match(card(kpiRow(win(sum({ calls: 3, free: 3 }), sum({ calls: 3, free: 3 })), '', false)), /3 call\(s\) · free tier only · list price/);
   assert.match(card(kpiRow(win(sum({ calls: 1, estimated: 1, usd: 0.25 }), sum({})), '', false)), /no prior 7 d data/);
 });
+
+test('duration chart: a day without a timed run is a gap in both lines (PR #242 review)', () => {
+  const day = (d, avg, p95) => ({ day: `2026-10-0${d}`, avg_ms: avg, p95_ms: p95 });
+  const html = durationChart([day(1, 1000, 2000), day(2, 1500, 2500), day(3, null, null), day(4, 1200, 2200), day(5, 900, 1900)]);
+  assert.equal((html.match(/<polyline /g) ?? []).length, 4, 'average and p95, two segments each');
+  // Isolated values keep their dot but draw no line.
+  const lone = durationChart([day(1, 1000, 2000), day(2, null, null), day(3, 1200, 2200)]);
+  assert.equal((lone.match(/<polyline /g) ?? []).length, 0);
+  assert.equal((lone.match(/<circle /g) ?? []).length, 2);
+});

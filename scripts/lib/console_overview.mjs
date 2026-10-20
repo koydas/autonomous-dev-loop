@@ -106,12 +106,17 @@ export function durationChart(series) {
   const top = Math.max(...series.map((s) => s.p95_ms ?? 0), 1000);
   const x = (i) => L + (series.length === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (series.length - 1));
   const y = (v) => T + (H - T - B) * (1 - v / top);
-  const path = (key) => series.map((s, i) => (s[key] == null ? null : `${x(i).toFixed(1)},${y(s[key]).toFixed(1)}`)).filter(Boolean).join(' ');
+  // One polyline per contiguous run of days with a value: a day without a timed run is a gap, never bridged.
+  const paths = (key) => series.reduce((segs, s, i) => {
+    if (s[key] == null) { if (segs.at(-1).length) segs.push([]); return segs; }
+    segs.at(-1).push(`${x(i).toFixed(1)},${y(s[key]).toFixed(1)}`);
+    return segs;
+  }, [[]]).filter((seg) => seg.length > 1);
   const dots = (key, cls) => series.map((s, i) => (s[key] == null ? '' : `<circle cx="${x(i).toFixed(1)}" cy="${y(s[key]).toFixed(1)}" r="3" class="${cls}"><title>${e(`${s.day}: ${key === 'avg_ms' ? 'average' : 'p95'} ${duration(s[key])}`)}</title></circle>`)).join('');
   const ticks = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - R}" y1="${y(top * f)}" y2="${y(top * f)}" stroke="var(--grid)"/><text x="${L - 6}" y="${y(top * f) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${e(duration(top * f))}</text>`).join('');
   const labels = series.map((s, i) => (i % Math.ceil(series.length / 7) === 0 ? `<text x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${e(s.day.slice(5))}</text>` : '')).join('');
   const rows = series.filter((s) => s.avg_ms != null).map((s) => `<tr><td>${e(s.day)}</td><td class="num">${e(duration(s.avg_ms))}</td><td class="num">${e(duration(s.p95_ms))}</td></tr>`).join('');
-  return `<div class="legend"><span><i class="line-key accent"></i>Average</span><span><i class="line-key dashed"></i>p95</span></div><div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Average and p95 run duration per day; values in the table">${ticks}<polyline points="${path('p95_ms')}" fill="none" stroke="var(--link)" stroke-width="1.6" stroke-dasharray="4 4"/><polyline points="${path('avg_ms')}" fill="none" stroke="var(--accent)" stroke-width="2.2"/>${dots('avg_ms', 'dot-accent')}${labels}</svg></div><details><summary>Values</summary><div class="table-wrap"><table><thead><tr><th>Day</th><th class="num">Average</th><th class="num">p95</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+  return `<div class="legend"><span><i class="line-key accent"></i>Average</span><span><i class="line-key dashed"></i>p95</span></div><div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Average and p95 run duration per day; values in the table">${ticks}${paths('p95_ms').map((pts) => `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--link)" stroke-width="1.6" stroke-dasharray="4 4"/>`).join('')}${paths('avg_ms').map((pts) => `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2.2"/>`).join('')}${dots('avg_ms', 'dot-accent')}${labels}</svg></div><details><summary>Values</summary><div class="table-wrap"><table><thead><tr><th>Day</th><th class="num">Average</th><th class="num">p95</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
 }
 
 /** LLM providers of the window: cost and calls, with their shares. */

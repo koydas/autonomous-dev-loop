@@ -146,7 +146,12 @@ function itemState(steps, escalated, runs) {
   // A rejection is the validation's decision even when its span is closed as failed (the run is partial).
   const validation = steps.find((s) => s.key === 'issue_validation');
   if (validation.final?.decision?.key === 'fail' && steps.every((s) => s.key === 'issue_validation' || !s.attempts.length)) return 'rejected';
-  const failedFinal = steps.some((s) => s.final?.status === 'failed' || s.final?.decision?.tone === 'bad') || runs.some((r) => r.outcome === 'failed' && !steps.some((s) => s.attempts.some((a) => a.run_id === r.run_id && a.status !== 'failed')));
+  // A failed run fails the item only while nothing superseded it: it attempted no step, or it is the final
+  // attempt of one (a later successful attempt of the same step is a recovery, not a failure).
+  const finalRuns = new Set(steps.map((s) => s.final?.run_id).filter(Boolean));
+  const attempted = new Set(steps.flatMap((s) => s.attempts.map((a) => a.run_id)));
+  const failedFinal = steps.some((s) => s.final?.status === 'failed' || s.final?.decision?.tone === 'bad')
+    || runs.some((r) => r.outcome === 'failed' && (!attempted.has(r.run_id) || finalRuns.has(r.run_id)));
   if (failedFinal) return 'failed';
   const review = steps.find((s) => s.key === 'review');
   const decisions = review.attempts.filter((a) => a.decision && a.decision.key !== 'skipped');
