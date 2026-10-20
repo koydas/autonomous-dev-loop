@@ -1,0 +1,21 @@
+# Paths the AI must never modify, in addition to the hard-coded floor of scripts/lib/protected_paths.mjs
+# (.git/, .github/, manifests and lock files, this file). The effective list is the union: an entry
+# here adds protection, nothing here can remove a floor entry (ADR-0044).
+#
+# Forms: `dir/` = root-level directory; `name` = file name at any depth; `a/b.json` = exact root path.
+# One `*` is allowed in a bare file name (quote it: `*` opens a YAML alias).
+#
+# Read from the default branch (ADR-0023): a PR changing this file affects runs only once merged.
+# scripts/tests/protected_paths.test.mjs pins every entry below, so none can be dropped silently.
+
+protected_paths:
+  # Pipeline self-protection (ADR-0021): runs with secrets, or state read back from the working tree.
+  - scripts/
+  - config/
+  - prompts/
+  - checkpoints/
+  - metrics/
+  - observability/
+  # Governance (ADR-0021 amendment, incident #173): documentation is human-owned.
+  - docs/
+  - README.md

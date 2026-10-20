@@ -81,6 +81,15 @@ The prompt rules above are backed by `scripts/lib/static_verifier.mjs` (ADR-0019
 
 The write denylist and the shrink guard (ADR-0021) still run inside `validateAiOutput()` / `writeGeneratedFiles()`. Any rejection is one `GuardrailError`: nothing is written. On auto-fix it follows the `Auto-Fix: Patch Rejected` path below. On generation, the issue gets a `Code Generation: Patch Rejected` comment (rules + reason per file) and `needs-human`, a `codegen_skip` metric records `rules`, the run exits 0 with `rejected=true` and `code-generation.yml` opens no PR. Fix the issue text (name the function whose signature must change, the file to edit) or implement by hand, then remove `needs-human` and re-apply `ready-for-dev`.
 
+### Protected paths: floor plus per-repository config (ADR-0044)
+
+The denylist is the union of a hard-coded floor and `config/protected-paths.yaml`:
+
+- **Floor** (`scripts/lib/protected_paths.mjs`, never overridable): `.git/`, `.github/`, `config/protected-paths.yaml`, Node manifests, lock files and `.npmrc`/`.yarnrc*`, .NET (`*.csproj`, `*.fsproj`, `*.vbproj`, `Directory.Packages.props`, `Directory.Build.props|targets`, `NuGet.config`, `global.json`, `packages.lock.json`) and Python (`requirements*.txt`, `pyproject.toml`, `poetry.lock`, `setup.py`, `setup.cfg`, `Pipfile`, `Pipfile.lock`, `uv.lock`, `pip.conf`). The ADR lists and justifies each one.
+- **Repository list:** `protected_paths:` in `config/protected-paths.yaml`, a `- entry` list or `[]`. Forms: `dir/` (root-level directory), `a/b.json` (exact root path), `name` (file name at any depth, one `*` allowed: quote it, `"*.gen.cs"`). A repository adds entries; nothing can remove a floor entry. This repository lists `scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `docs/`, `README.md`; a test fails if one is dropped.
+- **No file** means floor only. **Invalid content** (unknown key, bad entry, glob outside a file name, …) fails at startup of every script importing `output_writer.mjs`, with `config/protected-paths.yaml: protected_paths[<i>] …`. The file is read from the default branch (ADR-0023): a PR editing it takes effect once merged.
+- Both system prompts list the floor and this repository's entries; when you change the list, update `prompts/generation-system.md` and `prompts/auto-fix-system.md` (`smoke.test.mjs` fails otherwise).
+
 ## Blocked Outcome (ADR-0029 amendment)
 
 When generation cannot implement an issue it opens **no PR**. Before this, it wrote a Markdown handoff note instead (#191 for issue #190: `notes/issue-190-blocked.md`; #196 for #195: `patches/issue-195-dependency-manifest.md`), the review bot approved it, and merging it would have closed the issue. `scripts/lib/generation_blocked.mjs` decides, in this order (first match wins):

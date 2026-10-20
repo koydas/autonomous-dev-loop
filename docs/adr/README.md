@@ -47,3 +47,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0041: End-to-end tracing per work item](./0041-end-to-end-work-item-tracing.md)
 - [ADR-0042: Merged PR flow map](./0042-merged-pr-flow-map.md)
 - [ADR-0043: Diagnostic observability console](./0043-diagnostic-observability-console.md)
+- [ADR-0044: Protected write paths: hard-coded floor plus per-repository config](./0044-protected-paths-floor-and-repo-config.md)
