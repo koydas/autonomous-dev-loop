@@ -396,6 +396,14 @@ text, including PR/issue numbers, outcomes and models. The page reads up to the
 1,000 most recently updated closed PRs and states when that limit is reached.
 A merge is confirmed only by GitHub's `merged_at`, never by workflow success.
 
+Cards start collapsed. The summary shows the PR/issue title and one icon per
+step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge):
+✓ success, ✗ failed, ⊘ skipped, ○ not recorded. A step's icon is the span
+outcome of its latest execution by start time (undated runs rank last, ties keep
+trace order), so a failed review followed by an approval shows ✓. Any other or
+missing outcome is ○, never ✓. Merge turns ✓ only once GitHub's `merged_at`
+confirms it. Expand a card for the details below.
+
 Each card shows the canonical pipeline vertically on narrow screens, including
 missing stages in grey. Grey means **not recorded**, not skipped or failed.
 Expand review/auto-fix executions to inspect actors, models, duration, then follow
