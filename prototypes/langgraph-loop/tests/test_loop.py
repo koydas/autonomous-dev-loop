@@ -1,9 +1,10 @@
 import unittest
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphRecursionError
 
 from loop import (
-    BUGGY, DEMO_ISSUE, DEMO_TESTS, FIXED, MAX_ATTEMPTS,
+    BUGGY, DEMO_ISSUE, DEMO_TESTS, FIXED, MAX_ATTEMPTS, RECURSION_LIMIT,
     BudgetExhaustedError, LoopContext, LoopState, ScriptedGenerator,
     build_graph, should_continue,
 )
@@ -106,6 +107,20 @@ class Graph(unittest.TestCase):
         )
         self.assertEqual(final["outcome"], "needs_human_review")
         self.assertEqual(final["eval_report"]["status"], "fail")
+
+
+class RecursionBackstop(unittest.TestCase):
+    def test_default_limit_is_derived_from_max_attempts(self):
+        self.assertEqual(RECURSION_LIMIT, 2 * MAX_ATTEMPTS + 2)
+        self.assertEqual(build_graph().config["recursion_limit"], RECURSION_LIMIT)
+
+    def test_caller_override_takes_precedence(self):
+        with self.assertRaises(GraphRecursionError):
+            build_graph().invoke(
+                INPUT,
+                config={"recursion_limit": 1},
+                context=LoopContext(generator=ScriptedGenerator([BUGGY])),
+            )
 
 
 if __name__ == "__main__":
