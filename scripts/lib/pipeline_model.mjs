@@ -377,7 +377,8 @@ export function buildPipelineModel({ records = [], traces = [], runsJsonl = '', 
   };
 }
 
-const SUMMARY_KEYS = ['verdict', 'review_event', 'reason', 'operation', 'outcome', 'action', 'label', 'state', 'rules', 'error'];
+// error_type / status: what a provider error publishes instead of its message (ADR-0040 amendment, F01).
+const SUMMARY_KEYS = ['verdict', 'review_event', 'reason', 'operation', 'outcome', 'action', 'label', 'state', 'rules', 'error', 'error_type', 'status'];
 
 /** A short `key=value` summary of an event's meta (render-escaped by the caller). */
 export function eventSummary(meta) {

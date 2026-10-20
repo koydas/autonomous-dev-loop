@@ -567,3 +567,236 @@ test('schema 2: the run span takes its attributes from the validated envelope, n
   assert.equal(root['cicd.pipeline.name'], 'wf [redacted]');
   assert.equal(root['vcs.change.id'], String(record.envelope.pr_number), 'OTLP intValue is a decimal string');
 });
+
+// ---------------------------------------------------------------------------
+// ADR-0040 amendment (audit F01, F06, F20): provider error bodies and model text never published
+// ---------------------------------------------------------------------------
+
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { extractEmittedEvents } from '../lib/event_docs.mjs';
+import {
+  sanitizeErrorText, redactStoredRecord, redactMetricsLine, countRedactedStrings, BODY_OMITTED, SPAN_META_ALLOWLIST, PROVIDER_ERROR_EVENTS,
+} from '../lib/run_record.mjs';
+
+const SCRIPTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const EMITTED_EVENTS = [...new Set(readdirSync(SCRIPTS_DIR, { recursive: true })
+  .map((p) => String(p).split(path.sep).join('/'))
+  .filter((p) => p.endsWith('.mjs') && !p.startsWith('tests/'))
+  .flatMap((p) => extractEmittedEvents(readFileSync(path.join(SCRIPTS_DIR, p), 'utf8'))))].sort();
+
+const ORG_ID = 'org_01kp6a0jx3fq2v8w9z7y6t5r4s';
+const FAILED_GENERATION = 'FAILED-GENERATION-model-output-7c1e {\\"changes\\":[{\\"path\\":\\"a.mjs\\"}]}';
+const ANTHROPIC_MARKER = 'anthropic-body-marker-5d2b';
+const GROQ_429_BODY = JSON.stringify({ error: {
+  message: `Rate limit reached for model \`openai/gpt-oss-120b\` in organization \`${ORG_ID}\` service tier \`on_demand\` on tokens per minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try again in 7.5s.`,
+  type: 'tokens', code: 'rate_limit_exceeded',
+} });
+// Groq's 400 json_validate_failed: model output before, then after, the message (F20).
+const GROQ_400_BEFORE = `{"error":{"failed_generation":"${FAILED_GENERATION}","message":"Failed to validate JSON.","type":"invalid_request_error","code":"json_validate_failed"}}`;
+const GROQ_400_AFTER = `{"error":{"message":"Failed to validate JSON.","type":"invalid_request_error","code":"json_validate_failed","failed_generation":"${FAILED_GENERATION}"}}`;
+const ANTHROPIC_BODY = JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: `Overloaded ${ANTHROPIC_MARKER}` }, request_id: 'req_011CABCDEFGHIJKLMNOPQRSTUV' });
+const PROVIDER_BODIES = { groq_429: GROQ_429_BODY, groq_400_before: GROQ_400_BEFORE, groq_400_after: GROQ_400_AFTER, anthropic: ANTHROPIC_BODY };
+// Every shape a provider body reaches an error message in: the client's own, callLLM's errors[0], the
+// thrown "All providers failed", without our prefix, and the raw body.
+const messagesOf = (body) => [
+  `Groq API HTTP error 429: ${body}`,
+  `groq: Groq API HTTP error 400: ${body}`,
+  `All providers failed: anthropic: Anthropic API HTTP error 529: ${body}, groq: skipped (no API key configured)`,
+  `groq: ${body}`,
+  body,
+];
+const NEEDLES = [ORG_ID, 'org_01kp6a0j', 'on_demand', 'FAILED-GENERATION', 'model-output-7c1e', ANTHROPIC_MARKER, 'Rate limit reached', 'Failed to validate JSON', 'req_011C'];
+const assertNoProviderBody = (record, label) => {
+  const json = JSON.stringify(record);
+  for (const needle of NEEDLES) assert.ok(!json.includes(needle), `${label}: ${needle} reached the record`);
+};
+const SPAN = 'c'.repeat(16);
+
+test('the provider-error events allowlist error_type and status, never a free-text key', () => {
+  const freeText = ['error', 'detail', 'message', 'reason', 'body', 'text'];
+  for (const name of PROVIDER_ERROR_EVENTS) {
+    assert.ok(EMITTED_EVENTS.includes(name), `${name} is emitted under scripts/`);
+    assert.deepEqual(EVENT_META_ALLOWLIST[name].filter((k) => freeText.includes(k)), [], name);
+    assert.ok(EVENT_META_ALLOWLIST[name].includes('error_type') && EVENT_META_ALLOWLIST[name].includes('status'), name);
+  }
+});
+
+test('code_gen.skipped publishes source and reason, not the model blocked_reason `detail` (F06)', () => {
+  assert.ok(!EVENT_META_ALLOWLIST['code_gen.skipped'].includes('detail'));
+  for (const key of ['source', 'reason']) assert.ok(EVENT_META_ALLOWLIST['code_gen.skipped'].includes(key));
+  const record = redactTrace(trace({ events: [ev('code_gen.skipped', { reason: 'generation_blocked', source: 'model', detail: `The issue asks ${PROMPT_BODY}` })] }), { env: ENV });
+  assert.deepEqual(record.events[0].meta, { reason: 'generation_blocked', source: 'model' });
+  assert.ok(!JSON.stringify(record).includes('marker-7f3a'));
+});
+
+test('no allowlisted key of any event emitted under scripts/ publishes a Groq 429, Groq 400 or Anthropic error body', () => {
+  assert.ok(EMITTED_EVENTS.length > 50, `scanned ${EMITTED_EVENTS.length} events`);
+  for (const [label, body] of Object.entries(PROVIDER_BODIES)) {
+    for (const message of messagesOf(body)) {
+      const events = EMITTED_EVENTS.map((name) => {
+        // Every key that can hold an error message, plus — for the provider-error events — every
+        // allowlisted key: the emitter is not trusted to keep the body out of them.
+        const keys = new Set(['error', 'error_type', 'status', 'detail', ...(PROVIDER_ERROR_EVENTS.includes(name) ? EVENT_META_ALLOWLIST[name] : [])]);
+        return ev(name, Object.fromEntries([...keys].map((k) => [k, message])), { span_id: SPAN });
+      });
+      const t = trace({
+        spans: [{ stage: 'code_gen', span_id: SPAN, started_at: '2026-10-15T08:00:00.000Z', completed_at: '2026-10-15T08:00:30.000Z', outcome: 'failed', meta: { error: message } }],
+        events,
+      });
+      const record = redactTrace(t, { env: ENV });
+      assert.ok(record.otlp, 'the OTLP block is checked too');
+      assertNoProviderBody(record, `${label} / ${message.slice(0, 40)}`);
+      for (const e of record.events) {
+        if (e.meta.error_type !== undefined) assert.equal(e.meta.error_type, null, `${e.event}: error_type is an identifier or null`);
+        if (e.meta.status !== undefined) assert.equal(e.meta.status, null, `${e.event}: status is an HTTP status or null`);
+        if (PROVIDER_ERROR_EVENTS.includes(e.event)) for (const [k, v] of Object.entries(e.meta)) assert.equal(v, null, `${e.event}.${k}`);
+      }
+    }
+  }
+});
+
+test('an affected event keeps a structured, bounded form: code (or class) and HTTP status', () => {
+  const groq429 = `groq: Groq API HTTP error 429: ${GROQ_429_BODY}`;
+  const record = redactTrace(trace({
+    events: [
+      ev('retry.wait', { attempt: 0, wait_ms: 7500, status: 429, error_type: 'rate_limit_exceeded', error: groq429.slice(6) }),
+      ev('llm_fallback', { from: 'groq', to: 'anthropic', error_type: 'json_validate_failed', status: 400, error: `groq: Groq API HTTP error 400: ${GROQ_400_BEFORE}` }),
+      ev('llm_fallback_disabled', { from: 'anthropic', error_type: 'TRANSIENT', status: 529, error: `anthropic: Anthropic API HTTP error 529: ${ANTHROPIC_BODY}` }),
+      ev('code_gen.error', { error: `All providers failed: ${groq429}, anthropic: skipped (no API key configured)` }),
+      ev('autofix.error', { prNumber: 5, error: `groq: Groq API HTTP error 400: ${GROQ_400_AFTER}` }),
+    ],
+  }), { env: ENV });
+  assert.deepEqual(record.events.map((e) => e.meta), [
+    { attempt: 0, wait_ms: 7500, error_type: 'rate_limit_exceeded', status: 429 },
+    { from: 'groq', to: 'anthropic', error_type: 'json_validate_failed', status: 400 },
+    { from: 'anthropic', error_type: 'TRANSIENT', status: 529 },
+    { error: `All providers failed: groq: Groq API HTTP error 429 ${BODY_OMITTED}` },
+    { prNumber: 5, error: `groq: Groq API HTTP error 400 ${BODY_OMITTED}` },
+  ]);
+  assertNoProviderBody(record, 'structured');
+});
+
+test('sanitizeErrorText cuts at the earliest body marker and keeps the HTTP status', () => {
+  assert.equal(sanitizeErrorText('Groq API HTTP error 503: <html>Service Unavailable</html>'), `Groq API HTTP error 503 ${BODY_OMITTED}`);
+  assert.equal(sanitizeErrorText('bad payload {"error":"x"} then HTTP error 500: y'), `bad payload ${BODY_OMITTED}`);
+  assert.equal(sanitizeErrorText('config: {"a":1}'), `config ${BODY_OMITTED}`);
+  assert.equal(sanitizeErrorText('parse failed at: {broken'), `parse failed at ${BODY_OMITTED}`);
+  assert.equal(sanitizeErrorText('ENOENT: no such file, open \'trace.json\''), 'ENOENT: no such file, open \'trace.json\'', 'our own message is unchanged');
+  assert.equal(sanitizeErrorText(42), '42');
+});
+
+test('sanitizeErrorText scrubs organization ids, bearer values, credential pairs and key-shaped tokens', () => {
+  assert.equal(sanitizeErrorText(`quota of organization \`${ORG_ID}\` exceeded`), 'quota of organization `[redacted]` exceeded');
+  assert.equal(sanitizeErrorText('rejected Bearer abc'), 'rejected Bearer [redacted]');
+  assert.equal(sanitizeErrorText('api_key=short1 x-api-key: "v" password=hunter2'), 'api_key=[redacted] x-api-key: "[redacted]" password=[redacted]');
+  assert.equal(sanitizeErrorText(`token ${'a1'.repeat(16)} rejected`), 'token [redacted] rejected');
+  assert.equal(sanitizeErrorText(`plain ${'a'.repeat(40)} words`), `plain ${'a'.repeat(40)} words`, 'letters only is not key-shaped');
+});
+
+test('error_type and status keep only an identifier and an HTTP status; a non-string error is kept as a value', () => {
+  const record = redactTrace(trace({
+    events: [
+      ev('llm_provider_error', { provider: 'groq', error_type: 'json_validate_failed', status: 400 }),
+      ev('llm_provider_error', { provider: 'groq', error_type: 'has spaces', status: 99 }),
+      ev('retry.wait', { attempt: 1, wait_ms: 10, error_type: 'x'.repeat(65), status: '429' }),
+      ev('review.error', { error: 503 }),
+    ],
+  }), { env: ENV });
+  assert.deepEqual(record.events.map((e) => e.meta), [
+    { provider: 'groq', error_type: 'json_validate_failed', status: 400 },
+    { provider: 'groq', error_type: null, status: null },
+    { attempt: 1, wait_ms: 10, error_type: null, status: null },
+    { error: 503 },
+  ]);
+});
+
+test('global credential shapes: an organization id is scrubbed from any published string', () => {
+  assert.equal(scrubString(`reason ${ORG_ID}`), 'reason [redacted]');
+  assert.equal(scrubString('org_chart.md'), 'org_chart.md', 'a short org_ word is not an id');
+});
+
+// ---------------------------------------------------------------------------
+// redactStoredRecord / redactMetricsLine / countRedactedStrings (metrics cleanup)
+// ---------------------------------------------------------------------------
+
+// A record as published before the amendment: free-text errors and `detail` in events, span meta and OTLP.
+function legacyRecord() {
+  const record = redactTrace(trace({
+    spans: [{ stage: 'code_gen', span_id: SPAN, started_at: '2026-10-15T08:00:00.000Z', completed_at: '2026-10-15T08:00:30.000Z', outcome: 'failed', meta: { model: 'm' } }],
+    events: [
+      ev('retry.wait', { attempt: 0, wait_ms: 7500, status: 429 }, { span_id: SPAN }),
+      ev('code_gen.skipped', { reason: 'generation_blocked', source: 'model' }, { span_id: SPAN }),
+    ],
+  }), { env: ENV });
+  const message = `Groq API HTTP error 429: ${GROQ_429_BODY}`.slice(0, MAX_STRING) + '…';
+  record.events[0].meta.error = message;
+  record.events[1].meta.detail = 'model blocked_reason text';
+  record.spans[0].meta.error = message;
+  const spans = record.otlp.resourceSpans[0].scopeSpans[0].spans;
+  const codeGen = spans.find((s) => s.name === 'code_gen');
+  codeGen.attributes.push({ key: 'adl.error', value: { stringValue: message } });
+  codeGen.events.find((e) => e.name === 'retry.wait').attributes.push({ key: 'adl.error', value: { stringValue: message } });
+  codeGen.events.find((e) => e.name === 'code_gen.skipped').attributes.push({ key: 'adl.detail', value: { stringValue: 'model blocked_reason text' } });
+  return record;
+}
+
+test('redactStoredRecord re-applies the current allowlists to events, span meta and OTLP attributes', () => {
+  const before = legacyRecord();
+  assert.ok(JSON.stringify(before).includes('org_01kp6a0j'), 'fixture carries the org id like the six published records');
+  const after = redactStoredRecord(before);
+  assert.ok(!JSON.stringify(after).includes('org_01kp6a0j'));
+  assert.ok(!JSON.stringify(after).includes('blocked_reason text'));
+  assert.deepEqual(after.events[0].meta, { attempt: 0, wait_ms: 7500, status: 429 });
+  assert.deepEqual(after.events[1].meta, { reason: 'generation_blocked', source: 'model' });
+  assert.equal(after.spans[0].meta.error, `Groq API HTTP error 429 ${BODY_OMITTED}`);
+  const codeGen = after.otlp.resourceSpans[0].scopeSpans[0].spans.find((s) => s.name === 'code_gen');
+  assert.equal(codeGen.attributes.find((a) => a.key === 'adl.error').value.stringValue, `Groq API HTTP error 429 ${BODY_OMITTED}`);
+  assert.ok(!codeGen.events.flatMap((e) => e.attributes).some((a) => a.key === 'adl.detail' || a.key === 'adl.error'));
+  assert.equal(countRedactedStrings(before, after), 6, 'event error and detail, span error, three OTLP attribute values');
+  assert.ok(JSON.stringify(before).includes('org_01kp6a0j'), 'the input is not mutated');
+});
+
+test('redactStoredRecord is idempotent and leaves a clean record byte for byte', () => {
+  const clean = redactTrace(trace(), { env: ENV });
+  assert.equal(JSON.stringify(redactStoredRecord(clean)), JSON.stringify(clean));
+  const once = redactStoredRecord(legacyRecord());
+  assert.equal(JSON.stringify(redactStoredRecord(once)), JSON.stringify(once));
+  const cut = redactTrace(trace({ events: [ev('review.error', { error: 'e'.repeat(400) })] }), { env: ENV });
+  assert.equal(JSON.stringify(redactStoredRecord(cut)), JSON.stringify(cut), 'a string already cut stays as cut');
+});
+
+test('redactStoredRecord: a schema-1 record without OTLP, odd entries and attribute values, and non-records', () => {
+  const v1 = { schema_version: 1, run_id: '1-1', envelope: {}, spans: [null, { stage: 's' }], events: [null, { event: 7, meta: { error: 'x' } }, { event: 'review.error', meta: [] }] };
+  const out = redactStoredRecord(v1);
+  assert.deepEqual(out.spans, [null, { stage: 's', meta: {} }]);
+  assert.deepEqual(out.events, [null, { event: 7, meta: {} }, { event: 'review.error', meta: {} }]);
+  const attrs = [
+    { key: 'adl.model', value: { boolValue: true } }, { key: 'adl.score', value: { doubleValue: 1.5 } },
+    { key: 'adl.paths', value: { arrayValue: { values: [{ stringValue: 'a' }] } } }, { key: 'adl.rules', value: { kvlistValue: { values: [{ key: 'k', value: { intValue: '2' } }, { nope: 1 }] } } },
+    { key: 'adl.reason', value: {} }, { key: 'adl.source', value: null }, { nokey: true }, { key: 'adl.secret', value: { stringValue: 's' } },
+  ];
+  const v2 = { schema_version: 2, otlp: { resourceSpans: [{ scopeSpans: [{ spans: [null, { name: 'code_gen', attributes: attrs, events: [null, { name: 'x', attributes: attrs }] }, { name: 7 }] }, {}] }, {}] } };
+  const span = redactStoredRecord(v2).otlp.resourceSpans[0].scopeSpans[0].spans[1];
+  assert.deepEqual(span.attributes.map((a) => a.key), ['adl.model', 'adl.score', 'adl.paths', 'adl.rules']);
+  assert.deepEqual(span.attributes.find((a) => a.key === 'adl.rules').value, { kvlistValue: { values: [{ key: 'k', value: { intValue: '2' } }] } });
+  assert.deepEqual(span.events[1].attributes, [], 'an event outside the allowlist keeps no attribute');
+  for (const bad of [null, 'x', { schema_version: 3 }, []]) assert.equal(redactStoredRecord(bad), null);
+  assert.ok(SPAN_META_ALLOWLIST.includes('error'), 'stage spans keep a sanitized error');
+});
+
+test('redactMetricsLine sanitizes `error`, scrubs every string, keeps numbers, arrays and nesting, never cuts', () => {
+  const line = { type: 'issue', run_id: '1-1', error: `Groq API HTTP error 429: ${GROQ_429_BODY}`, nested: { error: 'ok', note: `id ${ORG_ID}` }, list: ['Bearer abcdefghijklmnop', 3], n: 4, long: 'z'.repeat(500) };
+  const out = redactMetricsLine(line, [PLANTED_SECRET]);
+  assert.deepEqual(out, { type: 'issue', run_id: '1-1', error: `Groq API HTTP error 429 ${BODY_OMITTED}`, nested: { error: 'ok', note: 'id [redacted]' }, list: ['[redacted]', 3], n: 4, long: 'z'.repeat(500) });
+  assert.equal(redactMetricsLine(`k ${PLANTED_SECRET}`, [PLANTED_SECRET]), 'k [redacted]');
+  assert.equal(redactMetricsLine(null), null);
+});
+
+test('countRedactedStrings counts removed or rewritten string leaves as a multiset', () => {
+  assert.equal(countRedactedStrings({ a: 'x', b: ['x', 'y'] }, { a: 'x', b: ['x', 'y'] }), 0);
+  assert.equal(countRedactedStrings({ a: 'x', b: ['x', 'y'] }, { a: 'x', b: ['z'] }), 2);
+  assert.equal(countRedactedStrings('s', null), 1);
+  assert.equal(countRedactedStrings([{ key: 'adl.error', value: { stringValue: 'x' } }], []), 1, 'an attribute name is not counted');
+});

@@ -62,7 +62,9 @@ export async function retryWithBackoff(fn, options = {}) {
       const base = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
       const waitMs = error.waitMs ?? (jitter ? base * (Math.random() * 0.4 + 0.8) : base);
       log('retry', { attempt, error: error.message, waitMs });
-      obsLog({ stage: 'retry', event: 'retry.wait', level: 'warn', meta: { attempt, wait_ms: Math.round(waitMs), status: error.status ?? null, error: error.message } });
+      // The public record keeps error_type and status only: the message may embed a provider body (ADR-0040, F01).
+      const errorType = error.code ?? error.errorType ?? error.name ?? null;
+      obsLog({ stage: 'retry', event: 'retry.wait', level: 'warn', meta: { attempt, wait_ms: Math.round(waitMs), status: error.status ?? null, error_type: errorType, error: error.message } });
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       attempt++;
     }

@@ -40,6 +40,26 @@ METRICS_FILE=/tmp/runs.jsonl node scripts/metrics-report.mjs
 ```
 `metrics/runs.jsonl` on `main` is not the store and stays empty.
 
+**Re-redact the stored records (one-shot, ADR-0040 amendment 2026-10-20):** records published before the amendment can hold a provider error body (`llm_fallback.error`, `retry.wait.error`, stage `error`: a Groq organization id and service tier, audit F01) or the model's `blocked_reason` (`code_gen.skipped.detail`, F06). `scripts/redact_metrics_records.mjs` re-applies the current allowlists and sanitizer to every `metrics/runs/**/*.json` and `metrics/runs.jsonl` line of a local checkout. It never runs git or the network and never prints the redacted content. From an up-to-date `main` checkout:
+
+```bash
+TMP=$(mktemp -d)
+git fetch origin metrics
+git worktree add -b redact-metrics "$TMP/metrics" origin/metrics           # the metrics branch in a temp dir
+node scripts/redact_metrics_records.mjs "$TMP/metrics"                       # dry run: files to rewrite, redacted-string counts, skipped files
+node scripts/redact_metrics_records.mjs "$TMP/metrics" --write               # rewrite in place
+git -C "$TMP/metrics" grep -n 'org_[a-z0-9]' -- metrics/ || echo "no organization id left"
+git -C "$TMP/metrics" commit -am "chore(metrics): re-redact run records (ADR-0040 amendment)"
+git -C "$TMP/metrics" push origin HEAD:metrics                               # fast-forward only, never --force
+git worktree remove "$TMP/metrics" && git branch -D redact-metrics
+```
+
+- A rejected push means a run committed to `metrics` meanwhile: remove the worktree and branch, and start over from `git fetch` (the script is idempotent).
+- Skipped files (invalid JSON, not a record, symlink) are listed and left untouched; fix them by hand if needed.
+- Only the tip is cleaned: the branch history keeps the old blobs, so the organization id stays reachable in earlier commits (and in old job logs). Rewriting `metrics` history is not part of this procedure.
+- Nothing to rotate: an organization id is an account identifier, not a credential.
+- Idempotent: a second dry run reports `0 to rewrite`.
+
 **Metrics troubleshooting:**
 
 | Symptom | Probable Cause |

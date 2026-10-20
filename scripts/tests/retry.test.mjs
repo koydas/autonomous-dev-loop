@@ -224,3 +224,24 @@ test('retryWithBackoff exhausts maxAttempts on a persistent retryable AbortError
   );
   assert.equal(calls, 3);
 });
+
+// ADR-0040 amendment (F01): retry.wait carries error_type (provider code, else taxonomy class, else
+// error name) and status; the record publishes those, never the message.
+test('retry.wait logs error_type from err.code, else err.errorType, else the error name, with the status', async () => {
+  const lines = [];
+  const write = process.stderr.write;
+  process.stderr.write = (chunk) => { lines.push(String(chunk)); return true; };
+  try {
+    const errors = [
+      Object.assign(new Error('Groq API HTTP error 429: {"error":{}}'), { status: 429, code: 'rate_limit_exceeded', errorType: 'TRANSIENT' }),
+      Object.assign(new Error('Anthropic API HTTP error 529: {}'), { status: 529, errorType: 'TRANSIENT' }),
+      new TypeError('fetch failed'),
+    ];
+    let i = 0;
+    await retryWithBackoff(async () => { if (i < errors.length) throw errors[i++]; return 'ok'; }, { ...FAST, maxAttempts: 4 });
+  } finally {
+    process.stderr.write = write;
+  }
+  const waits = lines.filter((l) => l.includes('"retry.wait"')).map((l) => JSON.parse(l).meta);
+  assert.deepEqual(waits.map((m) => [m.error_type, m.status]), [['rate_limit_exceeded', 429], ['TRANSIENT', 529], ['TypeError', null]]);
+});
