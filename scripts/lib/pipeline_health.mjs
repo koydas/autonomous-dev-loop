@@ -192,7 +192,10 @@ function groqTokens(runs, scorecard) {
     for (const c of run.llm) {
       const ts = c.ts ?? run.started_at;
       if (c.provider !== 'groq' || ts == null) continue;
-      points.push({ ts, workflow: run.workflow ?? 'unknown', series: seriesOf(run.workflow), tokens: (c.tokens_in ?? 0) + (c.tokens_out ?? 0), estimated: c.estimated !== false });
+      // Groq does not count cached prompt tokens against its rate limits (docs/evals.md): only a measured call
+      // knows its cache share; an estimate keeps its whole input.
+      const cached = c.estimated === false ? (c.cache_read ?? 0) : 0;
+      points.push({ ts, workflow: run.workflow ?? 'unknown', series: seriesOf(run.workflow), tokens: (c.tokens_in ?? 0) - cached + (c.tokens_out ?? 0), estimated: c.estimated !== false });
     }
   }
   for (const [suite, s] of Object.entries(isObj(scorecard?.suites) ? scorecard.suites : {})) {

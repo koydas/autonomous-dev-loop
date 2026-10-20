@@ -102,10 +102,12 @@ export function meanAmount(sum, n) {
 }
 
 /**
- * One-line amount: `$0.0240 USD + 1 unpriced call(s) (2 Groq free-tier call(s) at no cost)`, or
- * `Not recorded` without any call.
+ * One-line amount: `$0.0240 USD + 1 unpriced call(s) (2 Groq free-tier call(s) at no cost)`,
+ * `unpriced (N call(s))` when no call is priced or free, or `Not recorded` without any call.
  */
 export function costLine(sum) {
   if (!sum.calls) return 'Not recorded';
+  // Nothing priced and nothing free: no known part to show as an amount.
+  if (!sum.measured && !sum.estimated && !sum.free) return `unpriced (${sum.unpriced} call(s))`;
   return `${formatUsd(sum.usd)} USD${sum.unpriced ? ` + ${sum.unpriced} unpriced call(s)` : ''}${sum.free ? ` (${sum.free} Groq free-tier call(s) at no cost)` : ''}`;
 }

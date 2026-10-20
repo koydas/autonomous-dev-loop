@@ -121,3 +121,8 @@ test('callCost: a measured cache split that cannot be priced (invalid count, rea
   assert.equal(callCost(opus({ estimated: false, cache_read: 600_000, cache_write: 400_000 })).basis, 'measured', 'reads + writes = input is valid');
   assert.equal(callCost(opus({ cache_read: 2_000_000 })).basis, 'estimated', 'an estimate ignores the cache split');
 });
+
+test('costLine: no priced and no free call reads unpriced, never $0', () => {
+  assert.equal(costLine(sumCosts([{ provider: 'anthropic', model: 'claude-unknown', tokens_in: 1, tokens_out: 1 }, { provider: 'x' }])), 'unpriced (2 call(s))');
+  assert.equal(costLine(sumCosts([{ provider: 'groq' }, { provider: 'x' }])), '$0.0000 USD + 1 unpriced call(s) (1 Groq free-tier call(s) at no cost)', 'a free call is a known $0');
+});

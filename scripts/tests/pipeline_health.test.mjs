@@ -233,3 +233,12 @@ test('costs: runs and items with an unpriced call are never ranked on their part
   assert.deepEqual(costs.top_items.map((it) => it.item.number), [1]);
   assert.deepEqual(costs.unpriced_items.map((it) => it.item.number), [2]);
 });
+
+test('groq tokens per day leave out the cached prompt tokens of measured calls (not counted by the rate limits)', () => {
+  const records = [
+    makeRecord({ runId: '70', start: T0, tokensIn: 1000, tokensOut: 100, usage: { cacheRead: 600 } }),
+    makeRecord({ runId: '71', start: T0 + 1000, tokensIn: 300, tokensOut: 100 }),
+  ];
+  const d = computeHealth({ model: model(records) }).tokens.days.find((x) => x.day === '2026-10-14');
+  assert.deepEqual([d.total, d.estimated], [400 + 100 + 300 + 100, 400]);
+});
