@@ -229,3 +229,120 @@ test('auto-fix push rate counts delivered pushes only; stuck reviews link by ste
   assert.match(gap.detail, /^1 run\(s\) prepared a change but recorded no PR operation/);
   assert.deepEqual(gap.runs, [prepared.run_id]);
 });
+
+// Withheld verdicts: guardrail vs anomaly. Each WITHHELD verdict below is on its own head.
+const cutTo = (budget) => ({ event: 'review.prompt_truncated', meta: { diff_truncated: true, unreviewed_code_files: 3, max_input_tokens: budget, prNumber: 9 } });
+const groq = [{ provider: 'groq', pipeline_stage: 'review', fallback: false, failed: false }];
+const fellBack = [{ provider: 'groq', pipeline_stage: 'review', fallback: false, failed: true }, { provider: 'anthropic', pipeline_stage: 'review', fallback: true, failed: false }];
+const withheldRuns = (metas, { llm = groq, budget = 6300, pr = (i) => 9 + (i % 2) } = {}) => metas.map((meta, i) => run({
+  sha: String(i).repeat(40).slice(0, 40), pr: pr(i), llm, events: [cutTo(budget), verdict('WITHHELD', { unreviewed_code_files: 3, ...meta }, pr(i))],
+}));
+
+test('withheld guardrail (code cut, ADR-0038): info with heads, PRs, provider and budget, volume kept', () => {
+  const runs = [
+    ...withheldRuns([{ withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, {}]),
+    // A second review of the first head (push + pull_request): a verdict, not a new head.
+    run({ sha: '0'.repeat(40), pr: 9, llm: groq, events: [cutTo(6300), verdict('WITHHELD', { withheld_from: 'APPROVE', unreviewed_code_files: 3 })] }),
+    run({ sha: 'f'.repeat(40), pr: 11, events: [verdict('APPROVE', {}, 11)] }),
+  ];
+  const w = find(diagnose({ model: model(runs) }), 'review-withheld');
+  assert.equal(w.severity, 'info');
+  assert.equal(w.title, 'Reviews withhold their verdict by design (ADR-0038)');
+  assert.match(w.fact, /^4 of 5 verdicts are WITHHELD \(80 %\)/);
+  assert.match(w.fact, /They cover 3 PR head\(s\) on 2 PR\(s\)\. Guardrail: 4 \(code cut, ADR-0038: 4; CI evidence, ADR-0026: 0\); anomaly: 0 /);
+  assert.match(w.fact, /Answered by: groq 4; input budget 6300 tokens\.$/);
+  assert.equal(w.frequency, '4 verdict(s) on 3 head(s) of 2 PR(s)');
+  assert.match(w.hypothesis, /worked as designed.*provider or its input budget/);
+  assert.equal(w.runs.length, 4, 'the volume is not hidden');
+  // One commit heading two PRs is two PR heads.
+  const shared = [9, 10, 10].map((pr) => run({ sha: 'd'.repeat(40), pr, events: [cutTo(6300), verdict('WITHHELD', { withheld_from: 'APPROVE', unreviewed_code_files: 3 }, pr)] }));
+  assert.equal(find(diagnose({ model: model(shared) }), 'review-withheld').frequency, '3 verdict(s) on 2 head(s) of 2 PR(s)');
+  // Missing CI evidence is a guardrail too (ADR-0026); no budget hypothesis without a cut majority.
+  const ev = find(diagnose({ model: model([0, 1, 2].map((i) => run({ sha: String(i).repeat(40), events: [verdict('WITHHELD', { evidence_state: i ? 'stale' : 'missing' })] }))) }), 'review-withheld');
+  assert.equal(ev.severity, 'info');
+  assert.equal(ev.title, 'Reviews withhold their verdict by design (ADR-0026)', 'the title names the guardrail observed');
+  assert.match(ev.fact, /CI evidence, ADR-0026: 3\); anomaly: 0 .*Answered by: not recorded 3\.$/);
+  assert.equal(ev.hypothesis, null);
+});
+
+test('withheld anomaly: REQUEST_CHANGES withheld on unseen code over withheldShare is a warning', () => {
+  const runs = withheldRuns([{ withheld_from: 'REQUEST_CHANGES' }, { withheld_from: 'REQUEST_CHANGES' }, { withheld_from: 'APPROVE' }]);
+  const w = find(diagnose({ model: model(runs) }), 'review-withheld');
+  assert.equal(w.severity, 'warning');
+  assert.equal(w.title, 'Reviews withhold their verdict');
+  assert.match(w.fact, /anomaly: 2 \(REQUEST_CHANGES on unseen code: 2; unknown cause: 0; fallback answered a prompt cut to the primary's budget: 0\)/);
+  assert.equal(w.hypothesis, null);
+  // The threshold applies to the anomaly share: 1 anomaly in 5 verdicts (20 %) stays info, whatever the total.
+  const below = [...withheldRuns([{ withheld_from: 'REQUEST_CHANGES' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }]), run({ sha: 'e'.repeat(40), events: [verdict('APPROVE')] })];
+  const b = find(diagnose({ model: model(below) }), 'review-withheld');
+  assert.equal(b.severity, 'info');
+  assert.match(b.fact, /^4 of 5 verdicts are WITHHELD.*anomaly: 1 /);
+});
+
+test('withheld with an unknown cause (no cut, no evidence state, withheld_from null) is an anomaly', () => {
+  const runs = [0, 1, 2].map((i) => run({ sha: String(i).repeat(40), events: [verdict('WITHHELD', { withheld_from: null, unreviewed_code_files: 0 })] }));
+  const w = find(diagnose({ model: model(runs) }), 'review-withheld');
+  assert.equal(w.severity, 'warning');
+  assert.match(w.fact, /Guardrail: 0 .*unknown cause: 3;/);
+});
+
+test('withheld answered by the fallback on a prompt cut to the primary budget is an anomaly (#242)', () => {
+  const runs = withheldRuns([{ withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }], { llm: fellBack });
+  const w = find(diagnose({ model: model(runs) }), 'review-withheld');
+  assert.equal(w.severity, 'warning');
+  assert.match(w.fact, /Guardrail: 0 \(code cut, ADR-0038: 0; .*fallback answered a prompt cut to the primary's budget: 3\)/);
+  assert.match(w.fact, /Answered by: anthropic \(fallback\) 3; input budget 6300 tokens/);
+  assert.match(w.hypothesis, /fallback provider answered a prompt already cut/);
+  // The same fallback without a budget (Anthropic primary sets none) is not capped: a guardrail.
+  // Missing CI evidence withholds whatever the fallback said: it stays an ADR-0026 guardrail.
+  const evidence = withheldRuns([{ withheld_from: null, evidence_state: 'missing' }, { withheld_from: null, evidence_state: 'stale' }, { withheld_from: null, evidence_state: 'missing' }], { llm: fellBack });
+  const ev = find(diagnose({ model: model(evidence) }), 'review-withheld');
+  assert.equal(ev.severity, 'info');
+  assert.match(ev.fact, /CI evidence, ADR-0026: 3\); anomaly: 0 /);
+  const unbudgeted = withheldRuns([{ withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }], { llm: fellBack, budget: null });
+  assert.equal(find(diagnose({ model: model(unbudgeted) }), 'review-withheld').severity, 'info');
+  // Calls without a review stage still name the responder (v1 records).
+  const v1 = withheldRuns([{ withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }], { llm: [{ provider: 'anthropic', pipeline_stage: null, fallback: true, failed: false }] });
+  assert.equal(find(diagnose({ model: model(v1) }), 'review-withheld').severity, 'warning');
+});
+
+test('auto-fix blocked by design: protected/unshown targets, files withheld by budget; approved / attempt-limit runs are not attempts', () => {
+  const attempt = (events) => run({ stage: 'autofix', events: [{ event: 'autofix.start', meta: { prNumber: 9 } }, ...events] });
+  const budget = (hidden) => ({ event: 'autofix.prompt_budget', meta: { input_budget: 2308, shown_files: ['a.md'], hidden_files: hidden } });
+  const runs = [
+    attempt([budget(['docs/x.md']), { event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['protected_path'] } }]),
+    attempt([budget(['CHANGELOG.md']), { event: 'autofix.skipped', meta: { reason: 'no_changes' } }]),
+    attempt([budget(['CHANGELOG.md']), { event: 'autofix.skipped', meta: { reason: 'no_changes' } }]),
+    attempt([{ event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['unshown_file', 'withheld_file'] } }]),
+    // As auto_fix_pr.mjs emits them: an approved head or the attempt limit exits before autofix.start.
+    run({ stage: 'autofix', events: [{ event: 'autofix.skipped', meta: { reason: 'approved' } }] }),
+    run({ stage: 'autofix', events: [{ event: 'autofix.max_attempts_reached' }] }),
+  ];
+  const f = find(diagnose({ model: model(runs) }), 'autofix-ineffective');
+  assert.equal(f.severity, 'info');
+  assert.match(f.title, /by design \(ADR-0021, ADR-0029\)/);
+  assert.match(f.fact, /^0 delivered push\(es\) for 4 attempt\(s\)/);
+  assert.match(f.fact, /Blocked by design: 4 \(protected or unshown target 2, files withheld by budget 2\); anomaly: 0\.$/);
+  assert.match(f.hypothesis, /worked as designed/);
+  assert.equal(f.frequency, '4 of 4 attempt(s)', 'the volume is not hidden');
+  assert.equal(f.runs.length, 4, 'runs without autofix.start are not attempts');
+  assert.match(f.fact, /skip reasons: guardrail_rejected 2, no_changes 2\./, 'skips of non-attempts are not listed');
+  assert.equal(f.evidence.length, 4);
+});
+
+test('auto-fix anomaly: no_changes with every file shown, or a rule outside the design set, is a warning', () => {
+  const attempt = (events) => run({ stage: 'autofix', events: [{ event: 'autofix.start', meta: { prNumber: 9 } }, ...events] });
+  const runs = [
+    attempt([{ event: 'autofix.prompt_budget', meta: { hidden_files: [] } }, { event: 'autofix.skipped', meta: { reason: 'no_changes' } }]),
+    attempt([{ event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['protected_path', 'mass_deletion'] } }]),
+    attempt([{ event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['protected_path'] } }]),
+  ];
+  const f = find(diagnose({ model: model(runs) }), 'autofix-ineffective');
+  assert.equal(f.severity, 'warning');
+  assert.equal(f.title, 'Auto-fix rarely pushes a fix');
+  assert.match(f.fact, /Blocked by design: 1 \(protected or unshown target 1\); anomaly: 2\.$/);
+  assert.match(f.hypothesis, /does not prove a fix was needed/);
+  // One anomaly in three attempts (33 %) is under autofixNoPushShare: info, the card stays.
+  const mostly = [runs[0], runs[2], attempt([{ event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['unshown_file'] } }])];
+  assert.equal(find(diagnose({ model: model(mostly) }), 'autofix-ineffective').severity, 'info');
+});

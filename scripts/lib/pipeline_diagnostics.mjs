@@ -4,7 +4,7 @@
 // events and work items it was computed from. Gaps in the telemetry are findings of their own (`gaps`):
 // missing data is never read as the absence of a problem. Pure.
 import { eventSummary, safeUrl } from './pipeline_model.mjs';
-import { percentile } from './pipeline_health.mjs';
+import { percentile, withheldCause } from './pipeline_health.mjs';
 import { attemptOf, stepDecision } from './pipeline_journey.mjs';
 
 // Rule thresholds: below them a pattern is not reported (too few cases to separate it from noise).
@@ -84,6 +84,23 @@ function executionFailures(runs) {
   return out;
 }
 
+// A WITHHELD verdict: its cause (withheldCause, pipeline_health.mjs), the provider whose answer it is (the run's
+// last non-failed review call) and the input budget its prompt was cut to. Anomalies: a fallback answering a
+// prompt cut to the primary's budget (a number: only a budgeted provider sets it), REQUEST_CHANGES withheld on
+// unseen code, an unknown cause. A code cut or missing CI evidence is a guardrail doing its job (ADR-0038, ADR-0026).
+const ANOMALY_CAUSES = new Set(['rc_unseen', 'other']);
+function withheldClass({ run, e }) {
+  const calls = run.llm.filter((c) => !c.failed);
+  const reviewCalls = calls.filter((c) => c.pipeline_stage === 'review');
+  const responder = (reviewCalls.length ? reviewCalls : calls).at(-1) ?? null;
+  const budget = run.events.filter((x) => x.event === 'review.prompt_truncated').map((x) => x.meta.max_input_tokens).find((n) => typeof n === 'number') ?? null;
+  const cause = withheldCause(e.meta);
+  // Missing / stale CI evidence withholds whatever the model said (decideVerdict, ADR-0026): the fallback did not cause it.
+  const evidence = cause === 'evidence_missing' || cause === 'evidence_stale';
+  const key = responder?.fallback === true && budget != null && !evidence ? 'fallback_capped' : cause;
+  return { key, anomaly: key === 'fallback_capped' || ANOMALY_CAUSES.has(cause), responder, budget };
+}
+
 function reviewFindings(runs) {
   const out = [];
   const verdicts = events(runs, 'review.verdict');
@@ -94,11 +111,30 @@ function reviewFindings(runs) {
   if (rated && withheld.length / verdicts.length >= RULES.withheldShare) {
     const fromApprove = withheld.filter(({ e }) => e.meta.withheld_from === 'APPROVE').length;
     const cut = withheld.filter(({ e }) => typeof e.meta.unreviewed_code_files === 'number' && e.meta.unreviewed_code_files > 0).length;
+    const classes = withheld.map(withheldClass);
+    const count = (k) => classes.filter((c) => c.key === k).length;
+    const anomalies = classes.filter((c) => c.anomaly).length;
+    // Keyed by PR and SHA, as the duplicate-review grouping: one commit can head two PRs.
+    const heads = new Set(withheld.filter((v) => v.run.head_sha).map((v) => `${prOf(v)}@${v.run.head_sha}`)).size;
+    const prs = new Set(withheld.map(prOf).filter(Boolean)).size;
+    const tally = (list) => Object.entries(list.reduce((o, k) => ({ ...o, [k]: (o[k] ?? 0) + 1 }), {})).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(', ');
+    const answered = tally(classes.map((c) => (c.responder ? `${c.responder.provider ?? 'unknown'}${c.responder.fallback ? ' (fallback)' : ''}` : 'not recorded')));
+    const budgets = [...new Set(classes.map((c) => c.budget).filter((n) => n != null))];
+    const warning = anomalies / verdicts.length >= RULES.withheldShare;
+    const guardrailCut = count('approve_cut') + count('cut_unknown');
+    const guardrailEvidence = count('evidence_missing') + count('evidence_stale');
+    const adrs = [guardrailCut ? 'ADR-0038' : null, guardrailEvidence ? 'ADR-0026' : null].filter(Boolean).join(', ');
     out.push(finding({
-      id: 'review-withheld', severity: 'warning', category: 'Review', title: 'Reviews withhold their verdict',
-      fact: `${withheld.length} of ${verdicts.length} verdicts are WITHHELD (${pct(withheld.length / verdicts.length)}); ${cut} of them had code files not reviewed, ${fromApprove} would have been APPROVE (withheld_from).`,
-      hypothesis: cut > withheld.length / 2 ? 'Most withheld verdicts follow a cut diff: the review input budget looks too small for these PRs (ADR-0038 keeps approval withheld on unseen code, by design).' : null,
-      impact: `${withheld.length} review(s) ended without a usable verdict; a person has to review`, frequency: `${withheld.length} verdict(s) on ${new Set(withheld.map(prOf)).size} PR(s)`,
+      id: 'review-withheld', severity: warning ? 'warning' : 'info', category: 'Review',
+      title: warning || !adrs ? 'Reviews withhold their verdict' : `Reviews withhold their verdict by design (${adrs})`,
+      fact: `${withheld.length} of ${verdicts.length} verdicts are WITHHELD (${pct(withheld.length / verdicts.length)}); ${cut} of them had code files not reviewed, ${fromApprove} would have been APPROVE (withheld_from). `
+        + `They cover ${heads} PR head(s) on ${prs} PR(s). Guardrail: ${withheld.length - anomalies} (code cut, ADR-0038: ${guardrailCut}; CI evidence, ADR-0026: ${guardrailEvidence}); `
+        + `anomaly: ${anomalies} (REQUEST_CHANGES on unseen code: ${count('rc_unseen')}; unknown cause: ${count('other')}; fallback answered a prompt cut to the primary's budget: ${count('fallback_capped')}). `
+        + `Answered by: ${answered}${budgets.length ? `; input budget ${budgets.join(' / ')} tokens` : ''}.`,
+      hypothesis: warning
+        ? (count('fallback_capped') * 2 >= anomalies ? 'The fallback provider answered a prompt already cut to the primary\'s input budget: it saw no more code than the primary would have, so the cut, not the model, withheld the verdict.' : null)
+        : guardrailCut > withheld.length / 2 ? 'The guardrail worked as designed: approval is withheld on code the review did not see (ADR-0038). The lever is the provider or its input budget (review_max_input_tokens, ADR-0025), not the review rule.' : null,
+      impact: `${withheld.length} review(s) ended without a usable verdict; a person has to review`, frequency: `${withheld.length} verdict(s) on ${heads} head(s) of ${prs} PR(s)`,
       items: [...new Set(withheld.map(prOf).filter(Boolean))], runs: runIds(withheld), evidence: evidenceOf(withheld), link: 'health.html#reviews',
     }));
   }
@@ -156,6 +192,20 @@ function reviewFindings(runs) {
   return out;
 }
 
+// An auto-fix attempt blocked by design: every rejected target protected, unshown or withheld (ADR-0021,
+// ADR-0029); no change proposed while the budget withheld files from the prompt (ADR-0029: the records do
+// not name the files the fix needed, so this is the closest observable cause). Anything else that did not
+// push is an anomaly. An approved head (ADR-0028) or the attempt limit (ADR-0034) exits before autofix.start:
+// such a run is not an attempt, so it never counts here.
+const DESIGN_RULES = new Set(['protected_path', 'unshown_file', 'withheld_file']);
+function blockedByDesign(run) {
+  const d = stepDecision(run, 'autofix');
+  const skip = run.events.filter((e) => e.event === 'autofix.skipped').at(-1);
+  if (d?.key === 'guardrail_rejected' && Array.isArray(skip?.meta.rules) && skip.meta.rules.length && skip.meta.rules.every((r) => DESIGN_RULES.has(r))) return 'protected or unshown target';
+  if (d?.key === 'no_changes' && run.events.some((e) => e.event === 'autofix.prompt_budget' && Array.isArray(e.meta.hidden_files) && e.meta.hidden_files.length)) return 'files withheld by budget';
+  return null;
+}
+
 function autofixFindings(runs) {
   const attempts = events(runs, 'autofix.start');
   if (attempts.length < RULES.autofixMinAttempts) return [];
@@ -165,14 +215,25 @@ function autofixFindings(runs) {
   const failedPushes = decided.filter((k) => k === 'push_failed').length;
   const noPush = attempts.length - pushes.length;
   if (noPush / attempts.length < RULES.autofixNoPushShare) return [];
-  const skips = events(runs, 'autofix.skipped');
+  // Skip details from the attempts only: an approved head or the attempt limit skips before autofix.start.
+  const attemptRuns = new Set(runIds(attempts));
+  const skips = events(runs.filter((r) => attemptRuns.has(r.run_id)), 'autofix.skipped');
   const reasons = {};
   for (const { e } of skips) reasons[e.meta.reason ?? 'unspecified'] = (reasons[e.meta.reason ?? 'unspecified'] ?? 0) + 1;
   const noChanges = reasons.no_changes ?? 0;
+  const designed = {};
+  for (const { run } of attempts) { const why = blockedByDesign(run); if (why) designed[why] = (designed[why] ?? 0) + 1; }
+  const blocked = Object.values(designed).reduce((t, n) => t + n, 0);
+  const anomalies = noPush - blocked;
+  const warning = anomalies / attempts.length >= RULES.autofixNoPushShare;
   return [finding({
-    id: 'autofix-ineffective', severity: 'warning', category: 'Auto-fix', title: 'Auto-fix rarely pushes a fix',
-    fact: `${pushes.length} delivered push(es) for ${attempts.length} attempt(s)${failedPushes ? `, ${failedPushes} whose git push failed` : ''}; skip reasons: ${Object.entries(reasons).map(([k, n]) => `${k} ${n}`).join(', ') || 'none recorded'}.`,
-    hypothesis: noChanges ? '`no_changes` alone does not prove a fix was needed: the finding may be false, or the context given to the model did not include the files to change (docs/dashboard-partial-diagnosis.md, item 3).' : null,
+    id: 'autofix-ineffective', severity: warning ? 'warning' : 'info', category: 'Auto-fix',
+    title: warning ? 'Auto-fix rarely pushes a fix' : 'Auto-fix blocked by design (ADR-0021, ADR-0029)',
+    fact: `${pushes.length} delivered push(es) for ${attempts.length} attempt(s)${failedPushes ? `, ${failedPushes} whose git push failed` : ''}; skip reasons: ${Object.entries(reasons).map(([k, n]) => `${k} ${n}`).join(', ') || 'none recorded'}. `
+      + `Blocked by design: ${blocked}${blocked ? ` (${Object.entries(designed).map(([k, n]) => `${k} ${n}`).join(', ')})` : ''}; anomaly: ${anomalies}.`,
+    hypothesis: warning
+      ? (noChanges ? '`no_changes` alone does not prove a fix was needed: the finding may be false, or the context given to the model did not include the files to change (docs/dashboard-partial-diagnosis.md, item 3).' : null)
+      : 'The guardrails worked as designed: the attempts stopped on a protected or unshown target, or on files the budget withheld from the prompt. The lever is the input budget (autofix_max_input_tokens, ADR-0017) or a human fix, not the guardrail.',
     impact: `${noPush} attempt(s) ended without a change, usually escalated to a human`, frequency: `${noPush} of ${attempts.length} attempt(s)`,
     items: [...new Set(attempts.map(prOf).filter(Boolean))], runs: runIds(attempts), evidence: evidenceOf(skips.length ? skips : attempts), link: 'health.html#autofix',
   })];

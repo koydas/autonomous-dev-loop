@@ -16,9 +16,10 @@ const modelOf = (records) => buildPipelineModel({ records: asFiles(records), tra
 const scripts = (html) => [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 const noRaw = (html) => { for (const raw of RAW_MARKERS) assert.ok(!html.includes(raw), `raw ${raw}`); };
 
-const withheld = (runId, t, pr = 50) => makeRecord({ runId, start: t, prNumber: pr, events: [
+// from REQUEST_CHANGES: an anomaly cause, so the finding stays a warning (an approval withheld on a cut is info).
+const withheld = (runId, t, pr = 50, from = 'APPROVE') => makeRecord({ runId, start: t, prNumber: pr, events: [
   { event: 'review.prompt_truncated', level: 'warn', meta: { diff_truncated: true, unreviewed_code_files: 5, prNumber: pr } },
-  { event: 'review.verdict', meta: { verdict: 'WITHHELD', withheld_from: 'APPROVE', unreviewed_code_files: 5, prNumber: pr } },
+  { event: 'review.verdict', meta: { verdict: 'WITHHELD', withheld_from: from, unreviewed_code_files: 5, prNumber: pr } },
 ] });
 
 test('formatting helpers', () => {
@@ -52,7 +53,7 @@ test('a hostile string in any recorded field is escaped on the overview, diagnos
 });
 
 test('diagnostics: finding card separates observed facts from a labelled hypothesis; filters and gaps', () => {
-  const ctx = consoleContext(modelOf([withheld('850', T), withheld('851', T + 1000, 51), withheld('852', T + 2000, 52)]));
+  const ctx = consoleContext(modelOf([withheld('850', T, 50, 'REQUEST_CHANGES'), withheld('851', T + 1000, 51, 'REQUEST_CHANGES'), withheld('852', T + 2000, 52, 'REQUEST_CHANGES')]));
   const html = diagnosticsBody(ctx, '');
   assert.match(html, /<h1>Diagnostics<\/h1>/);
   assert.match(html, /no LLM involved/);
