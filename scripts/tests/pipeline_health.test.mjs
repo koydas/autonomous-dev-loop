@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeHealth, modelUsage, percentile, evalProvider, GROQ_TPD, TOKEN_DAYS, EVAL_CRONS, TOKEN_SERIES } from '../lib/pipeline_health.mjs';
+import { computeHealth, modelUsage, percentile, evalProvider, withheldCause, WITHHELD_CAUSES, GROQ_TPD, TOKEN_DAYS, EVAL_CRONS, TOKEN_SERIES } from '../lib/pipeline_health.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
 import { makeRecord, asFiles, indexesOf } from './fixtures/pipeline/records.mjs';
 
@@ -241,4 +241,17 @@ test('groq tokens per day leave out the cached prompt tokens of measured calls (
   ];
   const d = computeHealth({ model: model(records) }).tokens.days.find((x) => x.day === '2026-10-14');
   assert.deepEqual([d.total, d.estimated], [400 + 100 + 300 + 100, 400]);
+});
+
+test('withheldCause: every WITHHELD_CAUSES key from a review.verdict meta', () => {
+  assert.equal(withheldCause({ withheld_from: 'APPROVE', unreviewed_code_files: 2 }), 'approve_cut');
+  assert.equal(withheldCause({ withheld_from: 'REQUEST_CHANGES' }), 'rc_unseen');
+  assert.equal(withheldCause({ unreviewed_code_files: 3 }), 'cut_unknown', 'record written before withheld_from existed');
+  // A present null means no backstop: the cut alone does not make it cut_unknown.
+  assert.equal(withheldCause({ withheld_from: null, unreviewed_code_files: 3 }), 'other');
+  assert.equal(withheldCause({ unreviewed_code_files: 0, evidence_state: 'missing' }), 'evidence_missing');
+  assert.equal(withheldCause({ evidence_state: 'stale' }), 'evidence_stale');
+  assert.equal(withheldCause({}), 'other');
+  assert.deepEqual(Object.keys(WITHHELD_CAUSES), ['approve_cut', 'rc_unseen', 'cut_unknown', 'evidence_missing', 'evidence_stale', 'other']);
+  assert.ok(Object.isFrozen(WITHHELD_CAUSES));
 });
