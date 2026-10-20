@@ -5,7 +5,7 @@
 // missing data is never read as the absence of a problem. Pure.
 import { eventSummary, safeUrl } from './pipeline_model.mjs';
 import { percentile } from './pipeline_health.mjs';
-import { attemptOf } from './pipeline_journey.mjs';
+import { attemptOf, stepDecision } from './pipeline_journey.mjs';
 
 // Rule thresholds: below them a pattern is not reported (too few cases to separate it from noise).
 export const RULES = Object.freeze({
@@ -146,7 +146,7 @@ function reviewFindings(runs) {
       id: 'review-stuck', severity: 'warning', category: 'Review', title: 'PRs not approved after several reviews',
       fact: `${stuck.length} PR(s) have their last ${RULES.reviewStreak}+ verdicts without an APPROVE: ${stuck.map(([pr, l]) => `#${pr} (${l.length})`).join(', ')}.`,
       impact: `${stuck.reduce((n, [, l]) => n + l.length, 0)} review run(s) without converging`, frequency: `${stuck.length} PR(s)`,
-      items: stuck.map(([pr]) => pr), runs: runIds(stuck.flatMap(([, l]) => l)), evidence: evidenceOf(stuck.flatMap(([, l]) => l.slice(-RULES.reviewStreak))), link: 'flows.html?state=withheld',
+      items: stuck.map(([pr]) => pr), runs: runIds(stuck.flatMap(([, l]) => l)), evidence: evidenceOf(stuck.flatMap(([, l]) => l.slice(-RULES.reviewStreak))), link: 'flows.html?problem=review',
     }));
   }
   return out;
@@ -155,7 +155,10 @@ function reviewFindings(runs) {
 function autofixFindings(runs) {
   const attempts = events(runs, 'autofix.start');
   if (attempts.length < RULES.autofixMinAttempts) return [];
-  const pushes = events(runs, 'autofix.push');
+  // A push counts only when delivered: autofix.push followed by a failed workflow git push is "Push failed".
+  const decided = runs.filter((r) => r.events.some((e) => e.event === 'autofix.push')).map((r) => stepDecision(r, 'autofix')?.key);
+  const pushes = decided.filter((k) => k === 'pushed');
+  const failedPushes = decided.filter((k) => k === 'push_failed').length;
   const noPush = attempts.length - pushes.length;
   if (noPush / attempts.length < RULES.autofixNoPushShare) return [];
   const skips = events(runs, 'autofix.skipped');
@@ -164,7 +167,7 @@ function autofixFindings(runs) {
   const noChanges = reasons.no_changes ?? 0;
   return [finding({
     id: 'autofix-ineffective', severity: 'warning', category: 'Auto-fix', title: 'Auto-fix rarely pushes a fix',
-    fact: `${pushes.length} push(es) for ${attempts.length} attempt(s); skip reasons: ${Object.entries(reasons).map(([k, n]) => `${k} ${n}`).join(', ') || 'none recorded'}.`,
+    fact: `${pushes.length} delivered push(es) for ${attempts.length} attempt(s)${failedPushes ? `, ${failedPushes} whose git push failed` : ''}; skip reasons: ${Object.entries(reasons).map(([k, n]) => `${k} ${n}`).join(', ') || 'none recorded'}.`,
     hypothesis: noChanges ? '`no_changes` alone does not prove a fix was needed: the finding may be false, or the context given to the model did not include the files to change (docs/dashboard-partial-diagnosis.md, item 3).' : null,
     impact: `${noPush} attempt(s) ended without a change, usually escalated to a human`, frequency: `${noPush} of ${attempts.length} attempt(s)`,
     items: [...new Set(attempts.map(prOf).filter(Boolean))], runs: runIds(attempts), evidence: evidenceOf(skips.length ? skips : attempts), link: 'health.html#autofix',
@@ -269,6 +272,10 @@ function telemetryGaps(model, journeys) {
   if (overflow.length) gaps.push({ id: 'overflow', title: 'Truncated journals', detail: `${overflow.length} run(s) dropped events or spans over the record caps (events_overflow / spans_overflow).`, runs: overflow.map((r) => r.run_id) });
   const untraced = model.runs.filter((r) => !r.trace_id || !model.tracesById?.has(r.trace_id)).length;
   if (untraced) gaps.push({ id: 'untraced', title: 'Runs outside any work-item trace', detail: `${untraced} run(s) have no trace index: they appear in Investigation but not in Pipelines.` });
+  // The workflow records workflow.pr_operation only when its PR action succeeded: a prepared change without it
+  // may have no PR (failed action) or come from an older record; the records cannot tell which.
+  const unconfirmed = model.runs.filter((r) => r.stages.some((s) => s.stage === 'pr_prepare' && s.outcome === 'success') && !r.events.some((e) => e.event === 'workflow.pr_operation'));
+  if (unconfirmed.length) gaps.push({ id: 'pr-operation-unrecorded', title: 'PR creation not confirmed', detail: `${unconfirmed.length} run(s) prepared a change but recorded no PR operation: the PR action may have failed after the trace was written. Check the workflow run.`, runs: unconfirmed.map((r) => r.run_id) });
   const calls = model.runs.flatMap((r) => r.llm);
   const estimated = calls.filter((c) => c.estimated !== false).length;
   if (estimated) gaps.push({ id: 'estimated-tokens', title: 'Token counts are estimates', detail: `${estimated} of ${calls.length} LLM call(s) carry chars/4 estimates, not provider-measured usage: their cost excludes thinking and prompt cache.` });

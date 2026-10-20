@@ -101,7 +101,7 @@ test('auto-fix that rarely pushes, with a hypothesis only for no_changes', () =>
   const attempt = (reason) => run({ stage: 'autofix', events: [{ event: 'autofix.start', meta: { prNumber: 9 } }, ...(reason ? [{ event: 'autofix.skipped', meta: { reason } }] : [{ event: 'autofix.push' }])] });
   const d = diagnose({ model: model([attempt('no_changes'), attempt('guardrail_rejected'), attempt(null)]) });
   const f = find(d, 'autofix-ineffective');
-  assert.match(f.fact, /1 push\(es\) for 3 attempt\(s\); skip reasons: no_changes 1, guardrail_rejected 1/);
+  assert.match(f.fact, /1 delivered push\(es\) for 3 attempt\(s\); skip reasons: no_changes 1, guardrail_rejected 1/);
   assert.match(f.hypothesis, /does not prove a fix was needed/);
   assert.equal(find(diagnose({ model: model([attempt('guardrail_rejected'), attempt('guardrail_rejected')]) }), 'autofix-ineffective').hypothesis, null);
   assert.ok(!ids(diagnose({ model: model([attempt(null), attempt(null), attempt('no_changes')]) })).includes('autofix-ineffective'), 'most attempts pushed');
@@ -196,4 +196,20 @@ test('over the evidence cap the oldest occurrence is kept, so "since" is the tru
   assert.equal(f.evidence.length, 25);
   assert.equal(Math.min(...f.evidence.map((x) => x.ts)), T - 39 * 60000);
   assert.equal(f.evidence[0].ts, T, 'the newest occurrences still lead');
+});
+
+test('auto-fix push rate counts delivered pushes only; stuck reviews link by step; unconfirmed PR creation is a gap (PR #242 review)', () => {
+  const attempt = (events) => run({ stage: 'autofix', events: [{ event: 'autofix.start' }, ...events] });
+  const failed = () => attempt([{ event: 'autofix.push' }, { event: 'workflow.push', stage: 'workflow', meta: { outcome: 'failure' } }]);
+  const f = find(diagnose({ model: model([failed(), failed(), attempt([{ event: 'autofix.push' }])]) }), 'autofix-ineffective');
+  assert.match(f.fact, /^1 delivered push\(es\) for 3 attempt\(s\), 2 whose git push failed/);
+  // Stuck PRs link to the review step, whatever their last verdict.
+  const runs = [1, 2, 3].map((i) => run({ t: T + i, sha: String(i).repeat(40), events: [verdict('REQUEST_CHANGES')] }));
+  assert.equal(find(diagnose({ model: model(runs) }), 'review-stuck').link, 'flows.html?problem=review');
+  // A prepared change without a recorded PR operation.
+  const prepared = run({ stage: 'pr_prepare', outcome: 'success', events: [{ event: 'pr_prepare.complete' }] });
+  const created = run({ stage: 'pr_prepare', outcome: 'success', events: [{ event: 'workflow.pr_operation', meta: { operation: 'created' } }] });
+  const gap = diagnose({ model: model([prepared, created]) }).gaps.find((g) => g.id === 'pr-operation-unrecorded');
+  assert.match(gap.detail, /^1 run\(s\) prepared a change but recorded no PR operation/);
+  assert.deepEqual(gap.runs, [prepared.run_id]);
 });
