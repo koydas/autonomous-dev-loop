@@ -37,3 +37,5 @@ Two smaller exposures of the same kind:
 - ⚠️ A pipeline change takes effect only after it is merged to the default branch; a PR cannot test its own pipeline changes end to end in CI (unit and smoke tests still run from the branch in `test.yml`).
 - ⚠️ If the default branch and a long-lived PR branch diverge in their checkpoint/label conventions, the merged pipeline operates on the PR with the merged conventions.
 - ⚠️ The workflow YAML itself still comes from the branch for `push` events (GitHub behavior); `.github/` stays in the ADR-0021 denylist for that reason.
+
+**See also:** [ADR-0045](./0045-reusable-pipeline-workflows.md) — the trusted pipeline becomes the pinned ref of the pipeline repository for target repositories.

@@ -46,3 +46,5 @@ On a repository the pipeline works on, `scripts/`, `config/` or `docs/` are ordi
 - ⚠️ In a repository without a `README.md` entry, the shrink guard (ADR-0021 amendment) is the only defense against a stubbed README.
 - ⚠️ File names are matched at any depth, so `global.json` or `pyproject.toml` in an unrelated folder is blocked too: a false block, never a bypass.
 - ⚠️ A repository with a broken config fails at startup of every script importing `output_writer.mjs` (generation, auto-fix, and anything importing `static_verifier.mjs`).
+
+**See also:** [ADR-0045](./0045-reusable-pipeline-workflows.md) — on a target repository the per-repository file is read from the trusted default-branch checkout of the target, not next to the pipeline scripts.
