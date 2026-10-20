@@ -186,3 +186,9 @@ test('cost note names the basis: measured only, estimated only; cache reads are 
  const estimated = flowDashboard({ traces: [trace([{ ...run, llm: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1, tokens_out: 1 }] }])] });
  assert.match(estimated, /chars\/4 token estimate, excludes thinking and cache adjustments; list price, never a bill/);
 });
+
+test('an all-unpriced flow shows unpriced on its chip and executions, never $0', () => {
+ const html = flowDashboard({ traces: [trace([{ ...run, llm: [{ provider: 'anthropic', model: 'claude-unknown', tokens_in: 1, tokens_out: 1 }] }])] });
+ assert.match(html, /<span class="flow-cost-chip"[^>]*>unpriced<\/span>/);
+ assert.match(html, /partial · 1\.2 s · unpriced<\/summary>/);
+});

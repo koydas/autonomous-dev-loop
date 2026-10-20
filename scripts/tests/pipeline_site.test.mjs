@@ -259,3 +259,13 @@ test('cost: no LLM call → empty cost states', () => {
   assert.match(files['pipeline/health.html'], /No LLM call recorded in the window/);
   assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">—/);
 });
+
+test('cost: a window of unpriced calls only reads unpriced on the activity tile, execution cards, health and models', () => {
+  const { files } = site([makeRecord({ runId: '620', start: T0, provider: 'anthropic', model: 'claude-unknown' })]);
+  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">unpriced/);
+  assert.match(files['pipeline/index.html'], /<span>LLM unpriced · 1 call\(s\)<\/span>/);
+  assert.match(files['pipeline/runs/620-1.html'], /LLM cost<\/div><div class="value">unpriced/);
+  assert.match(files['pipeline/health.html'], /Mean per run<\/div><div class="value">—/);
+  assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">unpriced/);
+  assert.doesNotMatch(files['pipeline/index.html'], /\$0\.0000/);
+});

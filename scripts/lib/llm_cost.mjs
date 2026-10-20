@@ -76,6 +76,17 @@ export function costBasis(sum) {
 }
 
 /**
+ * A sum as one short amount, never an unknown shown as $0: `—` without a call, `free tier` when every call
+ * is Groq, `unpriced` when no call is priced, else `$0.0240` with ` + 2 unpriced` when some are not.
+ */
+export function costAmount(sum) {
+  if (!sum.calls) return '—';
+  if (sum.free === sum.calls) return 'free tier';
+  if (!sum.measured && !sum.estimated) return 'unpriced';
+  return `${formatUsd(sum.usd)}${sum.unpriced ? ` + ${sum.unpriced} unpriced` : ''}`;
+}
+
+/**
  * One-line amount: `$0.0240 USD + 1 unpriced call(s) (2 Groq free-tier call(s) at no cost)`, or
  * `Not recorded` without any call.
  */

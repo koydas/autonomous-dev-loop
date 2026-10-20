@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LLM_STAGE_TO_PIPELINE_STAGE, pipelineStage, callCost, sumCosts, addCosts, formatUsd, costBasis, costLine,
+  LLM_STAGE_TO_PIPELINE_STAGE, pipelineStage, callCost, sumCosts, addCosts, formatUsd, costAmount, costBasis, costLine,
 } from '../lib/llm_cost.mjs';
 
 const opus = (over = {}) => ({ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1_000_000, tokens_out: 100_000, ...over });
@@ -85,4 +85,13 @@ test('callCost: cache hits at the published rates — 0.05 × input on Opus 5.5 
   close(hit('claude-opus-5-5'), 0.20);
   close(hit('claude-sonnet-5-5'), 0.10);
   close(callCost({ provider: 'anthropic', model: 'claude-haiku-5-5', tokens_in: 100_000, tokens_out: 0, cache_read: 100_000, cache_write: 0, estimated: false }).usd, 0.001);
+});
+
+test('costAmount never shows an unknown cost as $0', () => {
+  assert.equal(costAmount(sumCosts([])), '—');
+  assert.equal(costAmount(sumCosts([{ provider: 'groq' }, { provider: 'groq' }])), 'free tier');
+  assert.equal(costAmount(sumCosts([{ provider: 'anthropic', model: 'claude-unknown', tokens_in: 1, tokens_out: 1 }])), 'unpriced');
+  assert.equal(costAmount(sumCosts([{ provider: 'groq' }, opus({ tokens_in: null })])), 'unpriced');
+  assert.equal(costAmount(sumCosts([opus({ tokens_in: 1000, tokens_out: 1000 })])), '$0.0240');
+  assert.equal(costAmount(sumCosts([opus({ tokens_in: 1000, tokens_out: 1000 }), { provider: 'x' }, { provider: 'x' }])), '$0.0240 + 2 unpriced');
 });

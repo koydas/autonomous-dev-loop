@@ -8,7 +8,7 @@ import { feedEntries } from './pipeline_model.mjs';
 import { flowDashboard, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
 import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps } from './dashboard_ui.mjs';
-import { callCost, sumCosts, formatUsd, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
+import { callCost, sumCosts, formatUsd, costAmount, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
 
 // The newest actions on pipeline/index.html; each month page holds at most MONTH_FEED_CAP (the run
 // pages keep every event).
@@ -128,7 +128,7 @@ export function renderFeedIndex(model, { generatedAt = null } = {}) {
     ['Runs (window)', compact(model.runs.length)],
     ['Work-item traces', compact(model.traces.length)],
     ['Actions', compact(all.length)],
-    ['LLM cost (window)', (() => { const c = sumCosts(model.runs.flatMap((r) => r.llm)); return c.calls ? formatUsd(c.usd) : '—'; })()],
+    ['LLM cost (window)', costAmount(sumCosts(model.runs.flatMap((r) => r.llm)))],
     ['Latest run', latest ? time(latest.started_at) : '—'],
   ].map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
   const window = model.months.length ? `Records of ${e(model.months.at(-1))} → ${e(model.months[0])}${model.skippedMonths.length ? ` (older months stay on the <code>metrics</code> branch: ${model.skippedMonths.map(e).join(', ')})` : ''}.` : 'No run record on the <code>metrics</code> branch yet.';
@@ -183,7 +183,7 @@ const BASIS_TEXT = {
 };
 const costSub = (sum) => `${BASIS_TEXT[costBasis(sum)] ?? 'no priced call'}; list price (<code>PRICES_USD_PER_MTOK</code>), never a bill${sum.unpriced ? `; ${e(sum.unpriced)} unpriced call(s) not counted` : ''}${sum.free ? `; ${e(sum.free)} Groq free-tier call(s) at $0` : ''}.`;
 const costTiles = (sum, extra = []) => [
-  ['LLM cost', sum.calls ? formatUsd(sum.usd) : '—'], ['LLM calls', compact(sum.calls)], ['Input tokens', compact(sum.tokens_in)],
+  ['LLM cost', costAmount(sum)], ['LLM calls', compact(sum.calls)], ['Input tokens', compact(sum.tokens_in)],
   ['of which cache reads', compact(sum.cache_read)], ['Output tokens', compact(sum.tokens_out)], ...extra,
 ].map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
 
@@ -322,7 +322,7 @@ ${nav('../', model.months)}
 <div class="tile"><div class="label">Lead time (first start → last end)</div><div class="value">${e(formatDuration(trace.lead_time_ms))}</div></div>
 <div class="tile"><div class="label">Running</div><div class="value">${e(formatDuration(running))}</div></div>
 <div class="tile"><div class="label">Waiting between runs</div><div class="value">${e(formatDuration(waiting))}</div></div>
-<div class="tile"><div class="label">LLM cost</div><div class="value">${e(cost.calls ? formatUsd(cost.usd) : '—')}</div></div>
+<div class="tile"><div class="label">LLM cost</div><div class="value">${e(costAmount(cost))}</div></div>
 </div>
 ${notes.map((n) => `<p class="note">${e(n)}</p>`).join('')}
 <p class="note">Runs are separate jobs on different runners: spans are placed by their own clocks, so offsets between runs are approximate (ADR-0041 §6).</p>
@@ -489,13 +489,14 @@ const COST_COLS = [{ label: 'Calls', num: true }, { label: 'Input', num: true },
 export function costPanel(costs) {
   if (!costs?.total.calls) return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
   const t = costs.total;
-  const extra = [['Mean per run', costs.runs ? formatUsd(t.usd / costs.runs) : '—'], ['Mean per work item', costs.items ? formatUsd(costs.items_usd / costs.items) : '—']];
-  const priced = costs.by_stage.filter((g) => g.usd > 0);
+  const priced = t.measured + t.estimated > 0;
+  const extra = [['Mean per run', priced && costs.runs ? formatUsd(t.usd / costs.runs) : '—'], ['Mean per work item', priced && costs.items ? formatUsd(costs.items_usd / costs.items) : '—']];
+  const stages = costs.by_stage.filter((g) => g.usd > 0);
   return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary><h2>LLM cost</h2>
 <div class="tiles">${costTiles(t, extra)}</div>
 <p class="sub">${costSub(t)} The mean per work item counts work items with a trace index only.</p>
 <h3>Per stage</h3>
-${priced.length ? hbars(priced.map((g) => ({ label: g.key, value: g.usd })), { label: 'LLM cost in USD per pipeline stage', format: formatUsd }) : ''}
+${stages.length ? hbars(stages.map((g) => ({ label: g.key, value: g.usd })), { label: 'LLM cost in USD per pipeline stage', format: formatUsd }) : ''}
 ${table([{ label: 'Stage' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_stage.map((g) => [...costRow(`<code>${e(g.key)}</code>`, g, [e(g.runs)]), e(formatUsd(g.per_run_usd))]))}
 <h3>Per workflow</h3>
 ${table([{ label: 'Workflow' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_workflow.map((g) => [...costRow(e(g.key), g, [e(g.runs)]), e(formatUsd(g.per_run_usd))]))}
@@ -522,7 +523,7 @@ export function renderModels(models, model) {
     const runs = m.runs.map((r) => `<a href="${runHref('', r)}">${e(r)}</a>`).join(', ');
     const evals = m.evals.map((ev) => `<a href="../runs/${encodeURIComponent(ev.run_id)}.html">${e(ev.suite)} ${e(ev.run_id)}</a> ${ev.passed ? '<span class="ok">✓</span>' : '<span class="ko">✕</span>'}`).join(', ');
     return `<section${id}><h2><code>${e(m.key)}</code></h2>
-<div class="tiles">${tile('Pipeline LLM calls', compact(m.calls))}${tile('Failed', compact(m.failed))}${tile('Fallback answers', compact(m.fallback))}${tile('Tokens', compact(m.tokens))}${tile('LLM cost', m.provider === 'groq' ? 'free tier' : formatUsd(m.usd), m.unpriced ? `${m.unpriced} unpriced call(s)` : '')}${tile('Eval runs', compact(m.evals.length))}</div>
+<div class="tiles">${tile('Pipeline LLM calls', compact(m.calls))}${tile('Failed', compact(m.failed))}${tile('Fallback answers', compact(m.fallback))}${tile('Tokens', compact(m.tokens))}${tile('LLM cost', m.provider === 'groq' ? 'free tier' : m.calls && m.unpriced === m.calls ? 'unpriced' : formatUsd(m.usd), m.unpriced ? `${m.unpriced} unpriced call(s)` : '')}${tile('Eval runs', compact(m.evals.length))}</div>
 <p class="sub">Pipeline runs: ${runs || '<span class="muted">none in the window</span>'}</p>
 <p class="sub">Eval runs: ${evals || '<span class="muted">none on the scorecard</span>'}</p></section>`;
   }).join('\n');
