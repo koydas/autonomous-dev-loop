@@ -242,7 +242,7 @@ test('cost: run page per call, waterfall column, trace per stage and run, feed t
   assert.match(health, /aria-label="LLM cost in USD per pipeline stage/);
   assert.match(health, /Most expensive runs/);
   assert.match(health, /href="runs\/600-1\.html"/);
-  assert.match(health, /Mean per work item<\/div><div class="value">\$0\.2590/);
+  assert.match(health, /Mean per work item<\/div><div class="value">≥ \$0\.2590/, 'one call of the item is unpriced: a lower bound');
   assert.match(health, /provider-measured tokens \(prompt cache priced apart/);
   assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">\$0\.2590/);
   assert.match(files['pipeline/models.html'], /1 unpriced call\(s\)/);
@@ -278,9 +278,22 @@ test('models: a model seen only in the eval scorecard has no pipeline cost (—)
   assert.doesNotMatch(html, /free tier|\$0\.0000/);
 });
 
-test('health: a stage or workflow with no priced call shows no per-run mean', () => {
+test('health: a stage or workflow with no priced call shows no $0 per-run mean', () => {
   const { files } = site([makeRecord({ runId: '630', start: T0 })]);
   const health = files['pipeline/health.html'];
-  assert.match(health, /<code>review<\/code><\/td><td class="num">1<\/td>.*?<td class="num">—<\/td><\/tr>/);
+  assert.match(health, /<code>review<\/code><\/td><td class="num">1<\/td>.*?<td class="num">free tier<\/td><\/tr>/);
+  const unpriced = site([makeRecord({ runId: '631', start: T0, provider: 'anthropic', model: 'claude-unknown' })]).files['pipeline/health.html'];
+  assert.match(unpriced, /<code>review<\/code><\/td><td class="num">1<\/td>.*?<td class="num">—<\/td><\/tr>/);
   assert.doesNotMatch(health.slice(health.indexOf('Per stage')), /<td class="num">\$0\.0000<\/td>/);
+});
+
+test('health: means over a window with unpriced calls are marked as lower bounds', () => {
+  const { files } = site([
+    makeRecord({ runId: '640', start: T0, provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1000, tokensOut: 1000 }),
+    makeRecord({ runId: '641', start: T0 + 1000, provider: 'anthropic', model: 'claude-unknown' }),
+  ]);
+  const health = files['pipeline/health.html'];
+  assert.match(health, /Mean per run<\/div><div class="value">≥ \$0\.0120/);
+  assert.match(health, /Mean per work item<\/div><div class="value">≥ \$0\.0240/, 'both runs belong to PR #7: one item');
+  assert.match(health, /<td class="num">≥ \$0\.0120<\/td>/, 'per-run column of the stage / workflow rows');
 });

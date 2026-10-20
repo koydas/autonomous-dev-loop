@@ -8,7 +8,7 @@ import { feedEntries } from './pipeline_model.mjs';
 import { flowDashboard, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
 import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps } from './dashboard_ui.mjs';
-import { callCost, sumCosts, formatUsd, costAmount, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
+import { callCost, sumCosts, formatUsd, costAmount, meanAmount, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
 
 // The newest actions on pipeline/index.html; each month page holds at most MONTH_FEED_CAP (the run
 // pages keep every event).
@@ -482,8 +482,7 @@ ${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: 
   return pipelinePage('Pipeline health', body, 1);
 }
 
-// A mean is shown only when the group has a priced call; otherwise it would read as a $0 cost.
-const perRun = (g) => (g.measured + g.estimated ? formatUsd(g.per_run_usd) : '—');
+const perRun = (g) => meanAmount(g, g.runs);
 const costRow = (label, g, extra = []) => [label, ...extra, e(g.calls), e(compact(g.tokens_in)), e(compact(g.cache_read)), e(compact(g.tokens_out)), e(costLine(g))];
 const COST_COLS = [{ label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Cache reads', num: true }, { label: 'Output', num: true }, 'Cost'];
 
@@ -491,8 +490,8 @@ const COST_COLS = [{ label: 'Calls', num: true }, { label: 'Input', num: true },
 export function costPanel(costs) {
   if (!costs?.total.calls) return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
   const t = costs.total;
-  const priced = t.measured + t.estimated > 0;
-  const extra = [['Mean per run', priced && costs.runs ? formatUsd(t.usd / costs.runs) : '—'], ['Mean per work item', priced && costs.items ? formatUsd(costs.items_usd / costs.items) : '—']];
+  const items = costs.items_sum ?? sumCosts([]);
+  const extra = [['Mean per run', meanAmount(t, costs.runs)], ['Mean per work item', meanAmount(items, costs.items)]];
   const stages = costs.by_stage.filter((g) => g.usd > 0);
   return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary><h2>LLM cost</h2>
 <div class="tiles">${costTiles(t, extra)}</div>

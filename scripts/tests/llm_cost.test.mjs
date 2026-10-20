@@ -95,3 +95,14 @@ test('costAmount never shows an unknown cost as $0', () => {
   assert.equal(costAmount(sumCosts([opus({ tokens_in: 1000, tokens_out: 1000 })])), '$0.0240');
   assert.equal(costAmount(sumCosts([opus({ tokens_in: 1000, tokens_out: 1000 }), { provider: 'x' }, { provider: 'x' }])), '$0.0240 + 2 unpriced');
 });
+
+test('meanAmount: a lower bound (≥) when part of the sum is unpriced, — without priced calls', async () => {
+  const { meanAmount } = await import('../lib/llm_cost.mjs');
+  const priced = opus({ tokens_in: 1000, tokens_out: 1000 });
+  assert.equal(meanAmount(sumCosts([priced, priced]), 2), '$0.0240');
+  assert.equal(meanAmount(sumCosts([priced, { provider: 'x' }]), 2), '≥ $0.0120');
+  assert.equal(meanAmount(sumCosts([{ provider: 'x' }]), 1), '—');
+  assert.equal(meanAmount(sumCosts([{ provider: 'groq' }]), 1), 'free tier');
+  assert.equal(meanAmount(sumCosts([priced]), 0), '—');
+  assert.equal(meanAmount(sumCosts([]), 3), '—');
+});

@@ -263,6 +263,7 @@ function costs(runs, traces) {
     runs: priced.length,
     items: items.length,
     items_usd: items.reduce((t, it) => t + it.usd, 0),
+    items_sum: items.reduce((t, it) => addCosts(t, it), sumCosts([])),
     by_stage: rows(groups.stage).sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key)),
     by_workflow: rows(groups.workflow).sort((a, b) => b.usd - a.usd || a.key.localeCompare(b.key)),
     by_day: rows(groups.day).sort((a, b) => a.key.localeCompare(b.key)).slice(-TOKEN_DAYS),

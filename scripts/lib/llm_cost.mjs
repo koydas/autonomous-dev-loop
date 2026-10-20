@@ -87,6 +87,18 @@ export function costAmount(sum) {
 }
 
 /**
+ * A sum spread over `n` runs, items or executions: `—` with nothing to divide or no priced call, `free tier`
+ * when every call is Groq, `≥ $0.0120` when some calls are unpriced (their cost is missing, so the mean is
+ * only a lower bound), else `$0.0120`.
+ */
+export function meanAmount(sum, n) {
+  if (!n || !sum.calls) return '—';
+  if (sum.free === sum.calls) return 'free tier';
+  if (!sum.measured && !sum.estimated) return '—';
+  return `${sum.unpriced ? '≥ ' : ''}${formatUsd(sum.usd / n)}`;
+}
+
+/**
  * One-line amount: `$0.0240 USD + 1 unpriced call(s) (2 Groq free-tier call(s) at no cost)`, or
  * `Not recorded` without any call.
  */
