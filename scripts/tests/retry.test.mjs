@@ -236,12 +236,13 @@ test('retry.wait logs error_type from err.code, else err.errorType, else the err
       Object.assign(new Error('Groq API HTTP error 429: {"error":{}}'), { status: 429, code: 'rate_limit_exceeded', errorType: 'TRANSIENT' }),
       Object.assign(new Error('Anthropic API HTTP error 529: {}'), { status: 529, errorType: 'TRANSIENT' }),
       new TypeError('fetch failed'),
+      new DOMException('This operation was aborted', 'AbortError'),
     ];
     let i = 0;
-    await retryWithBackoff(async () => { if (i < errors.length) throw errors[i++]; return 'ok'; }, { ...FAST, maxAttempts: 4 });
+    await retryWithBackoff(async () => { if (i < errors.length) throw errors[i++]; return 'ok'; }, { ...FAST, maxAttempts: 5 });
   } finally {
     process.stderr.write = write;
   }
   const waits = lines.filter((l) => l.includes('"retry.wait"')).map((l) => JSON.parse(l).meta);
-  assert.deepEqual(waits.map((m) => [m.error_type, m.status]), [['rate_limit_exceeded', 429], ['TRANSIENT', 529], ['TypeError', null]]);
+  assert.deepEqual(waits.map((m) => [m.error_type, m.status]), [['rate_limit_exceeded', 429], ['TRANSIENT', 529], ['TypeError', null], ['AbortError', null]]);
 });
