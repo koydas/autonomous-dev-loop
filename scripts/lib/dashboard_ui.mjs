@@ -1,5 +1,7 @@
 // Presentation only: the published scorecard, run records and trace indexes remain authoritative.
 // No framework, credentials or third-party assets are needed by the generated pages.
+import { costAmount, sumCosts } from './llm_cost.mjs';
+
 const e = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const label = (v) => String(v ?? 'Unknown').replace(/_/g, ' ');
 const date = (v) => v == null || !Number.isFinite(new Date(v).getTime()) ? 'Not recorded' : new Date(v).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
@@ -226,7 +228,7 @@ function executionFacts(run) {
 }
 
 export function executionBrowser(model, root = '') {
-  const cards = model.runs.map(run => `<article class="widget" data-entry data-result="${e(run.outcome || 'unknown')}"><div class="widget-head"><h3><a href="${runUrl(root, run)}">${e(run.workflow ?? 'Workflow')}</a></h3>${badge(run.outcome)}</div><p>${e(itemName(run.item))} · execution ${e(run.run_id)}</p>${executionFacts(run)}<div class="widget-meta"><span>${e(date(run.started_at))}</span><span>${e(run.events.length)} actions</span><span>${e(run.event_name ?? 'Unknown trigger')}</span></div><div class="link-row"><a class="button-link" href="${runUrl(root, run)}">Inspect execution →</a>${model.tracesById?.has(run.trace_id) ? `<a class="button-link" href="${root}traces/${encodeURIComponent(run.trace_id)}.html">Full flow</a>` : ''}</div></article>`).join('');
+  const cards = model.runs.map(run => `<article class="widget" data-entry data-result="${e(run.outcome || 'unknown')}"><div class="widget-head"><h3><a href="${runUrl(root, run)}">${e(run.workflow ?? 'Workflow')}</a></h3>${badge(run.outcome)}</div><p>${e(itemName(run.item))} · execution ${e(run.run_id)}</p>${executionFacts(run)}<div class="widget-meta"><span>${e(date(run.started_at))}</span><span>${e(run.events.length)} actions</span><span>${e(run.event_name ?? 'Unknown trigger')}</span>${run.llm?.length ? `<span>LLM ${e(costAmount(run.cost ?? sumCosts(run.llm)))} · ${e(run.llm.length)} call(s)</span>` : ''}</div><div class="link-row"><a class="button-link" href="${runUrl(root, run)}">Inspect execution →</a>${model.tracesById?.has(run.trace_id) ? `<a class="button-link" href="${root}traces/${encodeURIComponent(run.trace_id)}.html">Full flow</a>` : ''}</div></article>`).join('');
   return `<section id="executions"><div class="section-intro"><div><h2>Executions</h2><p>One card per recorded workflow run. Search, filter, then inspect its actions and spans.</p></div></div>${cards ? browse('executions', cards, model.runs.length) : '<p class="notice">No executions recorded yet.</p>'}</section>`;
 }
 
@@ -240,5 +242,5 @@ export function workItemBrowser(model) {
 }
 
 export function flowSteps(trace) {
-  return `<ol class="flow-steps" aria-label="Workflow execution history">${[...trace.runs].sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0)).map((r, i) => `<li class="flow-step"><div class="widget-head"><strong>${i + 1}. ${r.run ? `<a href="../runs/${encodeURIComponent(r.run_id)}.html">${e(r.workflow ?? 'Workflow')}</a>` : e(r.workflow ?? 'Workflow') + ' (record not loaded)'}</strong>${badge(r.outcome)}</div><p>${e(date(r.started_at))} · ${e(r.run_id)}${r.run ? ` · ${e(r.run.events.length)} actions` : ''}</p></li>`).join('')}</ol>`;
+  return `<ol class="flow-steps" aria-label="Workflow execution history">${[...trace.runs].sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0)).map((r, i) => `<li class="flow-step"><div class="widget-head"><strong>${i + 1}. ${r.run ? `<a href="../runs/${encodeURIComponent(r.run_id)}.html">${e(r.workflow ?? 'Workflow')}</a>` : e(r.workflow ?? 'Workflow') + ' (record not loaded)'}</strong>${badge(r.outcome)}</div><p>${e(date(r.started_at))} · ${e(r.run_id)}${r.run ? ` · ${e(r.run.events.length)} actions` : ''}${r.run?.llm?.length ? ` · LLM ${e(costAmount(r.run.cost ?? sumCosts(r.run.llm)))}` : ''}</p></li>`).join('')}</ol>`;
 }

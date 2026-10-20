@@ -148,3 +148,13 @@ test('decision facts escape metadata and prefer the latest verdict over earlier 
   assert.match(html, /&lt;script&gt;/);
   for (const raw of RAW_MARKERS) assert.ok(!html.includes(raw));
 });
+
+test('execution cards and flow history show the LLM cost of a run with calls only', () => {
+ const priced = makeRecord({ runId: '700', provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1000, tokensOut: 1000 });
+ const model = modelOf(priced);
+ assert.match(executionBrowser(model), /<span>LLM \$0\.0240 · 1 call\(s\)<\/span>/);
+ assert.match(flowSteps(model.traces[0]), / · LLM \$0\.0240<\/p>/);
+ const none = modelOf(makeRecord({ runId: '701' }));
+ none.runs[0].llm = [];
+ assert.doesNotMatch(executionBrowser(none), /LLM \$/);
+});

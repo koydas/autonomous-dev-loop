@@ -6,6 +6,7 @@
 import { readRunRecord } from './run_record.mjs';
 import { TRACE_ID_RE, SPAN_ID_RE } from './trace_context.mjs';
 import { SIDE_EFFECT_EVENTS } from './otlp_trace.mjs';
+import { callCost, sumCosts, pipelineStage } from './llm_cost.mjs';
 
 export const RUN_ID_RE = /^\d{1,20}-\d{1,4}$/;
 export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -78,10 +79,19 @@ function llmFields(kind, attrs) {
   if (kind !== 'llm') return { provider: null, model: str(attrs['adl.model']), tokens: null };
   const tin = num(attrs['gen_ai.usage.input_tokens']);
   const tout = num(attrs['gen_ai.usage.output_tokens']);
+  // Measured only when the record says so (adl.usage.estimated: false); a record without the flag is an estimate.
+  const estimated = attrs['adl.usage.estimated'] !== false;
   return {
     provider: str(attrs['gen_ai.system']),
     model: str(attrs['gen_ai.response.model']) ?? str(attrs['gen_ai.request.model']),
-    tokens: tin == null && tout == null ? null : { in: tin, out: tout, estimated: attrs['adl.usage.estimated'] === true },
+    stage: str(attrs['adl.stage']),
+    tokens: tin == null && tout == null ? null : {
+      in: tin, out: tout, estimated,
+      ...(!estimated && {
+        cache_read: num(attrs['gen_ai.usage.cache_read.input_tokens']),
+        cache_write: num(attrs['gen_ai.usage.cache_creation.input_tokens']),
+      }),
+    },
     fallback: attrs['adl.llm.fallback'] === true,
     error_type: str(attrs['error.type']),
   };
@@ -176,14 +186,19 @@ function normalizeEvents(events) {
   }));
 }
 
-// LLM calls with their (estimated) tokens: the llm_call spans of a v2 record; for a v1 record the
-// envelope's llm_calls, with the stage's request/response token estimates on the first call.
+// A call with its list-price cost (llm_cost.mjs) and the pipeline stage it ran in.
+const priced = (call) => ({ ...call, pipeline_stage: pipelineStage(call.stage), cost: callCost(call) });
+
+// LLM calls with their tokens (measured or estimated): the llm_call spans of a v2 record; for a v1 record
+// the envelope's llm_calls, with the stage's request/response token estimates on the first call.
 function llmCalls(waterfall, envelope, events) {
   const spans = waterfall.filter((s) => s.kind === 'llm');
   if (spans.length) {
-    return spans.map((s) => ({
-      provider: s.provider, model: s.model, ts: s.start, duration_ms: s.start != null && s.end != null ? s.end - s.start : null,
-      tokens_in: s.tokens?.in ?? 0, tokens_out: s.tokens?.out ?? 0, estimated: s.tokens?.estimated ?? true,
+    return spans.map((s) => priced({
+      provider: s.provider, model: s.model, stage: s.stage, ts: s.start, duration_ms: s.start != null && s.end != null ? s.end - s.start : null,
+      // No usage on the span (a failed call without a billed response): null, so the call prices as unpriced.
+      tokens_in: s.tokens?.in ?? null, tokens_out: s.tokens?.out ?? null, estimated: s.tokens?.estimated ?? true,
+      cache_read: s.tokens?.cache_read ?? null, cache_write: s.tokens?.cache_write ?? null,
       fallback: s.fallback === true, failed: s.status === 'error',
     }));
   }
@@ -194,9 +209,10 @@ function llmCalls(waterfall, envelope, events) {
   if (!calls.length && !tin && !tout) return [];
   const first = events.find((e) => e.event.endsWith('.llm_request'))?.ts ?? null;
   const list = calls.length ? calls : [{}];
-  return list.map((c, i) => ({
-    provider: str(c.provider), model: str(c.model), ts: first, duration_ms: num(c.duration_ms),
-    tokens_in: i === 0 ? tin : 0, tokens_out: i === 0 ? tout : 0, estimated: true,
+  const stage = events.find((e) => e.event.endsWith('.llm_request'))?.stage ?? null;
+  return list.map((c, i) => priced({
+    provider: str(c.provider), model: str(c.model), stage: str(c.stage) ?? stage, ts: first, duration_ms: num(c.duration_ms),
+    tokens_in: i === 0 ? tin : 0, tokens_out: i === 0 ? tout : 0, estimated: true, cache_read: null, cache_write: null,
     fallback: c.fallback === true, failed: c.outcome === 'failed',
   }));
 }
@@ -218,6 +234,7 @@ export function normalizeRun(raw, path = '') {
   const flat = otlp.length === 0;
   const waterfall = flat ? waterfallFlat(rec, started, completed) : otlp;
   const item = isObj(rec.item) && ['issue', 'pr', 'run'].includes(rec.item.kind) && posInt(rec.item.number) ? { kind: rec.item.kind, number: rec.item.number, key: str(rec.item.key) } : null;
+  const llm = llmCalls(waterfall, envelope, events);
   return {
     run: {
       run_id: rec.run_id,
@@ -246,7 +263,8 @@ export function normalizeRun(raw, path = '') {
       events,
       waterfall,
       flat,
-      llm: llmCalls(waterfall, envelope, events),
+      llm,
+      cost: sumCosts(llm),
       events_overflow: { count: num(rec.events_overflow?.count) ?? 0, bytes: num(rec.events_overflow?.bytes) ?? 0 },
       spans_overflow: { count: num(rec.spans_overflow?.count) ?? 0, events: num(rec.spans_overflow?.events) ?? 0 },
     },

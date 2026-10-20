@@ -8,6 +8,7 @@ import { feedEntries } from './pipeline_model.mjs';
 import { flowDashboard, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
 import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps } from './dashboard_ui.mjs';
+import { callCost, sumCosts, formatUsd, costAmount, meanAmount, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
 
 // The newest actions on pipeline/index.html; each month page holds at most MONTH_FEED_CAP (the run
 // pages keep every event).
@@ -127,6 +128,7 @@ export function renderFeedIndex(model, { generatedAt = null } = {}) {
     ['Runs (window)', compact(model.runs.length)],
     ['Work-item traces', compact(model.traces.length)],
     ['Actions', compact(all.length)],
+    ['LLM cost (window)', costAmount(sumCosts(model.runs.flatMap((r) => r.llm)))],
     ['Latest run', latest ? time(latest.started_at) : '—'],
   ].map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
   const window = model.months.length ? `Records of ${e(model.months.at(-1))} → ${e(model.months[0])}${model.skippedMonths.length ? ` (older months stay on the <code>metrics</code> branch: ${model.skippedMonths.map(e).join(', ')})` : ''}.` : 'No run record on the <code>metrics</code> branch yet.';
@@ -161,8 +163,45 @@ function legend() {
 
 function tokensHtml(t) {
   if (!t) return '';
-  return `${e(compact(t.in))} → ${e(compact(t.out))}${t.estimated ? ' <span class="muted">est.</span>' : ''}`;
+  return `${e(compact(t.in))} → ${e(compact(t.out))}${t.estimated ? ' <span class="muted">est.</span>' : t.cache_read ? ` <span class="muted">${e(compact(t.cache_read))} cached</span>` : ''}`;
 }
+
+const spanCall = (s) => ({ provider: s.provider, model: s.model, tokens_in: s.tokens?.in, tokens_out: s.tokens?.out, cache_read: s.tokens?.cache_read, cache_write: s.tokens?.cache_write, estimated: s.tokens?.estimated });
+
+function costHtml(cost) {
+  if (!cost) return '';
+  if (cost.basis === 'free') return '<span class="muted">free tier</span>';
+  if (cost.usd == null) return '<span class="muted">unpriced</span>';
+  return `${e(formatUsd(cost.usd))}${cost.basis === 'estimated' ? ' <span class="muted">est.</span>' : ''}`;
+}
+
+// How a cost was obtained, for the note under a cost tile row.
+const BASIS_TEXT = {
+  measured: 'provider-measured tokens (prompt cache priced apart, thinking inside the output)',
+  estimated: 'chars/4 token estimates (records before measured usage: no thinking, no cache discount)',
+  'measured + estimated': 'provider-measured tokens where the record has them, chars/4 estimates for older records',
+};
+const costSub = (sum) => `${BASIS_TEXT[costBasis(sum)] ?? 'no priced call'}; list price (<code>PRICES_USD_PER_MTOK</code>), never a bill${sum.unpriced ? `; ${e(sum.unpriced)} unpriced call(s) not counted` : ''}${sum.free ? `; ${e(sum.free)} Groq free-tier call(s) at $0` : ''}.`;
+const costTiles = (sum, extra = []) => [
+  ['LLM cost', costAmount(sum)], ['LLM calls', compact(sum.calls)], ['Input tokens', compact(sum.tokens_in)],
+  ['of which cache reads', compact(sum.cache_read)], ['Output tokens', compact(sum.tokens_out)], ...extra,
+].map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
+
+/** Cost per pipeline stage of some runs: rows for a table (Stage, Calls, Input, Cache read, Output, USD). */
+function stageCostRows(runs) {
+  const byStage = new Map();
+  for (const run of runs) {
+    for (const c of run.llm) {
+      const stage = c.pipeline_stage ?? pipelineStage(c.stage) ?? (run.stages.length === 1 && run.stages[0].stage ? run.stages[0].stage : 'unattributed');
+      byStage.set(stage, [...(byStage.get(stage) ?? []), c]);
+    }
+  }
+  return [...byStage.entries()].map(([stage, calls]) => {
+    const t = sumCosts(calls);
+    return [`<code>${e(stage)}</code>`, e(t.calls), e(compact(t.tokens_in)), e(compact(t.cache_read)), e(compact(t.tokens_out)), e(costLine(t))];
+  });
+}
+const STAGE_COST_HEAD = ['Stage', { label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Cache reads', num: true }, { label: 'Output', num: true }, 'Cost'];
 
 /**
  * Rows of spans on one time axis [t0, t1]. `rows`: { label, depth, kind, start, end, status, outcome,
@@ -186,14 +225,15 @@ export function waterfall(rows, { t0, t1, root = '../' } = {}) {
     const pm = providerModel(r.provider, r.model);
     const name = r.href ? `<a href="${e(r.href)}">${e(r.label)}</a>` : e(r.label);
     const links = (r.links ?? []).map((l) => link(l.url ?? l, l.label ?? 'link')).filter(Boolean).join(' · ');
-    return `<tr><td class="name" style="padding-left:${8 + Math.min(r.depth ?? 0, 12) * 16}px"><span class="key" style="background:var(${KIND_VAR[r.kind] ?? '--s2'})"></span>${name} <span class="lvl">${e(KIND_LABEL[r.kind] ?? 'span')}</span></td><td>${bar}</td><td class="num">${e(formatDuration(dur))}</td><td>${statusHtml(r.status, r.outcome)}</td><td>${pm ? `<a href="${root}models.html#${modelAnchor(r.model)}"><code>${e(pm)}</code></a>` : ''}</td><td class="num">${tokensHtml(r.tokens)}</td><td>${links}</td></tr>`;
+    return `<tr><td class="name" style="padding-left:${8 + Math.min(r.depth ?? 0, 12) * 16}px"><span class="key" style="background:var(${KIND_VAR[r.kind] ?? '--s2'})"></span>${name} <span class="lvl">${e(KIND_LABEL[r.kind] ?? 'span')}</span></td><td>${bar}</td><td class="num">${e(formatDuration(dur))}</td><td>${statusHtml(r.status, r.outcome)}</td><td>${pm ? `<a href="${root}models.html#${modelAnchor(r.model)}"><code>${e(pm)}</code></a>` : ''}</td><td class="num">${tokensHtml(r.tokens)}</td><td class="num">${costHtml(r.cost)}</td><td>${links}</td></tr>`;
   }).join('');
-  return `${legend()}<div class="card table-wrap"><table class="wf"><thead><tr><th>Span</th><th>Timeline${span ? ` (${e(formatDuration(span))})` : ''}</th><th class="num">Duration</th><th>Status</th><th>provider:model</th><th class="num">Tokens in → out</th><th>Links</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  return `${legend()}<div class="card table-wrap"><table class="wf"><thead><tr><th>Span</th><th>Timeline${span ? ` (${e(formatDuration(span))})` : ''}</th><th class="num">Duration</th><th>Status</th><th>provider:model</th><th class="num">Tokens in → out</th><th class="num">Cost</th><th>Links</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 const spanRows = (run, depthOffset = 0) => run.waterfall.map((s) => ({
   label: s.name, depth: s.depth + depthOffset, kind: s.kind, start: s.start, end: s.end, status: s.status, outcome: s.outcome,
   provider: s.provider, model: s.kind === 'llm' ? s.model : null, tokens: s.tokens, links: s.links.map((url) => ({ url, label: 'link' })),
+  cost: s.kind === 'llm' ? callCost(spanCall(s)) : null,
 }));
 
 function runLinks(run) {
@@ -224,12 +264,20 @@ export function renderRunPage(run, model) {
     ['Duration', formatDuration(run.duration_ms)], ['Record', `schema ${run.schema_version}`],
   ].map(([k, v]) => `<tr><th>${e(k)}</th><td>${e(v ?? '—')}</td></tr>`).join('');
   const links = runLinks(run).map((l) => link(l.url, l.label)).join(' · ');
+  const cost = run.cost ?? sumCosts(run.llm);
+  const calls = run.llm.length ? table(['Time (UTC)', 'Stage', 'provider:model', { label: 'Input', num: true }, { label: 'Cache reads', num: true }, { label: 'Cache writes', num: true }, { label: 'Output', num: true }, 'Tokens', 'Cost'],
+    run.llm.map((c) => [e(time(c.ts)), `<code>${e(c.pipeline_stage ?? c.stage ?? '—')}</code>`, `<code>${e(providerModel(c.provider, c.model) || '?')}</code>${c.fallback ? ' <span class="muted">fallback</span>' : ''}${c.failed ? ' <span class="status status-critical">failed</span>' : ''}`,
+      e(compact(c.tokens_in)), e(c.estimated === false ? compact(c.cache_read ?? 0) : '—'), e(c.estimated === false ? compact(c.cache_write ?? 0) : '—'), e(compact(c.tokens_out)), c.estimated === false ? 'measured' : '<span class="muted">estimated</span>', costHtml(c.cost ?? callCost(c))])) : emptyCard('No LLM call in this run.');
   const events = run.events.length ? `<div class="card table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Stage</th><th>Event</th><th>Level</th><th class="num">ms</th><th>Meta</th></tr></thead><tbody>${run.events.map((ev) => `<tr><td>${e(time(ev.ts))}</td><td><code>${e(ev.stage ?? '—')}</code></td><td><code>${e(ev.event)}</code></td><td>${levelHtml(ev.level)}</td><td class="num">${e(ev.duration_ms ?? '—')}</td><td class="wrap"><code>${e(JSON.stringify(ev.meta))}</code></td></tr>`).join('')}</tbody></table></div>` : emptyCard('No event in this record.');
   return pipelinePage(`Run ${run.run_id}`, `<h1>Run <code>${e(run.run_id)}</code> ${statusHtml(null, run.outcome)}</h1>
 ${nav('../', model.months)}
 <p class="sub">${links || 'No link recorded.'}${trace ? ` · <a href="${traceHref('../', trace.trace_id)}">work-item trace (${e(itemLabel(trace.item))})</a>` : run.trace_id ? ' · <span class="muted">no trace index for this work item</span>' : ''}</p>
 <details class="detail-panel"><summary>Execution context · workflow, actor & revision</summary><div class="card table-wrap"><table><tbody>${facts}</tbody></table></div></details>
 ${overflowHtml(run)}
+<details class="detail-panel" open><summary>LLM cost · tokens & USD per call</summary><h2>LLM cost</h2>
+<div class="tiles">${costTiles(cost)}</div>
+<p class="sub">${costSub(cost)}</p>
+${calls}</details>
 <details class="detail-panel"><summary>Timing & span waterfall</summary><h2>Spans</h2>
 ${run.flat ? '<p class="note">Schema 1 record (ADR-0040): no span tree — the run and its stages are shown flat; the events below hold every action.</p>' : ''}
 ${waterfall(spanRows(run), { t0: run.started_at, t1: run.completed_at })}</details>
@@ -260,6 +308,13 @@ export function renderTracePage(trace, model) {
   const missing = trace.runs.filter((r) => !r.run).length;
   if (missing) notes.push(`${missing} run(s) listed by the index have no loaded record (missing, malformed or older than the month window).`);
   for (const r of trace.runs) if (r.run && (r.run.spans_overflow.count || r.run.spans_overflow.events)) notes.push(`Run ${r.run_id}: ${r.run.spans_overflow.count} span(s), ${r.run.spans_overflow.events} span event(s) over the cap (spans_overflow).`);
+  const loaded = trace.runs.map((r) => r.run).filter(Boolean);
+  const cost = sumCosts(loaded.flatMap((r) => r.llm));
+  const costPanel = cost.calls ? `<details class="detail-panel" open><summary>LLM cost · per stage & per run</summary><h2>LLM cost</h2>
+<div class="tiles">${costTiles(cost, [['Runs with LLM calls', compact(loaded.filter((r) => r.llm.length).length)]])}</div>
+<p class="sub">${costSub(cost)}${missing ? ` ${e(missing)} run(s) without a loaded record are not counted.` : ''}</p>
+${table(STAGE_COST_HEAD, stageCostRows(loaded))}
+${table(['Run', 'Workflow', { label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Output', num: true }, 'Cost'], loaded.filter((r) => r.llm.length).map((r) => { const c = r.cost ?? sumCosts(r.llm); return [`<a href="${runHref('../', r.run_id)}">${e(r.run_id)}</a>`, e(r.workflow ?? '—'), e(c.calls), e(compact(c.tokens_in)), e(compact(c.tokens_out)), e(costLine(c))]; }))}</details>` : '';
   return pipelinePage(`Trace ${itemLabel(trace.item)}`, `<h1>Work-item trace · ${e(itemLabel(trace.item))}</h1>
 ${nav('../', model.months)}
 <p class="sub">Trace <code>${e(trace.trace_id)}</code>${trace.item?.key ? ` · <code>${e(trace.item.key)}</code>` : ''} · ${e(trace.runs.length)} run(s)</p>
@@ -267,9 +322,11 @@ ${nav('../', model.months)}
 <div class="tile"><div class="label">Lead time (first start → last end)</div><div class="value">${e(formatDuration(trace.lead_time_ms))}</div></div>
 <div class="tile"><div class="label">Running</div><div class="value">${e(formatDuration(running))}</div></div>
 <div class="tile"><div class="label">Waiting between runs</div><div class="value">${e(formatDuration(waiting))}</div></div>
+<div class="tile"><div class="label">LLM cost</div><div class="value">${e(costAmount(cost))}</div></div>
 </div>
 ${notes.map((n) => `<p class="note">${e(n)}</p>`).join('')}
 <p class="note">Runs are separate jobs on different runners: spans are placed by their own clocks, so offsets between runs are approximate (ADR-0041 §6).</p>
+${costPanel}
 <h2>Flow history</h2>${flowSteps(trace)}
 <details class="detail-panel"><summary>Full trace · Waterfall, spans, models & tokens</summary><h2>Waterfall</h2>
 ${waterfall(rows, { t0: trace.first_started_at, t1: trace.last_completed_at })}</details>`, 2);
@@ -305,18 +362,21 @@ function colPath(x, y0, w, h, round = true) {
   return `M${x},${y0}V${y0 - h + r}Q${x},${y0 - h} ${x + r},${y0 - h}H${x + w - r}Q${x + w},${y0 - h} ${x + w},${y0 - h + r}V${y0}Z`;
 }
 
-/** One-series horizontal bars: rows `{ label, value, note? }`; value null → the note instead of a bar. */
-export function hbars(rows, { label = 'Bar chart', max = null } = {}) {
+/**
+ * One-series horizontal bars: rows `{ label, value, note? }`; value null → the note instead of a bar.
+ * `minScale` floors the axis (1 for counts; a fractional-dollar chart passes a smaller one).
+ */
+export function hbars(rows, { label = 'Bar chart', max = null, format = compact, minScale = 1 } = {}) {
   if (!rows.length) return emptyCard('No data.');
   const W = 640, L = 260, R = 64, BAR = 16, GAP = 10;
-  const top = Math.max(1, max ?? Math.max(...rows.map((r) => r.value ?? 0)));
+  const top = Math.max(minScale, max ?? Math.max(...rows.map((r) => r.value ?? 0)));
   const H = rows.length * (BAR + GAP) + 4;
   const marks = rows.map((r, i) => {
     const y = 2 + i * (BAR + GAP);
     const name = `<text x="${L - 8}" y="${y + BAR - 4}" text-anchor="end" font-size="12" fill="var(--ink-2)">${e(r.label)}</text>`;
     if (r.value == null) return `<g>${name}<text x="${L}" y="${y + BAR - 4}" font-size="12" fill="var(--muted)">${e(r.note ?? 'not recorded')}</text></g>`;
     const w = ((W - L - R) * r.value) / top;
-    return `<g><title>${e(`${r.label}: ${r.value}`)}</title>${name}<rect x="${L}" y="${y - GAP / 2}" width="${W - L}" height="${BAR + GAP}" fill="transparent"/><path d="${hbarPath(L, y, w, BAR)}" fill="var(--s1)"/><text x="${L + w + 6}" y="${y + BAR - 4}" font-size="12" fill="var(--ink)">${e(compact(r.value))}</text></g>`;
+    return `<g><title>${e(`${r.label}: ${r.value}`)}</title>${name}<rect x="${L}" y="${y - GAP / 2}" width="${W - L}" height="${BAR + GAP}" fill="transparent"/><path d="${hbarPath(L, y, w, BAR)}" fill="var(--s1)"/><text x="${L + w + 6}" y="${y + BAR - 4}" font-size="12" fill="var(--ink)">${e(format(r.value))}</text></g>`;
   }).join('');
   return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" style="max-width:${W}px" role="img" aria-label="${e(label)}; values in the table"><line x1="${L}" x2="${L}" y1="0" y2="${H}" stroke="var(--axis)" stroke-width="1"/>${marks}</svg></div>`;
 }
@@ -344,14 +404,16 @@ export function tokenChart(tokens) {
       base -= h;
       return `<path d="${path}" fill="var(${SERIES_VAR[p.si]})"/>`;
     }).join('');
-    const tip = `${d.day}: ${d.total} tokens (est.)${Object.entries(d.workflows).map(([w, v]) => `, ${w} ${v}`).join('')}${d.crons.length ? ` · eval cron: ${d.crons.join(', ')}` : ''}`;
+    // A day without the estimated share (older data shape) is all estimated.
+    const est = d.estimated ?? d.total;
+    const tip = `${d.day}: ${d.total} tokens ${est >= d.total ? '(est.)' : est ? `(${est} est.)` : '(measured)'}${Object.entries(d.workflows).map(([w, v]) => `, ${w} ${v}`).join('')}${d.crons.length ? ` · eval cron: ${d.crons.join(', ')}` : ''}`;
     const cron = d.crons.length ? `<text x="${x + bw / 2}" y="${H - B + 28}" text-anchor="middle" font-size="10" fill="var(--ink-2)">▲ ${e(d.crons.map((c) => c[0].toUpperCase()).join(''))}</text>` : '';
     const label = (tokens.days.length - 1 - i) % 7 === 0 ? `<text x="${x + bw / 2}" y="${H - B + 14}" text-anchor="middle" font-size="10" fill="var(--muted)">${e(d.day.slice(5))}</text>` : '';
     return `<g><title>${e(tip)}</title><rect x="${L + i * slot}" y="${T}" width="${slot}" height="${H - T - B}" fill="transparent"/>${marks}${label}${cron}</g>`;
   }).join('');
   const limit = `<line x1="${L}" x2="${W - R}" y1="${y(tokens.limit)}" y2="${y(tokens.limit)}" stroke="var(--critical)" stroke-width="1"/><text x="${W - R}" y="${y(tokens.limit) - 4}" text-anchor="end" font-size="11" fill="var(--ink-2)">${e(compact(tokens.limit))} TPD (Groq free tier)</text>`;
   const legendHtml = `<div class="legend">${TOKEN_SERIES.map((s, i) => `<span><span class="key" style="background:var(${SERIES_VAR[i]})"></span>${e(s)}</span>`).join('')}<span>▲ V / R: weekly eval cron (validation / review)</span></div>`;
-  return `${legendHtml}<div class="chart"><svg viewBox="0 0 ${W} ${H}" style="max-width:${W}px" role="img" aria-label="Estimated Groq tokens per day against the 200k tokens-per-day limit; values in the table below">${grid}<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--axis)" stroke-width="1"/>${cols}${limit}</svg></div>`;
+  return `${legendHtml}<div class="chart"><svg viewBox="0 0 ${W} ${H}" style="max-width:${W}px" role="img" aria-label="Groq tokens per day (provider-measured where recorded, chars/4 estimates otherwise) against the 200k tokens-per-day limit; values in the table below">${grid}<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--axis)" stroke-width="1"/>${cols}${limit}</svg></div>`;
 }
 
 /** Per item: share of the lead time spent running vs waiting between runs (100% stacked bars). */
@@ -370,7 +432,7 @@ export function criticalPathChart(items) {
 }
 
 export function renderHealth(health, model) {
-  const { funnel, reviews, autofix, llm, latency, critical_path: cp, tokens } = health;
+  const { funnel, reviews, autofix, llm, latency, critical_path: cp, tokens, costs } = health;
   const funnelRows = funnel.stages.map((s) => ({ label: s.stage, value: s.count, note: 'not recorded — no workflow journals a merge' }));
   const causes = reviews.causes.filter((c) => c.count > 0);
   const autofixRows = [
@@ -383,7 +445,9 @@ export function renderHealth(health, model) {
   const cpSorted = [...cp].sort((a, b) => b.lead_time_ms - a.lead_time_ms).slice(0, 25);
   const body = `<h1>Pipeline health</h1>
 ${nav('', model.months)}
-<p class="sub">${e(health.window.runs)} run record(s), ${e(health.window.traces)} work-item trace(s)${health.window.months.length ? `, ${e(health.window.months.at(-1))} → ${e(health.window.months[0])}` : ''}. Token counts are chars/4 estimates (ADR-0041 §3), not provider-measured usage.</p>
+<p class="sub">${e(health.window.runs)} run record(s), ${e(health.window.traces)} work-item trace(s)${health.window.months.length ? `, ${e(health.window.months.at(-1))} → ${e(health.window.months[0])}` : ''}. Token counts are provider-measured where the record has them (ADR-0041 amendment), chars/4 estimates for older records.</p>
+
+${costPanel(costs)}
 
 <details class="detail-panel" open><summary>Delivery funnel · progress through the loop</summary><h2>Funnel</h2>
 <p class="sub">Issue work items that reached each stage (each stage counts items that also reached the previous one). PRs without an issue: ${e(funnel.pr_items.total)}, ${e(funnel.pr_items.approved)} approved.</p>
@@ -417,10 +481,45 @@ ${criticalPathChart(cpSorted)}
 ${table(['Work item', { label: 'Runs', num: true }, { label: 'Lead time', num: true }, { label: 'Running', num: true }, { label: 'Waiting', num: true }], cpSorted.map((c) => [`<a href="${traceHref('', c.trace_id)}">${e(itemLabel(c.item))}</a>`, e(c.runs), e(formatDuration(c.lead_time_ms)), e(formatDuration(c.running_ms)), e(formatDuration(c.waiting_ms))]))}
 
 </details><details class="detail-panel"><summary>Token usage · daily estimates & quotas</summary><h2>Groq tokens per day</h2>
-<p class="sub">Estimated tokens (in + out) of Groq calls per UTC day over ${e(tokens.days.length)} days, pipeline runs by workflow and eval runs from the scorecard, against the ${e(compact(tokens.limit))} tokens-per-day free-tier limit. Groq counts real tokens and its prompt cache: the estimate is an approximation.</p>
+<p class="sub">Tokens (in + out) of Groq calls per UTC day over ${e(tokens.days.length)} days, pipeline runs by workflow and eval runs from the scorecard, against the ${e(compact(tokens.limit))} tokens-per-day free-tier limit. Pipeline calls recorded since the ADR-0041 amendment carry Groq's measured counts; older records and eval runs are chars/4 estimates (the tooltip gives the estimated share per day).</p>
 ${tokenChart(tokens)}
 ${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: true }, { label: '% of TPD', num: true }, 'Eval cron'], tokenTable) : ''}</details>`;
   return pipelinePage('Pipeline health', body, 1);
+}
+
+const perRun = (g) => meanAmount(g, g.runs);
+const costRow = (label, g, extra = []) => [label, ...extra, e(g.calls), e(compact(g.tokens_in)), e(compact(g.cache_read)), e(compact(g.tokens_out)), e(costLine(g))];
+const COST_COLS = [{ label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Cache reads', num: true }, { label: 'Output', num: true }, 'Cost'];
+
+const RUN_HEAD = [{ label: 'Run' }, 'Workflow', 'Work item', ...COST_COLS];
+const ITEM_HEAD = [{ label: 'Work item' }, { label: 'Runs', num: true }, ...COST_COLS];
+const runRow = (r) => costRow(`<a href="${runHref('', r.run_id)}">${e(r.run_id)}</a><br><span class="muted">${e(time(r.started_at))}</span>`, r, [e(r.workflow ?? '—'), e(itemLabel(r.item))]);
+const itemRow = (it) => costRow(`<a href="${traceHref('', it.trace_id)}">${e(itemLabel(it.item))}</a>`, it, [e(it.runs)]);
+
+/** Health panel: LLM cost of the window per stage, workflow, day, and the most expensive runs / work items. */
+export function costPanel(costs) {
+  if (!costs?.total.calls) return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
+  const t = costs.total;
+  const items = costs.items_sum ?? sumCosts([]);
+  const extra = [['Mean per run', meanAmount(t, costs.runs)], ['Mean per work item', meanAmount(items, costs.items)]];
+  const stages = costs.by_stage.filter((g) => g.usd > 0);
+  return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary><h2>LLM cost</h2>
+<div class="tiles">${costTiles(t, extra)}</div>
+<p class="sub">${costSub(t)} The mean per work item counts work items with a trace index only.</p>
+<h3>Per stage</h3>
+${stages.length ? hbars(stages.map((g) => ({ label: g.key, value: g.usd })), { label: 'LLM cost in USD per pipeline stage', format: formatUsd, minScale: 1e-6 }) : ''}
+${table([{ label: 'Stage' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_stage.map((g) => [...costRow(`<code>${e(g.key)}</code>`, g, [e(g.runs)]), e(perRun(g))]))}
+<h3>Per workflow</h3>
+${table([{ label: 'Workflow' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_workflow.map((g) => [...costRow(e(g.key), g, [e(g.runs)]), e(perRun(g))]))}
+<h3>Most expensive runs</h3>
+<p class="sub">Ranked on fully priced runs only; a run with an unpriced call has an incomplete cost and is listed apart.</p>
+${costs.top_runs.length ? table(RUN_HEAD, costs.top_runs.map(runRow)) : emptyCard('No fully priced run.')}
+${costs.unpriced_runs.length ? `<h3>Runs with unpriced calls · cost incomplete, not ranked</h3>${table(RUN_HEAD, costs.unpriced_runs.map(runRow))}` : ''}
+<h3>Most expensive work items</h3>
+${costs.items ? (costs.top_items.length ? table(ITEM_HEAD, costs.top_items.map(itemRow)) : emptyCard('No fully priced work item.')) : emptyCard('No work-item trace with an LLM call.')}
+${costs.unpriced_items.length ? `<h3>Work items with unpriced calls · cost incomplete, not ranked</h3>${table(ITEM_HEAD, costs.unpriced_items.map(itemRow))}` : ''}
+<h3>Per day (UTC)</h3>
+${table([{ label: 'Day' }, { label: 'Runs', num: true }, ...COST_COLS], costs.by_day.slice().reverse().map((g) => costRow(e(g.key), g, [e(g.runs)])))}</details>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +537,7 @@ export function renderModels(models, model) {
     const runs = m.runs.map((r) => `<a href="${runHref('', r)}">${e(r)}</a>`).join(', ');
     const evals = m.evals.map((ev) => `<a href="../runs/${encodeURIComponent(ev.run_id)}.html">${e(ev.suite)} ${e(ev.run_id)}</a> ${ev.passed ? '<span class="ok">✓</span>' : '<span class="ko">✕</span>'}`).join(', ');
     return `<section${id}><h2><code>${e(m.key)}</code></h2>
-<div class="tiles">${tile('Pipeline LLM calls', compact(m.calls))}${tile('Failed', compact(m.failed))}${tile('Fallback answers', compact(m.fallback))}${tile('Tokens (est.)', compact(m.tokens))}${tile('Eval runs', compact(m.evals.length))}</div>
+<div class="tiles">${tile('Pipeline LLM calls', compact(m.calls))}${tile('Failed', compact(m.failed))}${tile('Fallback answers', compact(m.fallback))}${tile('Tokens', compact(m.tokens))}${tile('LLM cost', costAmount(m.cost ?? sumCosts([])), m.unpriced ? `${m.unpriced} unpriced call(s)` : '')}${tile('Eval runs', compact(m.evals.length))}</div>
 <p class="sub">Pipeline runs: ${runs || '<span class="muted">none in the window</span>'}</p>
 <p class="sub">Eval runs: ${evals || '<span class="muted">none on the scorecard</span>'}</p></section>`;
   }).join('\n');

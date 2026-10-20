@@ -209,3 +209,115 @@ test('flow map is generated with shared navigation, retained evidence and live m
   assert.match(html, /data-merge-node/);
   assert.match(html, /api.github.com\/repos\/koydas\/autonomous-dev-loop\/pulls/);
 });
+
+// LLM cost on the run, trace, feed, health and models pages.
+test('cost: run page per call, waterfall column, trace per stage and run, feed tile, health panel, models tile', () => {
+  const issue = { kind: 'issue', number: 70, source: 'branch' };
+  const records = [
+    makeRecord({ runId: '600', workflow: 'Code Generation', stage: 'code_gen', prNumber: null, issueNumber: 70, item: issue, start: T0, provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 100_000, tokensOut: 10_000, usage: { cacheRead: 90_000, cacheWrite: 1000 } }),
+    makeRecord({ runId: '601', item: issue, start: T0 + 60000, tokensIn: 5000, tokensOut: 500 }),
+    makeRecord({ runId: '602', item: issue, start: T0 + 120000, provider: 'anthropic', model: 'claude-unknown' }),
+  ];
+  const { files } = site(records);
+  const run = files['pipeline/runs/600-1.html'];
+  // 9k uncached × $4 + 90k read × $0.20 + 1k write × $5 + 10k out × $20 = $0.259
+  assert.match(run, /LLM cost · tokens &amp; USD per call|LLM cost · tokens & USD per call/);
+  assert.match(run, /\$0\.2590/);
+  assert.match(run, /<td class="num">90\.0k<\/td><td class="num">1\.0k<\/td>/, 'cache reads and writes per call');
+  assert.match(run, /provider-measured tokens/);
+  assert.match(run, /<th class="num">Cost<\/th>/, 'waterfall cost column');
+  assert.match(run, /90\.0k cached/);
+  assert.match(files['pipeline/runs/601-1.html'], /free tier/);
+  assert.match(files['pipeline/runs/602-1.html'], /unpriced/);
+  const trace = Object.entries(files).find(([p, html]) => /^pipeline\/traces\/[0-9a-f]{32}\.html$/.test(p) && html.includes('issue #70'))[1];
+  assert.match(trace, /LLM cost · per stage &amp; per run|LLM cost · per stage & per run/);
+  assert.match(trace, /<code>code_gen<\/code>/);
+  assert.match(trace, /<code>code_gen<\/code><\/td><td class="num">1<\/td>.*?<td>\$0\.2590 USD<\/td>/);
+  assert.match(trace, /<code>review<\/code><\/td><td class="num">2<\/td>.*?\$0\.0000 USD \+ 1 unpriced call\(s\) \(1 Groq free-tier call\(s\) at no cost\)/);
+  assert.match(trace, /LLM cost<\/div><div class="value">\$0\.2590/, 'trace tile');
+  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">\$0\.2590/);
+  assert.match(files['pipeline/index.html'], /LLM \$0\.2590 · 1 call\(s\)/, 'execution card');
+  const health = files['pipeline/health.html'];
+  assert.match(health, /LLM cost · per stage, run &amp; work item|LLM cost · per stage, run & work item/);
+  assert.match(health, /aria-label="LLM cost in USD per pipeline stage/);
+  assert.match(health, /Most expensive runs/);
+  assert.match(health, /href="runs\/600-1\.html"/);
+  assert.match(health, /Mean per work item<\/div><div class="value">≥ \$0\.2590/, 'one call of the item is unpriced: a lower bound');
+  assert.match(health, /provider-measured tokens \(prompt cache priced apart/);
+  assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">\$0\.2590/);
+  assert.match(files['pipeline/models.html'], /1 unpriced call\(s\)/);
+  assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">free tier/);
+});
+
+test('cost: no LLM call → empty cost states', () => {
+  const rec = makeRecord({ runId: '610', start: T0 });
+  rec.otlp.resourceSpans[0].scopeSpans[0].spans = rec.otlp.resourceSpans[0].scopeSpans[0].spans.filter((s) => s.name !== 'llm_call');
+  rec.envelope.llm_calls = [];
+  rec.events = [];
+  const { files } = site([rec]);
+  assert.match(files['pipeline/runs/610-1.html'], /No LLM call in this run/);
+  assert.match(files['pipeline/health.html'], /No LLM call recorded in the window/);
+  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">—/);
+});
+
+test('cost: a window of unpriced calls only reads unpriced on the activity tile, execution cards, health and models', () => {
+  const { files } = site([makeRecord({ runId: '620', start: T0, provider: 'anthropic', model: 'claude-unknown' })]);
+  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">unpriced/);
+  assert.match(files['pipeline/index.html'], /<span>LLM unpriced · 1 call\(s\)<\/span>/);
+  assert.match(files['pipeline/runs/620-1.html'], /LLM cost<\/div><div class="value">unpriced/);
+  assert.match(files['pipeline/health.html'], /Mean per run<\/div><div class="value">—/);
+  assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">unpriced/);
+  assert.doesNotMatch(files['pipeline/index.html'], /\$0\.0000/);
+});
+
+test('models: a model seen only in the eval scorecard has no pipeline cost (—), never free or $0', () => {
+  const scorecard = { suites: { review: { runs: [{ run_id: 'r1', model: 'claude-opus-5-5', ts: '2026-10-14T00:00:00Z', passed: true }, { run_id: 'r2', model: 'openai/gpt-oss-120b', ts: '2026-10-14T00:00:00Z', passed: true }] } } };
+  const model = buildPipelineModel({ records: [], traces: [] });
+  const html = renderModels(modelUsage(model.runs, scorecard), model);
+  assert.equal((html.match(/LLM cost<\/div><div class="value">—/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /free tier|\$0\.0000/);
+});
+
+test('health: a stage or workflow with no priced call shows no $0 per-run mean', () => {
+  const { files } = site([makeRecord({ runId: '630', start: T0 })]);
+  const health = files['pipeline/health.html'];
+  assert.match(health, /<code>review<\/code><\/td><td class="num">1<\/td>.*?<td class="num">free tier<\/td><\/tr>/);
+  const unpriced = site([makeRecord({ runId: '631', start: T0, provider: 'anthropic', model: 'claude-unknown' })]).files['pipeline/health.html'];
+  assert.match(unpriced, /<code>review<\/code><\/td><td class="num">1<\/td>.*?<td class="num">—<\/td><\/tr>/);
+  assert.doesNotMatch(health.slice(health.indexOf('Per stage')), /<td class="num">\$0\.0000<\/td>/);
+});
+
+test('health: means over a window with unpriced calls are marked as lower bounds', () => {
+  const { files } = site([
+    makeRecord({ runId: '640', start: T0, provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1000, tokensOut: 1000 }),
+    makeRecord({ runId: '641', start: T0 + 1000, provider: 'anthropic', model: 'claude-unknown' }),
+  ]);
+  const health = files['pipeline/health.html'];
+  assert.match(health, /Mean per run<\/div><div class="value">≥ \$0\.0120/);
+  assert.match(health, /Mean per work item<\/div><div class="value">≥ \$0\.0240/, 'both runs belong to PR #7: one item');
+  assert.match(health, /<td class="num">≥ \$0\.0120<\/td>/, 'per-run column of the stage / workflow rows');
+});
+
+test('token chart: tooltips say measured, est. (all estimated) or the estimated share per day', () => {
+  const days = (measured, est) => ({ days: [{ day: '2026-10-14', total: measured + est, estimated: est, series: { 'PR Review': measured + est, 'Auto-Fix PR': 0, Evals: 0, Other: 0 }, workflows: {}, crons: [] }], workflows: [], limit: 200000 });
+  assert.match(tokenChart(days(500, 0)), /2026-10-14: 500 tokens \(measured\)/);
+  assert.match(tokenChart(days(0, 400)), /2026-10-14: 400 tokens \(est\.\)/);
+  assert.match(tokenChart(days(500, 400)), /2026-10-14: 900 tokens \(400 est\.\)/);
+  assert.match(tokenChart(days(1, 0)), /provider-measured where recorded, chars\/4 estimates otherwise/);
+});
+
+test('cost: a usage-less LLM span reads unpriced in the waterfall; unpriced runs listed apart; sub-dollar bars scale to the max', () => {
+  const rec = makeRecord({ runId: '650', start: T0, provider: 'anthropic', model: 'claude-opus-5-5', llmStatus: 'error' });
+  const llm = rec.otlp.resourceSpans[0].scopeSpans[0].spans.find((s) => s.name === 'llm_call');
+  llm.attributes = llm.attributes.filter((a) => !a.key.startsWith('gen_ai.usage.') && a.key !== 'adl.usage.estimated');
+  const { files } = site([rec, makeRecord({ runId: '651', prNumber: 8, start: T0, provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1000, tokensOut: 1000 })]);
+  const wf = files['pipeline/runs/650-1.html'];
+  assert.match(wf.slice(wf.indexOf('<table class="wf">')), /<td class="num"><span class="muted">unpriced<\/span><\/td>/);
+  const health = files['pipeline/health.html'];
+  assert.match(health, /Runs with unpriced calls · cost incomplete, not ranked/);
+  assert.match(health, /Work items with unpriced calls · cost incomplete, not ranked/);
+  const bars = hbars([{ label: 'a', value: 0.01 }, { label: 'b', value: 0.02 }], { format: (v) => String(v), minScale: 1e-6 });
+  const widths = [...bars.matchAll(/<path d="M260,\d+H([\d.]+)/g)].map((m) => Number(m[1]) - 260);
+  // Path end = width − 4 (rounded corner): the largest value fills the 316 px plot, half of it half.
+  assert.ok(widths[1] + 4 === 316 && Math.abs((widths[0] + 4) * 2 - (widths[1] + 4)) < 2, `bars scale to the largest value: ${widths}`);
+});

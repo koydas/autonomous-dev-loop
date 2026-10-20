@@ -499,3 +499,35 @@ test('callGroq waits out Retry-After (3 s) on fake timers: no request before 300
     delete process.env.GROQ_MAX_RETRIES;
   }
 });
+
+// ADR-0041 amendment: measured usage through onUsage.
+test('groqUsage: prompt_tokens already include the cached ones; missing or malformed usage → null', async () => {
+  const { groqUsage } = await import('../lib/groq_client.mjs');
+  assert.deepEqual(groqUsage({ usage: { prompt_tokens: 900, completion_tokens: 120, prompt_tokens_details: { cached_tokens: 300 } } }), { input: 900, output: 120, cache_read: 300, cache_write: 0 });
+  assert.deepEqual(groqUsage({ usage: { prompt_tokens: 9, completion_tokens: 1 } }), { input: 9, output: 1, cache_read: 0, cache_write: 0 });
+  assert.equal(groqUsage({}), null);
+  assert.equal(groqUsage({ usage: null }), null);
+  assert.equal(groqUsage({ usage: { prompt_tokens: 9 } }), null);
+});
+
+test('callGroq reports the usage through onUsage, before the content check', async () => {
+  const seen = [];
+  mockFetch(makeResponse({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 50, completion_tokens: 5 } }));
+  assert.equal(await callGroq({ ...BASE_ARGS, onUsage: (u) => seen.push(u) }), 'ok');
+  mockFetch(makeResponse({ choices: [{ message: { content: '' } }], usage: { prompt_tokens: 50, completion_tokens: 0 } }));
+  await assert.rejects(() => callGroq({ ...BASE_ARGS, onUsage: (u) => seen.push(u) }), /Unexpected Groq API response format/);
+  assert.deepEqual(seen.map((u) => u.output), [5, 0]);
+  mockFetch(makeResponse({ choices: [{ message: { content: 'ok' } }] }));
+  assert.equal(await callGroq({ ...BASE_ARGS, onUsage: (u) => seen.push(u) }), 'ok');
+  assert.equal(seen.length, 2, 'no usage in the response: no report');
+});
+
+test('groqUsage rejects malformed counts instead of coercing them', async () => {
+  const { groqUsage } = await import('../lib/groq_client.mjs');
+  for (const usage of [
+    { prompt_tokens: -1, completion_tokens: 2 }, { prompt_tokens: 1, completion_tokens: 0.5 },
+    { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: -1 } },
+    { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 11 } },
+  ]) assert.equal(groqUsage({ usage }), null, JSON.stringify(usage));
+  assert.equal(groqUsage({ usage: { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: null } } }).cache_read, 0);
+});

@@ -1,6 +1,6 @@
 // Recorded evidence is rendered at build time; GitHub supplies merge facts in the browser.
 import { escapeHtml as e } from './eval_site.mjs';
-import { PRICES_USD_PER_MTOK } from './eval_scorecard.mjs';
+import { callCost, sumCosts, costAmount, meanAmount, costLine, costBasis, formatUsd } from './llm_cost.mjs';
 
 const stages = [['Validation', 'issue_validation'], ['Code generation', 'code_gen'], ['PR preparation', 'pr_prepare'], ['Review', 'review'], ['Auto-fix', 'autofix']];
 const duration = v => v == null ? 'Not recorded' : `${(v / 1000).toFixed(1)} s`;
@@ -17,25 +17,33 @@ function stageStatus(matching, stage) {
   return STATUS.has(outcome) ? outcome : 'not-recorded';
 }
 
+const tokens = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+const BASIS_NOTE = {
+  measured: 'provider-measured tokens, thinking and prompt cache included',
+  estimated: 'chars/4 token estimate, excludes thinking and cache adjustments',
+  'measured + estimated': 'provider-measured tokens where recorded, chars/4 estimate for older records',
+};
+const costNote = sum => `${BASIS_NOTE[costBasis(sum)] ? `${BASIS_NOTE[costBasis(sum)]}; ` : ''}list price, never a bill.`;
+// A call belongs to the step its adl.stage names; a call without one (older record) to the run's only stage.
+const stepCalls = (runs, stage) => runs.flatMap(r => r.llm.filter(c => (c.pipeline_stage ?? (r.stages.length === 1 ? r.stages[0].stage : null)) === stage));
+const callText = c => {
+  const cost = c.cost ?? callCost(c);
+  const cache = c.cache_read ? ` (${c.cache_read} from cache)` : '';
+  return `${c.provider ?? '?'}:${c.model ?? '?'} · ${c.tokens_in ?? '?'} input${cache} / ${c.tokens_out ?? '?'} output tokens (${c.estimated === false ? 'measured' : 'estimated'}) · ${cost.basis === 'free' ? 'free tier' : cost.usd == null ? 'unpriced' : formatUsd(cost.usd)}${c.fallback ? ' · fallback' : ''}${c.failed ? ' · failed call' : ''}`;
+};
+
 function card(trace) {
   const runs = trace.runs.map(r => r.run).filter(Boolean);
   const calls = runs.flatMap(r => r.llm);
-  let usd = 0, unpriced = 0, free = 0;
-  for (const call of calls) {
-    // Groq runs on the free tier: no cost, never unpriced (same rule as eval_scorecard.mjs).
-    if (call.provider === 'groq') { free++; continue; }
-    const price = PRICES_USD_PER_MTOK[`${call.provider}:${call.model}`];
-    if (!price || call.tokens_in == null || call.tokens_out == null || (price.maxPromptTokens && call.tokens_in > price.maxPromptTokens)) unpriced++;
-    else usd += (call.tokens_in * price.in + call.tokens_out * price.out) / 1e6;
-  }
+  const total = sumCosts(calls);
   const numbers = [...new Set(runs.flatMap(r => [r.pr_number, ...r.events.map(ev => ev.meta?.prNumber)]).filter(n => Number.isSafeInteger(n) && n > 0))];
   if (trace.item?.kind === 'pr' && !numbers.includes(trace.item.number)) numbers.push(trace.item.number);
   const steps = stages.map(([name, stage]) => {
     const matching = runs.filter(r => r.stages.some(s => s.stage === stage) || r.events.some(ev => ev.stage === stage));
-    return { name, matching, status: stageStatus(matching, stage) };
+    return { name, matching, status: stageStatus(matching, stage), cost: sumCosts(stepCalls(matching, stage)) };
   });
-  return `<article class="widget flow-card" data-flow data-prs="${numbers.join(',')}" data-issue="${trace.item?.kind === 'issue' ? trace.item.number : ''}"><details class="flow-details"><summary class="flow-summary"><h2 data-flow-title>${e(trace.item?.kind ?? 'Work item')} #${e(trace.item?.number ?? 'unknown')}</h2><span class="flow-status">${steps.map(s => statusIcon(s.name, s.status)).join('')}<span data-merge-status>${statusIcon('Merge', 'not-recorded')}</span></span></summary><p data-merge>Merge status: not checked</p><p data-related></p><div class="widget-meta"><span>Recorded running: ${duration(trace.running_ms)}</span><span>Waiting: ${duration(trace.waiting_ms)}</span><span>${trace.runs.length} executions</span></div><p>LLM cost estimate: ${calls.length ? `$${usd.toFixed(4)} USD${unpriced ? ` + ${unpriced} unpriced call(s)` : ''}${free ? ` (${free} Groq free-tier call(s) at no cost)` : ''}` : 'Not recorded'} · excludes thinking and cache adjustments; never a bill.</p><ol class="flow-pipeline">${steps.map(({ name, matching }) => {
-    return `<li class="flow-node${matching.length ? '' : ' missing'}"><strong>${name}</strong><p>${matching.length ? `${matching.length} execution(s)` : 'Not recorded'}</p>${matching.map(r => `<details><summary>${e(r.outcome ?? 'Unknown')} · ${duration(r.duration_ms)}</summary><p>${e(r.workflow)} · ${e(r.actor ?? 'Unknown actor')} · ${e(r.head_sha ?? 'SHA not recorded')}</p><p>${e(r.llm.map(c => `${c.provider ?? '?'}:${c.model ?? '?'} · ${c.tokens_in ?? '?'} input / ${c.tokens_out ?? '?'} output tokens (estimated)${c.fallback ? ' · fallback' : ''}${c.failed ? ' · failed call' : ''}`).join(', ') || 'Model not recorded')}</p><p>${r.started_at == null ? 'Start not recorded' : e(new Date(r.started_at).toISOString())} · ${r.events.length} actions</p><a class="button-link" href="runs/${encodeURIComponent(r.run_id)}.html">Agent trace, events & spans →</a></details>`).join('')}</li>`;
+  return `<article class="widget flow-card" data-flow data-prs="${numbers.join(',')}" data-issue="${trace.item?.kind === 'issue' ? trace.item.number : ''}"><details class="flow-details"><summary class="flow-summary"><h2 data-flow-title>${e(trace.item?.kind ?? 'Work item')} #${e(trace.item?.number ?? 'unknown')}</h2><span class="flow-status">${steps.map(s => statusIcon(s.name, s.status)).join('')}<span data-merge-status>${statusIcon('Merge', 'not-recorded')}</span>${total.calls ? `<span class="flow-cost-chip" title="LLM cost of this flow (list price)">${e(costAmount(total))}</span>` : ''}</span></summary><p data-merge>Merge status: not checked</p><p data-related></p><div class="widget-meta"><span>Recorded running: ${duration(trace.running_ms)}</span><span>Waiting: ${duration(trace.waiting_ms)}</span><span>${trace.runs.length} executions</span></div><p>LLM cost estimate: ${costLine(total)} · ${total.calls ? `${total.calls} call(s), ${tokens(total.tokens_in)} input / ${tokens(total.tokens_out)} output tokens · ` : ''}${costNote(total)}</p><ol class="flow-pipeline">${steps.map(({ name, matching, cost }) => {
+    return `<li class="flow-node${matching.length ? '' : ' missing'}"><strong>${name}</strong><p>${matching.length ? `${matching.length} execution(s)` : 'Not recorded'}</p>${cost.calls ? `<p class="flow-step-cost" data-step-cost>LLM: ${costLine(cost)} · ${cost.calls} call(s) · ${tokens(cost.tokens_in)} in / ${tokens(cost.tokens_out)} out${matching.length > 1 && cost.measured + cost.estimated ? ` · ${meanAmount(cost, matching.length)} per execution` : ''}</p>` : ''}${matching.map(r => `<details><summary>${e(r.outcome ?? 'Unknown')} · ${duration(r.duration_ms)}${r.llm.length ? ` · ${costAmount(r.cost ?? sumCosts(r.llm))}` : ''}</summary><p>${e(r.workflow)} · ${e(r.actor ?? 'Unknown actor')} · ${e(r.head_sha ?? 'SHA not recorded')}</p><p>${e(r.llm.map(callText).join(', ') || 'Model not recorded')}</p><p>${r.started_at == null ? 'Start not recorded' : e(new Date(r.started_at).toISOString())} · ${r.events.length} actions</p><a class="button-link" href="runs/${encodeURIComponent(r.run_id)}.html">Agent trace, events & spans →</a></details>`).join('')}</li>`;
   }).join('')}<li class="flow-node missing" data-merge-node><strong>Merge</strong><p data-merge-step>Not checked</p></li></ol><p>${trace.runs.filter(r => !r.run).length} execution record(s) unavailable · ${e(trace.runs_overflow)} outside index</p>${trace.trace_id ? `<a class="button-link" href="traces/${trace.trace_id}.html">Full chronological flow →</a>` : ''}</details></article>`;
 }
 
@@ -56,6 +64,8 @@ export const FLOW_STYLE = `
 .flow-status { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
 .flow-status-icon { display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:28px; border:1px solid var(--border); border-radius:50%; font-weight:700; }
 .flow-status-icon.success { color:var(--good); } .flow-status-icon.failed { color:var(--critical); border-color:var(--critical); }
+.flow-cost-chip { display:inline-flex; align-items:center; min-height:28px; padding:0 10px; border:1px solid var(--border); border-radius:14px; font-size:12px; font-weight:650; color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.flow-step-cost { font-variant-numeric:tabular-nums; }
 .flow-status-icon.skipped { color:var(--ink-2); } .flow-status-icon.not-recorded { color:var(--muted); border-style:dashed; }
 @media(max-width:600px) { .flow-pipeline { grid-template-columns:1fr; } .flow-card h2 { font-size:22px; } [data-flow-search] { width:100%; } }
 `;

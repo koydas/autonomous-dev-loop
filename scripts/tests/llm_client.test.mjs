@@ -971,3 +971,56 @@ test('callLLM: llm_fallback_disabled carries the taxonomy class without a provid
   assert.equal(typeof disabled.meta.error_type, 'string');
   assert.equal(disabled.meta.status, null);
 });
+
+// ADR-0041 amendment: provider-measured usage on the llm_call span when the API reports it.
+test('callLLM: measured usage replaces the estimate on the span, prompt cache split out', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async () => makeResponse({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 40, cache_read_input_tokens: 3000, cache_creation_input_tokens: 0, output_tokens: 700 } });
+  const { llm } = await tracedCall({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' }, (call) => call());
+  assert.equal(llm[0].attributes['gen_ai.usage.input_tokens'], 3040);
+  assert.equal(llm[0].attributes['gen_ai.usage.output_tokens'], 700);
+  assert.equal(llm[0].attributes['gen_ai.usage.cache_read.input_tokens'], 3000);
+  assert.equal(llm[0].attributes['gen_ai.usage.cache_creation.input_tokens'], 0);
+  assert.equal(llm[0].attributes['adl.usage.estimated'], false);
+});
+
+test('callLLM: the answering fallback\'s usage is recorded, not the failed primary\'s', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.GROQ_API_KEY = 'groq-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async (_url, opts) => (opts.headers['x-api-key']
+    ? makeResponse({ stop_reason: 'refusal', content: [], usage: { input_tokens: 999, output_tokens: 999 } })
+    : makeResponse({ choices: [{ message: { content: 'fallback-ok' } }], usage: { prompt_tokens: 80, completion_tokens: 8 } }));
+  const { llm } = await tracedCall({ stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5' }, (call) => call());
+  assert.equal(llm[0].attributes['gen_ai.system'], 'groq');
+  assert.equal(llm[0].attributes['gen_ai.usage.input_tokens'], 80);
+  assert.equal(llm[0].attributes['gen_ai.usage.output_tokens'], 8);
+  assert.equal(llm[0].attributes['adl.usage.estimated'], false);
+});
+
+test('callLLM: a billed answer that fails anyway keeps its measured usage on the error span', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async () => makeResponse({ stop_reason: 'max_tokens', content: [], usage: { input_tokens: 500, output_tokens: 16000 } });
+  const { llm } = await tracedCall(
+    { stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5', fallback: false },
+    (call) => assert.rejects(call),
+  );
+  assert.equal(llm[0].status, 'error');
+  assert.equal(llm[0].attributes['gen_ai.usage.output_tokens'], 16000);
+  assert.equal(llm[0].attributes['adl.usage.estimated'], false);
+});
+
+test('callLLM: a failed call without any billed response carries no usage', async () => {
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-key';
+  process.env.AI_PROVIDER = 'anthropic';
+  globalThis.fetch = async () => makeResponse('Unauthorized', 401);
+  const { llm } = await tracedCall(
+    { stage: 'review', prompt: 'hi', systemPrompt: 'sys', apiKey: 'sk-ant-key', model: 'claude-opus-5-5', fallback: false },
+    (call) => assert.rejects(call),
+  );
+  assert.equal(llm[0].status, 'error');
+  assert.ok(!('gen_ai.usage.input_tokens' in llm[0].attributes));
+  assert.ok(!('adl.usage.estimated' in llm[0].attributes));
+});

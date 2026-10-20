@@ -430,7 +430,9 @@ Each journal event carries `span_id`: the `withSpan()` context (AsyncLocalStorag
 | `gen_ai.request.model` | model the stage asked for (primary config) |
 | `gen_ai.response.model` | model of the provider that answered (its config; the API response is not parsed) |
 | `gen_ai.request.max_tokens` | stage `max_tokens`, when set |
-| `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` | **estimates** (`estimateTokens`, chars / 4), flagged by `adl.usage.estimated: true` |
+| `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens` | as the provider billed them (`onUsage`, ADR-0041 amendment): input = whole prompt including cached tokens, output including thinking / reasoning; the chars/4 estimate when the provider reported no usage |
+| `gen_ai.usage.cache_read.input_tokens` / `gen_ai.usage.cache_creation.input_tokens` | prompt-cache reads / writes, measured usage only |
+| `adl.usage.estimated` | `false` for provider-measured usage, `true` for an estimate; a failed call with no billed response has no usage attribute |
 | `adl.stage` | calling stage |
 | `adl.llm.fallback` / `adl.llm.fallback_from` | the fallback answered / the primary it replaced |
 | `adl.llm.providers` | `<provider>:<status \| skip reason>` per failed or skipped provider |
@@ -439,6 +441,19 @@ Each journal event carries `span_id`: the `withSpan()` context (AsyncLocalStorag
 | `error.type` | error class (`TRANSIENT`, `PERMANENT`, …) on a failed call; status `error` |
 
 Never an attribute: prompt, completion, file content, issue/PR title or body, env value — the allowlist has no key for them, and the record drops anything unlisted.
+
+### LLM cost on the dashboard
+
+`scripts/lib/llm_cost.mjs` prices each `llm_call` from `PRICES_USD_PER_MTOK` (`eval_scorecard.mjs`), list price, never the bill:
+
+| Basis | When | Amount |
+|---|---|---|
+| `measured` | `adl.usage.estimated: false` | uncached input × `in` + cache reads × `cacheRead` + cache writes × `cacheWrite` + output × `out` |
+| `estimated` | older records, or no usage reported | input × `in` + output × `out` (no cache, no thinking) |
+| `free` | `gen_ai.system: groq` | $0 (free tier) |
+| `unpriced` | model not in the table, no token count, prompt over `maxPromptTokens` | not added, counted apart |
+
+`adl.stage` names the pipeline stage the cost goes to (`validation` → `issue_validation`, `generation` → `code_gen`, `review`, `autofix`). Shown on the flow card (per flow, step, execution, call), the run page (LLM cost panel, waterfall Cost column), the trace page (per stage and run), Health (total, mean per run / work item, per stage, workflow, day, top 10 runs and work items), Activity and Models.
 
 ### Storage
 

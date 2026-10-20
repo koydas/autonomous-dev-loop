@@ -195,3 +195,38 @@ test('eventSummary picks the decisive meta keys; feedEntries orders every event 
   assert.deepEqual([feed[0].issue, feed[0].pr, feed[0].url], [5, null, 'https://github.com/o/r/issues/5#c']);
   assert.deepEqual([feed[1].pr, feed[1].url, feed[1].summary], [7, null, 'verdict=APPROVE']);
 });
+
+// LLM cost (llm_cost.mjs): measured usage, pipeline stage and list price per call and per run.
+test('normalizeRun: a measured llm_call carries its cache split, pipeline stage and measured cost', () => {
+  const rec = makeRecord({ runId: '900', provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1_000_000, tokensOut: 100_000, usage: { cacheRead: 800_000, cacheWrite: 0 } });
+  const { run } = normalizeRun(JSON.stringify(rec), 'metrics/runs/2026-10/900-1.json');
+  const [call] = run.llm;
+  assert.deepEqual([call.estimated, call.cache_read, call.cache_write, call.stage, call.pipeline_stage, call.cost.basis], [false, 800_000, 0, 'review', 'review', 'measured']);
+  assert.ok(Math.abs(call.cost.usd - (200_000 * 4 + 800_000 * 0.2 + 100_000 * 20) / 1e6) < 1e-9);
+  assert.deepEqual(run.waterfall.find((s) => s.kind === 'llm').tokens, { in: 1_000_000, out: 100_000, estimated: false, cache_read: 800_000, cache_write: 0 });
+  assert.equal(run.cost.calls, 1);
+  assert.equal(run.cost.measured, 1);
+  assert.equal(run.cost.usd, call.cost.usd);
+});
+
+test('normalizeRun: an estimated call, a record without the estimated flag and a v1 record price as estimates', () => {
+  const est = normalizeRun(JSON.stringify(makeRecord({ runId: '901', provider: 'anthropic', model: 'claude-opus-5-5', stage: 'autofix' }))).run;
+  assert.deepEqual([est.llm[0].cost.basis, est.llm[0].pipeline_stage, est.llm[0].cache_read], ['estimated', 'autofix', null]);
+  const rec = makeRecord({ runId: '902', provider: 'anthropic', model: 'claude-opus-5-5' });
+  const llm = rec.otlp.resourceSpans[0].scopeSpans[0].spans.find((s) => s.name === 'llm_call');
+  llm.attributes = llm.attributes.filter((a) => a.key !== 'adl.usage.estimated');
+  assert.equal(normalizeRun(JSON.stringify(rec)).run.llm[0].estimated, true, 'no flag: never read as measured');
+  const v1 = normalizeRun(V1_REVIEW(), 'metrics/runs/2026-10/38848221354-1.json').run;
+  for (const c of v1.llm) assert.equal(c.cost.basis, c.provider === 'groq' ? 'free' : c.cost.basis);
+  assert.ok(v1.llm.every((c) => c.stage === 'review' && c.pipeline_stage === 'review'), 'v1: stage from the envelope');
+  assert.equal(v1.cost.calls, v1.llm.length);
+});
+
+test('normalizeRun: an llm_call span without usage (failed, nothing billed) keeps null counts and prices as unpriced', () => {
+  const rec = makeRecord({ runId: '903', provider: 'anthropic', model: 'claude-opus-5-5', llmStatus: 'error' });
+  const llm = rec.otlp.resourceSpans[0].scopeSpans[0].spans.find((s) => s.name === 'llm_call');
+  llm.attributes = llm.attributes.filter((a) => !a.key.startsWith('gen_ai.usage.') && a.key !== 'adl.usage.estimated');
+  const { run } = normalizeRun(JSON.stringify(rec));
+  assert.deepEqual([run.llm[0].tokens_in, run.llm[0].tokens_out, run.llm[0].cost.basis], [null, null, 'unpriced']);
+  assert.deepEqual([run.cost.unpriced, run.cost.estimated, run.cost.usd], [1, 0, 0]);
+});

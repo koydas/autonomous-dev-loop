@@ -43,6 +43,21 @@ function isTpmRateLimit(status, rawText) {
   }
 }
 
+const valid = (v) => Number.isSafeInteger(v) && v >= 0;
+
+/**
+ * The response's `usage` → `{ input, output, cache_read, cache_write }`, or null without a well-formed one
+ * (a malformed count is never coerced: the caller falls back to its estimate).
+ * Groq's prompt_tokens already include the cached ones; completion_tokens include the reasoning.
+ */
+export function groqUsage(raw) {
+  const u = raw?.usage;
+  if (u === null || typeof u !== 'object' || !valid(u.prompt_tokens) || !valid(u.completion_tokens)) return null;
+  const cached = u.prompt_tokens_details?.cached_tokens;
+  if (cached != null && (!valid(cached) || cached > u.prompt_tokens)) return null;
+  return { input: u.prompt_tokens, output: u.completion_tokens, cache_read: cached ?? 0, cache_write: 0 };
+}
+
 export async function callGroq({
   prompt,
   systemPrompt,
@@ -53,6 +68,7 @@ export async function callGroq({
   maxTokens,
   responseFormat = { type: 'json_object' },
   reasoningEffort,
+  onUsage,
 }) {
   const parsed = parseInt(process.env.GROQ_MAX_RETRIES, 10);
   const maxAttempts = (Number.isFinite(parsed) && parsed >= 0 ? parsed : 3) + 1;
@@ -116,6 +132,9 @@ export async function callGroq({
   } catch (err) {
     throw new Error('Groq API returned non-JSON response', { cause: err });
   }
+
+  const usage = groqUsage(raw);
+  if (usage) onUsage?.(usage);
 
   const content = raw?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || content.trim() === '') {

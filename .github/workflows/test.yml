@@ -358,6 +358,17 @@ jobs:
             --statements 80 \
             node --test scripts/tests/github_output.test.mjs
 
+      - name: Check llm_cost coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/llm_cost.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/llm_cost.test.mjs
+
       # Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build).
       - name: Check build_eval_site coverage (≥80%)
         run: |
