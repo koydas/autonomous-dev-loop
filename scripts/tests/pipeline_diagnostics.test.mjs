@@ -93,8 +93,24 @@ test('PRs stuck without approval after RULES.reviewStreak reviews', () => {
   assert.ok(!ids(diagnose({ model: model(runs) })).includes('review-stuck'), 'an approval among the last three');
   runs.push(run({ t: T + 9, sha: 'f'.repeat(40), events: [verdict('REQUEST_CHANGES')] }));
   const f = find(diagnose({ model: model(runs) }), 'review-stuck');
-  assert.match(f.fact, /#9 \(4\)/);
+  // The approval ended the earlier round: only the trailing streak is counted.
+  assert.match(f.fact, /#9 \(3\)/);
+  assert.match(f.impact, /^3 review run\(s\)/);
+  assert.equal(f.runs.length, 3);
+  assert.ok(!f.runs.includes(runs[0].run_id));
   assert.equal(f.evidence.length, RULES.reviewStreak);
+});
+
+test('cut-diff rate: a cut review that errored before its verdict stays out of the numerator', () => {
+  const cut = { event: 'review.prompt_truncated', meta: { diff_truncated: true, unreviewed_code_files: 3, prNumber: 9 } };
+  const runs = [
+    ...[1, 2, 3].map((i) => run({ sha: String(i).repeat(40), events: [cut, verdict('WITHHELD', { unreviewed_code_files: 3 })] })),
+    run({ runOutcome: 'failed', outcome: 'failed', sha: 'd'.repeat(40), events: [cut, { event: 'review.error', level: 'error', meta: { error: 'boom' } }] }),
+    run({ runOutcome: 'failed', outcome: 'failed', sha: 'e'.repeat(40), events: [cut, { event: 'review.error', level: 'error', meta: { error: 'boom' } }] }),
+  ];
+  const c = find(diagnose({ model: model(runs) }), 'review-coverage');
+  assert.match(c.fact, /^3 of 3 reviews saw a truncated diff/);
+  assert.equal(c.runs.length, 3);
 });
 
 test('auto-fix that rarely pushes, with a hypothesis only for no_changes', () => {

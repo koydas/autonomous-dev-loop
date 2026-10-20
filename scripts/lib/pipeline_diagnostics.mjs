@@ -102,7 +102,9 @@ function reviewFindings(runs) {
       items: [...new Set(withheld.map(prOf).filter(Boolean))], runs: runIds(withheld), evidence: evidenceOf(withheld), link: 'health.html#reviews',
     }));
   }
-  const truncated = events(runs, 'review.prompt_truncated').filter(({ e }) => e.meta.diff_truncated === true);
+  // Same population as the denominator: a cut review that errored before its verdict is not counted.
+  const verdictRuns = new Set(verdicts.map(({ run }) => run.run_id));
+  const truncated = events(runs, 'review.prompt_truncated').filter(({ run, e }) => e.meta.diff_truncated === true && verdictRuns.has(run.run_id));
   if (rated && truncated.length / verdicts.length >= RULES.truncatedShare) {
     const unseen = truncated.map(({ e }) => e.meta.unreviewed_code_files).filter((n) => typeof n === 'number');
     const budgets = [...new Set(truncated.map(({ e }) => e.meta.max_input_tokens).filter((n) => typeof n === 'number'))];
@@ -134,13 +136,15 @@ function reviewFindings(runs) {
       items: [...new Set(dup.map((l) => prOf(l[0])))], runs: runIds(dup.flat()), evidence: evidenceOf(dup.flat()), link: 'index.html#executions',
     }));
   }
-  // A PR whose last N verdicts are all non-APPROVE.
+  // A PR whose last N verdicts are all non-APPROVE. An APPROVE ends a fix round (ADR-0034):
+  // only the trailing streak after the latest approval counts.
   const byPr = new Map();
   for (const v of [...verdicts].sort((a, b) => (a.e.ts ?? 0) - (b.e.ts ?? 0))) {
     if (!prOf(v)) continue;
-    byPr.set(prOf(v), [...(byPr.get(prOf(v)) ?? []), v]);
+    const l = v.e.meta.verdict === 'APPROVE' ? [] : [...(byPr.get(prOf(v)) ?? []), v];
+    byPr.set(prOf(v), l);
   }
-  const stuck = [...byPr.entries()].filter(([, l]) => l.length >= RULES.reviewStreak && l.slice(-RULES.reviewStreak).every(({ e }) => e.meta.verdict !== 'APPROVE'));
+  const stuck = [...byPr.entries()].filter(([, l]) => l.length >= RULES.reviewStreak);
   if (stuck.length) {
     out.push(finding({
       id: 'review-stuck', severity: 'warning', category: 'Review', title: 'PRs not approved after several reviews',
