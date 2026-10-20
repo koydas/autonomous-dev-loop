@@ -36,7 +36,9 @@ import { buildSite } from './lib/eval_site.mjs';
 import { SUITES } from './lib/eval_suites.mjs';
 import { buildPipelineModel, MONTH_RE } from './lib/pipeline_model.mjs';
 import { computeHealth, modelUsage } from './lib/pipeline_health.mjs';
-import { pipelineOverview } from './lib/dashboard_ui.mjs';
+import { consoleContext } from './lib/console_views.mjs';
+import { consoleOverview } from './lib/console_overview.mjs';
+import { pipelineFacets } from './lib/flow_dashboard.mjs';
 import { buildPipelineSite } from './lib/pipeline_site.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -165,9 +167,12 @@ export async function readPipelineDir(dir, { log = console.log } = {}) {
 // Pure: pipeline inputs + the scorecard being deployed → the pipeline/ pages.
 export function assemblePipeline({ pipeline, scorecard, generatedAt = null, log = () => {} }) {
   const model = buildPipelineModel({ ...pipeline, log });
-  const files = buildPipelineSite({ model, health: computeHealth({ model, scorecard }), models: modelUsage(model.runs, scorecard), generatedAt });
-  return { files, model };
+  const ctx = consoleContext(model);
+  const files = buildPipelineSite({ model, health: computeHealth({ model, scorecard }), models: modelUsage(model.runs, scorecard), generatedAt, console: ctx });
+  return { files, model, console: ctx };
 }
+
+const escapeAttr = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 const siteBytes = (files) => Object.values(files).reduce((n, c) => n + Buffer.byteLength(c, 'utf8'), 0);
 
@@ -231,8 +236,20 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   const files = buildSite({ scorecard, details, thresholds, generatedAt, pipeline: pipeline != null });
   const assembled = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }) : null;
   const pipelineFiles = assembled?.files ?? {};
-  if (assembled) files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', pipelineOverview(assembled.model, 'pipeline/'));
-  return { files: { ...files, ...pipelineFiles }, scorecard, skipped, pipelineFiles, rebaseline: rebase && { rebaselined: rebase.rebaselined, noops: rebase.noops, refused: rebase.refused } };
+  // The home page leads with the pipeline's health (ADR-0043); the eval sections follow it.
+  if (assembled) {
+    files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', () => consoleOverview(assembled.console, 'pipeline/'))
+      .replace('</nav></aside>', () => `</nav><div class="side-filters">${pipelineFacets(assembled.console.journeys)}</div></aside>`);
+  }
+  // Header facts known only here: the build time ("Updated …") and, with pipeline views, the findings count.
+  // Only the home page and the pipeline pages carry them: eval detail pages stay byte-identical across
+  // pipeline-only builds (ADR-0027 amendment), so their header shows neither.
+  const findings = assembled ? String(assembled.console.diagnosis.findings.filter((f) => f.severity !== 'info').length || '') : '';
+  const all = { ...files, ...pipelineFiles };
+  for (const [p, c] of Object.entries(all)) {
+    if (p === 'index.html' || (p.startsWith('pipeline/') && p.endsWith('.html'))) all[p] = c.replace('data-generated=""', `data-generated="" data-ts="${escapeAttr(generatedAt)}"`).replace('<span class="nav-badge" data-diag-badge></span>', () => `<span class="nav-badge" data-diag-badge>${findings}</span>`);
+  }
+  return { files: all, scorecard, skipped, pipelineFiles: Object.fromEntries(Object.keys(pipelineFiles).map((k) => [k, all[k]])), rebaseline: rebase && { rebaselined: rebase.rebaselined, noops: rebase.noops, refused: rebase.refused } };
 }
 
 // The current dataset of each suite in the batch: sha256 of the file and case ids, as run_evals.mjs reads them.

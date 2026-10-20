@@ -107,6 +107,14 @@ cat observability/traces/<run_id>.json | jq '[.spans[] | {stage, outcome, durati
 
 All instrumentation goes through `scripts/lib/observability.mjs`. Schema reference and full event tables: `docs/observability.md`. Design rationale: [ADR-0018](docs/adr/0018-structured-observability.md).
 
+### Dashboard
+
+**[koydas.github.io/autonomous-dev-loop →](https://koydas.github.io/autonomous-dev-loop/)** — a static console built from the redacted run records on the `metrics` branch, organised as **Overview → Diagnostics → Pipelines → Investigation** ([ADR-0043](docs/adr/0043-diagnostic-observability-console.md)): system status and windowed indicators, deterministic diagnostics (observed fact vs labelled hypothesis, with evidence), every work item with every attempt of every stage, and the run / trace journals. Reading guide: [`docs/runbook.md`](docs/runbook.md#reading-the-dashboard).
+
+![Dashboard design mockup: overview, diagnostics, pipelines and pipeline detail, desktop and mobile](docs/images/dashboard-mockup.png)
+
+*Design mockup (target layout, illustrative data). The published console follows it with what the records can support: no "running" state (records are written when a run completes), approval rate instead of a job success rate, and merge confirmed only by GitHub's `merged_at`.*
+
 ## Evals
 
 Tests mock the LLM to prove the wiring; evals call the real model on a fixed, labelled dataset to measure the quality of its decisions — so a prompt or model change can be compared on the same inputs before merge.

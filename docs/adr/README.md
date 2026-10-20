@@ -46,3 +46,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0040: Run journal in the trace and a redacted public run record on the `metrics` branch](./0040-run-journal-and-public-run-record.md)
 - [ADR-0041: End-to-end tracing per work item](./0041-end-to-end-work-item-tracing.md)
 - [ADR-0042: Merged PR flow map](./0042-merged-pr-flow-map.md)
+- [ADR-0043: Diagnostic observability console](./0043-diagnostic-observability-console.md)

@@ -519,6 +519,20 @@ test('a pipeline-only build (no eval result, history read back from the live sit
   assert.notEqual(afterHome, beforeHome, 'the homepage reflects the new pipeline execution');
   assert.deepEqual(second.scorecard, first.scorecard, 'all evaluation history remains intact');
   assert.ok(second.files['pipeline/runs/702-1.html'], 'the pipeline half took the new run');
+  // ADR-0043: the home page leads with the pipeline's health, before the evaluations, with its styles.
+  assert.ok(afterHome.indexOf('class="status-banner') < afterHome.indexOf('id="evaluations"'));
+  assert.match(afterHome, /data-kpi="executions"/);
+  assert.match(afterHome, /<link rel="stylesheet" href="pipeline\/console\.css">/);
+  assert.match(afterHome, /<span class="nav-badge" data-diag-badge>\d*<\/span>/);
+  assert.match(afterHome, /data-generated="" data-ts="/);
+  assert.match(second.files['pipeline/index.html'], /data-generated="" data-ts="/);
+  assert.match(second.files['runs/e1.html'], /<span class="updated-dot" data-generated="" data-prefix="Updated "><\/span>/, 'eval detail pages carry no build-time fact');
+  assert.match(second.files['runs/e1.html'], /<span class="nav-badge" data-diag-badge><\/span>/);
+  assert.match(afterHome, /<div class="side-filters"><p class="side-title">Filter pipelines/);
+  assert.match(afterHome, /href="pipeline\/diagnostics\.html"/);
+  assert.match(second.files['pipeline/console.css'], /\.kpi-grid4 \{/);
+  assert.doesNotMatch(afterHome, /<!-- pipeline-overview -->/);
+  assert.ok(second.files['pipeline/diagnostics.html'], 'the diagnostics page is built');
   assert.ok(logs.some((m) => /^Pipeline views: 3 record\(s\), 1 trace index\(es\), \d+ page\(s\), [\d.]+ MB$/.test(m)));
   assert.ok(logs.some((m) => /^Eval dashboard written to .* \(\d+ files, [\d.]+ MB\)$/.test(m)));
 });
@@ -531,6 +545,7 @@ test('a build without --pipeline-dir has no pipeline pages and no pipeline link 
   const { files } = await buildEvalSite({ outDir: path.join(tmp, 'a'), resultFiles: [r1], log: (m) => logs.push(m) });
   assert.deepEqual(Object.keys(pipelineFiles(files)), []);
   assert.doesNotMatch(files['index.html'], /pipeline\//);
+  assert.doesNotMatch(files['index.html'], /status-banner|data-kpi=/, 'no pipeline overview without pipeline data');
   assert.ok(logs.includes('No --pipeline-dir: eval pages only (the pipeline views are not built)'));
 });
 

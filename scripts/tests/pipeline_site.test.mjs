@@ -60,7 +60,11 @@ test('a hostile string in every rendered field is escaped on every page', () => 
 
 test('empty states: no record, no trace, no LLM call', () => {
   const { files } = site([]);
-  assert.deepEqual(Object.keys(files).sort(), ['pipeline/flows.html', 'pipeline/health.html', 'pipeline/index.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
+  assert.deepEqual(Object.keys(files).sort(), ['pipeline/console.css', 'pipeline/diagnostics.html', 'pipeline/flows.html', 'pipeline/health.html', 'pipeline/index.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
+  // No data is said, never shown as healthy.
+  assert.match(files['pipeline/diagnostics.html'], /No pipeline run recorded yet/);
+  assert.doesNotMatch(files['pipeline/diagnostics.html'], /No problem detected/);
+  assert.match(files['pipeline/diagnostics.html'], /Merge is not journaled/);
   assert.match(files['pipeline/index.html'], /No run record on the <code>metrics<\/code> branch yet/);
   assert.match(files['pipeline/index.html'], /No pipeline action recorded in this period/);
   assert.match(files['pipeline/traces/index.html'], /No trace index on the metrics branch yet/);
@@ -203,7 +207,10 @@ test('health, models and run pages link to each other; the eval run pages are cr
 test('flow map is generated with shared navigation, retained evidence and live merge enhancement', () => {
   const { files } = site([makeRecord({ runId: '921' })]);
   const html = files['pipeline/flows.html'];
-  assert.match(html, /Flow map<\/a>/);
+  assert.match(html, /<a href="\.\.\/pipeline\/flows\.html"><svg class="nav-icon"[^>]*>.*?<\/svg>Pipelines<\/a>/);
+  assert.match(html, /<link rel="stylesheet" href="\.\.\/pipeline\/console\.css">/);
+  assert.match(html, /data-facet="state"/, 'the sidebar carries the pipeline facets');
+  assert.match(html, /<h1>Pipelines<\/h1>/);
   assert.match(html, /data-flow-dashboard/);
   assert.match(html, /runs\/921-1.html/);
   assert.match(html, /data-merge-node/);
@@ -320,4 +327,18 @@ test('cost: a usage-less LLM span reads unpriced in the waterfall; unpriced runs
   const widths = [...bars.matchAll(/<path d="M260,\d+H([\d.]+)/g)].map((m) => Number(m[1]) - 260);
   // Path end = width − 4 (rounded corner): the largest value fills the 316 px plot, half of it half.
   assert.ok(widths[1] + 4 === 316 && Math.abs((widths[0] + 4) * 2 - (widths[1] + 4)) < 2, `bars scale to the largest value: ${widths}`);
+});
+
+test('trace page: header with state and GitHub link, six tabs (overview, timeline, LLM calls, events, Actions runs, traces)', () => {
+  const { files, model } = site([makeRecord({ runId: '930', events: [{ event: 'review.verdict', meta: { verdict: 'WITHHELD', prNumber: 7, unreviewed_code_files: 2 } }] })]);
+  const html = files[`pipeline/traces/${model.traces[0].trace_id}.html`];
+  assert.match(html, /<h1>Work-item trace · PR #7 <span class="pill tone-warn">/);
+  assert.match(html, /<a class="button-link" href="https:\/\/github\.com\/koydas\/autonomous-dev-loop\/pull\/7">View on GitHub →<\/a>/);
+  const tabs = [...html.matchAll(/<section data-tab="([^"]+)" id="(tab-[a-z]+)">/g)].map((m) => m[1]);
+  assert.deepEqual(tabs, ['Overview', 'Timeline', 'LLM calls', 'Events', 'GitHub Actions', 'Traces']);
+  assert.match(html, /<dl class="key-info">/);
+  assert.match(html, /href="\.\.\/runs\/930-1\.html#ev-\d"><code>review\.verdict<\/code>/, 'key events link to the run journal');
+  assert.match(html, /<a href="https:\/\/github\.com\/koydas\/autonomous-dev-loop\/actions\/runs\/930\/attempts\/1">workflow run<\/a>/);
+  assert.match(html, /<h2>Waterfall<\/h2>/);
+  assert.match(html, /role', 'tablist'/);
 });

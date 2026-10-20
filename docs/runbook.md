@@ -2,14 +2,19 @@
 
 ## Reading the dashboard
 
-The overview separates **recorded outcomes** (which can mix execution status and business decisions) from **evaluation gates** (whether the model met its quality thresholds). A successful execution does not imply that its PR was approved or merged. Click a success/failure widget to open the corresponding filtered executions.
+The site follows **Overview → Diagnostics → Pipelines → Investigation** (ADR-0043); **Metrics** keeps the detailed tables.
 
-- **Issues & flows** shows open issues loaded from the public GitHub API, with labels and links to any recorded flow. This live list requires JavaScript and API access; rate limits or connectivity failures show an explicit message and a link to GitHub. Refresh retries the request. At most 1,000 GitHub items are fetched, with a visible notice if more remain. PRs returned by the issues API are excluded. Live titles are displayed only in the browser, never added to public run records.
-- **Recorded flows** keeps the latest known execution result for each issue or PR, independently of its current open/closed state. Open a flow for its chronological executions, then an execution for its journal and full span waterfall. Missing records remain visible and labelled.
-- **Executions** supports search and result filters. The technical action feed, month archives and every recorded event remain accessible in the expandable journal.
+Layout (design mockup in the README): top tabs, a left sidebar with the sections and — on Overview and Pipelines — filters by status, stage reached and LLM provider (they filter the pipeline lists, not the indicators), a bottom tab bar on phones. Dark theme by default; **Light** in the header switches and is remembered per browser. "Updated …" is the build time.
+
+- **Overview** (home page) — a status badge computed by the diagnostic rules (critical / issues / "no problem detected", which is never proof of health), a **Range** select (last 7 / 14 / 30 days, ending on the latest recorded run, kept in the URL as `?range=`), four indicators — pipeline executions by class, review approval rate, average run duration, LLM cost — each with its change against the same number of days before ("no prior data" when nothing was recorded then, never an invented change), a sparkline and a link to what explains it; charts of pipeline results per day, average / p95 duration and LLM providers by cost and calls; a strip with work items waiting on a person, steps recovered automatically, lead time and time lost on rate limits; **Issues requiring attention** (top findings, runs affected, since when); **Recent pipelines** (the ten newest rows, see Pipelines). **Metric definitions** (bottom) gives each indicator's source, method, period, population and known limits. The eval sections follow.
+- **Diagnostics** — severity chips (All / Critical / Warning / Info with counts) and a category filter over problems found by fixed rules (`RULES` in `scripts/lib/pipeline_diagnostics.mjs`, no LLM): each card gives what was **observed**, its impact and frequency, an optional **hypothesis** marked "interpretation, not verified", the evidence (runs, events, GitHub links) and an **Investigate** link. Filter by severity or category. **Data gaps** lists what the records cannot tell (merge, running state, missing records, estimated tokens, too few runs for a trend): a gap is not an absence of problem.
+- **Pipelines** — status chips with counts, then one row per recorded work item: title (the PR title is fetched live), last recorded state, stage icons, duration (lead time), attempts (runs), cost and last update. The stage icons are: the **final** attempt's execution status (✓ success, ✗ failed, ⊘ skipped, ○ not recorded — never a failure), ×N when the step ran several times, an amber ring when the step completed but decided not to move the item forward (WITHHELD, REQUEST_CHANGES, blocked, no change). The icon's label names earlier failed or adverse attempts. Below: the last recorded state (approved, approval withheld, escalated, failed, rejected, …). Open a row for its detail: one box per stage (total duration, final decision, executions, cost, the attempts in order with status, decision, run outcome, duration and a link to the run) and the key information (issue, PR, workflows, start, lead time, executions, cost, last recorded state, merge). Filters (search, state — including live merged / open / closed —, step with problems, kind, provider, period) are kept in the URL, so a link from the Overview opens the page pre-filtered.
+- **Investigation** — the execution list (search, result filter) and the technical journal (every action, month pages). A **run page** starts with what each step executed and decided, then the key events (decisions, warnings, errors, side effects, with their GitHub links); the full event journal (with meta) is behind **All events**. A **trace page** (pipeline detail) has tabs: Overview (journey per step, interventions, key information), Timeline (flow history), LLM calls (cost per stage and run), Events (key events of each run, linked to the run journal), GitHub Actions (every run with its workflow-run link) and Traces (waterfall); the open tab is kept in the URL hash. Without JavaScript every section shows.
+- **Metrics** (`pipeline/health.html`) — funnel, review decisions, auto-fix outcomes, providers, latency and critical path, token usage and LLM cost per stage, workflow, day, run and work item. **Models** cross-links provider:model usage with eval runs.
 - **Evaluations** presents the latest suite results as cards. Expand a suite for all metrics, thresholds, trends and history. Open a run to filter its cases and inspect parsed and raw model outputs; its results JSON remains unchanged. Case attention flags (error or score below 1) are separate from suite gates and do not change excluded-case policy.
-- **LLM cost** is shown per flow, step, execution and call (flow map), per call on each run page, per stage and run on each trace page, and for the window on Health (per stage, workflow, day, most expensive runs and work items). Amounts are list prices on provider-measured tokens (thinking and prompt cache included) for records written since the ADR-0041 amendment, chars/4 estimates for older ones — each amount says which; Groq calls are $0 (free tier), unknown models are counted as unpriced. An unexpected jump: open the run from Health → Most expensive runs and compare its input / cache reads / output per call.
-- **Health** groups delivery, reviews, auto-fix outcomes, providers, performance and token usage into expandable widgets. Tables and raw values remain available. On small screens ordinary tables become labelled rows; timing waterfalls and confusion matrices keep their axes and scroll within their panels.
+- **LLM cost** is shown per flow, step, execution and call (Pipelines), per call on each run page, per stage and run on each trace page, and for the window on Metrics. Amounts are list prices on provider-measured tokens (thinking and prompt cache included) for records written since the ADR-0041 amendment, chars/4 estimates for older ones — each amount says which; Groq calls are $0 (free tier), unknown models are counted as unpriced. An unexpected jump: open the run from Metrics → Most expensive runs and compare its input / cache reads / output per call.
+
+Triage path: **symptom** (Overview indicator or Diagnostics card) → **step** (Pipelines card, problem steps) → **event** (run page key events) → **observable cause** (event meta, full journal) → **GitHub source** (comment, PR, workflow run links). On small screens ordinary tables become labelled rows; timing waterfalls and confusion matrices keep their axes and scroll within their panels.
 
 The site remains a static build using the existing `build_eval_site.mjs` command and Pages workflows. No new service or credential is required. Recorded information uses the existing retention window; the generation timestamp and retention notes are available in the overview's “About these results & retention” panel. Publishing still preserves `scorecard.json` and retained `runs/*.json` as its history store.
 
@@ -386,27 +391,40 @@ coverage, and inspect `no_changes` escalations rather than forcing a patch.
 See [the incident diagnosis and proposed fixes](dashboard-partial-diagnosis.md)
 for the 16–18 October sample, evidence limits and follow-up acceptance criteria.
 
-### Flow map dashboard
+### Pipelines (flow map)
 
-Open **Flow map** in the dashboard navigation for one card per merged PR.
+Open **Pipelines** in the dashboard navigation: one card per recorded work item, plus a card for each merged PR without a recorded flow (ADR-0042, ADR-0043).
 Branch-based issue matching (`ai/issue-<n>`) requires a head owned by this
 repository; fork or deleted heads use recorded PR identity or local closing
-references instead, so a fork branch cannot attach an unrelated issue trace. Use
-**Refresh merged PRs** to reload GitHub merge facts; search matches visible card
-text, including PR/issue numbers, outcomes and models. The page reads up to the
-1,000 most recently updated closed PRs and states when that limit is reached.
-A merge is confirmed only by GitHub's `merged_at`, never by workflow success.
+references instead, so a fork branch cannot attach an unrelated issue trace. A PR number
+recorded by one work item is never borrowed by another through a hint. Use
+**Refresh merge status** to reload GitHub PR states (cached 5 minutes per tab
+otherwise); search matches visible card text, including PR/issue numbers,
+decisions and models. The page reads up to the 1,000 most recently updated PRs
+(open and closed) and states when that limit is reached. A merge is confirmed
+only by GitHub's `merged_at`, never by workflow success; a PR closed without it
+shows ⊘ "closed without merge", an open one ○ "PR open".
 
 Cards start collapsed. The summary shows the PR/issue title and one icon per
 step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge):
 ✓ success, ✗ failed, ⊘ skipped, ○ not recorded. A step's icon is the span
-outcome of its latest execution by start time (undated runs rank last, ties keep
-trace order), so a failed review followed by an approval shows ✓. Any other or
-missing outcome is ○, never ✓. Merge turns ✓ only once GitHub's `merged_at`
-confirms it. Expand a card for the details below.
+outcome of its final execution, ordered by when each attempt ended: its last
+event of the step, including the workflow event that decides it
+(`workflow.push` for Auto-fix, `workflow.pr_operation` for PR preparation),
+else the run's completion, else its start. Overlapping runs (duplicate
+triggers) can finish out of start order. Undated runs rank first, so never
+final over a dated one; ties keep the earlier run in trace order. A failed
+review followed by an approval shows ✓ **with** ×3 and an aria-label "after 2
+failed or adverse attempt(s)"; the expanded step says "2 failed · recovered
+automatically" and lists every attempt. An amber ring marks a step whose span
+succeeded but whose decision did not move the item forward. Any other or missing
+outcome is ○, never ✓. Merge turns ✓ only once GitHub's `merged_at` confirms
+it. Expand a card for the details below.
 
-Each card shows the canonical pipeline vertically on narrow screens, including
-missing stages in grey. Grey means **not recorded**, not skipped or failed.
+Each card shows the canonical pipeline (three columns on wide screens, stacked on
+narrow ones), including missing stages in grey. Grey means **not recorded**, not
+skipped or failed; a conditional step says why it is absent (no linked issue,
+auto-fix not triggered without a REQUEST_CHANGES verdict).
 Expand review/auto-fix executions to inspect actors, models, duration, then follow
 **Agent trace, events & spans** for detailed debugging. **Full chronological flow**
 shows the actual execution order; stage arrows only show the canonical pipeline.

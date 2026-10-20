@@ -7,7 +7,7 @@
  */
 
 import { formatScorecard, MAX_RUNS } from './eval_scorecard.mjs';
-import { DASHBOARD_STYLE, DASHBOARD_SCRIPT, dashboardHeader, evalOverview, suiteWidget } from './dashboard_ui.mjs';
+import { DASHBOARD_STYLE, DASHBOARD_SCRIPT, dashboardHeader, sidebar, mobileNav, evalOverview, suiteWidget } from './dashboard_ui.mjs';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,7 +86,8 @@ function metricAt(summaryLike, metricPath) {
 // Layout
 // ---------------------------------------------------------------------------
 
-const STYLE = `
+// Base tokens and layout of every page; with pipeline views it ships in pipeline/console.css instead.
+export const BASE_STYLE = `
 :root {
   color-scheme: light;
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
@@ -131,7 +132,8 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--page); bo
 `;
 
 // pipeline: the site also holds the pipeline views (build_eval_site.mjs --pipeline-dir): nav link.
-export function page(title, body, { depth = 0, pipeline = false, style = '' } = {}) {
+// filters: page-specific sidebar filters (HTML); without pipeline views there is no sidebar.
+export function page(title, body, { depth = 0, pipeline = false, style = '', filters = '' } = {}) {
   const root = '../'.repeat(depth);
   return `<!doctype html>
 <html lang="en">
@@ -139,15 +141,19 @@ export function page(title, body, { depth = 0, pipeline = false, style = '' } = 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
-<style>${STYLE}${DASHBOARD_STYLE}${style}</style>
+${pipeline ? `<link rel="stylesheet" href="${root}pipeline/console.css">
+<style>${style}</style>` : `<style>${BASE_STYLE}${DASHBOARD_STYLE}${style}</style>`}
 </head>
 <body>
 ${dashboardHeader(root, pipeline)}
+<div class="app-body${pipeline ? '' : ' no-side'}">${pipeline ? sidebar(root, pipeline, filters) : ''}
 <main id="main-content">
 <p class="muted legacy-nav"><a href="${root}index.html">Eval dashboard</a>${pipeline ? ` · <a href="${root}pipeline/index.html">Pipeline</a>` : ''} · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
 ${body}
 <footer class="page-footer">Dev loop monitor · Explore a summary, then open its details. All published data stays available through the original tables and JSON files.</footer>
 </main>
+</div>
+${mobileNav(root, pipeline)}
 ${DASHBOARD_SCRIPT}
 </body>
 </html>
@@ -270,9 +276,9 @@ export function renderIndex(scorecard, { thresholds = {}, generatedAt, pipeline 
   const body = suites.length
     ? suites.map(([name, s]) => suiteSection(name, s.runs, thresholds[name], pipeline ? '' : null)).join('\n')
     : '<div class="card">No live eval run recorded yet. Run <strong>Actions → Evals</strong> on the default branch with <code>publish</code> ticked.</div>';
-  return page('Eval dashboard', `<span class="eyebrow">Autonomous development / overview</span><h1>How is the dev loop doing?</h1>
-<p class="sub">See what worked, what needs attention, and follow an issue through its executions.</p>
-${pipeline ? '<!-- pipeline-overview -->' : ''}
+  // With pipeline views the system overview (console_overview.mjs) heads the page in place of this intro.
+  return page('Eval dashboard', `${pipeline ? '<!-- pipeline-overview -->' : `<span class="eyebrow">Autonomous development / overview</span><h1>How is the dev loop doing?</h1>
+<p class="sub">See what worked, what needs attention, and follow an issue through its executions.</p>`}
 ${evalOverview(suites)}
 <section id="evaluations"><div class="section-intro"><div><span class="eyebrow">Model quality</span><h2>Evaluations</h2><p>Latest result per suite. A passing gate means its required thresholds were met.</p></div></div>
 <div class="widget-grid">${suites.map(([name, s]) => suiteWidget(name, s.runs[0])).join('')}</div>
