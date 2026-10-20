@@ -103,6 +103,17 @@ jobs:
             --statements 80 \
             node --test scripts/tests/output_writer.test.mjs
 
+      - name: Check protected_paths coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/protected_paths.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/protected_paths.test.mjs
+
       - name: Check eval_harness coverage (≥80%)
         run: |
           npx --yes c8 \

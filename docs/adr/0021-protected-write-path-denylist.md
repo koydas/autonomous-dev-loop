@@ -68,3 +68,7 @@ Consequences:
 - ⚠️ **Documentation issues can no longer be automated.** An issue that only targets `README.md` or `docs/` (for example the `valid-docs-diagram` eval case) passes validation, then fails at generation with a `protected path` error. The issue validator does not know the denylist.
 - ⚠️ A legitimate refactor that deletes more than half of a large file is rejected. It must be done by a human or split.
 
+
+## Amendment (2026-10-20): the list is a floor plus per-repository config
+
+`PROTECTED_WRITE_PATHS` is no longer one hard-coded constant: the universal entries (`.git/`, `.github/`, manifests, lock files, registry config, and their .NET and Python equivalents) are a non-overridable floor, and the pipeline self-protection and documentation entries above (`scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `docs/`, `README.md`) are this repository's `config/protected-paths.yaml`. The exported list is unchanged for this repository. See [ADR-0044](./0044-protected-paths-floor-and-repo-config.md).

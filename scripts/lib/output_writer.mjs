@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { loadProtectedPaths, entryMatches } from './protected_paths.mjs';
 
 const MAX_FILE_COUNT = 6;
 
@@ -65,34 +66,11 @@ export function parseJsonResponse(raw) {
 }
 const MAX_FILE_CONTENT_LENGTH = 16000;
 
-// Paths the model must never write (ADR-0021). Entries ending in "/" are root-level
-// directory prefixes; the others are file names matched at any depth.
-// Workflows, pipeline scripts, config and prompts run with secrets on push; checkpoints,
-// metrics and traces are pipeline state read back from the same working tree; manifests,
-// lock files and npm/yarn rc files control what gets installed. `.git/` is matched as a path
-// segment at any depth: git metadata (config, hooks) executes on the next git command.
-// `docs/` and `README.md` are human-owned documentation (ADR-0021 amendment): auto-fix attempt 2
-// on #173 replaced README.md with a 9-line stub to "address" a coverage finding.
-export const PROTECTED_WRITE_PATHS = Object.freeze([
-  '.git/',
-  '.github/',
-  'scripts/',
-  'config/',
-  'prompts/',
-  'checkpoints/',
-  'metrics/',
-  'observability/',
-  'docs/',
-  'package.json',
-  'package-lock.json',
-  'npm-shrinkwrap.json',
-  'yarn.lock',
-  'pnpm-lock.yaml',
-  '.npmrc',
-  '.yarnrc',
-  '.yarnrc.yml',
-  'README.md',
-]);
+// Paths the model must never write (ADR-0021, ADR-0044): the hard-coded floor of protected_paths.mjs
+// (git metadata, workflows, manifests, lock files, registry config) plus this repository's own list
+// in config/protected-paths.yaml (pipeline directories, documentation). Loaded once at import;
+// an invalid config fails here, at startup. See protected_paths.mjs for the entry forms.
+export const PROTECTED_WRITE_PATHS = loadProtectedPaths();
 
 // A rewrite that drops most of an existing file is the ADR-0009 failure mode (a 690-line suite
 // replaced by an 18-line stub, README.md 145 → 9 lines). Small files are exempt.
@@ -122,12 +100,8 @@ function findProtectedPathEntry(targetPath) {
     .normalize(targetPath.replaceAll('\\', '/'))
     .replace(/^(\.\/)+/, '')
     .toLowerCase();
-  const baseName = path.posix.basename(normalized);
   if (normalized.split('/').includes('.git')) return '.git/';
-  return PROTECTED_WRITE_PATHS.find((entry) => {
-    const key = entry.toLowerCase();
-    return key.endsWith('/') ? normalized.startsWith(key) || normalized === key.slice(0, -1) : baseName === key;
-  });
+  return PROTECTED_WRITE_PATHS.find((entry) => entryMatches(entry, normalized));
 }
 
 /** The PROTECTED_WRITE_PATHS entry a repo path falls under, or null (ADR-0021). */
