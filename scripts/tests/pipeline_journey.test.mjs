@@ -205,3 +205,21 @@ test('a later APPROVE supersedes an earlier failure of another step (PR #242 rev
   // Same for a failed run without a step.
   assert.equal(workItemJourney(trace([{ ...run('4', null, null, 1000), outcome: 'failed' }, verdictRun('5', 2000, 'APPROVE')], { kind: 'pr', number: 9 })).state, 'approved');
 });
+
+test('overlapping attempts are ordered by their terminal event, not by start (PR #242 review)', () => {
+  // Duplicate triggers: run 1 starts first but records APPROVE last; run 2 starts later and finishes first.
+  const approve = { ...run('1', 'review', 'success', 1000, [{ event: 'review.verdict', ts: 5000, meta: { verdict: 'APPROVE' } }]), pr_number: 9 };
+  const changes = { ...run('2', 'review', 'success', 2000, [{ event: 'review.verdict', ts: 3000, meta: { verdict: 'REQUEST_CHANGES' } }]), pr_number: 9 };
+  const j = stepJourney([approve, changes], 'review');
+  assert.deepEqual(j.attempts.map((a) => a.run_id), ['2', '1']);
+  assert.equal(j.final.decision.key, 'APPROVE');
+  assert.equal(j.final.ended_at, 5000);
+  assert.equal(workItemJourney(trace([approve, changes], { kind: 'pr', number: 9 })).state, 'approved');
+  // An approval that ended before a failure that started earlier but ended later does not clear it.
+  const failedPush = { ...run('3', 'autofix', 'success', 1500, [{ event: 'autofix.push', ts: 6000 }, { event: 'workflow.push', stage: 'workflow', ts: 6000, meta: { outcome: 'failure' } }]), pr_number: 9 };
+  assert.equal(workItemJourney(trace([approve, failedPush], { kind: 'pr', number: 9 })).state, 'failed');
+  // Without a step event, the run's completion, then its start, is the end.
+  assert.equal(attemptOf({ ...run('4', 'review', 'success', 100), completed_at: 900 }, 'review').ended_at, 900);
+  assert.equal(attemptOf(run('5', 'review', 'success', 100), 'review').ended_at, 100);
+  assert.equal(attemptOf(run('6', 'review', 'success', undefined), 'review').ended_at, null);
+});

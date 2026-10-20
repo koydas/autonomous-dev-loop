@@ -121,21 +121,26 @@ export function attemptOf(run, step) {
   const escalated = run.events.find((e) => e.event === `${step}.escalated`);
   const decision = stepDecision(run, step) ?? (escalated ? { key: 'escalated', label: 'Escalated to a human', tone: 'warn', reason: reasonText(escalated.meta?.reason), url: null } : null);
   const tone = status === 'failed' ? 'bad' : decision?.tone ?? (status === 'success' ? 'good' : status === 'skipped' ? 'neutral' : 'unknown');
+  // When the attempt ended: its last event of the step (the decision is recorded last), else the run's
+  // completion, else its start. Overlapping runs (duplicate triggers) finish out of start order.
+  const stepTs = run.events.filter((e) => e.stage === step && typeof e.ts === 'number').map((e) => e.ts);
+  const ended_at = stepTs.length ? Math.max(...stepTs) : run.completed_at ?? run.started_at ?? null;
   return {
-    run_id: run.run_id, workflow: run.workflow, event_name: run.event_name, started_at: run.started_at,
+    run_id: run.run_id, workflow: run.workflow, event_name: run.event_name, started_at: run.started_at, ended_at,
     duration_ms: span?.duration_ms ?? run.duration_ms, status, decision, tone,
   };
 }
 
 /**
  * Every attempt of one step in chronological order, its final attempt and what the earlier ones hid.
- * Order: by start; an undated run ranks first (oldest), so it is never taken as the final attempt over a
+ * Order: by end (`ended_at`, see attemptOf), so the last recorded decision is the final one even when two
+ * runs overlap; an undated run ranks first (oldest), so it is never taken as the final attempt over a
  * dated one; on a tie the run earlier in trace order is the final one (as the collapsed card always did).
  */
 export function stepJourney(runs, step) {
-  const indexed = runsOfStep(runs, step).map((run, i) => ({ run, i }));
-  indexed.sort((a, b) => (a.run.started_at ?? -Infinity) - (b.run.started_at ?? -Infinity) || b.i - a.i);
-  const attempts = indexed.map(({ run }) => attemptOf(run, step));
+  const indexed = runsOfStep(runs, step).map((run, i) => ({ a: attemptOf(run, step), i }));
+  indexed.sort((x, y) => (x.a.ended_at ?? -Infinity) - (y.a.ended_at ?? -Infinity) || y.i - x.i);
+  const attempts = indexed.map(({ a }) => a);
   const final = attempts.at(-1) ?? null;
   const failures = attempts.filter((a) => a.status === 'failed').length;
   const adverse = attempts.filter((a) => a.status !== 'failed' && (a.tone === 'warn' || a.tone === 'bad')).length;
@@ -163,15 +168,15 @@ function itemState(steps, escalated, runs) {
   const attempted = new Set(steps.flatMap((s) => s.attempts.map((a) => a.run_id)));
   // A later APPROVE ends the fix round (AGENTS.md, ADR-0034): a failure before it no longer fails the item.
   const review = steps.find((s) => s.key === 'review');
-  const approvedAt = Math.max(-Infinity, ...review.attempts.filter((a) => a.decision?.key === 'APPROVE').map((a) => a.started_at ?? -Infinity));
+  const approvedAt = Math.max(-Infinity, ...review.attempts.filter((a) => a.decision?.key === 'APPROVE').map((a) => a.ended_at ?? -Infinity));
   const standing = (t) => !(approvedAt > (t ?? -Infinity));
-  const failedFinal = steps.some((s) => (s.final?.status === 'failed' || s.final?.decision?.tone === 'bad') && standing(s.final.started_at))
-    || runs.some((r) => r.outcome === 'failed' && (!attempted.has(r.run_id) || finalRuns.has(r.run_id)) && standing(r.started_at));
+  const failedFinal = steps.some((s) => (s.final?.status === 'failed' || s.final?.decision?.tone === 'bad') && standing(s.final.ended_at))
+    || runs.some((r) => r.outcome === 'failed' && (!attempted.has(r.run_id) || finalRuns.has(r.run_id)) && standing(r.completed_at ?? r.started_at));
   if (failedFinal) return 'failed';
   const decisions = review.attempts.filter((a) => a.decision && a.decision.key !== 'skipped');
   const lastReview = decisions.at(-1);
   const lastEscalation = escalated.at(-1);
-  if (lastEscalation && !(lastReview?.decision.key === 'APPROVE' && (lastReview.started_at ?? 0) > (lastEscalation.ts ?? 0))) return 'escalated';
+  if (lastEscalation && !(lastReview?.decision.key === 'APPROVE' && (lastReview.ended_at ?? 0) > (lastEscalation.ts ?? 0))) return 'escalated';
   if (lastReview) return { APPROVE: 'approved', WITHHELD: 'withheld', REQUEST_CHANGES: 'changes_requested' }[lastReview.decision.key] ?? 'in_progress';
   return 'in_progress';
 }
