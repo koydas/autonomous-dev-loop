@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describeRoots, pipelineDefaultFile, repoConfigFile, targetConfigDir } from './lib/roots.mjs';
 import { loadModelsConfig, loadLabelsConfigAll } from './lib/layered_config.mjs';
-import { defaultConfigFile, loadProtectedPaths } from './lib/protected_paths.mjs';
+import { defaultConfigFile, protectedPathsFor } from './lib/protected_paths.mjs';
 import { parseFlatYaml } from './lib/yaml.mjs';
 
 export function resolveConfig(env = process.env) {
@@ -33,7 +33,7 @@ export function resolveConfig(env = process.env) {
     },
     modelsOverridden: Object.keys(models).filter((key) => models[key] !== defaults[key]),
     labels: { ready: labels.issue.valid.name, changes: labels.review.changes.name },
-    protectedPaths: [...loadProtectedPaths()],
+    protectedPaths: [...protectedPathsFor(env)],
     evidenceRequired: existsSync(evidenceFile),
   };
 }

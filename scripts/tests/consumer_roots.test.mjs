@@ -173,4 +173,15 @@ test('an invalid consumer configuration fails fast with the file and the key', (
     assert.equal(res.status, 1);
     assert.match(res.stdout + res.stderr, /ADL_CONFIG_PATH/);
   });
+  withConsumer((dir) => {
+    const res = runScript('print_resolved_config.mjs', dir, targetEnv(dir, { ADL_CONFIG_PATH: 'ci/./adl' }));
+    assert.equal(res.status, 1);
+    assert.match(res.stdout + res.stderr, /no "\." or "\.\." segment/);
+  });
+  withConsumer((dir) => {
+    // Relative to the working directory it would be the pull request's own, contributor-controlled copy.
+    const res = runScript('print_resolved_config.mjs', dir, targetEnv(dir, { ADL_CONFIG_DIR: CONFIG_REL }));
+    assert.equal(res.status, 1);
+    assert.match(res.stdout + res.stderr, /ADL_CONFIG_DIR ".*" must be an absolute path/);
+  });
 });

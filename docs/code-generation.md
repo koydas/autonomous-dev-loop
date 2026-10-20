@@ -251,7 +251,7 @@ Groundwork for running the pipeline on a repository that does not hold its scrip
 |---|---|---|
 | Pipeline | `scripts/`, `prompts/`, default `config/` | the location of the script itself |
 | Target | the repository under work: PR tree, `observability/traces`, `checkpoints`, file context, writes | the working directory (`ADL_TARGET_ROOT` overrides it in tests) |
-| Target config | the target's own `models.yaml`, `labels.yaml`, `protected-paths.yaml`, `review-evidence.yaml` | `ADL_CONFIG_DIR` (absolute, a trusted default-branch checkout); `ADL_CONFIG_PATH` is its repo-relative name |
+| Target config | the target's own `models.yaml`, `labels.yaml`, `protected-paths.yaml`, `review-evidence.yaml` | `ADL_CONFIG_DIR` (absolute, a trusted default-branch checkout; a relative value is a startup error, it would resolve inside the PR tree); `ADL_CONFIG_PATH` is its repo-relative name (forward slashes, no `.` or `..` segment) |
 
 Neither `ADL_*` variable set (this repository, every workflow today): `config/` of the pipeline is both the defaults and the repository configuration, exactly as before. `ADL_CONFIG_DIR` set (a target repository):
 
@@ -261,7 +261,7 @@ Neither `ADL_*` variable set (this repository, every workflow today): `config/` 
 - Prompts always come from the pipeline root.
 - The PR head's copy of `models.yaml` (prompt budget impact, ADR-0037) is read at `<ADL_CONFIG_PATH>/models.yaml` and laid over the defaults; a copy the layering rejects is ignored with one `review.models_config_ignored` warning.
 
-`node scripts/print_resolved_config.mjs` prints the resolved roots, where each file comes from, the effective protected paths and whether review evidence is required (JSON on stdout, nothing written). The reusable workflows that set these variables follow in separate changes (ADR-0045).
+`node scripts/print_resolved_config.mjs` prints the resolved roots, where each file comes from, the effective protected paths and whether review evidence is required (JSON on stdout, nothing written). `print_resolved_config.mjs` and `protectedPathsFor(env)` answer for the environment they are given. `roots.mjs` and `layered_config.mjs` are under the c8 ≥ 80% gate. The reusable workflows that set these variables follow in separate changes (ADR-0045).
 
 ## Observability
 

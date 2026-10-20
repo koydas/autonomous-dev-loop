@@ -157,12 +157,22 @@ export function loadProtectedPathsConfig(file = defaultConfigFile()) {
   return parseProtectedPathsConfig(content);
 }
 
-/** The effective denylist: floor ∪ the repository's config. Throws on an invalid config (fail-fast). */
-export function loadProtectedPaths(file = defaultConfigFile()) {
-  const extra = loadProtectedPathsConfig(file);
-  // A target's config directory is protected as a whole, whatever its own list says (ADR-0045).
-  if (targetConfigDir()) extra.push(`${configRelPath()}/`);
+/**
+ * The effective denylist for `env`: floor ∪ the repository's config. For a target repository
+ * (ADL_CONFIG_DIR set) its config directory is protected as a whole, whatever its own list says (ADR-0045).
+ */
+export function protectedPathsFor(env = process.env) {
+  const extra = loadProtectedPathsConfig(defaultConfigFile(env));
+  if (targetConfigDir(env)) extra.push(`${configRelPath(env)}/`);
   return resolveProtectedPaths(extra);
+}
+
+/**
+ * The effective denylist: floor ∪ the repository's config. Throws on an invalid config (fail-fast).
+ * Without `file` it follows the environment (protectedPathsFor); an explicit file is read as is.
+ */
+export function loadProtectedPaths(file) {
+  return file === undefined ? protectedPathsFor() : resolveProtectedPaths(loadProtectedPathsConfig(file));
 }
 
 /** True when `normalizedPath` (lower-cased, forward slashes, no leading "./") falls under `entry`. */

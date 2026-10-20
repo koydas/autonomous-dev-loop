@@ -9,7 +9,8 @@ import {
   pipelineDefaultFile, repoConfigFile, describeRoots,
 } from '../lib/roots.mjs';
 import { overlayFlat, overlayNested, loadModelsConfig, loadLabelsConfigAll, modelsFromContent } from '../lib/layered_config.mjs';
-import { defaultConfigFile, loadProtectedPaths, DEFAULT_CONFIG_FILE, PROTECTED_FLOOR } from '../lib/protected_paths.mjs';
+import { defaultConfigFile, loadProtectedPaths, protectedPathsFor, DEFAULT_CONFIG_FILE, PROTECTED_FLOOR } from '../lib/protected_paths.mjs';
+import { resolveConfig } from '../print_resolved_config.mjs';
 import { resetLabels, resetLabelsFrom } from '../reset_auto_fix.mjs';
 import { parseFlatYaml } from '../lib/yaml.mjs';
 
@@ -45,7 +46,7 @@ test('configRelPath defaults to config and normalizes a trailing slash', () => {
 });
 
 test('configRelPath rejects absolute, dot-relative, parent, backslash and empty-segment paths', () => {
-  for (const bad of ['/etc', './adl', '../adl', 'a/../b', 'a\\b', 'a//b', '/']) {
+  for (const bad of ['/etc', './adl', '../adl', 'a/../b', 'a\\b', 'a//b', '/', 'ci/./adl', 'ci/adl/.', '.', 'ci/adl/./']) {
     assert.throws(() => configRelPath({ ADL_CONFIG_PATH: bad }), /ADL_CONFIG_PATH .* must be a relative path/, bad);
   }
 });
@@ -54,6 +55,14 @@ test('targetConfigDir is null in the repository own mode and absolute otherwise'
   assert.equal(targetConfigDir({}), null);
   assert.equal(targetConfigDir({ ADL_CONFIG_DIR: '  ' }), null);
   assert.equal(targetConfigDir({ ADL_CONFIG_DIR: '/tmp/x/.adl' }), path.resolve('/tmp/x/.adl'));
+});
+
+test('a relative ADL_CONFIG_DIR is an error: it would resolve inside the pull request checkout', () => {
+  for (const bad of ['.autonomous-dev-loop', './adl', '../adl', 'adl/config']) {
+    assert.throws(() => targetConfigDir({ ADL_CONFIG_DIR: bad }), /ADL_CONFIG_DIR ".*" must be an absolute path/, bad);
+  }
+  assert.throws(() => repoConfigFile('models.yaml', { ADL_CONFIG_DIR: 'adl' }), /must be an absolute path/);
+  assert.throws(() => describeRoots({ ADL_CONFIG_DIR: 'adl' }), /must be an absolute path/);
 });
 
 test('repoConfigFile reads the pipeline config/ in own mode and the target directory otherwise, never both', () => {
@@ -161,6 +170,43 @@ test('a target config directory is protected as a whole, and an empty target lis
       // Own mode: no extra directory entry.
       delete process.env.ADL_CONFIG_DIR;
       assert.ok(!loadProtectedPaths().includes('ci/adl/'));
+    } finally {
+      for (const key of ['ADL_CONFIG_DIR', 'ADL_CONFIG_PATH']) { if (key in saved) process.env[key] = saved[key]; else delete process.env[key]; }
+    }
+  });
+});
+
+test('protectedPathsFor answers for the given environment, not the process one', () => {
+  withTargetConfig({ 'protected-paths.yaml': 'protected_paths:\n  - infra/\n' }, (dir) => {
+    const env = { ADL_CONFIG_DIR: dir, ADL_CONFIG_PATH: 'ci/adl' };
+    const list = protectedPathsFor(env);
+    assert.ok(list.includes('infra/') && list.includes('ci/adl/'));
+    assert.ok(!list.includes('scripts/'), 'the pipeline repository policy is not inherited');
+    // The process environment of this test run is untouched: own mode, this repository's list.
+    assert.ok(!protectedPathsFor({}).includes('ci/adl/') && protectedPathsFor({}).includes('scripts/'));
+    assert.ok(!protectedPathsFor({}).includes('infra/'));
+  });
+});
+
+test('resolveConfig reports the protected paths of the environment it is given', () => {
+  withTargetConfig({ 'protected-paths.yaml': 'protected_paths:\n  - infra/\n' }, (dir) => {
+    const report = resolveConfig({ ADL_CONFIG_DIR: dir, ADL_CONFIG_PATH: 'ci/adl' });
+    assert.ok(report.protectedPaths.includes('ci/adl/') && report.protectedPaths.includes('infra/'));
+    assert.equal(report.roots.mode, 'target');
+    assert.equal(resolveConfig({}).roots.mode, 'pipeline-repo');
+    assert.ok(!resolveConfig({}).protectedPaths.includes('infra/'));
+  });
+});
+
+test('an explicit file is read as is: the target config directory is not added to it', () => {
+  withTargetConfig({ 'other.yaml': 'protected_paths:\n  - extra/\n' }, (dir) => {
+    const saved = { ...process.env };
+    process.env.ADL_CONFIG_DIR = dir;
+    process.env.ADL_CONFIG_PATH = 'ci/adl';
+    try {
+      const list = loadProtectedPaths(path.join(dir, 'other.yaml'));
+      assert.ok(list.includes('extra/'));
+      assert.ok(!list.includes('ci/adl/'));
     } finally {
       for (const key of ['ADL_CONFIG_DIR', 'ADL_CONFIG_PATH']) { if (key in saved) process.env[key] = saved[key]; else delete process.env[key]; }
     }

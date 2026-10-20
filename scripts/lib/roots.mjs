@@ -28,16 +28,24 @@ export function configRelPath(env = process.env) {
   const raw = (env.ADL_CONFIG_PATH ?? '').trim();
   if (!raw) return DEFAULT_CONFIG_PATH;
   const rel = raw.replace(/\/+$/, '');
-  if (!rel || isAbsolute(rel) || rel.startsWith('./') || rel.includes('\\') || rel.includes('//') || rel.split('/').includes('..')) {
-    throw new Error(`ADL_CONFIG_PATH "${raw}" must be a relative path with forward slashes, no "./", ".." or "//"`);
+  // A "." or ".." segment anywhere: the output writer normalizes generated paths before matching, so a
+  // `ci/./adl/` entry would never match `ci/adl/…` and the directory would be left unprotected.
+  if (!rel || isAbsolute(rel) || rel.includes('\\') || rel.includes('//') || rel.split('/').some((segment) => segment === '.' || segment === '..')) {
+    throw new Error(`ADL_CONFIG_PATH "${raw}" must be a relative path with forward slashes, no "." or ".." segment and no "//"`);
   }
   return rel;
 }
 
-/** Absolute trusted directory holding the target's configuration, or null in this repository's own mode. */
+/**
+ * Absolute trusted directory holding the target's configuration, or null in this repository's own mode.
+ * A relative value is an error: scripts run with the pull request checkout as working directory, so it
+ * would resolve inside contributor-controlled content instead of the trusted default-branch checkout.
+ */
 export function targetConfigDir(env = process.env) {
   const raw = (env.ADL_CONFIG_DIR ?? '').trim();
-  return raw ? resolve(raw) : null;
+  if (!raw) return null;
+  if (!isAbsolute(raw)) throw new Error(`ADL_CONFIG_DIR "${raw}" must be an absolute path (the trusted checkout of the target's config directory)`);
+  return resolve(raw);
 }
 
 /** Defaults shipped with the pipeline: config/<name> next to its scripts. */
