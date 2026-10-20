@@ -128,16 +128,17 @@ test('prompts come from the pipeline root; the consumer decoy prompt is never lo
 test('run_review_evidence reads the consumer config, checks the consumer tree and writes its trace there', () => {
   withConsumer((dir) => {
     const evidence = path.join(dir, '..', `adl-evidence-${path.basename(dir)}`, 'review-evidence.json');
-    const before = fs.existsSync(path.join(REPO, 'observability', 'traces')) ? fs.readdirSync(path.join(REPO, 'observability', 'traces')) : [];
-    const res = runScript('run_review_evidence.mjs', dir, targetEnv(dir, { REVIEW_EVIDENCE_PATH: evidence, GITHUB_RUN_ID: '4242' }));
+    // A run id of its own: other test files write their traces under the pipeline root concurrently,
+    // so the directory listing as a whole says nothing.
+    const runId = `adl-consumer-${process.pid}-${Date.now()}`;
+    const res = runScript('run_review_evidence.mjs', dir, targetEnv(dir, { REVIEW_EVIDENCE_PATH: evidence, GITHUB_RUN_ID: runId }));
     try {
       assert.equal(res.status, 0, res.stderr);
       const written = JSON.parse(fs.readFileSync(evidence, 'utf8'));
       assert.deepEqual(written.checks.map((c) => [c.name, c.status]), [['smoke', 'pass']]);
       assert.equal(written.head_sha, execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim());
-      assert.ok(fs.existsSync(path.join(dir, 'observability', 'traces', '4242-evidence.json')), 'the trace belongs to the target');
-      const after = fs.existsSync(path.join(REPO, 'observability', 'traces')) ? fs.readdirSync(path.join(REPO, 'observability', 'traces')) : [];
-      assert.deepEqual(after, before, 'nothing is written under the pipeline root');
+      assert.ok(fs.existsSync(path.join(dir, 'observability', 'traces', `${runId}-evidence.json`)), 'the trace belongs to the target');
+      assert.ok(!fs.existsSync(path.join(REPO, 'observability', 'traces', `${runId}-evidence.json`)), 'nothing of this run is written under the pipeline root');
     } finally {
       fs.rmSync(path.dirname(evidence), { recursive: true, force: true });
     }
