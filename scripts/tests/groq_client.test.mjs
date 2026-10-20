@@ -521,3 +521,13 @@ test('callGroq reports the usage through onUsage, before the content check', asy
   assert.equal(await callGroq({ ...BASE_ARGS, onUsage: (u) => seen.push(u) }), 'ok');
   assert.equal(seen.length, 2, 'no usage in the response: no report');
 });
+
+test('groqUsage rejects malformed counts instead of coercing them', async () => {
+  const { groqUsage } = await import('../lib/groq_client.mjs');
+  for (const usage of [
+    { prompt_tokens: -1, completion_tokens: 2 }, { prompt_tokens: 1, completion_tokens: 0.5 },
+    { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: -1 } },
+    { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 11 } },
+  ]) assert.equal(groqUsage({ usage }), null, JSON.stringify(usage));
+  assert.equal(groqUsage({ usage: { prompt_tokens: 10, completion_tokens: 2, prompt_tokens_details: { cached_tokens: null } } }).cache_read, 0);
+});

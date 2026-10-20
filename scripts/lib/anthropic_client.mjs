@@ -14,19 +14,23 @@ const SERVER_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
 const FETCH_TIMEOUT_CODES = new Set(['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 
-const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+const valid = (v) => Number.isSafeInteger(v) && v >= 0;
+// An optional count: absent → 0; present but not a non-negative integer → NaN (the usage is rejected).
+const optional = (v) => (v == null ? 0 : valid(v) ? v : NaN);
 
 /**
- * The response's billed `usage` → `{ input, output, cache_read, cache_write }`, or null without one.
+ * The response's billed `usage` → `{ input, output, cache_read, cache_write }`, or null without a well-formed one
+ * (a malformed count is never coerced: the caller falls back to its estimate).
  * `input` is the whole prompt (uncached + cache read + cache write), as `gen_ai.usage.input_tokens`;
  * `output` includes the thinking tokens.
  */
 export function anthropicUsage(raw) {
   const u = raw?.usage;
-  if (u === null || typeof u !== 'object' || !Number.isSafeInteger(u.input_tokens) || !Number.isSafeInteger(u.output_tokens)) return null;
-  const cacheRead = count(u.cache_read_input_tokens);
-  const cacheWrite = count(u.cache_creation_input_tokens);
-  return { input: count(u.input_tokens) + cacheRead + cacheWrite, output: count(u.output_tokens), cache_read: cacheRead, cache_write: cacheWrite };
+  if (u === null || typeof u !== 'object' || !valid(u.input_tokens) || !valid(u.output_tokens)) return null;
+  const cacheRead = optional(u.cache_read_input_tokens);
+  const cacheWrite = optional(u.cache_creation_input_tokens);
+  if (Number.isNaN(cacheRead) || Number.isNaN(cacheWrite)) return null;
+  return { input: u.input_tokens + cacheRead + cacheWrite, output: u.output_tokens, cache_read: cacheRead, cache_write: cacheWrite };
 }
 
 export async function callAnthropic({

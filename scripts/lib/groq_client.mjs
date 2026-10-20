@@ -43,16 +43,19 @@ function isTpmRateLimit(status, rawText) {
   }
 }
 
-const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+const valid = (v) => Number.isSafeInteger(v) && v >= 0;
 
 /**
- * The response's `usage` → `{ input, output, cache_read, cache_write }`, or null without one.
+ * The response's `usage` → `{ input, output, cache_read, cache_write }`, or null without a well-formed one
+ * (a malformed count is never coerced: the caller falls back to its estimate).
  * Groq's prompt_tokens already include the cached ones; completion_tokens include the reasoning.
  */
 export function groqUsage(raw) {
   const u = raw?.usage;
-  if (u === null || typeof u !== 'object' || !Number.isSafeInteger(u.prompt_tokens) || !Number.isSafeInteger(u.completion_tokens)) return null;
-  return { input: count(u.prompt_tokens), output: count(u.completion_tokens), cache_read: count(u.prompt_tokens_details?.cached_tokens), cache_write: 0 };
+  if (u === null || typeof u !== 'object' || !valid(u.prompt_tokens) || !valid(u.completion_tokens)) return null;
+  const cached = u.prompt_tokens_details?.cached_tokens;
+  if (cached != null && (!valid(cached) || cached > u.prompt_tokens)) return null;
+  return { input: u.prompt_tokens, output: u.completion_tokens, cache_read: cached ?? 0, cache_write: 0 };
 }
 
 export async function callGroq({

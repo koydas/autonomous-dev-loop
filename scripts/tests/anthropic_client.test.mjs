@@ -381,3 +381,11 @@ test('callAnthropic without usage in the response, or without onUsage, is unchan
   mockFetch(makeResponse({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }));
   assert.equal(await callAnthropic(BASE_ARGS), 'ok');
 });
+
+test('anthropicUsage rejects malformed counts instead of coercing them', async () => {
+  const { anthropicUsage } = await import('../lib/anthropic_client.mjs');
+  for (const usage of [
+    { input_tokens: -1, output_tokens: 2 }, { input_tokens: 1, output_tokens: -2 }, { input_tokens: 1.5, output_tokens: 2 },
+    { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: -5 }, { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: '3' },
+  ]) assert.equal(anthropicUsage({ usage }), null, JSON.stringify(usage));
+});
