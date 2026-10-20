@@ -196,7 +196,8 @@ function llmCalls(waterfall, envelope, events) {
   if (spans.length) {
     return spans.map((s) => priced({
       provider: s.provider, model: s.model, stage: s.stage, ts: s.start, duration_ms: s.start != null && s.end != null ? s.end - s.start : null,
-      tokens_in: s.tokens?.in ?? 0, tokens_out: s.tokens?.out ?? 0, estimated: s.tokens?.estimated ?? true,
+      // No usage on the span (a failed call without a billed response): null, so the call prices as unpriced.
+      tokens_in: s.tokens?.in ?? null, tokens_out: s.tokens?.out ?? null, estimated: s.tokens?.estimated ?? true,
       cache_read: s.tokens?.cache_read ?? null, cache_write: s.tokens?.cache_write ?? null,
       fallback: s.fallback === true, failed: s.status === 'error',
     }));

@@ -221,3 +221,12 @@ test('normalizeRun: an estimated call, a record without the estimated flag and a
   assert.ok(v1.llm.every((c) => c.stage === 'review' && c.pipeline_stage === 'review'), 'v1: stage from the envelope');
   assert.equal(v1.cost.calls, v1.llm.length);
 });
+
+test('normalizeRun: an llm_call span without usage (failed, nothing billed) keeps null counts and prices as unpriced', () => {
+  const rec = makeRecord({ runId: '903', provider: 'anthropic', model: 'claude-opus-5-5', llmStatus: 'error' });
+  const llm = rec.otlp.resourceSpans[0].scopeSpans[0].spans.find((s) => s.name === 'llm_call');
+  llm.attributes = llm.attributes.filter((a) => !a.key.startsWith('gen_ai.usage.') && a.key !== 'adl.usage.estimated');
+  const { run } = normalizeRun(JSON.stringify(rec));
+  assert.deepEqual([run.llm[0].tokens_in, run.llm[0].tokens_out, run.llm[0].cost.basis], [null, null, 'unpriced']);
+  assert.deepEqual([run.cost.unpriced, run.cost.estimated, run.cost.usd], [1, 0, 0]);
+});

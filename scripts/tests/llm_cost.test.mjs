@@ -79,3 +79,10 @@ test('formatUsd, costBasis and costLine', () => {
   assert.equal(costLine(sumCosts([])), 'Not recorded');
   assert.equal(costLine(sumCosts([opus({ tokens_in: 1000, tokens_out: 1000 }), { provider: 'x' }, { provider: 'groq' }])), '$0.0240 USD + 1 unpriced call(s) (1 Groq free-tier call(s) at no cost)');
 });
+
+test('callCost: cache hits at the published rates — 0.05 × input on Opus 5.5 and Sonnet 5.5, 0.1 × on Haiku 5.5', () => {
+  const hit = (model) => callCost({ provider: 'anthropic', model, tokens_in: 1e6, tokens_out: 0, cache_read: 1e6, cache_write: 0, estimated: false }).usd;
+  close(hit('claude-opus-5-5'), 0.20);
+  close(hit('claude-sonnet-5-5'), 0.10);
+  close(callCost({ provider: 'anthropic', model: 'claude-haiku-5-5', tokens_in: 100_000, tokens_out: 0, cache_read: 100_000, cache_write: 0, estimated: false }).usd, 0.001);
+});
