@@ -39,7 +39,7 @@ export const DEFINITIONS = Object.freeze({
  */
 export function runClass(run) {
   const attempts = [...new Set(run.stages.map((s) => s.stage).filter(Boolean))].map((s) => attemptOf(run, s));
-  if (run.outcome === 'failed' || attempts.some((a) => a.status === 'failed' && (!a.decision || a.decision.tone === 'bad'))) return 'failed';
+  if (run.outcome === 'failed' || attempts.some((a) => (a.status === 'failed' && !a.decision) || a.decision?.tone === 'bad')) return 'failed';
   if (attempts.some((a) => a.tone === 'warn' || a.tone === 'bad')) return 'adverse';
   if (attempts.some((a) => a.tone === 'good')) return 'progressed';
   return 'neutral';

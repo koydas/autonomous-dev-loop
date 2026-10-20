@@ -188,3 +188,12 @@ test('rejected issues are not repeated stage failures; errored validations are (
   const e = diagnose({ model: model([errored(), errored(), rejected()]) });
   assert.match(find(e, 'stage-failures-issue_validation').fact, /2 of 3 issue_validation span\(s\) closed as failed without a decision explaining it/);
 });
+
+test('over the evidence cap the oldest occurrence is kept, so "since" is the true start (PR #242 review)', () => {
+  // model.runs is newest first: the oldest occurrence is the last one.
+  const runs = Array.from({ length: 40 }, (_, i) => run({ t: T - i * 60000, sha: String(i).padStart(40, '0'), events: [verdict('WITHHELD')] }));
+  const f = find(diagnose({ model: model(runs) }), 'review-withheld');
+  assert.equal(f.evidence.length, 25);
+  assert.equal(Math.min(...f.evidence.map((x) => x.ts)), T - 39 * 60000);
+  assert.equal(f.evidence[0].ts, T, 'the newest occurrences still lead');
+});

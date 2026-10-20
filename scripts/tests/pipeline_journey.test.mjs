@@ -180,3 +180,19 @@ test('a failed run superseded by a later success of the same step does not fail 
   // A failed run that attempted no step fails the item.
   assert.equal(workItemJourney(trace([verdictRun('1', 1000, 'APPROVE'), { ...run('2', null, null, 2000), outcome: 'failed' }], { kind: 'pr', number: 9 })).state, 'failed');
 });
+
+test('PR preparation rejected or failed, and an auto-fix whose git push failed, are not progress (PR #242 review)', () => {
+  const rejected = run('1', 'pr_prepare', 'skipped', 1, [{ event: 'pr_prepare.skipped', level: 'warn', meta: { reason: 'guardrail_rejected', rules: ['protected_path'] } }]);
+  assert.deepEqual(stepDecision(rejected, 'pr_prepare'), { key: 'guardrail_rejected', label: 'Rejected by guardrail', tone: 'warn', reason: 'guardrail rejected (protected_path)', url: null });
+  assert.equal(attemptOf(rejected, 'pr_prepare').tone, 'warn');
+  assert.equal(stepDecision(run('2', 'pr_prepare', 'skipped', 1, [{ event: 'pr_prepare.skipped' }]), 'pr_prepare').label, 'Skipped');
+  assert.equal(stepDecision(run('2', 'pr_prepare', 'skipped', 1, [{ event: 'pr_prepare.skipped' }]), 'pr_prepare').reason, 'reason not recorded');
+  assert.deepEqual(stepDecision(run('3', 'pr_prepare', 'failed', 1, [{ event: 'pr_prepare.error', level: 'error', meta: { error: 'x' } }]), 'pr_prepare'), { key: 'error', label: 'Error', tone: 'bad', reason: null, url: null });
+  const j = workItemJourney(trace([{ ...rejected, stages: [{ stage: 'code_gen', outcome: 'success' }, { stage: 'pr_prepare', outcome: 'skipped' }], events: [...rejected.events, { event: 'code_gen.complete', stage: 'code_gen', meta: {} }] }]));
+  assert.ok(j.problem_steps.includes('pr_prepare'));
+  // Auto-fix: files written (autofix.push) but the workflow's git push failed.
+  const failedPush = run('4', 'autofix', 'success', 1, [{ event: 'autofix.push' }, { event: 'workflow.push', stage: 'workflow', meta: { outcome: 'failure' } }]);
+  assert.deepEqual(stepDecision(failedPush, 'autofix'), { key: 'push_failed', label: 'Push failed', tone: 'bad', reason: 'the fix was written but the git push step failed', url: null });
+  assert.equal(workItemJourney(trace([failedPush])).state, 'failed');
+  assert.equal(stepDecision(run('5', 'autofix', 'success', 1, [{ event: 'autofix.push' }, { event: 'workflow.push', stage: 'workflow', meta: { outcome: 'success' } }]), 'autofix').key, 'pushed');
+});

@@ -27,7 +27,15 @@ const DAY_MS = 86400000;
 const pct = (v) => `${Math.round(v * 100)} %`;
 const minutes = (ms) => (ms >= 60000 ? `${(ms / 60000).toFixed(1)} min` : `${Math.round(ms / 1000)} s`);
 const events = (runs, name) => runs.flatMap((run) => run.events.filter((e) => e.event === name).map((e) => ({ run, e })));
-const evidenceOf = (list) => list.slice(0, EVIDENCE_CAP).map(({ run, e }) => ({
+// Capped evidence; over the cap, the oldest occurrence takes the last slot so "since" stays the true start.
+const capped = (list) => {
+  if (list.length <= EVIDENCE_CAP) return list;
+  const at = ({ run, e }) => e?.ts ?? run.started_at ?? Infinity;
+  const oldest = list.reduce((a, b) => (at(b) < at(a) ? b : a));
+  const head = list.filter((x) => x !== oldest).slice(0, EVIDENCE_CAP - 1);
+  return [...head, oldest];
+};
+const evidenceOf = (list) => capped(list).map(({ run, e }) => ({
   run_id: run.run_id, ts: e?.ts ?? run.started_at, event: e?.event ?? null, summary: e ? eventSummary(e.meta) : run.workflow ?? '',
   pr: run.pr_number ?? (Number.isSafeInteger(e?.meta?.prNumber) ? e.meta.prNumber : null), url: safeUrl(e?.meta?.url),
 }));

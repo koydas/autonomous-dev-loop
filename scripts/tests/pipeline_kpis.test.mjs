@@ -150,3 +150,8 @@ test('provider cost shares are not shown when any call is unpriced (PR #242 revi
   const rows = providerBreakdown([run('m', { llm: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1000, tokens_out: 1000 }, { provider: 'other', model: 'x', tokens_in: 1, tokens_out: 1 }] })]);
   assert.deepEqual(rows.map((r) => [r.provider, r.usd_share, r.call_share]), [['anthropic', null, 0.5], ['other', null, 0.5]]);
 });
+
+test('a run whose step decided with an error (failed push) is failed, not moved forward (PR #242 review)', () => {
+  assert.equal(runClass(run('p', { stage: 'autofix', events: [{ event: 'autofix.push' }, { event: 'workflow.push', meta: { outcome: 'failure' } }] })), 'failed');
+  assert.equal(runClass(run('r', { stage: 'pr_prepare', outcome: 'skipped', events: [{ event: 'pr_prepare.skipped', meta: { reason: 'guardrail_rejected' } }] })), 'adverse');
+});

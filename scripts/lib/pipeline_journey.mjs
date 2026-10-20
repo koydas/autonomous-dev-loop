@@ -66,8 +66,14 @@ export function stepDecision(run, step) {
     return { key: String(e.meta.reason ?? 'skipped'), label: e.meta.reason === 'blocked' ? 'Blocked' : 'Skipped', tone: 'warn', reason: [reasonText(e.meta.reason), e.meta.source ? `source ${e.meta.source}` : null].filter(Boolean).join(', ') || null, url: null };
   }
   if (step === 'pr_prepare') {
-    const e = last(run, ['workflow.pr_operation']);
+    const e = last(run, ['workflow.pr_operation', 'pr_prepare.skipped', 'pr_prepare.error']);
     if (!e) return null;
+    // generate_issue_change.mjs: a guardrail rejection skips the stage; an error (incl. a failed escalation) fails it.
+    if (e.event === 'pr_prepare.error') return { key: 'error', label: 'Error', tone: 'bad', reason: null, url: null };
+    if (e.event === 'pr_prepare.skipped') {
+      const rules = Array.isArray(e.meta.rules) && e.meta.rules.length ? ` (${e.meta.rules.join(', ')})` : '';
+      return { key: String(e.meta.reason ?? 'skipped'), label: e.meta.reason === 'guardrail_rejected' ? 'Rejected by guardrail' : 'Skipped', tone: 'warn', reason: `${reasonText(e.meta.reason) ?? 'reason not recorded'}${rules}`, url: null };
+    }
     return { key: String(e.meta.operation ?? 'operation'), label: `PR ${e.meta.operation ?? 'operation'}`, tone: 'good', reason: posInt(e.meta.prNumber) ? `PR #${e.meta.prNumber}` : null, url: safeUrl(e.meta.url) };
   }
   if (step === 'review') {
@@ -83,7 +89,12 @@ export function stepDecision(run, step) {
   if (step === 'autofix') {
     const e = last(run, ['autofix.push', 'autofix.skipped', 'autofix.max_attempts_reached', 'autofix.error']);
     if (!e) return null;
-    if (e.event === 'autofix.push') return { key: 'pushed', label: 'Fix pushed', tone: 'good', reason: null, url: null };
+    if (e.event === 'autofix.push') {
+      // autofix.push means the files were written; the workflow's git push is recorded later (workflow.push).
+      const push = last(run, ['workflow.push']);
+      if (push && push.meta.outcome === 'failure') return { key: 'push_failed', label: 'Push failed', tone: 'bad', reason: 'the fix was written but the git push step failed', url: null };
+      return { key: 'pushed', label: 'Fix pushed', tone: 'good', reason: null, url: null };
+    }
     if (e.event === 'autofix.error') return { key: 'error', label: 'Error', tone: 'bad', reason: reasonText(e.meta.error_type ?? e.meta.reason), url: null };
     if (e.event === 'autofix.max_attempts_reached') return { key: 'max_attempts', label: 'Attempt limit reached', tone: 'warn', reason: null, url: null };
     if (e.meta.reason === 'approved') return { key: 'approved', label: 'Skipped: head approved', tone: 'neutral', reason: null, url: null };
