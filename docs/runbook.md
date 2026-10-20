@@ -237,6 +237,16 @@ Key steps to expand per workflow:
 
 ---
 
+## Checking Which Configuration a Run Resolves (ADR-0045)
+
+When a run behaves as if it read the wrong `models.yaml`, `labels.yaml`, protected-paths list or review-evidence file (a repository that uses the pipeline from another repository, or `ADL_CONFIG_DIR` / `ADL_CONFIG_PATH` set by hand), run from the repository under work:
+
+```bash
+ADL_CONFIG_DIR=/path/to/trusted/config ADL_CONFIG_PATH=.autonomous-dev-loop node /path/to/pipeline/scripts/print_resolved_config.mjs
+```
+
+`roots.mode` is `target` when `ADL_CONFIG_DIR` is set and `pipeline-repo` otherwise; `files` shows the default and the layer actually found; `modelsOverridden` lists the keys the target changed; `protectedPaths` is the effective denylist. Startup errors name the file and the key (`models.yaml (<file>): unknown key "…"`, `protected_paths[0] …`, `ADL_CONFIG_PATH "…" must be a relative path`): fix the target's file, the defaults are never edited for a target.
+
 ## Recovery Actions per Workflow
 
 ### `validate-issue`

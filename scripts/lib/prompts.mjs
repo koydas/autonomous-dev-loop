@@ -1,8 +1,8 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { resolve, dirname } from 'node:path';
+import { resolve } from 'node:path';
+import { PIPELINE_ROOT } from './roots.mjs';
 
-const PROMPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
+const PROMPTS_DIR = resolve(PIPELINE_ROOT, 'prompts');
 
 export function loadPrompt(name) {
   const promptPath = resolve(PROMPTS_DIR, `${name}.md`);

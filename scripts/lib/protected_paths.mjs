@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resolve, join } from 'node:path';
+import { PIPELINE_ROOT, targetConfigDir, configRelPath } from './roots.mjs';
 
 // Paths the model must never write (ADR-0021, ADR-0044). The floor is hard-coded and universal: it
 // covers what executes with secrets or controls what gets installed, whatever the repository holds.
@@ -129,14 +129,24 @@ export function resolveProtectedPaths(extra = []) {
   return Object.freeze([...dirs, ...union.filter((entry) => !entry.endsWith('/'))]);
 }
 
-export const DEFAULT_CONFIG_FILE = resolve(dirname(fileURLToPath(import.meta.url)), '../../', PROTECTED_PATHS_CONFIG_PATH);
+export const DEFAULT_CONFIG_FILE = resolve(PIPELINE_ROOT, PROTECTED_PATHS_CONFIG_PATH);
+
+/**
+ * Where the repository's list is read. This repository: next to the pipeline scripts (ADR-0044 §5).
+ * A target repository (ADL_CONFIG_DIR set, ADR-0045): its own `protected-paths.yaml` in the trusted
+ * default-branch checkout of its config directory; the pipeline's own list is never inherited.
+ */
+export function defaultConfigFile(env = process.env) {
+  const dir = targetConfigDir(env);
+  return dir ? join(dir, 'protected-paths.yaml') : DEFAULT_CONFIG_FILE;
+}
 
 /**
  * The repository's additional entries. The file is resolved next to the pipeline scripts, so a
  * pipeline run from the default branch (ADR-0023) reads the default branch's list, never the PR's.
  * A missing file means no additional entries (floor only); any other read error propagates.
  */
-export function loadProtectedPathsConfig(file = DEFAULT_CONFIG_FILE) {
+export function loadProtectedPathsConfig(file = defaultConfigFile()) {
   let content;
   try {
     content = readFileSync(file, 'utf8');
@@ -148,8 +158,11 @@ export function loadProtectedPathsConfig(file = DEFAULT_CONFIG_FILE) {
 }
 
 /** The effective denylist: floor ∪ the repository's config. Throws on an invalid config (fail-fast). */
-export function loadProtectedPaths(file = DEFAULT_CONFIG_FILE) {
-  return resolveProtectedPaths(loadProtectedPathsConfig(file));
+export function loadProtectedPaths(file = defaultConfigFile()) {
+  const extra = loadProtectedPathsConfig(file);
+  // A target's config directory is protected as a whole, whatever its own list says (ADR-0045).
+  if (targetConfigDir()) extra.push(`${configRelPath()}/`);
+  return resolveProtectedPaths(extra);
 }
 
 /** True when `normalizedPath` (lower-cased, forward slashes, no leading "./") falls under `entry`. */

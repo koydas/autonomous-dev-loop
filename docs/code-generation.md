@@ -243,6 +243,26 @@ sequenceDiagram
     end
 ```
 
+## Roots and Layered Configuration (ADR-0045)
+
+Groundwork for running the pipeline on a repository that does not hold its scripts. A script deals with three roots, all derived in `scripts/lib/roots.mjs` and nowhere else (a test forbids `import.meta.url` root arithmetic elsewhere):
+
+| Root | Holds | Resolved from |
+|---|---|---|
+| Pipeline | `scripts/`, `prompts/`, default `config/` | the location of the script itself |
+| Target | the repository under work: PR tree, `observability/traces`, `checkpoints`, file context, writes | the working directory (`ADL_TARGET_ROOT` overrides it in tests) |
+| Target config | the target's own `models.yaml`, `labels.yaml`, `protected-paths.yaml`, `review-evidence.yaml` | `ADL_CONFIG_DIR` (absolute, a trusted default-branch checkout); `ADL_CONFIG_PATH` is its repo-relative name |
+
+Neither `ADL_*` variable set (this repository, every workflow today): `config/` of the pipeline is both the defaults and the repository configuration, exactly as before. `ADL_CONFIG_DIR` set (a target repository):
+
+- `models.yaml`, `labels.yaml`: the target's keys are laid over the pipeline defaults, leaf by leaf; a key the defaults do not know fails at startup naming the file and the key; a missing file means defaults.
+- `protected-paths.yaml`: read from the target's directory only. The pipeline repository's own list is not inherited; a missing file means the hard-coded floor only. The target's config directory (`ADL_CONFIG_PATH`, e.g. `.autonomous-dev-loop/`) is protected as a whole whatever the list says, and an empty list removes no floor entry.
+- `review-evidence.yaml`: read from the target's directory only; absent means evidence is not required.
+- Prompts always come from the pipeline root.
+- The PR head's copy of `models.yaml` (prompt budget impact, ADR-0037) is read at `<ADL_CONFIG_PATH>/models.yaml` and laid over the defaults; a copy the layering rejects is ignored with one `review.models_config_ignored` warning.
+
+`node scripts/print_resolved_config.mjs` prints the resolved roots, where each file comes from, the effective protected paths and whether review evidence is required (JSON on stdout, nothing written). The reusable workflows that set these variables follow in separate changes (ADR-0045).
+
 ## Observability
 
 Every workflow run produces two observable outputs on top of GitHub Actions step logs.
