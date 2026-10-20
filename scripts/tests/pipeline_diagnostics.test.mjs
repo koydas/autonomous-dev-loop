@@ -294,6 +294,11 @@ test('withheld answered by the fallback on a prompt cut to the primary budget is
   assert.match(w.fact, /Answered by: anthropic \(fallback\) 3; input budget 6300 tokens/);
   assert.match(w.hypothesis, /fallback provider answered a prompt already cut/);
   // The same fallback without a budget (Anthropic primary sets none) is not capped: a guardrail.
+  // Missing CI evidence withholds whatever the fallback said: it stays an ADR-0026 guardrail.
+  const evidence = withheldRuns([{ withheld_from: null, evidence_state: 'missing' }, { withheld_from: null, evidence_state: 'stale' }, { withheld_from: null, evidence_state: 'missing' }], { llm: fellBack });
+  const ev = find(diagnose({ model: model(evidence) }), 'review-withheld');
+  assert.equal(ev.severity, 'info');
+  assert.match(ev.fact, /CI evidence, ADR-0026: 3\); anomaly: 0 /);
   const unbudgeted = withheldRuns([{ withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }], { llm: fellBack, budget: null });
   assert.equal(find(diagnose({ model: model(unbudgeted) }), 'review-withheld').severity, 'info');
   // Calls without a review stage still name the responder (v1 records).
@@ -321,6 +326,8 @@ test('auto-fix blocked by design: protected/unshown targets, files withheld by b
   assert.match(f.hypothesis, /worked as designed/);
   assert.equal(f.frequency, '4 of 4 attempt(s)', 'the volume is not hidden');
   assert.equal(f.runs.length, 4, 'runs without autofix.start are not attempts');
+  assert.match(f.fact, /skip reasons: guardrail_rejected 2, no_changes 2\./, 'skips of non-attempts are not listed');
+  assert.equal(f.evidence.length, 4);
 });
 
 test('auto-fix anomaly: no_changes with every file shown, or a rule outside the design set, is a warning', () => {

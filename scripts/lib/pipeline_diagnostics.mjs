@@ -95,7 +95,9 @@ function withheldClass({ run, e }) {
   const responder = (reviewCalls.length ? reviewCalls : calls).at(-1) ?? null;
   const budget = run.events.filter((x) => x.event === 'review.prompt_truncated').map((x) => x.meta.max_input_tokens).find((n) => typeof n === 'number') ?? null;
   const cause = withheldCause(e.meta);
-  const key = responder?.fallback === true && budget != null ? 'fallback_capped' : cause;
+  // Missing / stale CI evidence withholds whatever the model said (decideVerdict, ADR-0026): the fallback did not cause it.
+  const evidence = cause === 'evidence_missing' || cause === 'evidence_stale';
+  const key = responder?.fallback === true && budget != null && !evidence ? 'fallback_capped' : cause;
   return { key, anomaly: key === 'fallback_capped' || ANOMALY_CAUSES.has(cause), responder, budget };
 }
 
@@ -213,7 +215,9 @@ function autofixFindings(runs) {
   const failedPushes = decided.filter((k) => k === 'push_failed').length;
   const noPush = attempts.length - pushes.length;
   if (noPush / attempts.length < RULES.autofixNoPushShare) return [];
-  const skips = events(runs, 'autofix.skipped');
+  // Skip details from the attempts only: an approved head or the attempt limit skips before autofix.start.
+  const attemptRuns = new Set(runIds(attempts));
+  const skips = events(runs.filter((r) => attemptRuns.has(r.run_id)), 'autofix.skipped');
   const reasons = {};
   for (const { e } of skips) reasons[e.meta.reason ?? 'unspecified'] = (reasons[e.meta.reason ?? 'unspecified'] ?? 0) + 1;
   const noChanges = reasons.no_changes ?? 0;
