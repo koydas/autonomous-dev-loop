@@ -17,8 +17,8 @@ import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 
 const startMs = Date.now();
-// Script-relative, like prompts/ and config/ elsewhere: with ADR-0023 the runner and its config come
-// from the trusted default-branch copy, while cwd is the PR tree under check.
+// From repoConfigFile (ADR-0045): this repository's config/ next to the scripts, or the target's trusted
+// default-branch config directory (ADL_CONFIG_DIR). Never the cwd, which is the PR tree under check (ADR-0023).
 const configPath = process.env.REVIEW_EVIDENCE_CONFIG ?? repoConfigFile('review-evidence.yaml');
 const outputPath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
 // Suffixed so the trace does not collide with the review job's trace of the same workflow run.

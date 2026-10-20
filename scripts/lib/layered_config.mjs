@@ -17,11 +17,11 @@ function readOrNull(file) {
   }
 }
 
-/** Defaults with the keys of `overrides` laid over them; `file` names the source in errors. */
+/** Defaults with the keys of `overrides` laid over them (own keys only: `constructor` or `toString` are typos too); `file` names the source in errors. */
 export function overlayFlat(defaults, overrides, file) {
   const merged = { ...defaults };
   for (const [key, value] of Object.entries(overrides)) {
-    if (!(key in defaults)) throw new Error(`${file}: unknown key "${key}"`);
+    if (!Object.hasOwn(defaults, key)) throw new Error(`${file}: unknown key "${key}"`);
     merged[key] = value;
   }
   return merged;
@@ -34,11 +34,11 @@ export function overlayNested(defaults, overrides, file) {
     Object.fromEntries(Object.entries(sections).map(([section, leaves]) => [section, { ...leaves }])),
   ]));
   for (const [group, sections] of Object.entries(overrides)) {
-    if (!(group in defaults)) throw new Error(`${file}: unknown group "${group}"`);
+    if (!Object.hasOwn(defaults, group)) throw new Error(`${file}: unknown group "${group}"`);
     for (const [section, leaves] of Object.entries(sections)) {
-      if (!(section in defaults[group])) throw new Error(`${file}: unknown section "${group}.${section}"`);
+      if (!Object.hasOwn(defaults[group], section)) throw new Error(`${file}: unknown section "${group}.${section}"`);
       for (const [leaf, value] of Object.entries(leaves)) {
-        if (!(leaf in defaults[group][section])) throw new Error(`${file}: unknown key "${group}.${section}.${leaf}"`);
+        if (!Object.hasOwn(defaults[group][section], leaf)) throw new Error(`${file}: unknown key "${group}.${section}.${leaf}"`);
         merged[group][section][leaf] = value;
       }
     }

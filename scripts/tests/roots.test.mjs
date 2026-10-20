@@ -89,6 +89,17 @@ test('overlayFlat rejects a key the defaults do not know, naming the file and th
   assert.throws(() => overlayFlat({ a: '1' }, { typo: 'x' }, 'models.yaml (t)'), /models\.yaml \(t\): unknown key "typo"/);
 });
 
+test('overlays reject keys inherited from Object.prototype at every level', () => {
+  for (const inherited of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+    const flat = JSON.parse(`{ ${JSON.stringify(inherited)}: "x" }`);
+    assert.throws(() => overlayFlat({ a: '1' }, flat, 'f'), /unknown key/, `flat ${inherited}`);
+    const defaults = { review: { changes: { name: 'x' } } };
+    assert.throws(() => overlayNested(defaults, JSON.parse(`{ ${JSON.stringify(inherited)}: {} }`), 'f'), /unknown group/, `group ${inherited}`);
+    assert.throws(() => overlayNested(defaults, { review: JSON.parse(`{ ${JSON.stringify(inherited)}: {} }`) }, 'f'), /unknown section/, `section ${inherited}`);
+    assert.throws(() => overlayNested(defaults, { review: { changes: JSON.parse(`{ ${JSON.stringify(inherited)}: "x" }`) } }, 'f'), /unknown key/, `leaf ${inherited}`);
+  }
+});
+
 test('overlayNested overrides at leaf level and keeps the other leaves, without mutating the defaults', () => {
   const defaults = { review: { changes: { name: 'changes-requested', color: 'red' }, ok: { name: 'approved' } } };
   const merged = overlayNested(defaults, { review: { changes: { name: 'needs-work' } } }, 'labels.yaml');
