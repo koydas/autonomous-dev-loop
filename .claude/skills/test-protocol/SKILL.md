@@ -46,6 +46,8 @@ Modules with CI-enforced ≥ 80% coverage (`c8 --check-coverage` in `test.yml`):
 - `scripts/lib/groq_client.mjs`
 - `scripts/lib/output_writer.mjs`
 - `scripts/lib/protected_paths.mjs`
+- `scripts/lib/roots.mjs`
+- `scripts/lib/layered_config.mjs`
 - `scripts/lib/static_verifier.mjs`
 - `scripts/lib/review_evidence.mjs`
 - `scripts/lib/eval_harness.mjs`

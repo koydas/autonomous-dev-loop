@@ -21,6 +21,8 @@ on:
       - 'scripts/lib/prompts.mjs'
       - 'scripts/lib/config.mjs'
       - 'scripts/lib/yaml.mjs'
+      - 'scripts/lib/roots.mjs'
+      - 'scripts/lib/layered_config.mjs'
       - 'scripts/lib/metrics.mjs'
       - 'scripts/lib/observability.mjs'
       - 'scripts/lib/run_journal.mjs'

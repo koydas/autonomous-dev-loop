@@ -1,18 +1,15 @@
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
-import { parseFlatYaml, parseNestedYaml } from './yaml.mjs';
+import { loadModelsConfig, loadLabelsConfigAll } from './layered_config.mjs';
+import { PIPELINE_ROOT } from './roots.mjs';
 import { log } from './observability.mjs';
 
-const CONFIG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../config');
-const MODELS_FILE = resolve(CONFIG_DIR, 'models.yaml');
-const LABELS_FILE = resolve(CONFIG_DIR, 'labels.yaml');
-
-export const GROQ_MODEL_DEFAULTS = parseFlatYaml(readFileSync(MODELS_FILE, 'utf8'));
+// Pipeline defaults, with the target repository's keys laid over them when ADL_CONFIG_DIR is set (ADR-0045).
+export const GROQ_MODEL_DEFAULTS = loadModelsConfig();
 
 export function loadLabelsConfig(group) {
-  const all = parseNestedYaml(readFileSync(LABELS_FILE, 'utf8'));
+  const all = loadLabelsConfigAll();
   const section = all[group];
   if (!section) throw new Error(`Unknown label group "${group}" in labels.yaml`);
   return section;
@@ -247,7 +244,7 @@ export function validateStartup(promptsDirOverride) {
   requireEnv('GITHUB_EVENT_PATH');
   requireEnv('ISSUE_NUMBER');
   requireEnv('ISSUE_TITLE');
-  const promptsDir = promptsDirOverride ?? resolve(dirname(fileURLToPath(import.meta.url)), '../../prompts');
+  const promptsDir = promptsDirOverride ?? resolve(PIPELINE_ROOT, 'prompts');
   const generationSystemPromptPath = resolve(promptsDir, 'generation-system.md');
   const generationUserPromptPath = resolve(promptsDir, 'generation-user.md');
   if (!existsSync(generationSystemPromptPath)) {

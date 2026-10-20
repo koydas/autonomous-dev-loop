@@ -1,0 +1,2 @@
+# Consumer override: one key laid over the pipeline defaults (ADR-0045).
+anthropic_review_effort: low

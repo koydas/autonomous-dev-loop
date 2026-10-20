@@ -69,3 +69,8 @@ Today three roots coincide and the code assumes it:
 - ⚠️ On a target, the coverage and prompt-budget heuristics are off and the review uses the neutral core; repository-specific review rules come only from its own `review-guidelines.md`.
 - ⚠️ Trust boundary of self-calls is unchanged: on `push` GitHub takes the caller workflow (and, for `./` calls, the called one) from the pushed branch, as ADR-0023 already records for `pr-review.yml`. Both files sit under `.github/`, in the protected floor, so generation and auto-fix cannot write them; whoever can push a branch could before and still can. A pinned remote literal would not close it (the caller stays branch-controlled). Hardening (ruleset restricting branch pushes or requiring workflows) is a repository setting, outside this ADR.
 - ⚠️ Third-party actions inside the workflows are still referenced by tag, not SHA (separate follow-up).
+
+## Amendment (2026-10-20): implementation notes, part 1
+
+- The config directory is protected **dynamically**: `loadProtectedPaths` adds the resolved `<config_dir>/` when a target runs (`ADL_CONFIG_DIR` set). No static `.autonomous-dev-loop/` entry joins `PROTECTED_FLOOR`: it would protect nothing when `config_dir` differs, and every floor entry must be listed in the generation and auto-fix prompts (ADR-0044 §8).
+- The runtime contract between workflows and scripts is three environment variables: `ADL_CONFIG_DIR` (absolute, trusted checkout), `ADL_CONFIG_PATH` (repo-relative) and, in tests only, `ADL_TARGET_ROOT`. Neither of the first two set = this repository's own mode, so every existing workflow is unchanged.

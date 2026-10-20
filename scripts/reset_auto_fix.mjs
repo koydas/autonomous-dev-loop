@@ -6,10 +6,10 @@
  * of the PR's work item (ADR-0041): the PR is read once for its head ref and closing references.
  * Env: GITHUB_TOKEN, GITHUB_REPOSITORY, PR_NUMBER, RETRIGGER, GITHUB_API_URL (optional), GITHUB_RUN_ID.
  */
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseNestedYaml } from './lib/yaml.mjs';
+import { loadLabelsConfigAll } from './lib/layered_config.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { prWorkItemHint } from './lib/trace_context.mjs';
 
@@ -17,7 +17,11 @@ const STAGE = 'autofix_reset';
 
 /** Attempt labels and the changes-requested label from config/labels.yaml. */
 export function resetLabels(labelsYaml) {
-  const labels = parseNestedYaml(labelsYaml);
+  return resetLabelsFrom(parseNestedYaml(labelsYaml));
+}
+
+/** Same, from the parsed (and layered, ADR-0045) labels config. */
+export function resetLabelsFrom(labels) {
   return {
     attemptLabels: [labels.autofix.attempt1.name, labels.autofix.attempt2.name, labels.autofix.attempt3.name],
     changesLabel: labels.review.changes.name,
@@ -72,7 +76,7 @@ async function loadOptions(env = process.env) {
     return { status: res.status, ok: res.ok, json };
   };
   const retrigger = env.RETRIGGER === 'true';
-  const { attemptLabels, changesLabel } = resetLabels(readFileSync('config/labels.yaml', 'utf8'));
+  const { attemptLabels, changesLabel } = resetLabelsFrom(loadLabelsConfigAll());
   return { prNumber, retrigger, request, attemptLabels, changesLabel };
 }
 

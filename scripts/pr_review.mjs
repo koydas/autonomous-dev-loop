@@ -3,7 +3,6 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
@@ -20,8 +19,9 @@ import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, i
 import { findStaleReferences, formatStaleRefsContext, formatStaleRefsSection } from './lib/stale_refs.mjs';
 import { findRelatedAdrs } from './lib/related_adrs.mjs';
 import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudgetSection } from './lib/prompt_budget.mjs';
-import { parseFlatYaml } from './lib/yaml.mjs';
-import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
+import { modelsFromContent } from './lib/layered_config.mjs';
+import { repoConfigFile, configRelPath } from './lib/roots.mjs';
+import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote } from './lib/review_evidence.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
 const _reviewStartMs = Date.now();
@@ -318,13 +318,23 @@ const readHeadOrNull = (p) => {
 // defaults, one warn event, never followed and never an abort.
 const readPrModels = () => {
   try {
-    return readHeadOrNull('config/models.yaml');
+    return readHeadOrNull(`${configRelPath()}/models.yaml`);
   } catch (err) {
-    obsLog({ stage: 'review', event: 'review.models_config_ignored', level: 'warn', meta: { path: 'config/models.yaml', error: err.message } });
+    obsLog({ stage: 'review', event: 'review.models_config_ignored', level: 'warn', meta: { path: `${configRelPath()}/models.yaml`, error: err.message } });
     return null;
   }
 };
 const prModels = readPrModels();
+// The PR's models file, on top of the pipeline defaults for a target repository (ADR-0045); a file the
+// layering rejects (unknown key) is ignored with one warn event, like an unreadable one.
+const prModelsOrDefaults = (content) => {
+  try {
+    return modelsFromContent(content);
+  } catch (err) {
+    obsLog({ stage: 'review', event: 'review.models_config_ignored', level: 'warn', meta: { path: `${configRelPath()}/models.yaml`, error: err.message } });
+    return GROQ_MODEL_DEFAULTS;
+  }
+};
 const promptBudget = computePromptBudgetImpact({
   rawDiff,
   readBase: (p) => {
@@ -332,7 +342,7 @@ const promptBudget = computePromptBudgetImpact({
     return git(['show', `${mergeBase}:${p}`]);
   },
   readHead: readHeadOrNull,
-  models: prModels == null ? GROQ_MODEL_DEFAULTS : parseFlatYaml(prModels),
+  models: prModels == null ? GROQ_MODEL_DEFAULTS : prModelsOrDefaults(prModels),
 });
 if (promptBudget.length) log('Prompt budget impact', { prNumber, promptBudget });
 const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
@@ -381,7 +391,7 @@ const llmApproved = llmVerdict === 'APPROVED';
 // ADR-0024: a failing check blocks APPROVE in code, whatever the LLM concluded.
 // ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.
 // Same resolution as run_review_evidence.mjs: without a config the repo has not opted in to evidence.
-const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
+const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? repoConfigFile('review-evidence.yaml');
 const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
 // ADR-0038: an approval of a diff whose code was cut to the budget is withheld; a human reviews the rest.
 // So is a REQUEST_CHANGES whose findings all cite only cut code files (#219), unless a check failed.

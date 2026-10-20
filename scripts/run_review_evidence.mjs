@@ -11,15 +11,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { parseEvidenceConfig, runCheck, buildEvidence, EVIDENCE_CONFIG_PATH } from './lib/review_evidence.mjs';
+import { parseEvidenceConfig, runCheck, buildEvidence } from './lib/review_evidence.mjs';
+import { repoConfigFile } from './lib/roots.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 
 const startMs = Date.now();
-// Script-relative, like prompts/ and config/ elsewhere: with ADR-0023 the runner and its config come
-// from the trusted default-branch copy, while cwd is the PR tree under check.
-const configPath = process.env.REVIEW_EVIDENCE_CONFIG ?? fileURLToPath(new URL(`../${EVIDENCE_CONFIG_PATH}`, import.meta.url));
+// From repoConfigFile (ADR-0045): this repository's config/ next to the scripts, or the target's trusted
+// default-branch config directory (ADL_CONFIG_DIR). Never the cwd, which is the PR tree under check (ADR-0023).
+const configPath = process.env.REVIEW_EVIDENCE_CONFIG ?? repoConfigFile('review-evidence.yaml');
 const outputPath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
 // Suffixed so the trace does not collide with the review job's trace of the same workflow run.
 const runId = `${process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`}-evidence`;

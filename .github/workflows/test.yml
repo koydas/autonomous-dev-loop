@@ -114,6 +114,28 @@ jobs:
             --statements 80 \
             node --test scripts/tests/protected_paths.test.mjs
 
+      - name: Check roots coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/roots.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/roots.test.mjs
+
+      - name: Check layered_config coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/layered_config.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/roots.test.mjs
+
       - name: Check eval_harness coverage (≥80%)
         run: |
           npx --yes c8 \
