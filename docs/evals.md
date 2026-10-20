@@ -138,7 +138,7 @@ Rules:
 
 | Overlap | Behavior |
 |---|---|
-| Weekly run + manual `evals.yml` run on the default branch | Same group (`evals-<ref>`): the second one waits. GitHub keeps one pending run per group, so a third run cancels the **pending** one, never the running one (`cancel-in-progress: false`). |
+| Weekly run + manual `evals.yml` run on the default branch | Same group (`evals-<ref>`): the second one waits. GitHub keeps one pending run per group, so a third run cancels the **pending** one, never the running one (`cancel-in-progress: false`). The cancelled pending run can be the weekly cron: that week's suite is then neither measured nor published, and nothing fails (audit F27). Before dispatching, run `gh run list --workflow evals.yml`: with one run in progress and one pending, wait for the running one to finish. |
 | Weekly run + `pr-evals.yml` | Different groups (`evals-<ref>` vs `pr-evals-<PR>`): neither waits for the other. Both call Groq with the same key and share its TPM: each waits out the other's 429s (ADR-0028), so both run slower while they overlap but neither fails for it. A weekly review suite overlapping a 3-repeat PR review eval can roughly double in duration, still inside its timeout in the usual case. |
 | Weekly run + `eval-replay.yml` | No LLM call in the replay. A replay that reads the site during the deploy sees either the previous or the new tree. |
 

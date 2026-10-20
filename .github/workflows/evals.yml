@@ -90,6 +90,9 @@ permissions:
 # One run per branch at a time: each publish reads the deployed site, then redeploys it. The weekly
 # run (ref = default branch) queues behind a manual run on the default branch and vice versa; GitHub
 # keeps one pending run per group, so a third run cancels the pending one, never the running one.
+# The cancelled pending run can be the weekly cron: that week's measurement and publication are then
+# lost with no error (audit F27). Before a manual dispatch, check `gh run list --workflow evals.yml`:
+# with one run in progress and one pending, wait instead of dispatching.
 # pr-evals.yml keys its own group per PR, so the two never block each other. They share the Groq TPM,
 # each waiting out the other's 429s (ADR-0028), only slower while they overlap.
 concurrency:

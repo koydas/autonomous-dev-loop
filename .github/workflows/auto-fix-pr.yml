@@ -6,15 +6,17 @@ on:
   issue_comment:
     types: [created, edited]
 
+# Per job (ADR-0007 amendment 2026-10-20): load-labels runs on every label/comment event and only reads.
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  actions: write
+  contents: read
 
 jobs:
   load-labels:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # gh api on the PR (head ref for issue_comment events).
+      pull-requests: read
     outputs:
       changes_requested: ${{ steps.cfg.outputs.changes_requested }}
       head_ref: ${{ steps.head.outputs.ref }}
@@ -55,6 +57,15 @@ jobs:
     runs-on: ubuntu-latest
     # 15 Groq retries x 60 s + 5 min for checkout, push and labels (ADR-0028).
     timeout-minutes: 20
+    permissions:
+      # git push to the PR branch when AI_PR_TOKEN is unset, and the `metrics` branch (Commit metrics).
+      contents: write
+      # Kept: labels on the PR through the issues API (auto_fix_pr.mjs, this token); issues: write may suffice.
+      pull-requests: write
+      # Attempt / needs-human labels and comments (auto_fix_pr.mjs, this token).
+      issues: write
+      # Checkpoint artifact list and download (read only).
+      actions: read
     # Job-level: every PR comment/label triggers this workflow; a workflow-level group
     # would let skipped runs displace the pending real one. Never cancel: this job pushes.
     # Shared with pr-review and reset-auto-fix (ADR-0020).
@@ -98,11 +109,11 @@ jobs:
       - name: Download checkpoint artifact
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
-          PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
           ARTIFACT_NAME="checkpoints-pr-${PR_NUMBER}"
           ARTIFACT_URL=$(gh api \
-            "repos/${{ github.repository }}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1" \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1" \
             --jq '[.artifacts[] | select(.expired == false)] | .[0].archive_download_url // ""' \
             2>/dev/null || echo "")
           if [ -n "$ARTIFACT_URL" ]; then
@@ -115,8 +126,10 @@ jobs:
           fi
 
       - name: Check prerequisite checkpoint
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
-          RUNID="pr-${{ github.event.pull_request.number || github.event.issue.number }}"
+          RUNID="pr-${PR_NUMBER}"
           if [ ! -f "./checkpoints/${RUNID}/review.json" ]; then
             echo "::error::Checkpoint 'review' not found for run '${RUNID}'. The pr-review workflow must complete successfully before auto-fix can proceed."
             exit 1

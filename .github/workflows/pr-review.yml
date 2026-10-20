@@ -7,11 +7,9 @@ on:
   pull_request:
     types: [opened]
 
+# Per job (ADR-0007 amendment 2026-10-20): the default here is read-only; each job grants what it calls.
 permissions:
-  pull-requests: write
-  contents: write
-  issues: write
-  actions: write
+  contents: read
 
 # Shared with auto-fix-pr and reset-auto-fix (ADR-0020): one pipeline stage per PR branch at a time.
 concurrency:
@@ -79,6 +77,15 @@ jobs:
     # wait several windows. GROQ_MAX_RETRIES x LLM_MAX_RETRY_WAIT_MS = 12 min of waits, + 3 min for the
     # rest of the job (ADR-0022, ADR-0028 amendment).
     timeout-minutes: 15
+    permissions:
+      # The `metrics` branch only (Commit metrics, Git Data API).
+      contents: write
+      # Review submit; pr_review.mjs uses AI_PR_TOKEN, this token when it is unset.
+      pull-requests: write
+      # Labels and the review comment, same fallback.
+      issues: write
+      # gh run list, the auto-fix run check and the cross-run checkpoint download (read only).
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,31 +111,32 @@ jobs:
         id: ckpt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Event values through env, never expanded into the script (audit F14): a ref name may hold `$(`, `;`, backticks.
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "pr_number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
           else
-            BRANCH="${{ github.ref_name }}"
             PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
             if [ -z "$PR" ]; then
               sleep 5
               PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
             fi
-            echo "pr_number=${PR:-${{ github.run_id }}}" >> "$GITHUB_OUTPUT"
+            echo "pr_number=${PR:-$RUN_ID}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Find latest auto-fix run for checkpoint
         id: fix_run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # pull_request: the head ref; push: the pushed branch (same key as the concurrency group).
+          BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BRANCH="${{ github.event.pull_request.head.ref }}"
-          else
-            BRANCH="${{ github.ref_name }}"
-          fi
           RUN_ID=$(gh run list \
-            --repo "${{ github.repository }}" \
+            --repo "$GITHUB_REPOSITORY" \
             --workflow auto-fix-pr.yml \
             --branch "$BRANCH" \
             --status completed \
@@ -137,7 +145,7 @@ jobs:
             --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
           if [ -z "$RUN_ID" ]; then
             RUN_ID=$(gh run list \
-              --repo "${{ github.repository }}" \
+              --repo "$GITHUB_REPOSITORY" \
               --workflow auto-fix-pr.yml \
               --status completed \
               --limit 20 \

@@ -14,19 +14,21 @@ on:
         required: false
         type: string
 
+# Per job (ADR-0007 amendment 2026-10-20): load-labels runs on every issue label event and only reads.
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
-  actions: write
+  contents: read
 
 jobs:
   load-labels:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       ready_for_dev: ${{ steps.cfg.outputs.ready_for_dev }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -48,14 +50,26 @@ jobs:
     runs-on: ubuntu-latest
     # 15 Groq retries x 60 s + 5 min for checkout, PR creation and artifacts (ADR-0028).
     timeout-minutes: 20
+    permissions:
+      # create-pull-request pushes ai/issue-<n> when AI_PR_TOKEN is unset; the `metrics` branch (Commit metrics).
+      contents: write
+      # create-pull-request opens / updates the PR, same fallback.
+      pull-requests: write
+      # gh issue view; needs-human label and comment on escalation (generate_issue_change.mjs, this token).
+      issues: write
+      # Cross-run checkpoint download from the validate-issue run (read only).
+      actions: read
     # Job-level: any label added to the issue triggers this workflow (see auto-fix-pr.yml).
     concurrency:
       group: code-generation-${{ github.event.issue.number || inputs.issue_number }}
       cancel-in-progress: false
 
     steps:
+      # Nothing here runs git push: create-pull-request sets its own token for its push.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -66,20 +80,23 @@ jobs:
         id: issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_NUMBER: ${{ inputs.issue_number }}
+          EVENT_NUMBER: ${{ github.event.issue.number }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            NUMBER="${{ inputs.issue_number }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            NUMBER="$INPUT_NUMBER"
           else
-            NUMBER="${{ github.event.issue.number }}"
+            NUMBER="$EVENT_NUMBER"
           fi
-          TITLE=$(gh issue view "$NUMBER" --repo "${{ github.repository }}" --json title -q '.title')
-          LABELS=$(gh issue view "$NUMBER" --repo "${{ github.repository }}" --json labels -q '.labels | map(.name) | tojson')
+          TITLE=$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json title -q '.title')
+          LABELS=$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels | map(.name) | tojson')
           # Issue text is untrusted: random heredoc delimiter per run, so a body line cannot close the
           # block and forge outputs (audit F28); number/labels written last (last value wins).
           DELIM="ghadelim_$(openssl rand -hex 16)"
           {
             echo "body<<$DELIM"
-            gh issue view "$NUMBER" --repo "${{ github.repository }}" --json body -q '.body'
+            gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json body -q '.body'
             echo "$DELIM"
             echo "title<<$DELIM"
             printf '%s\n' "$TITLE"
@@ -100,8 +117,10 @@ jobs:
 
       - name: Check prerequisite checkpoint
         if: inputs.validate_run_id != ''
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
         run: |
-          RUNID="issue-${{ steps.issue.outputs.number }}"
+          RUNID="issue-${ISSUE_NUMBER}"
           if [ ! -f "./checkpoints/${RUNID}/validate.json" ]; then
             echo "::error::Checkpoint 'validate' not found for run '${RUNID}'. The validate-issue job must complete successfully before code-generation can proceed."
             exit 1
