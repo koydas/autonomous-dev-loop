@@ -8,6 +8,7 @@ import {
   MIN_MATCH_CHARS, MIN_RUN_CHARS, QUOTE_SLACK_CHARS, MAX_LIVE_SOURCE_CHARS, MAX_REPORTED_HITS,
 } from '../lib/stale_refs.mjs';
 import { parseFlatYaml } from '../lib/yaml.mjs';
+import { loadReviewSystemPrompt } from '../lib/review_prompt.mjs';
 import { LOW_HEADROOM_RATIO, computePromptBudgetImpact } from '../lib/prompt_budget.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -287,7 +288,8 @@ test('stale references are capped at a Low verify note in the prompt, within the
   assert.doesNotMatch(ctx, /gate \(b\)/);
   const PROMPT = 'prompts/pr-review-system.md';
   const system = readFileSync(resolve(ROOT, PROMPT), 'utf8');
-  assert.match(system, /"Stale references" block is a lead.*at most one Low issue, "Verify stale reference".*never a Medium or High finding, never a reason for REQUEST_CHANGES\. A hit alone is never a gate \(b\) finding; judge gate \(b\) from the diff as usual/);
+  // The rule is split between the neutral core and this repository's rules (ADR-0045): the assembled prompt keeps both halves.
+  assert.match(loadReviewSystemPrompt({ self: true }), /"Stale references" block is a lead.*at most one Low issue, "Verify stale reference".*never a Medium or High finding, never a reason for REQUEST_CHANGES\. A hit alone is never a gate \(b\) finding; judge gate \(b\) from the diff as usual/);
   const models = parseFlatYaml(readFileSync(resolve(ROOT, 'config/models.yaml'), 'utf8'));
   const [impact] = computePromptBudgetImpact({
     rawDiff: `diff --git a/${PROMPT} b/${PROMPT}\n--- a/${PROMPT}\n+++ b/${PROMPT}\n@@ -1 +1 @@\n-a\n+b\n`,

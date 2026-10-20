@@ -65,6 +65,27 @@ export function modelsFromContent(content, env = process.env) {
   return overlayFlat(parseFlatYaml(readFileSync(pipelineDefaultFile('models.yaml'), 'utf8')), parsed, 'models.yaml (pull request head)');
 }
 
+// The target's review guidelines are prompt text: bounded, so a repository cannot starve the diff of its budget.
+export const REVIEW_GUIDELINES_MAX_CHARS = 6000;
+
+/**
+ * Review guidelines of a target repository: `review-guidelines.md` in its trusted config directory.
+ * Empty in this repository's own mode (its rules are prompts/pr-review-repo-rules.md), when the file is
+ * missing, or when it is blank. Over REVIEW_GUIDELINES_MAX_CHARS is an error naming the file; any read
+ * error other than a missing file propagates.
+ */
+export function loadReviewGuidelines(env = process.env) {
+  const dir = targetConfigDir(env);
+  if (!dir) return '';
+  const file = join(dir, 'review-guidelines.md');
+  const content = readOrNull(file);
+  const text = (content ?? '').trim();
+  if (text.length > REVIEW_GUIDELINES_MAX_CHARS) {
+    throw new Error(`review-guidelines.md (${file}): ${text.length} characters, the limit is ${REVIEW_GUIDELINES_MAX_CHARS}`);
+  }
+  return text;
+}
+
 /** Effective models.yaml: pipeline defaults, then the target's keys. */
 export function loadModelsConfig(env = process.env) {
   return layered('models.yaml', parseFlatYaml, overlayFlat, env);

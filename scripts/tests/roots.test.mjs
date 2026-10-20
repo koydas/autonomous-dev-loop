@@ -6,9 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PIPELINE_ROOT, DEFAULT_CONFIG_PATH, pipelineConfigDir, targetRoot, configRelPath, targetConfigDir,
-  pipelineDefaultFile, repoConfigFile, describeRoots,
+  pipelineDefaultFile, repoConfigFile, describeRoots, isSelfTarget,
 } from '../lib/roots.mjs';
-import { overlayFlat, overlayNested, loadModelsConfig, loadLabelsConfigAll, modelsFromContent } from '../lib/layered_config.mjs';
+import { overlayFlat, overlayNested, loadModelsConfig, loadLabelsConfigAll, modelsFromContent, loadReviewGuidelines, REVIEW_GUIDELINES_MAX_CHARS } from '../lib/layered_config.mjs';
 import { defaultConfigFile, loadProtectedPaths, protectedPathsFor, DEFAULT_CONFIG_FILE, PROTECTED_FLOOR } from '../lib/protected_paths.mjs';
 import { resolveConfig } from '../print_resolved_config.mjs';
 import { resetLabels, resetLabelsFrom } from '../reset_auto_fix.mjs';
@@ -68,6 +68,37 @@ test('a relative ADL_CONFIG_DIR is an error: it would resolve inside the pull re
 test('repoConfigFile reads the pipeline config/ in own mode and the target directory otherwise, never both', () => {
   assert.equal(repoConfigFile('review-evidence.yaml', {}), path.join(REPO, 'config', 'review-evidence.yaml'));
   assert.equal(repoConfigFile('review-evidence.yaml', { ADL_CONFIG_DIR: '/tmp/t/.adl' }), path.join(path.resolve('/tmp/t/.adl'), 'review-evidence.yaml'));
+});
+
+test('isSelfTarget: this repository unless ADL_PIPELINE_REPOSITORY names another one than GITHUB_REPOSITORY', () => {
+  assert.equal(isSelfTarget({}), true);
+  assert.equal(isSelfTarget({ ADL_PIPELINE_REPOSITORY: '  ', GITHUB_REPOSITORY: 'owner/repo' }), true);
+  assert.equal(isSelfTarget({ ADL_PIPELINE_REPOSITORY: 'koydas/autonomous-dev-loop', GITHUB_REPOSITORY: 'koydas/autonomous-dev-loop' }), true);
+  assert.equal(isSelfTarget({ ADL_PIPELINE_REPOSITORY: 'Koydas/Autonomous-Dev-Loop', GITHUB_REPOSITORY: 'koydas/autonomous-dev-loop' }), true);
+  assert.equal(isSelfTarget({ ADL_PIPELINE_REPOSITORY: 'koydas/autonomous-dev-loop', GITHUB_REPOSITORY: 'acme/app' }), false);
+  assert.equal(isSelfTarget({ ADL_PIPELINE_REPOSITORY: 'koydas/autonomous-dev-loop' }), false, 'a missing GITHUB_REPOSITORY is not this repository');
+});
+
+test('loadReviewGuidelines: empty in own mode, empty when missing or blank, trimmed text otherwise', () => {
+  assert.equal(loadReviewGuidelines({}), '');
+  withTargetConfig({}, (dir) => assert.equal(loadReviewGuidelines({ ADL_CONFIG_DIR: dir }), ''));
+  withTargetConfig({ 'review-guidelines.md': '  \n\n' }, (dir) => assert.equal(loadReviewGuidelines({ ADL_CONFIG_DIR: dir }), ''));
+  withTargetConfig({ 'review-guidelines.md': '\n* Public API changes need a CHANGELOG entry.\n' }, (dir) => {
+    assert.equal(loadReviewGuidelines({ ADL_CONFIG_DIR: dir }), '* Public API changes need a CHANGELOG entry.');
+  });
+});
+
+test('loadReviewGuidelines rejects an oversized file naming it, and an unreadable one', () => {
+  withTargetConfig({ 'review-guidelines.md': 'x'.repeat(REVIEW_GUIDELINES_MAX_CHARS + 1) }, (dir) => {
+    assert.throws(() => loadReviewGuidelines({ ADL_CONFIG_DIR: dir }), /review-guidelines\.md .*: \d+ characters, the limit is 6000/);
+  });
+  withTargetConfig({ 'review-guidelines.md': 'x'.repeat(REVIEW_GUIDELINES_MAX_CHARS) }, (dir) => {
+    assert.equal(loadReviewGuidelines({ ADL_CONFIG_DIR: dir }).length, REVIEW_GUIDELINES_MAX_CHARS);
+  });
+  withTargetConfig({}, (dir) => {
+    fs.mkdirSync(path.join(dir, 'review-guidelines.md'));
+    assert.throws(() => loadReviewGuidelines({ ADL_CONFIG_DIR: dir }), /EISDIR/);
+  });
 });
 
 test('describeRoots names the mode and the three roots', () => {

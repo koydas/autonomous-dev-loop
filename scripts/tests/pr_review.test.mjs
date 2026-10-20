@@ -1752,6 +1752,46 @@ test('pr_review falls back to the default model budgets when config/models.yaml 
   }
 });
 
+// ADR-0045: the rules, gates and budget impact written for this repository apply to this repository only.
+const llmSystem = (server) => {
+  const { system } = JSON.parse(server.requests.find((r) => r.url === '/v1/messages').body);
+  return typeof system === 'string' ? system : system.map((b) => b.text).join('\n');
+};
+
+test('pr_review reviews another repository with the neutral prompt, no automation gates and no prompt budget block', async () => {
+  const diffText = 'diff --git a/scripts/build.mjs b/scripts/build.mjs\n--- a/scripts/build.mjs\n+++ b/scripts/build.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\ndiff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -1,1 +1,1 @@\n-old\n+new\n';
+  const cases = {
+    'this repository': { env: {}, self: true },
+    'another repository': { env: { ADL_PIPELINE_REPOSITORY: 'koydas/autonomous-dev-loop', GITHUB_REPOSITORY: 'owner/repo' }, self: false },
+  };
+  for (const [name, { env, self }] of Object.entries(cases)) {
+    const fixture = await makePrTree({ files: { 'scripts/build.mjs': 'old\n', 'prompts/pr-review-system.md': 'old\n' } });
+    await fs.writeFile(path.join(fixture.tree, 'prompts/pr-review-system.md'), 'new prompt text\n');
+    const trusted = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-review-trusted-config-'));
+    await fs.writeFile(path.join(trusted, 'review-guidelines.md'), '* Public API changes need a CHANGELOG entry.\n');
+    const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+    const eventFile = await writeEventFile();
+    try {
+      const target = self ? {} : { ADL_CONFIG_DIR: trusted, ADL_CONFIG_PATH: '.autonomous-dev-loop' };
+      const result = await runPrReview(server.address().port, eventFile, { ...env, ...target }, { cwd: fixture.tree });
+      assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+      const system = llmSystem(server);
+      const prompt = llmPrompt(server);
+      assert.equal(/For gate \(c\), CI enforces/.test(system), self, `${name}: gate (c) rule in the system prompt`);
+      assert.equal(/Node\.js automation repository/.test(system), self, `${name}: repository kind`);
+      assert.equal(system.includes('Public API changes need a CHANGELOG entry.'), !self, `${name}: the repository guidelines`);
+      assert.equal(/Automation gates context:/.test(prompt), self, `${name}: automation gates context`);
+      assert.equal(/## Prompt budget impact/.test(prompt), self, `${name}: prompt budget block`);
+      assert.ok(/Change classification context:/.test(prompt), `${name}: the generic context stays`);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fs.rm(trusted, { recursive: true, force: true });
+      await fixture.cleanup();
+    }
+  }
+});
+
 // ADR-0045: on a target repository the PR head's models file lives at ADL_CONFIG_PATH and holds only the
 // keys it changes. It is laid over the pipeline defaults; a copy the layering rejects is ignored with one
 // warn event (defaults), never an abort.

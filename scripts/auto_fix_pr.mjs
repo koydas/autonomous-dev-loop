@@ -18,6 +18,7 @@ import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
 import { readPrTreeFile } from './lib/pr_tree_reader.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
+import { isSelfTarget } from './lib/roots.mjs';
 import { appendOutputs } from './lib/github_output.mjs';
 
 let tracer;
@@ -358,7 +359,8 @@ const diff = truncateToTokenBudget(filterDiff(rawDiff, diffBudget * 4), diffBudg
 const allChangedFiles = [...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1]))];
 
 const SELF_PATH = 'scripts/auto_fix_pr.mjs';
-if (allChangedFiles.includes(SELF_PATH)) {
+// ADR-0045: SELF_PATH names this pipeline's script; in another repository it is just a path.
+if (isSelfTarget() && allChangedFiles.includes(SELF_PATH)) {
   const selfModRes = await ghFetch(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
     method: 'POST',
     body: JSON.stringify({

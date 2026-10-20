@@ -32,10 +32,11 @@ test('test.yml uses --check-coverage for each gated module', () => {
     `Expected ${GATE_COUNT} --check-coverage flags, found ${gateCount}`);
 });
 
-test('pr-review-system.md lists exactly the files gated by c8 in test.yml (gate (c) must not drift)', () => {
-  const prompt = readFileSync(resolve(ROOT, 'prompts/pr-review-system.md'), 'utf8');
+test('pr-review-repo-rules.md lists exactly the files gated by c8 in test.yml (gate (c) must not drift)', () => {
+  // ADR-0045: gate (c) is a rule written for this repository, so it lives in the repository rules, not in the neutral core.
+  const prompt = readFileSync(resolve(ROOT, 'prompts/pr-review-repo-rules.md'), 'utf8');
   const gateLine = prompt.split('\n').find((line) => line.startsWith('* For gate (c),'));
-  assert.ok(gateLine, 'gate (c) rule missing from prompts/pr-review-system.md');
+  assert.ok(gateLine, 'gate (c) rule missing from prompts/pr-review-repo-rules.md');
   const gated = [...workflow.matchAll(/--include '([^']+)'/g)].map((m) => m[1]).sort();
   const listed = [...gateLine.matchAll(/`(scripts\/[^`]+\.mjs)`/g)].map((m) => m[1]).filter((f) => !f.includes('*')).sort();
   assert.equal(gated.length, GATE_COUNT);

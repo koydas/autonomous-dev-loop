@@ -10,6 +10,7 @@ import { SUITES, validationSuite, blockerCodes, reviewSuite, findingSeverities, 
 import { filterCases, loadDataset, runSuite, summarize, checkThresholds } from '../lib/eval_harness.mjs';
 import { VALIDATION_SYSTEM_PROMPT } from '../lib/issue_validator.mjs';
 import { loadPrompt } from '../lib/prompts.mjs';
+import { loadReviewSystemPrompt } from '../lib/review_prompt.mjs';
 import { buildChangeClassificationContext } from '../lib/change_classifier.mjs';
 import { parseEvidence } from '../lib/review_evidence.mjs';
 import { GROQ_MODEL_DEFAULTS, loadLLMConfig, reviewMaxDiffChars } from '../lib/config.mjs';
@@ -563,7 +564,7 @@ test('reviewSuite.run sends the production system prompt and a user prompt with 
   const { output, request } = await runReview({
     title: 'Fix the counter', body: 'Counter starts at 2.', diff: SMALL_DIFF, dependencies: { ajv: '^8.0.0' }, evidence: passingEvidence(), head_sha: 'abc1234',
   });
-  assert.equal(request.systemPrompt, loadPrompt('pr-review-system'));
+  assert.equal(request.systemPrompt, loadReviewSystemPrompt({ self: true }));
   assert.match(request.prompt, /Title: Fix the counter/);
   assert.match(request.prompt, /Counter starts at 2\./);
   assert.match(request.prompt, /\+const a = 2;/);
