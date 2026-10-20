@@ -29,7 +29,7 @@ test('callCost: a measured call prices cache reads and writes apart from the unc
   // 100k uncached × $4 + 800k read × $0.20 + 100k write × $5 + 100k out × $20, per MTok
   close(c.usd, 0.4 + 0.16 + 0.5 + 2);
   close(callCost(opus({ estimated: false })).usd, 4 + 2);
-  close(callCost(opus({ estimated: false, cache_read: 2_000_000 })).usd, 2_000_000 * 0.2 / 1e6 + 2);
+  close(callCost(opus({ estimated: false, cache_read: null, cache_write: undefined })).usd, 4 + 2);
 });
 
 test('callCost: a price without cache entries falls back to the input price', async () => {
@@ -112,4 +112,12 @@ test('callCost: a negative or fractional token count is unpriced, never a negati
     assert.deepEqual(callCost(opus({ tokens_in: bad })), { usd: null, basis: 'unpriced' }, `in ${bad}`);
     assert.deepEqual(callCost(opus({ tokens_out: bad })), { usd: null, basis: 'unpriced' }, `out ${bad}`);
   }
+});
+
+test('callCost: a measured cache split that cannot be priced (invalid count, reads + writes over the input) is unpriced', () => {
+  for (const over of [{ cache_read: 1_000_001 }, { cache_read: 600_000, cache_write: 400_001 }, { cache_read: -1 }, { cache_write: 0.5 }, { cache_read: '10' }]) {
+    assert.deepEqual(callCost(opus({ estimated: false, ...over })), { usd: null, basis: 'unpriced' }, JSON.stringify(over));
+  }
+  assert.equal(callCost(opus({ estimated: false, cache_read: 600_000, cache_write: 400_000 })).basis, 'measured', 'reads + writes = input is valid');
+  assert.equal(callCost(opus({ cache_read: 2_000_000 })).basis, 'estimated', 'an estimate ignores the cache split');
 });

@@ -23,23 +23,25 @@ export function pipelineStage(stage) {
 
 /**
  * One call `{ provider, model, tokens_in, tokens_out, cache_read?, cache_write?, estimated }` →
- * `{ usd, basis }`. basis: `free` (Groq free tier, usd 0), `unpriced` (no price entry, a token count that is
- * missing or not a non-negative integer, or over the price's prompt limit; usd null), `measured` (cache read/write at their own price), `estimated`
- * (chars/4: every input token at the input price, no thinking).
+ * `{ usd, basis }`. basis: `free` (Groq free tier, usd 0), `unpriced` (no price entry, over the price's prompt
+ * limit, or counts that cannot be priced: input / output missing or not non-negative integers, a measured
+ * cache count that is not one, or cache reads + writes over the input; usd null), `measured` (cache
+ * read/write at their own price), `estimated` (chars/4: every input token at the input price, no thinking).
  */
 export function callCost(call) {
   if (call?.provider === 'groq') return { usd: 0, basis: 'free' };
   const price = PRICES_USD_PER_MTOK[`${call?.provider}:${call?.model}`];
   const tin = call?.tokens_in;
   const tout = call?.tokens_out;
+  const unpriced = { usd: null, basis: 'unpriced' };
+  // Counts come from stored records (untrusted shape): only non-negative integers are priced.
   const valid = (n) => Number.isSafeInteger(n) && n >= 0;
-  if (!price || !valid(tin) || !valid(tout) || (price.maxPromptTokens && tin > price.maxPromptTokens)) {
-    return { usd: null, basis: 'unpriced' };
-  }
+  if (!price || !valid(tin) || !valid(tout) || (price.maxPromptTokens && tin > price.maxPromptTokens)) return unpriced;
   if (call.estimated !== false) return { usd: (tin * price.in + tout * price.out) / 1e6, basis: 'estimated' };
-  const read = count(call.cache_read);
-  const write = count(call.cache_write);
-  const uncached = Math.max(0, tin - read - write);
+  const read = call.cache_read ?? 0;
+  const write = call.cache_write ?? 0;
+  if (!valid(read) || !valid(write) || read + write > tin) return unpriced;
+  const uncached = tin - read - write;
   const usd = (uncached * price.in + read * (price.cacheRead ?? price.in) + write * (price.cacheWrite ?? price.in) + tout * price.out) / 1e6;
   return { usd, basis: 'measured' };
 }
