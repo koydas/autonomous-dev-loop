@@ -119,11 +119,13 @@ function reviewFindings(runs) {
     const budgets = [...new Set(classes.map((c) => c.budget).filter((n) => n != null))];
     const warning = anomalies / verdicts.length >= RULES.withheldShare;
     const guardrailCut = count('approve_cut') + count('cut_unknown');
+    const guardrailEvidence = count('evidence_missing') + count('evidence_stale');
+    const adrs = [guardrailCut ? 'ADR-0038' : null, guardrailEvidence ? 'ADR-0026' : null].filter(Boolean).join(', ');
     out.push(finding({
       id: 'review-withheld', severity: warning ? 'warning' : 'info', category: 'Review',
-      title: warning ? 'Reviews withhold their verdict' : 'Reviews withhold their verdict by design (ADR-0038)',
+      title: warning || !adrs ? 'Reviews withhold their verdict' : `Reviews withhold their verdict by design (${adrs})`,
       fact: `${withheld.length} of ${verdicts.length} verdicts are WITHHELD (${pct(withheld.length / verdicts.length)}); ${cut} of them had code files not reviewed, ${fromApprove} would have been APPROVE (withheld_from). `
-        + `They cover ${heads} PR head(s) on ${prs} PR(s). Guardrail: ${withheld.length - anomalies} (code cut, ADR-0038: ${guardrailCut}; CI evidence, ADR-0026: ${count('evidence_missing') + count('evidence_stale')}); `
+        + `They cover ${heads} PR head(s) on ${prs} PR(s). Guardrail: ${withheld.length - anomalies} (code cut, ADR-0038: ${guardrailCut}; CI evidence, ADR-0026: ${guardrailEvidence}); `
         + `anomaly: ${anomalies} (REQUEST_CHANGES on unseen code: ${count('rc_unseen')}; unknown cause: ${count('other')}; fallback answered a prompt cut to the primary's budget: ${count('fallback_capped')}). `
         + `Answered by: ${answered}${budgets.length ? `; input budget ${budgets.join(' / ')} tokens` : ''}.`,
       hypothesis: warning
@@ -189,13 +191,12 @@ function reviewFindings(runs) {
 
 // An auto-fix attempt blocked by design: every rejected target protected, unshown or withheld (ADR-0021,
 // ADR-0029); no change proposed while the budget withheld files from the prompt (ADR-0029: the records do
-// not name the files the fix needed, so this is the closest observable cause); a head already approved
-// (ADR-0028) or the attempt limit reached (ADR-0034). Anything else that did not push is an anomaly.
+// not name the files the fix needed, so this is the closest observable cause). Anything else that did not
+// push is an anomaly. An approved head (ADR-0028) or the attempt limit (ADR-0034) exits before autofix.start:
+// such a run is not an attempt, so it never counts here.
 const DESIGN_RULES = new Set(['protected_path', 'unshown_file', 'withheld_file']);
 function blockedByDesign(run) {
   const d = stepDecision(run, 'autofix');
-  if (d?.key === 'approved') return 'head approved';
-  if (d?.key === 'max_attempts') return 'attempt limit';
   const skip = run.events.filter((e) => e.event === 'autofix.skipped').at(-1);
   if (d?.key === 'guardrail_rejected' && Array.isArray(skip?.meta.rules) && skip.meta.rules.length && skip.meta.rules.every((r) => DESIGN_RULES.has(r))) return 'protected or unshown target';
   if (d?.key === 'no_changes' && run.events.some((e) => e.event === 'autofix.prompt_budget' && Array.isArray(e.meta.hidden_files) && e.meta.hidden_files.length)) return 'files withheld by budget';
@@ -227,7 +228,7 @@ function autofixFindings(runs) {
       + `Blocked by design: ${blocked}${blocked ? ` (${Object.entries(designed).map(([k, n]) => `${k} ${n}`).join(', ')})` : ''}; anomaly: ${anomalies}.`,
     hypothesis: warning
       ? (noChanges ? '`no_changes` alone does not prove a fix was needed: the finding may be false, or the context given to the model did not include the files to change (docs/dashboard-partial-diagnosis.md, item 3).' : null)
-      : 'The guardrails and pipeline limits worked as designed: the attempts stopped on a protected or unshown target, on files the budget withheld, on an approved head or on the attempt limit. The lever is the input budget (autofix_max_input_tokens, ADR-0017) or a human fix, not the guardrail.',
+      : 'The guardrails worked as designed: the attempts stopped on a protected or unshown target, or on files the budget withheld from the prompt. The lever is the input budget (autofix_max_input_tokens, ADR-0017) or a human fix, not the guardrail.',
     impact: `${noPush} attempt(s) ended without a change, usually escalated to a human`, frequency: `${noPush} of ${attempts.length} attempt(s)`,
     items: [...new Set(attempts.map(prOf).filter(Boolean))], runs: runIds(attempts), evidence: evidenceOf(skips.length ? skips : attempts), link: 'health.html#autofix',
   })];

@@ -247,7 +247,7 @@ test('withheld guardrail (code cut, ADR-0038): info with heads, PRs, provider an
   ];
   const w = find(diagnose({ model: model(runs) }), 'review-withheld');
   assert.equal(w.severity, 'info');
-  assert.match(w.title, /by design \(ADR-0038\)/);
+  assert.equal(w.title, 'Reviews withhold their verdict by design (ADR-0038)');
   assert.match(w.fact, /^4 of 5 verdicts are WITHHELD \(80 %\)/);
   assert.match(w.fact, /They cover 3 PR head\(s\) on 2 PR\(s\)\. Guardrail: 4 \(code cut, ADR-0038: 4; CI evidence, ADR-0026: 0\); anomaly: 0 /);
   assert.match(w.fact, /Answered by: groq 4; input budget 6300 tokens\.$/);
@@ -257,6 +257,7 @@ test('withheld guardrail (code cut, ADR-0038): info with heads, PRs, provider an
   // Missing CI evidence is a guardrail too (ADR-0026); no budget hypothesis without a cut majority.
   const ev = find(diagnose({ model: model([0, 1, 2].map((i) => run({ sha: String(i).repeat(40), events: [verdict('WITHHELD', { evidence_state: i ? 'stale' : 'missing' })] }))) }), 'review-withheld');
   assert.equal(ev.severity, 'info');
+  assert.equal(ev.title, 'Reviews withhold their verdict by design (ADR-0026)', 'the title names the guardrail observed');
   assert.match(ev.fact, /CI evidence, ADR-0026: 3\); anomaly: 0 .*Answered by: not recorded 3\.$/);
   assert.equal(ev.hypothesis, null);
 });
@@ -297,7 +298,7 @@ test('withheld answered by the fallback on a prompt cut to the primary budget is
   assert.equal(find(diagnose({ model: model(v1) }), 'review-withheld').severity, 'warning');
 });
 
-test('auto-fix blocked by design: protected/unshown targets, files withheld by budget, approved head, attempt limit', () => {
+test('auto-fix blocked by design: protected/unshown targets, files withheld by budget; approved / attempt-limit runs are not attempts', () => {
   const attempt = (events) => run({ stage: 'autofix', events: [{ event: 'autofix.start', meta: { prNumber: 9 } }, ...events] });
   const budget = (hidden) => ({ event: 'autofix.prompt_budget', meta: { input_budget: 2308, shown_files: ['a.md'], hidden_files: hidden } });
   const runs = [
@@ -305,16 +306,18 @@ test('auto-fix blocked by design: protected/unshown targets, files withheld by b
     attempt([budget(['CHANGELOG.md']), { event: 'autofix.skipped', meta: { reason: 'no_changes' } }]),
     attempt([budget(['CHANGELOG.md']), { event: 'autofix.skipped', meta: { reason: 'no_changes' } }]),
     attempt([{ event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['unshown_file', 'withheld_file'] } }]),
-    attempt([{ event: 'autofix.skipped', meta: { reason: 'approved' } }]),
-    attempt([{ event: 'autofix.max_attempts_reached' }]),
+    // As auto_fix_pr.mjs emits them: an approved head or the attempt limit exits before autofix.start.
+    run({ stage: 'autofix', events: [{ event: 'autofix.skipped', meta: { reason: 'approved' } }] }),
+    run({ stage: 'autofix', events: [{ event: 'autofix.max_attempts_reached' }] }),
   ];
   const f = find(diagnose({ model: model(runs) }), 'autofix-ineffective');
   assert.equal(f.severity, 'info');
   assert.match(f.title, /by design \(ADR-0021, ADR-0029\)/);
-  assert.match(f.fact, /^0 delivered push\(es\) for 6 attempt\(s\)/);
-  assert.match(f.fact, /Blocked by design: 6 \(protected or unshown target 2, files withheld by budget 2, head approved 1, attempt limit 1\); anomaly: 0\.$/);
+  assert.match(f.fact, /^0 delivered push\(es\) for 4 attempt\(s\)/);
+  assert.match(f.fact, /Blocked by design: 4 \(protected or unshown target 2, files withheld by budget 2\); anomaly: 0\.$/);
   assert.match(f.hypothesis, /worked as designed/);
-  assert.equal(f.frequency, '6 of 6 attempt(s)', 'the volume is not hidden');
+  assert.equal(f.frequency, '4 of 4 attempt(s)', 'the volume is not hidden');
+  assert.equal(f.runs.length, 4, 'runs without autofix.start are not attempts');
 });
 
 test('auto-fix anomaly: no_changes with every file shown, or a rule outside the design set, is a warning', () => {
@@ -330,6 +333,6 @@ test('auto-fix anomaly: no_changes with every file shown, or a rule outside the 
   assert.match(f.fact, /Blocked by design: 1 \(protected or unshown target 1\); anomaly: 2\.$/);
   assert.match(f.hypothesis, /does not prove a fix was needed/);
   // One anomaly in three attempts (33 %) is under autofixNoPushShare: info, the card stays.
-  const mostly = [runs[0], runs[2], attempt([{ event: 'autofix.skipped', meta: { reason: 'approved' } }])];
+  const mostly = [runs[0], runs[2], attempt([{ event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['unshown_file'] } }])];
   assert.equal(find(diagnose({ model: model(mostly) }), 'autofix-ineffective').severity, 'info');
 });
