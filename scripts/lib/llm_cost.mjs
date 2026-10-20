@@ -23,8 +23,8 @@ export function pipelineStage(stage) {
 
 /**
  * One call `{ provider, model, tokens_in, tokens_out, cache_read?, cache_write?, estimated }` →
- * `{ usd, basis }`. basis: `free` (Groq free tier, usd 0), `unpriced` (no price entry, no token count or
- * over the price's prompt limit; usd null), `measured` (cache read/write at their own price), `estimated`
+ * `{ usd, basis }`. basis: `free` (Groq free tier, usd 0), `unpriced` (no price entry, a token count that is
+ * missing or not a non-negative integer, or over the price's prompt limit; usd null), `measured` (cache read/write at their own price), `estimated`
  * (chars/4: every input token at the input price, no thinking).
  */
 export function callCost(call) {
@@ -32,7 +32,8 @@ export function callCost(call) {
   const price = PRICES_USD_PER_MTOK[`${call?.provider}:${call?.model}`];
   const tin = call?.tokens_in;
   const tout = call?.tokens_out;
-  if (!price || !Number.isFinite(tin) || !Number.isFinite(tout) || (price.maxPromptTokens && tin > price.maxPromptTokens)) {
+  const valid = (n) => Number.isSafeInteger(n) && n >= 0;
+  if (!price || !valid(tin) || !valid(tout) || (price.maxPromptTokens && tin > price.maxPromptTokens)) {
     return { usd: null, basis: 'unpriced' };
   }
   if (call.estimated !== false) return { usd: (tin * price.in + tout * price.out) / 1e6, basis: 'estimated' };

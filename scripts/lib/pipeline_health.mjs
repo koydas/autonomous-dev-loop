@@ -192,7 +192,7 @@ function groqTokens(runs, scorecard) {
     for (const c of run.llm) {
       const ts = c.ts ?? run.started_at;
       if (c.provider !== 'groq' || ts == null) continue;
-      points.push({ ts, workflow: run.workflow ?? 'unknown', series: seriesOf(run.workflow), tokens: (c.tokens_in ?? 0) + (c.tokens_out ?? 0) });
+      points.push({ ts, workflow: run.workflow ?? 'unknown', series: seriesOf(run.workflow), tokens: (c.tokens_in ?? 0) + (c.tokens_out ?? 0), estimated: c.estimated !== false });
     }
   }
   for (const [suite, s] of Object.entries(isObj(scorecard?.suites) ? scorecard.suites : {})) {
@@ -200,7 +200,7 @@ function groqTokens(runs, scorecard) {
       const ts = Date.parse(r?.ts);
       const tokens = (Number(r?.tokens_est?.in) || 0) + (Number(r?.tokens_est?.out) || 0);
       if (!Number.isFinite(ts) || !tokens || evalProvider(r.model) !== 'groq') continue;
-      points.push({ ts, workflow: `Evals (${suite})`, series: 'Evals', tokens });
+      points.push({ ts, workflow: `Evals (${suite})`, series: 'Evals', tokens, estimated: true });
     }
   }
   if (!points.length) return { days: [], workflows: [], limit: GROQ_TPD };
@@ -208,13 +208,14 @@ function groqTokens(runs, scorecard) {
   const days = Array.from({ length: TOKEN_DAYS }, (_, i) => {
     const t = lastDay - (TOKEN_DAYS - 1 - i) * DAY_MS;
     const weekday = new Date(t).getUTCDay();
-    return { day: day(t), total: 0, series: Object.fromEntries(TOKEN_SERIES.map((s) => [s, 0])), workflows: {}, crons: EVAL_CRONS.filter((c) => c.weekday === weekday).map((c) => c.suite) };
+    return { day: day(t), total: 0, estimated: 0, series: Object.fromEntries(TOKEN_SERIES.map((s) => [s, 0])), workflows: {}, crons: EVAL_CRONS.filter((c) => c.weekday === weekday).map((c) => c.suite) };
   });
   const byDay = new Map(days.map((d) => [d.day, d]));
   for (const p of points) {
     const d = byDay.get(day(p.ts));
     if (!d) continue;
     d.total += p.tokens;
+    if (p.estimated) d.estimated += p.tokens;
     d.series[p.series] += p.tokens;
     inc(d.workflows, p.workflow, p.tokens);
   }

@@ -210,3 +210,13 @@ test('modelUsage: list-price cost and unpriced calls per model', () => {
   assert.ok(Math.abs(byKey['anthropic:claude-opus-5-5'].usd - 0.024) < 1e-9);
   assert.deepEqual([byKey['anthropic:claude-unknown'].usd, byKey['anthropic:claude-unknown'].unpriced], [0, 1]);
 });
+
+test('groq tokens per day keep the estimated share: measured pipeline calls apart from estimates and evals', () => {
+  const records = [
+    makeRecord({ runId: '50', start: T0, tokensIn: 900, tokensOut: 100, usage: { cacheRead: 0 } }),
+    makeRecord({ runId: '51', start: T0 + 1000, tokensIn: 300, tokensOut: 100 }),
+  ];
+  const scorecard = { suites: { review: { runs: [{ run_id: 'e', model: 'openai/gpt-oss-120b', ts: '2026-10-14T12:00:00Z', tokens_est: { in: 50, out: 50 } }] } } };
+  const d = computeHealth({ model: model(records), scorecard }).tokens.days.find((x) => x.day === '2026-10-14');
+  assert.deepEqual([d.total, d.estimated], [1500, 500]);
+});

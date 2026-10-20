@@ -106,3 +106,10 @@ test('meanAmount: a lower bound (≥) when part of the sum is unpriced, — with
   assert.equal(meanAmount(sumCosts([priced]), 0), '—');
   assert.equal(meanAmount(sumCosts([]), 3), '—');
 });
+
+test('callCost: a negative or fractional token count is unpriced, never a negative or fractional cost', () => {
+  for (const bad of [-1, 1.5, Infinity]) {
+    assert.deepEqual(callCost(opus({ tokens_in: bad })), { usd: null, basis: 'unpriced' }, `in ${bad}`);
+    assert.deepEqual(callCost(opus({ tokens_out: bad })), { usd: null, basis: 'unpriced' }, `out ${bad}`);
+  }
+});

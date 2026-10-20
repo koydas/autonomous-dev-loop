@@ -297,3 +297,11 @@ test('health: means over a window with unpriced calls are marked as lower bounds
   assert.match(health, /Mean per work item<\/div><div class="value">≥ \$0\.0240/, 'both runs belong to PR #7: one item');
   assert.match(health, /<td class="num">≥ \$0\.0120<\/td>/, 'per-run column of the stage / workflow rows');
 });
+
+test('token chart: tooltips say measured, est. (all estimated) or the estimated share per day', () => {
+  const days = (measured, est) => ({ days: [{ day: '2026-10-14', total: measured + est, estimated: est, series: { 'PR Review': measured + est, 'Auto-Fix PR': 0, Evals: 0, Other: 0 }, workflows: {}, crons: [] }], workflows: [], limit: 200000 });
+  assert.match(tokenChart(days(500, 0)), /2026-10-14: 500 tokens \(measured\)/);
+  assert.match(tokenChart(days(0, 400)), /2026-10-14: 400 tokens \(est\.\)/);
+  assert.match(tokenChart(days(500, 400)), /2026-10-14: 900 tokens \(400 est\.\)/);
+  assert.match(tokenChart(days(1, 0)), /provider-measured where recorded, chars\/4 estimates otherwise/);
+});

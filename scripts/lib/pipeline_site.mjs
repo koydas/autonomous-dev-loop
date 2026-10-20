@@ -401,14 +401,16 @@ export function tokenChart(tokens) {
       base -= h;
       return `<path d="${path}" fill="var(${SERIES_VAR[p.si]})"/>`;
     }).join('');
-    const tip = `${d.day}: ${d.total} tokens (est.)${Object.entries(d.workflows).map(([w, v]) => `, ${w} ${v}`).join('')}${d.crons.length ? ` · eval cron: ${d.crons.join(', ')}` : ''}`;
+    // A day without the estimated share (older data shape) is all estimated.
+    const est = d.estimated ?? d.total;
+    const tip = `${d.day}: ${d.total} tokens ${est >= d.total ? '(est.)' : est ? `(${est} est.)` : '(measured)'}${Object.entries(d.workflows).map(([w, v]) => `, ${w} ${v}`).join('')}${d.crons.length ? ` · eval cron: ${d.crons.join(', ')}` : ''}`;
     const cron = d.crons.length ? `<text x="${x + bw / 2}" y="${H - B + 28}" text-anchor="middle" font-size="10" fill="var(--ink-2)">▲ ${e(d.crons.map((c) => c[0].toUpperCase()).join(''))}</text>` : '';
     const label = (tokens.days.length - 1 - i) % 7 === 0 ? `<text x="${x + bw / 2}" y="${H - B + 14}" text-anchor="middle" font-size="10" fill="var(--muted)">${e(d.day.slice(5))}</text>` : '';
     return `<g><title>${e(tip)}</title><rect x="${L + i * slot}" y="${T}" width="${slot}" height="${H - T - B}" fill="transparent"/>${marks}${label}${cron}</g>`;
   }).join('');
   const limit = `<line x1="${L}" x2="${W - R}" y1="${y(tokens.limit)}" y2="${y(tokens.limit)}" stroke="var(--critical)" stroke-width="1"/><text x="${W - R}" y="${y(tokens.limit) - 4}" text-anchor="end" font-size="11" fill="var(--ink-2)">${e(compact(tokens.limit))} TPD (Groq free tier)</text>`;
   const legendHtml = `<div class="legend">${TOKEN_SERIES.map((s, i) => `<span><span class="key" style="background:var(${SERIES_VAR[i]})"></span>${e(s)}</span>`).join('')}<span>▲ V / R: weekly eval cron (validation / review)</span></div>`;
-  return `${legendHtml}<div class="chart"><svg viewBox="0 0 ${W} ${H}" style="max-width:${W}px" role="img" aria-label="Estimated Groq tokens per day against the 200k tokens-per-day limit; values in the table below">${grid}<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--axis)" stroke-width="1"/>${cols}${limit}</svg></div>`;
+  return `${legendHtml}<div class="chart"><svg viewBox="0 0 ${W} ${H}" style="max-width:${W}px" role="img" aria-label="Groq tokens per day (provider-measured where recorded, chars/4 estimates otherwise) against the 200k tokens-per-day limit; values in the table below">${grid}<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--axis)" stroke-width="1"/>${cols}${limit}</svg></div>`;
 }
 
 /** Per item: share of the lead time spent running vs waiting between runs (100% stacked bars). */
@@ -476,7 +478,7 @@ ${criticalPathChart(cpSorted)}
 ${table(['Work item', { label: 'Runs', num: true }, { label: 'Lead time', num: true }, { label: 'Running', num: true }, { label: 'Waiting', num: true }], cpSorted.map((c) => [`<a href="${traceHref('', c.trace_id)}">${e(itemLabel(c.item))}</a>`, e(c.runs), e(formatDuration(c.lead_time_ms)), e(formatDuration(c.running_ms)), e(formatDuration(c.waiting_ms))]))}
 
 </details><details class="detail-panel"><summary>Token usage · daily estimates & quotas</summary><h2>Groq tokens per day</h2>
-<p class="sub">Estimated tokens (in + out) of Groq calls per UTC day over ${e(tokens.days.length)} days, pipeline runs by workflow and eval runs from the scorecard, against the ${e(compact(tokens.limit))} tokens-per-day free-tier limit. Groq counts real tokens and its prompt cache: the estimate is an approximation.</p>
+<p class="sub">Tokens (in + out) of Groq calls per UTC day over ${e(tokens.days.length)} days, pipeline runs by workflow and eval runs from the scorecard, against the ${e(compact(tokens.limit))} tokens-per-day free-tier limit. Pipeline calls recorded since the ADR-0041 amendment carry Groq's measured counts; older records and eval runs are chars/4 estimates (the tooltip gives the estimated share per day).</p>
 ${tokenChart(tokens)}
 ${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: true }, { label: '% of TPD', num: true }, 'Eval cron'], tokenTable) : ''}</details>`;
   return pipelinePage('Pipeline health', body, 1);
