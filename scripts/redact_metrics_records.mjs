@@ -8,9 +8,11 @@
  *
  * Dry run by default: prints each file that would change and its number of redacted strings, never
  * the content. --write rewrites those files in place. No git and no network operation: the operator
- * commits and pushes (docs/runbook.md). Symlinks and unreadable files are skipped and listed.
+ * commits and pushes (docs/runbook.md). A file reached through a symlink (itself or any directory on its
+ * path below the checkout) and unreadable files are skipped and listed: nothing outside the checkout is
+ * ever read or written.
  */
-import { lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactStoredRecord, redactMetricsLine, countRedactedStrings, RUNS_JSONL_PATH } from './lib/run_record.mjs';
@@ -73,6 +75,9 @@ export function redactMetricsDir(dir, { write = false } = {}) {
   const changed = [];
   const unreadable = [];
   let invalidLines = 0;
+  // A recursive readdir follows directory symlinks and lstat only checks the last component: a file
+  // is used only when its real path is exactly <real checkout>/<relative path>.
+  const root = realpathSync(dir);
   const targets = [...findRecordFiles(dir).map((p) => ({ path: p, jsonl: false })), { path: RUNS_JSONL_PATH, jsonl: true }];
   let scanned = 0;
   for (const target of targets) {
@@ -82,6 +87,10 @@ export function redactMetricsDir(dir, { write = false } = {}) {
       const stat = lstatSync(file);
       if (!stat.isFile()) {
         unreadable.push({ path: target.path, reason: stat.isSymbolicLink() ? 'symlink' : 'not a regular file' });
+        continue;
+      }
+      if (realpathSync(file) !== path.join(root, ...target.path.split('/'))) {
+        unreadable.push({ path: target.path, reason: 'symlink in path' });
         continue;
       }
       text = readFileSync(file, 'utf8');

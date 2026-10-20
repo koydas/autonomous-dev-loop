@@ -129,6 +129,43 @@ test('redactMetricsDir skips and lists invalid JSON, non-records, symlinks and u
   assert.deepEqual(report.changed, []);
 });
 
+test('redactMetricsDir never reads or writes through a symlinked directory: under metrics/runs, metrics/runs itself, or metrics/', () => {
+  const outside = mkdtempSync(path.join(tmpdir(), 'outside-'));
+  try {
+    const legacy = `${JSON.stringify(legacyRecord())}\n`;
+    mkdirSync(path.join(outside, 'runs', '2026-10'), { recursive: true });
+    writeFileSync(path.join(outside, 'runs', '2026-10', 'x-1.json'), legacy);
+    writeFileSync(path.join(outside, 'runs.jsonl'), `${JSON.stringify({ run_id: '3-1', error: MESSAGE })}\n`);
+    // 1. A month directory that links out of the checkout.
+    mkdirSync(path.join(dir, 'metrics/runs'), { recursive: true });
+    symlinkSync(path.join(outside, 'runs', '2026-10'), path.join(dir, 'metrics/runs/2026-10'));
+    let report = redactMetricsDir(dir, { write: true });
+    assert.deepEqual(report.unreadable, [{ path: 'metrics/runs/2026-10/x-1.json', reason: 'symlink in path' }]);
+    assert.deepEqual(report.changed, []);
+    // 2. metrics/ itself linked out: runs/ and runs.jsonl both reached through it.
+    rmSync(path.join(dir, 'metrics'), { recursive: true });
+    symlinkSync(outside, path.join(dir, 'metrics'));
+    report = redactMetricsDir(dir, { write: true });
+    assert.deepEqual(report.unreadable.map((u) => u.reason), ['symlink in path', 'symlink in path']);
+    assert.deepEqual(report.changed, []);
+    assert.equal(readFileSync(path.join(outside, 'runs', '2026-10', 'x-1.json'), 'utf8'), legacy, 'the outside file is untouched');
+    assert.ok(readFileSync(path.join(outside, 'runs.jsonl'), 'utf8').includes(ORG_ID));
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('redactMetricsDir works when the checkout path itself goes through a symlink', () => {
+  put('metrics/runs/2026-10/39193212735-1.json', `${JSON.stringify(legacyRecord())}\n`);
+  const alias = `${dir}-alias`;
+  symlinkSync(dir, alias);
+  try {
+    assert.deepEqual(redactMetricsDir(alias).changed, [{ path: 'metrics/runs/2026-10/39193212735-1.json', redacted: 2 }]);
+  } finally {
+    rmSync(alias);
+  }
+});
+
 test('redactMetricsDir lists a runs.jsonl that is not a regular file', () => {
   mkdirSync(path.join(dir, 'metrics/runs.jsonl'), { recursive: true });
   assert.deepEqual(redactMetricsDir(dir).unreadable, [{ path: 'metrics/runs.jsonl', reason: 'not a regular file' }]);

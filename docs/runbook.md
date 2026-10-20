@@ -55,7 +55,7 @@ git worktree remove "$TMP/metrics" && git branch -D redact-metrics
 ```
 
 - A rejected push means a run committed to `metrics` meanwhile: remove the worktree and branch, and start over from `git fetch` (the script is idempotent).
-- Skipped files (invalid JSON, not a record, symlink) are listed and left untouched; fix them by hand if needed.
+- Skipped files (invalid JSON, not a record, a symlink or a file reached through a symlinked directory) are listed and left untouched; nothing outside the checkout is read or written. Fix them by hand if needed.
 - Only the tip is cleaned: the branch history keeps the old blobs, so the organization id stays reachable in earlier commits (and in old job logs). Rewriting `metrics` history is not part of this procedure.
 - Nothing to rotate: an organization id is an account identifier, not a credential.
 - Idempotent: a second dry run reports `0 to rewrite`.
