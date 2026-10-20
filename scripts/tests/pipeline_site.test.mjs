@@ -60,7 +60,11 @@ test('a hostile string in every rendered field is escaped on every page', () => 
 
 test('empty states: no record, no trace, no LLM call', () => {
   const { files } = site([]);
-  assert.deepEqual(Object.keys(files).sort(), ['pipeline/flows.html', 'pipeline/health.html', 'pipeline/index.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
+  assert.deepEqual(Object.keys(files).sort(), ['pipeline/diagnostics.html', 'pipeline/flows.html', 'pipeline/health.html', 'pipeline/index.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
+  // No data is said, never shown as healthy.
+  assert.match(files['pipeline/diagnostics.html'], /No pipeline run recorded yet/);
+  assert.doesNotMatch(files['pipeline/diagnostics.html'], /No problem detected/);
+  assert.match(files['pipeline/diagnostics.html'], /Merge is not journaled/);
   assert.match(files['pipeline/index.html'], /No run record on the <code>metrics<\/code> branch yet/);
   assert.match(files['pipeline/index.html'], /No pipeline action recorded in this period/);
   assert.match(files['pipeline/traces/index.html'], /No trace index on the metrics branch yet/);
@@ -203,7 +207,8 @@ test('health, models and run pages link to each other; the eval run pages are cr
 test('flow map is generated with shared navigation, retained evidence and live merge enhancement', () => {
   const { files } = site([makeRecord({ runId: '921' })]);
   const html = files['pipeline/flows.html'];
-  assert.match(html, /Flow map<\/a>/);
+  assert.match(html, /<a href="\.\.\/pipeline\/flows\.html">Pipelines<\/a>/);
+  assert.match(html, /<h1>Pipelines<\/h1>/);
   assert.match(html, /data-flow-dashboard/);
   assert.match(html, /runs\/921-1.html/);
   assert.match(html, /data-merge-node/);

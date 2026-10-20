@@ -99,7 +99,10 @@ test('all widget text and attributes escape hostile record content', () => {
 });
 
 test('shared navigation respects depth and the progressive enhancements need no external assets', () => {
-  assert.match(dashboardHeader('../../', true), /href="\.\.\/\.\.\/pipeline\/traces\/index\.html"/);
+  const header = dashboardHeader('../../', true);
+  for (const [href, label] of [['index.html', 'Overview'], ['pipeline/diagnostics.html', 'Diagnostics'], ['pipeline/flows.html', 'Pipelines'], ['pipeline/index.html', 'Investigation'], ['pipeline/health.html', 'Metrics']]) {
+    assert.ok(header.includes(`<a href="../../${href}">${label}</a>`), label);
+  }
   assert.doesNotMatch(dashboardHeader('', false), /pipeline\//);
   assert.match(DASHBOARD_STYLE, /@media\(max-width:600px\)/);
   assert.match(DASHBOARD_STYLE, /prefers-reduced-motion/);

@@ -95,7 +95,7 @@ pre { max-width:100%; }
 @media(max-width:850px) { .summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .source-link { display:none; } .app-header-inner { gap:10px 20px; } }
 @media(max-width:600px) {
   main { padding:24px 16px 48px; } .app-header-inner { padding:10px 16px; gap:10px; }
-  .brand { font-size:15px; } .primary-nav { width:100%; gap:2px; } .primary-nav a { padding:9px 10px; font-size:12px; flex:1; text-align:center; }
+  .brand { font-size:15px; } .primary-nav { width:100%; gap:2px; } .primary-nav a { padding:9px 3px; font-size:12px; flex:1; text-align:center; }
   .app-header { position:relative; } .summary-grid { gap:10px; } .stat-card { padding:16px; } .stat-card strong { font-size:30px; }
   .widget-grid { grid-template-columns:1fr; } .widget { padding:18px; } .detail-panel { padding-left:14px; padding-right:14px; }
   .card { padding:14px; } .legacy-nav { overflow-wrap:anywhere; } .tiles { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
@@ -177,7 +177,7 @@ export const DASHBOARD_SCRIPT = `<script>
 </script>`;
 
 export function dashboardHeader(root, pipeline) {
-  return `<a class="skip-link" href="#main-content">Skip to content</a><header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Dev loop <span class="muted">/ monitor</span></a><nav class="primary-nav" aria-label="Main navigation"><a href="${root}index.html">Overview</a>${pipeline ? `<a href="${root}pipeline/flows.html">Flow map</a><a href="${root}pipeline/traces/index.html">Issues & flows</a><a href="${root}pipeline/index.html">Executions</a><a href="${root}pipeline/health.html">Health</a>` : ''}</nav><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">View repository →</a></div></header>`;
+  return `<a class="skip-link" href="#main-content">Skip to content</a><header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Dev loop <span class="muted">/ monitor</span></a><nav class="primary-nav" aria-label="Main navigation"><a href="${root}index.html">Overview</a>${pipeline ? `<a href="${root}pipeline/diagnostics.html">Diagnostics</a><a href="${root}pipeline/flows.html">Pipelines</a><a href="${root}pipeline/index.html">Investigation</a><a href="${root}pipeline/health.html">Metrics</a>` : ''}</nav><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">View repository →</a></div></header>`;
 }
 
 export function evalOverview(suites) {

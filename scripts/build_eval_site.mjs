@@ -36,7 +36,7 @@ import { buildSite } from './lib/eval_site.mjs';
 import { SUITES } from './lib/eval_suites.mjs';
 import { buildPipelineModel, MONTH_RE } from './lib/pipeline_model.mjs';
 import { computeHealth, modelUsage } from './lib/pipeline_health.mjs';
-import { pipelineOverview } from './lib/dashboard_ui.mjs';
+import { consoleContext, consoleOverview, CONSOLE_STYLE } from './lib/console_views.mjs';
 import { buildPipelineSite } from './lib/pipeline_site.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -165,8 +165,9 @@ export async function readPipelineDir(dir, { log = console.log } = {}) {
 // Pure: pipeline inputs + the scorecard being deployed → the pipeline/ pages.
 export function assemblePipeline({ pipeline, scorecard, generatedAt = null, log = () => {} }) {
   const model = buildPipelineModel({ ...pipeline, log });
-  const files = buildPipelineSite({ model, health: computeHealth({ model, scorecard }), models: modelUsage(model.runs, scorecard), generatedAt });
-  return { files, model };
+  const ctx = consoleContext(model);
+  const files = buildPipelineSite({ model, health: computeHealth({ model, scorecard }), models: modelUsage(model.runs, scorecard), generatedAt, console: ctx });
+  return { files, model, console: ctx };
 }
 
 const siteBytes = (files) => Object.values(files).reduce((n, c) => n + Buffer.byteLength(c, 'utf8'), 0);
@@ -231,7 +232,8 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   const files = buildSite({ scorecard, details, thresholds, generatedAt, pipeline: pipeline != null });
   const assembled = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }) : null;
   const pipelineFiles = assembled?.files ?? {};
-  if (assembled) files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', pipelineOverview(assembled.model, 'pipeline/'));
+  // The home page leads with the pipeline's health (ADR-0043); the eval sections follow it.
+  if (assembled) files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', () => consoleOverview(assembled.console, 'pipeline/')).replace('</style>', () => `${CONSOLE_STYLE}</style>`);
   return { files: { ...files, ...pipelineFiles }, scorecard, skipped, pipelineFiles, rebaseline: rebase && { rebaselined: rebase.rebaselined, noops: rebase.noops, refused: rebase.refused } };
 }
 

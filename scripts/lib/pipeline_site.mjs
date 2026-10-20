@@ -4,10 +4,12 @@
 // of { path: html } out. Every record string is escaped (escapeHtml); numbers are formatted here;
 // inline styles carry computed numbers only. No external script: the feed filter is inline.
 import { escapeHtml, page, modelAnchor } from './eval_site.mjs';
-import { feedEntries } from './pipeline_model.mjs';
+import { feedEntries, eventSummary } from './pipeline_model.mjs';
 import { flowDashboard, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
 import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps } from './dashboard_ui.mjs';
+import { consoleContext, diagnosticsBody, journeyPanel, keyEvents, runSteps, itemTitle, CONSOLE_STYLE } from './console_views.mjs';
+import { workItemJourney, attemptOf } from './pipeline_journey.mjs';
 import { callCost, sumCosts, formatUsd, costAmount, meanAmount, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
 
 // The newest actions on pipeline/index.html; each month page holds at most MONTH_FEED_CAP (the run
@@ -76,10 +78,10 @@ function levelHtml(level) {
 
 function nav(root, months = []) {
   const monthLinks = months.map((m) => `<a href="${root}feed/${e(m)}.html">${e(m)}</a>`).join(' ');
-  return `<p class="nav2"><a href="${root}index.html">Activity</a><a href="${root}traces/index.html">Work-item traces</a><a href="${root}health.html">Health</a><a href="${root}models.html">Models</a>${monthLinks ? `<span class="muted">Months: ${monthLinks}</span>` : ''}</p>`;
+  return `<p class="nav2"><a href="${root}diagnostics.html">Diagnostics</a><a href="${root}flows.html">Pipelines</a><a href="${root}index.html">Executions & journal</a><a href="${root}traces/index.html">Trace table</a><a href="${root}health.html">Metrics</a><a href="${root}models.html">Models</a>${monthLinks ? `<span class="muted">Months: ${monthLinks}</span>` : ''}</p>`;
 }
 
-const pipelinePage = (title, body, depth) => page(title, body, { depth, pipeline: true, style: STYLE });
+const pipelinePage = (title, body, depth) => page(title, body, { depth, pipeline: true, style: STYLE + CONSOLE_STYLE });
 const emptyCard = (text) => `<div class="card muted">${e(text)}</div>`;
 
 // ---------------------------------------------------------------------------
@@ -132,8 +134,8 @@ export function renderFeedIndex(model, { generatedAt = null } = {}) {
     ['Latest run', latest ? time(latest.started_at) : '—'],
   ].map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
   const window = model.months.length ? `Records of ${e(model.months.at(-1))} → ${e(model.months[0])}${model.skippedMonths.length ? ` (older months stay on the <code>metrics</code> branch: ${model.skippedMonths.map(e).join(', ')})` : ''}.` : 'No run record on the <code>metrics</code> branch yet.';
-  return pipelinePage('Pipeline activity', `<h1>Pipeline activity</h1>
-<p class="sub">Every action of the issue → PR pipeline, newest first, from the redacted run records on the <code>metrics</code> branch (<a href="${repo}/docs/observability.md">docs</a>, <a href="${repo}/docs/adr/0040-run-journal-and-public-run-record.md">ADR-0040</a>, <a href="${repo}/docs/adr/0041-end-to-end-work-item-tracing.md">ADR-0041</a>). ${window}${generatedAt ? ` Updated ${e(generatedAt)}.` : ''}</p>
+  return pipelinePage('Investigation', `<h1>Investigation · executions</h1>
+<p class="sub">Every recorded run and every action of the issue → PR pipeline, newest first, from the redacted run records on the <code>metrics</code> branch (<a href="${repo}/docs/observability.md">docs</a>, <a href="${repo}/docs/adr/0040-run-journal-and-public-run-record.md">ADR-0040</a>, <a href="${repo}/docs/adr/0041-end-to-end-work-item-tracing.md">ADR-0041</a>). ${window}${generatedAt ? ` Updated ${e(generatedAt)}.` : ''}</p>
 ${nav('', model.months)}
 <div class="tiles">${tiles}</div>
 ${warningsHtml(model)}
@@ -268,21 +270,23 @@ export function renderRunPage(run, model) {
   const calls = run.llm.length ? table(['Time (UTC)', 'Stage', 'provider:model', { label: 'Input', num: true }, { label: 'Cache reads', num: true }, { label: 'Cache writes', num: true }, { label: 'Output', num: true }, 'Tokens', 'Cost'],
     run.llm.map((c) => [e(time(c.ts)), `<code>${e(c.pipeline_stage ?? c.stage ?? '—')}</code>`, `<code>${e(providerModel(c.provider, c.model) || '?')}</code>${c.fallback ? ' <span class="muted">fallback</span>' : ''}${c.failed ? ' <span class="status status-critical">failed</span>' : ''}`,
       e(compact(c.tokens_in)), e(c.estimated === false ? compact(c.cache_read ?? 0) : '—'), e(c.estimated === false ? compact(c.cache_write ?? 0) : '—'), e(compact(c.tokens_out)), c.estimated === false ? 'measured' : '<span class="muted">estimated</span>', costHtml(c.cost ?? callCost(c))])) : emptyCard('No LLM call in this run.');
-  const events = run.events.length ? `<div class="card table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Stage</th><th>Event</th><th>Level</th><th class="num">ms</th><th>Meta</th></tr></thead><tbody>${run.events.map((ev) => `<tr><td>${e(time(ev.ts))}</td><td><code>${e(ev.stage ?? '—')}</code></td><td><code>${e(ev.event)}</code></td><td>${levelHtml(ev.level)}</td><td class="num">${e(ev.duration_ms ?? '—')}</td><td class="wrap"><code>${e(JSON.stringify(ev.meta))}</code></td></tr>`).join('')}</tbody></table></div>` : emptyCard('No event in this record.');
-  return pipelinePage(`Run ${run.run_id}`, `<h1>Run <code>${e(run.run_id)}</code> ${statusHtml(null, run.outcome)}</h1>
+  const events = run.events.length ? `<div class="card table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Stage</th><th>Event</th><th>Level</th><th class="num">ms</th><th>Meta</th></tr></thead><tbody>${run.events.map((ev, i) => `<tr id="ev-${i}"><td>${e(time(ev.ts))}</td><td><code>${e(ev.stage ?? '—')}</code></td><td><code>${e(ev.event)}</code></td><td>${levelHtml(ev.level)}</td><td class="num">${e(ev.duration_ms ?? '—')}</td><td class="wrap"><code>${e(JSON.stringify(ev.meta))}</code></td></tr>`).join('')}</tbody></table></div>` : emptyCard('No event in this record.');
+  return pipelinePage(`Run ${run.run_id}`, `<p class="crumbs"><a href="../flows.html">Pipelines</a> › ${trace ? `<a href="${traceHref('../', trace.trace_id)}">${e(itemTitle(trace.item))}</a>` : e(itemTitle(run.item))} › run</p><h1>Run <code>${e(run.run_id)}</code> ${statusHtml(null, run.outcome)}</h1>
 ${nav('../', model.months)}
-<p class="sub">${links || 'No link recorded.'}${trace ? ` · <a href="${traceHref('../', trace.trace_id)}">work-item trace (${e(itemLabel(trace.item))})</a>` : run.trace_id ? ' · <span class="muted">no trace index for this work item</span>' : ''}</p>
+<p class="sub">${e(run.workflow ?? 'Workflow not recorded')} · ${e(time(run.started_at))} UTC · ${e(formatDuration(run.duration_ms))} · ${links || 'No link recorded.'}${trace ? ` · <a href="${traceHref('../', trace.trace_id)}">work-item trace (${e(itemLabel(trace.item))})</a>` : run.trace_id ? ' · <span class="muted">no trace index for this work item</span>' : ''}</p>
 <details class="detail-panel"><summary>Execution context · workflow, actor & revision</summary><div class="card table-wrap"><table><tbody>${facts}</tbody></table></div></details>
 ${overflowHtml(run)}
-<details class="detail-panel" open><summary>LLM cost · tokens & USD per call</summary><h2>LLM cost</h2>
+${run.stages.length ? `<section class="panel"><h3>What this run did · execution status and decision per step</h3>${runSteps(run, attemptOf)}</section>` : ''}
+${keyEvents(run, eventSummary)}
+<details class="detail-panel"><summary>LLM cost · tokens & USD per call</summary><h2>LLM cost</h2>
 <div class="tiles">${costTiles(cost)}</div>
 <p class="sub">${costSub(cost)}</p>
 ${calls}</details>
 <details class="detail-panel"><summary>Timing & span waterfall</summary><h2>Spans</h2>
 ${run.flat ? '<p class="note">Schema 1 record (ADR-0040): no span tree — the run and its stages are shown flat; the events below hold every action.</p>' : ''}
 ${waterfall(spanRows(run), { t0: run.started_at, t1: run.completed_at })}</details>
-<h2>Events</h2>
-${events}`, 2);
+<details class="detail-panel" id="events"><summary>All events (${e(run.events.length)}) · full technical journal with meta</summary><h2>Events</h2>
+${events}</details>`, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +319,7 @@ export function renderTracePage(trace, model) {
 <p class="sub">${costSub(cost)}${missing ? ` ${e(missing)} run(s) without a loaded record are not counted.` : ''}</p>
 ${table(STAGE_COST_HEAD, stageCostRows(loaded))}
 ${table(['Run', 'Workflow', { label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Output', num: true }, 'Cost'], loaded.filter((r) => r.llm.length).map((r) => { const c = r.cost ?? sumCosts(r.llm); return [`<a href="${runHref('../', r.run_id)}">${e(r.run_id)}</a>`, e(r.workflow ?? '—'), e(c.calls), e(compact(c.tokens_in)), e(compact(c.tokens_out)), e(costLine(c))]; }))}</details>` : '';
-  return pipelinePage(`Trace ${itemLabel(trace.item)}`, `<h1>Work-item trace · ${e(itemLabel(trace.item))}</h1>
+  return pipelinePage(`Trace ${itemLabel(trace.item)}`, `<p class="crumbs"><a href="../flows.html">Pipelines</a> › ${e(itemTitle(trace.item))}</p><h1>Work-item trace · ${e(itemLabel(trace.item))}</h1>
 ${nav('../', model.months)}
 <p class="sub">Trace <code>${e(trace.trace_id)}</code>${trace.item?.key ? ` · <code>${e(trace.item.key)}</code>` : ''} · ${e(trace.runs.length)} run(s)</p>
 <div class="tiles">
@@ -324,6 +328,7 @@ ${nav('../', model.months)}
 <div class="tile"><div class="label">Waiting between runs</div><div class="value">${e(formatDuration(waiting))}</div></div>
 <div class="tile"><div class="label">LLM cost</div><div class="value">${e(costAmount(cost))}</div></div>
 </div>
+${journeyPanel(workItemJourney(trace), '../')}
 ${notes.map((n) => `<p class="note">${e(n)}</p>`).join('')}
 <p class="note">Runs are separate jobs on different runners: spans are placed by their own clocks, so offsets between runs are approximate (ADR-0041 §6).</p>
 ${costPanel}
@@ -443,18 +448,18 @@ export function renderHealth(health, model) {
   ];
   const tokenTable = tokens.days.filter((d) => d.total > 0 || d.crons.length).map((d) => [e(d.day), ...tokens.workflows.map((w) => e(compact(d.workflows[w] ?? 0))), e(compact(d.total)), e(pct(d.total / tokens.limit)), e(d.crons.join(', ') || '—')]);
   const cpSorted = [...cp].sort((a, b) => b.lead_time_ms - a.lead_time_ms).slice(0, 25);
-  const body = `<h1>Pipeline health</h1>
+  const body = `<h1>Pipeline health · detailed metrics</h1>
 ${nav('', model.months)}
 <p class="sub">${e(health.window.runs)} run record(s), ${e(health.window.traces)} work-item trace(s)${health.window.months.length ? `, ${e(health.window.months.at(-1))} → ${e(health.window.months[0])}` : ''}. Token counts are provider-measured where the record has them (ADR-0041 amendment), chars/4 estimates for older records.</p>
 
 ${costPanel(costs)}
 
-<details class="detail-panel" open><summary>Delivery funnel · progress through the loop</summary><h2>Funnel</h2>
+<details class="detail-panel" id="funnel" open><summary>Delivery funnel · progress through the loop</summary><h2>Funnel</h2>
 <p class="sub">Issue work items that reached each stage (each stage counts items that also reached the previous one). PRs without an issue: ${e(funnel.pr_items.total)}, ${e(funnel.pr_items.approved)} approved.</p>
 ${hbars(funnelRows, { label: 'Funnel: issues validated, PR opened, approved, merged' })}
 ${table(['Stage', { label: 'Work items', num: true }], funnel.stages.map((s) => [e(s.stage), e(s.count ?? 'not recorded')]))}</details>
 
-<details class="detail-panel" open><summary>Review decisions · approvals & changes needed</summary><h2>Reviews</h2>
+<details class="detail-panel" id="reviews" open><summary>Review decisions · approvals & changes needed</summary><h2>Reviews</h2>
 <div class="tiles">${tile('WITHHELD rate', pct(reviews.withheld_rate), `${reviews.verdicts.WITHHELD} of ${reviews.total} verdicts`)}${tile('APPROVE', compact(reviews.verdicts.APPROVE))}${tile('REQUEST_CHANGES', compact(reviews.verdicts.REQUEST_CHANGES))}${tile('REQUEST_CHANGES → WITHHELD (#220)', compact(reviews.rc_to_withheld), 'unseen-code backstop')}${tile('Reviews of a cut diff', compact(reviews.diff_cut.reviews), `${reviews.diff_cut.withheld} withheld (ADR-0038)`)}</div>
 <h3>WITHHELD causes</h3>
 ${causes.length ? hbars(causes.map((c) => ({ label: c.label.length > 40 ? `${c.label.slice(0, 39)}…` : c.label, value: c.count })), { label: 'WITHHELD verdicts by cause' }) : ''}
@@ -463,16 +468,16 @@ ${table(['Cause', { label: 'Verdicts', num: true }], reviews.causes.map((c) => [
 ${hbars(reviews.cycles_distribution.map((d) => ({ label: `${d.cycles} cycle${d.cycles > 1 ? 's' : ''}`, value: d.prs })), { label: 'Number of PRs by review cycles' })}
 ${table(['PR', { label: 'Review cycles', num: true }], reviews.cycles_per_pr.slice(0, 30).map((r) => [`#${e(r.pr)}`, e(r.cycles)]))}</details>
 
-<details class="detail-panel"><summary>Auto-fix outcomes · fixes, skips & guardrails</summary><h2>Auto-fix outcomes</h2>
+<details class="detail-panel" id="autofix"><summary>Auto-fix outcomes · fixes, skips & guardrails</summary><h2>Auto-fix outcomes</h2>
 ${hbars(autofixRows, { label: 'Auto-fix attempts by outcome' })}
 ${table(['Guardrail rule', { label: 'Rejections', num: true }], autofix.rules.map((r) => [`<code>${e(r.rule)}</code>`, e(r.count)]))}
 ${autofix.legacy_counted ? `<p class="note">${e(autofix.legacy_counted)} outcome(s) from legacy <code>runs.jsonl</code> lines whose run has no record.</p>` : ''}</details>
 
-<details class="detail-panel"><summary>Providers · failures, fallbacks & rate limits</summary><h2>LLM providers</h2>
+<details class="detail-panel" id="providers"><summary>Providers · failures, fallbacks & rate limits</summary><h2>LLM providers</h2>
 <div class="tiles">${tile('LLM calls', compact(llm.calls))}${tile('Fallbacks', compact(llm.fallbacks), 'llm_fallback')}${tile('No provider answered', compact(llm.failed), 'llm_call_failed')}${tile('Fallback disabled', compact(llm.fallback_disabled))}${tile('Rate-limit waits', compact(llm.rate_limit_waits), 'retry.wait on 429')}${tile('Circuit-breaker trips', 'not recorded', 'eval runs only, see note')}</div>
 <p class="note">The circuit breaker is an eval-harness mechanism: a tripped eval run fails <code>error_rate</code>, is never added to the scorecard, and eval traces stay workflow artifacts (no record on the <code>metrics</code> branch). Its trips are in the Evals workflow logs (<code>eval.error</code>, <code>reason: provider_quota</code>).</p>
 
-</details><details class="detail-panel"><summary>Performance · latency & critical path</summary><h2>Latency per stage</h2>
+</details><details class="detail-panel" id="performance"><summary>Performance · latency & critical path</summary><h2>Latency per stage</h2>
 ${latency.length ? table(['Stage', { label: 'Runs', num: true }, { label: 'p50', num: true }, { label: 'p95', num: true }], latency.map((l) => [`<code>${e(l.stage)}</code>`, e(l.n), e(formatDuration(l.p50)), e(formatDuration(l.p95))])) : emptyCard('No stage span recorded.')}
 
 <h2>Critical path per work item</h2>
@@ -480,7 +485,7 @@ ${latency.length ? table(['Stage', { label: 'Runs', num: true }, { label: 'p50',
 ${criticalPathChart(cpSorted)}
 ${table(['Work item', { label: 'Runs', num: true }, { label: 'Lead time', num: true }, { label: 'Running', num: true }, { label: 'Waiting', num: true }], cpSorted.map((c) => [`<a href="${traceHref('', c.trace_id)}">${e(itemLabel(c.item))}</a>`, e(c.runs), e(formatDuration(c.lead_time_ms)), e(formatDuration(c.running_ms)), e(formatDuration(c.waiting_ms))]))}
 
-</details><details class="detail-panel"><summary>Token usage · daily estimates & quotas</summary><h2>Groq tokens per day</h2>
+</details><details class="detail-panel" id="tokens"><summary>Token usage · daily estimates & quotas</summary><h2>Groq tokens per day</h2>
 <p class="sub">Tokens (in + out) of Groq calls per UTC day over ${e(tokens.days.length)} days, pipeline runs by workflow and eval runs from the scorecard, against the ${e(compact(tokens.limit))} tokens-per-day free-tier limit. Pipeline calls recorded since the ADR-0041 amendment carry Groq's measured counts; older records and eval runs are chars/4 estimates (the tooltip gives the estimated share per day).</p>
 ${tokenChart(tokens)}
 ${tokenTable.length ? table(['Day', ...tokens.workflows, { label: 'Total', num: true }, { label: '% of TPD', num: true }, 'Eval cron'], tokenTable) : ''}</details>`;
@@ -498,12 +503,12 @@ const itemRow = (it) => costRow(`<a href="${traceHref('', it.trace_id)}">${e(ite
 
 /** Health panel: LLM cost of the window per stage, workflow, day, and the most expensive runs / work items. */
 export function costPanel(costs) {
-  if (!costs?.total.calls) return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
+  if (!costs?.total.calls) return `<details class="detail-panel" id="cost" open><summary>LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
   const t = costs.total;
   const items = costs.items_sum ?? sumCosts([]);
   const extra = [['Mean per run', meanAmount(t, costs.runs)], ['Mean per work item', meanAmount(items, costs.items)]];
   const stages = costs.by_stage.filter((g) => g.usd > 0);
-  return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary><h2>LLM cost</h2>
+  return `<details class="detail-panel" id="cost" open><summary>LLM cost · per stage, run & work item</summary><h2>LLM cost</h2>
 <div class="tiles">${costTiles(t, extra)}</div>
 <p class="sub">${costSub(t)} The mean per work item counts work items with a trace index only.</p>
 <h3>Per stage</h3>
@@ -549,11 +554,12 @@ ${sections || emptyCard('No LLM call or eval run recorded yet.')}`, 1);
 
 /**
  * Every pipeline page: `{ 'pipeline/…': html }`. `model` from buildPipelineModel(), `health` from
- * computeHealth(), `models` from modelUsage().
+ * computeHealth(), `models` from modelUsage(), `console` from consoleContext() (computed when omitted).
  */
-export function buildPipelineSite({ model, health, models, generatedAt = null }) {
+export function buildPipelineSite({ model, health, models, generatedAt = null, console: ctx = consoleContext(model) }) {
   const files = {
-    'pipeline/flows.html': pipelinePage('Flow map', flowDashboard(model) + FLOW_SCRIPT, 1).replace('</style>', FLOW_STYLE + '</style>'),
+    'pipeline/diagnostics.html': pipelinePage('Diagnostics', `${nav('', model.months)}${diagnosticsBody(ctx, '')}`, 1),
+    'pipeline/flows.html': pipelinePage('Pipelines', `${nav('', model.months)}${flowDashboard(model)}${FLOW_SCRIPT}`, 1).replace('</style>', FLOW_STYLE + '</style>'),
     'pipeline/index.html': renderFeedIndex(model, { generatedAt }),
     'pipeline/traces/index.html': renderTraceIndex(model),
     'pipeline/health.html': renderHealth(health, model),
