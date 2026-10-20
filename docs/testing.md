@@ -87,7 +87,7 @@ All AI prompts live in `prompts/` as `.md` files, one per prompt:
 | `generation-system.md` | `generate_issue_change.mjs` | System instruction for code generation |
 | `generation-user.md` | `config.mjs` | Placeholders: `{{issueNumber}}`, `{{issueTitle}}`, `{{issueBody}}`, `{{fileContents}}` |
 | `pr-review-system.md` | `scripts/pr_review.mjs` | Reviewer persona, target-neutral core with `{{repository_kind}}` and `{{repository_rules_N}}` placeholders (ADR-0045) |
-| `pr-review-repo-rules.md` | `scripts/lib/review_prompt.mjs` | The review rules written for this repository (automation gates a/b/c, the c8 list), three blocks separated by `<!-- next -->`; put back in place of the placeholders for this repository only |
+| `pr-review-repo-rules.md` | `scripts/lib/review_prompt.mjs` | The review rules written for this repository (automation gates a/b/c, the c8 list, the Node/React named defect checks), four blocks separated by `<!-- next -->`; put back in place of the placeholders for this repository only |
 | `pr-review-user.md` | `scripts/pr_review.mjs` | Placeholders: `{{issueTitle}}`, `{{issueBody}}`, `{{diff}}` |
 | `auto-fix-system.md` | `scripts/auto_fix_pr.mjs` | Fix-only persona, hard output-format rules |
 | `auto-fix-user.md` | `scripts/auto_fix_pr.mjs` | Placeholders: `{{reviewFeedback}}`, `{{diff}}`, `{{fileContents}}` |

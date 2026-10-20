@@ -443,16 +443,16 @@ test('assembleReviewSystemPrompt appends the guidelines of another repository, t
   assert.equal(assembleReviewSystemPrompt(CORE, '', { self: false, guidelines: '  \n ' }), 'Intro for a software repository.\n* a\n* stale lead.\n* z');
 });
 
-test('the real prompts split cleanly: three placeholders in the core, three blocks in the rules, nothing left over', () => {
+test('the real prompts split cleanly: four placeholders in the core, four blocks in the rules, nothing left over', () => {
   const PROMPTS_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   const core = readFileSync(resolve(PROMPTS_ROOT, 'prompts/pr-review-system.md'), 'utf8');
   const rules = readFileSync(resolve(PROMPTS_ROOT, 'prompts/pr-review-repo-rules.md'), 'utf8');
-  assert.deepEqual([...core.matchAll(/\{\{repository_rules_(\d+)\}\}/g)].map((m) => m[1]), ['1', '2', '3']);
+  assert.deepEqual([...core.matchAll(/\{\{repository_rules_(\d+)\}\}/g)].map((m) => m[1]), ['1', '2', '3', '4']);
   assert.equal([...core.matchAll(/\{\{repository_kind\}\}/g)].length, 1);
-  assert.equal(rules.split('\n<!-- next -->\n').length, 3);
+  assert.equal(rules.split('\n<!-- next -->\n').length, 4);
   const self = loadReviewSystemPrompt({ self: true });
   assert.ok(!self.includes('{{') && !self.includes('<!--'));
-  for (const text of ['For PRs that modify generation/review/auto-fix automation', 'For gate (a),', 'For gate (b),', 'For gate (c), CI enforces', 'A hit alone is never a gate (b) finding; judge gate (b) from the diff as usual.']) {
+  for (const text of ['For PRs that modify generation/review/auto-fix automation', 'For gate (a),', 'For gate (b),', 'For gate (c), CI enforces', 'Named defect checks', 'Read-only property assignment', 'Unauthorized dependency', 'Non-persistent "ref" pattern', 'A hit alone is never a gate (b) finding; judge gate (b) from the diff as usual.']) {
     assert.ok(self.includes(text), `this repository's review prompt lost: ${text}`);
   }
   assert.ok(self.length > core.length, 'the rules are put back');
@@ -463,10 +463,10 @@ test('another repository gets the review rules that hold anywhere, none of this 
   const target = loadReviewSystemPrompt({ self: false });
   assert.ok(!target.includes('{{') && !target.includes('<!--'));
   assert.match(target, /^You are a senior engineer reviewing a pull request diff for a software repository\./);
-  for (const text of ['gate (a)', 'gate (b)', 'gate (c)', 'c8', 'docs/code-generation.md', 'scripts/lib/', 'Node.js']) {
+  for (const text of ['gate (a)', 'gate (b)', 'gate (c)', 'c8', 'docs/code-generation.md', 'scripts/lib/', 'Node.js', 'Named defect checks', 'Unauthorized dependency', 'useRef', 'AbortController']) {
     assert.ok(!target.includes(text), `the neutral prompt still mentions ${text}`);
   }
-  for (const text of ['Review only what is present in the provided diff', 'Allowed verdicts are only: APPROVED or REQUEST_CHANGES', 'Tool evidence:', 'Context-aware review:', 'Stale references']) {
+  for (const text of ['Review only what is present in the provided diff', 'Allowed verdicts are only: APPROVED or REQUEST_CHANGES', 'Before flagging a step condition', 'Tool evidence:', 'Context-aware review:', 'Stale references']) {
     assert.ok(target.includes(text), `the neutral prompt lost: ${text}`);
   }
   assert.match(loadReviewSystemPrompt({ self: false, guidelines: '* Be kind.' }), /Repository review guidelines[\s\S]*\* Be kind\.$/);

@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadPrompt, interpolatePrompt } from '../lib/prompts.mjs';
+import { loadReviewSystemPrompt } from '../lib/review_prompt.mjs';
 
 const PROMPT_NAMES = [
   'validation-system',
@@ -186,7 +187,8 @@ describe('prompt file contents', () => {
   });
 
   test('pr-review-system includes the named defect checklist', () => {
-    const content = loadPrompt('pr-review-system');
+    // The Node/React checks are this repository's rules (ADR-0045): the review prompt of this repository has them.
+    const content = loadReviewSystemPrompt({ self: true });
     assert.ok(content.includes('Read-only property assignment'));
     assert.ok(content.includes('Unauthorized dependency'));
     assert.ok(content.includes('Non-persistent "ref" pattern'));

@@ -265,7 +265,7 @@ Neither `ADL_*` variable set (this repository, every workflow today): `config/` 
 
 ## Review Prompt: This Repository vs Another Repository (ADR-0045)
 
-`prompts/pr-review-system.md` is a target-neutral core. The rules written for this repository (automation gates (a)/(b)/(c), the c8 file list, the stale-reference gate (b) note) live in `prompts/pr-review-repo-rules.md`, three blocks separated by a `<!-- next -->` line, and replace the `{{repository_rules_N}}` placeholders of the core. `{{repository_kind}}` reads "a Node.js automation repository" for this repository and "a software repository" for any other.
+`prompts/pr-review-system.md` is a target-neutral core. The rules written for this repository (automation gates (a)/(b)/(c), the stale-reference gate (b) note, the c8 file list, and the Node/React named defect checks: read-only property assignment, unauthorized `package.json` dependency, non-persistent `useRef`) live in `prompts/pr-review-repo-rules.md`, four blocks separated by a `<!-- next -->` line, and replace the `{{repository_rules_N}}` placeholders of the core. `{{repository_kind}}` reads "a Node.js automation repository" for this repository and "a software repository" for any other.
 
 `isSelfTarget()` (`scripts/lib/roots.mjs`) decides: `ADL_PIPELINE_REPOSITORY` unset (every workflow today, a local run) or equal to `GITHUB_REPOSITORY` (case-insensitive) means this repository. Another repository gets, instead:
 
