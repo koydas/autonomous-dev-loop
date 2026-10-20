@@ -112,7 +112,8 @@ function reviewFindings(runs) {
     const classes = withheld.map(withheldClass);
     const count = (k) => classes.filter((c) => c.key === k).length;
     const anomalies = classes.filter((c) => c.anomaly).length;
-    const heads = new Set(withheld.map((v) => v.run.head_sha).filter(Boolean)).size;
+    // Keyed by PR and SHA, as the duplicate-review grouping: one commit can head two PRs.
+    const heads = new Set(withheld.filter((v) => v.run.head_sha).map((v) => `${prOf(v)}@${v.run.head_sha}`)).size;
     const prs = new Set(withheld.map(prOf).filter(Boolean)).size;
     const tally = (list) => Object.entries(list.reduce((o, k) => ({ ...o, [k]: (o[k] ?? 0) + 1 }), {})).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(', ');
     const answered = tally(classes.map((c) => (c.responder ? `${c.responder.provider ?? 'unknown'}${c.responder.fallback ? ' (fallback)' : ''}` : 'not recorded')));

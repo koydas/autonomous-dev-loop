@@ -254,6 +254,9 @@ test('withheld guardrail (code cut, ADR-0038): info with heads, PRs, provider an
   assert.equal(w.frequency, '4 verdict(s) on 3 head(s) of 2 PR(s)');
   assert.match(w.hypothesis, /worked as designed.*provider or its input budget/);
   assert.equal(w.runs.length, 4, 'the volume is not hidden');
+  // One commit heading two PRs is two PR heads.
+  const shared = [9, 10, 10].map((pr) => run({ sha: 'd'.repeat(40), pr, events: [cutTo(6300), verdict('WITHHELD', { withheld_from: 'APPROVE', unreviewed_code_files: 3 }, pr)] }));
+  assert.equal(find(diagnose({ model: model(shared) }), 'review-withheld').frequency, '3 verdict(s) on 2 head(s) of 2 PR(s)');
   // Missing CI evidence is a guardrail too (ADR-0026); no budget hypothesis without a cut majority.
   const ev = find(diagnose({ model: model([0, 1, 2].map((i) => run({ sha: String(i).repeat(40), events: [verdict('WITHHELD', { evidence_state: i ? 'stale' : 'missing' })] }))) }), 'review-withheld');
   assert.equal(ev.severity, 'info');
