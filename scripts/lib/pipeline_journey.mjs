@@ -161,10 +161,13 @@ function itemState(steps, escalated, runs) {
   // attempt of one (a later successful attempt of the same step is a recovery, not a failure).
   const finalRuns = new Set(steps.map((s) => s.final?.run_id).filter(Boolean));
   const attempted = new Set(steps.flatMap((s) => s.attempts.map((a) => a.run_id)));
-  const failedFinal = steps.some((s) => s.final?.status === 'failed' || s.final?.decision?.tone === 'bad')
-    || runs.some((r) => r.outcome === 'failed' && (!attempted.has(r.run_id) || finalRuns.has(r.run_id)));
-  if (failedFinal) return 'failed';
+  // A later APPROVE ends the fix round (AGENTS.md, ADR-0034): a failure before it no longer fails the item.
   const review = steps.find((s) => s.key === 'review');
+  const approvedAt = Math.max(-Infinity, ...review.attempts.filter((a) => a.decision?.key === 'APPROVE').map((a) => a.started_at ?? -Infinity));
+  const standing = (t) => !(approvedAt > (t ?? -Infinity));
+  const failedFinal = steps.some((s) => (s.final?.status === 'failed' || s.final?.decision?.tone === 'bad') && standing(s.final.started_at))
+    || runs.some((r) => r.outcome === 'failed' && (!attempted.has(r.run_id) || finalRuns.has(r.run_id)) && standing(r.started_at));
+  if (failedFinal) return 'failed';
   const decisions = review.attempts.filter((a) => a.decision && a.decision.key !== 'skipped');
   const lastReview = decisions.at(-1);
   const lastEscalation = escalated.at(-1);

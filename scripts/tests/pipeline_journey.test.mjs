@@ -196,3 +196,12 @@ test('PR preparation rejected or failed, and an auto-fix whose git push failed, 
   assert.equal(workItemJourney(trace([failedPush])).state, 'failed');
   assert.equal(stepDecision(run('5', 'autofix', 'success', 1, [{ event: 'autofix.push' }, { event: 'workflow.push', stage: 'workflow', meta: { outcome: 'success' } }]), 'autofix').key, 'pushed');
 });
+
+test('a later APPROVE supersedes an earlier failure of another step (PR #242 review)', () => {
+  const failedPush = { ...run('1', 'autofix', 'success', 1000, [{ event: 'autofix.push' }, { event: 'workflow.push', stage: 'workflow', meta: { outcome: 'failure' } }]), pr_number: 9 };
+  assert.equal(workItemJourney(trace([failedPush, verdictRun('2', 2000, 'APPROVE')], { kind: 'pr', number: 9 })).state, 'approved');
+  // An approval before the failure does not clear it.
+  assert.equal(workItemJourney(trace([verdictRun('1', 500, 'APPROVE'), { ...failedPush, run_id: '3', started_at: 1000 }], { kind: 'pr', number: 9 })).state, 'failed');
+  // Same for a failed run without a step.
+  assert.equal(workItemJourney(trace([{ ...run('4', null, null, 1000), outcome: 'failed' }, verdictRun('5', 2000, 'APPROVE')], { kind: 'pr', number: 9 })).state, 'approved');
+});

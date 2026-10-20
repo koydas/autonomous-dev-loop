@@ -124,5 +124,6 @@ test('duration chart: a day without a timed run is a gap in both lines (PR #242 
   // Isolated values keep their dot but draw no line.
   const lone = durationChart([day(1, 1000, 2000), day(2, null, null), day(3, 1200, 2200)]);
   assert.equal((lone.match(/<polyline /g) ?? []).length, 0);
-  assert.equal((lone.match(/<circle /g) ?? []).length, 2);
+  assert.equal((lone.match(/<circle /g) ?? []).length, 4, 'average and p95 dots for each isolated day');
+  assert.equal((lone.match(/class="dot-p95"/g) ?? []).length, 2);
 });
