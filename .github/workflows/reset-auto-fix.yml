@@ -13,14 +13,16 @@ on:
         type: boolean
         default: true
 
+# Per job (ADR-0007 amendment 2026-10-20).
 permissions:
-  pull-requests: write
-  issues: write
   contents: read
 
 jobs:
   resolve:
     runs-on: ubuntu-latest
+    permissions:
+      # gh api on the PR (head ref).
+      pull-requests: read
     outputs:
       head_ref: ${{ steps.head.outputs.ref }}
     steps:
@@ -30,7 +32,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         # Fail closed: an empty ref would put the job in the global group `pr-pipeline-`.
         run: |
-          REF=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.ref')
+          REF=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')
           [ -n "$REF" ] || { echo "::error::Could not resolve PR head ref"; exit 1; }
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
@@ -38,6 +40,7 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     permissions:
+      # Kept: label removal / re-apply on the PR (reset_auto_fix.mjs, AI_PR_TOKEN or this token); issues: write may suffice.
       pull-requests: write
       issues: write
       # The `metrics` branch only (Commit metrics step, ADR-0040, ADR-0041).
@@ -47,7 +50,10 @@ jobs:
       group: pr-pipeline-${{ needs.resolve.outputs.head_ref }}
       cancel-in-progress: false
     steps:
+      # No step pushes: labels and metrics go through the API with an explicit token.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'

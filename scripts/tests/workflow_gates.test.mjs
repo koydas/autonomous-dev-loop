@@ -938,3 +938,140 @@ test('code-generation.yml writes the issue body and title with a random delimite
   assert.deepEqual([...order].sort((x, y) => x - y), order, 'heredocs first, single-line control outputs last');
   assert.equal((step.match(/echo "\$DELIM"/g) || []).length, 2, 'each heredoc closes with the random delimiter');
 });
+
+// ---------------------------------------------------------------------------
+// Workflow hardening (audit 2026-10-19 F14, F15; ADR-0007 amendment 2026-10-20)
+// ---------------------------------------------------------------------------
+
+// Every `run:` script of a workflow, block scalars included: [{ line, body }].
+function runScripts(text) {
+  const lines = text.split('\n');
+  const scripts = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s*)(?:- )?run:\s*(.*)$/);
+    if (!m) continue;
+    if (!/^[|>]/.test(m[2])) { scripts.push({ line: i + 1, body: m[2] }); continue; }
+    const body = [];
+    for (let j = i + 1; j < lines.length && (lines[j].trim() === '' || lines[j].match(/^\s*/)[0].length > m[1].length); j++) body.push(lines[j]);
+    scripts.push({ line: i + 1, body: body.join('\n') });
+  }
+  return scripts;
+}
+
+// Attacker-influenced values (ref names, titles, bodies, comment text): expanded into a script, they
+// are shell source. They reach a `run:` through `env:` and a quoted variable only.
+const UNTRUSTED_EXPRESSIONS = [
+  'github.ref_name',
+  'github.head_ref',
+  'github.event.pull_request.head.ref',
+  'github.event.pull_request.title',
+  'github.event.pull_request.body',
+  'github.event.issue.title',
+  'github.event.issue.body',
+  'github.event.comment.body',
+];
+
+test('no run: script interpolates a ref name, title, body or comment text (audit F14)', () => {
+  let scanned = 0;
+  for (const { name, text } of readWorkflows()) {
+    for (const { line, body } of runScripts(text)) {
+      scanned++;
+      for (const expr of UNTRUSTED_EXPRESSIONS) {
+        const pattern = new RegExp(`\\$\\{\\{[^}]*${expr.replace(/\./g, '\\.')}\\b[^}]*\\}\\}`);
+        assert.doesNotMatch(body, pattern, `${name}:${line} interpolates ${expr} into a run: script; pass it through env:`);
+      }
+    }
+  }
+  assert.ok(scanned > 50, `expected to scan every run: script, scanned ${scanned}`);
+});
+
+test('the run: script scanner sees one-line and block scripts', () => {
+  const sample = 'steps:\n  - run: echo "${{ github.head_ref }}"\n  - name: x\n    run: |\n      A=1\n      echo "${{ github.event.comment.body }}"\n    env:\n      B: ${{ github.ref_name }}\n';
+  const scripts = runScripts(sample);
+  assert.equal(scripts.length, 2);
+  assert.match(scripts[0].body, /github\.head_ref/);
+  assert.match(scripts[1].body, /github\.event\.comment\.body/);
+  assert.ok(!scripts.some((s) => s.body.includes('ref_name')), 'env: values are not part of the script');
+});
+
+test('pr-review.yml passes the branch to its shell steps through env (audit F14)', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+  const step = (name) => text.slice(text.indexOf(`- name: ${name}`)).split(/\n      - (?:name|uses): /)[0];
+  assert.match(step('Resolve PR number for checkpoint'), /\n\s+BRANCH: \$\{\{ github\.ref_name \}\}\n/);
+  assert.match(step('Find latest auto-fix run for checkpoint'), /\n\s+BRANCH: \$\{\{ github\.event\.pull_request\.head\.ref \|\| github\.ref_name \}\}\n/);
+  for (const name of ['Resolve PR number for checkpoint', 'Find latest auto-fix run for checkpoint']) {
+    assert.match(step(name), /--head "\$BRANCH"|--branch "\$BRANCH"/, `${name} uses the quoted variable`);
+  }
+});
+
+// `gh workflow run` (a dispatch) is the only call that needs actions: write; listing runs and
+// downloading artifacts need actions: read.
+const ACTIONS_WRITE_ALLOWED = {
+  // Trigger Code Generation step: POST /actions/workflows/code-generation.yml/dispatches (ADR-0007 amendment).
+  'validate-issue.yml': 1,
+};
+
+test('no workflow grants actions: write, except the validate-issue dispatch (audit F15)', () => {
+  for (const { name, text } of readWorkflows()) {
+    const count = (text.match(/^\s+actions:\s*write\b/gm) ?? []).length;
+    assert.equal(count, ACTIONS_WRITE_ALLOWED[name] ?? 0, `${name} grants actions: write ${count} time(s)`);
+  }
+  const validate = readFileSync(resolve(WORKFLOWS_DIR, 'validate-issue.yml'), 'utf8');
+  assert.match(validate, /gh workflow run code-generation\.yml/, 'the allowed actions: write is for the dispatch');
+});
+
+const workflowPermissions = (text) => text.match(/^permissions:\s*(\{\}|\n((?: {2}.+\n)+))/m);
+
+test('multi-job workflows grant write scopes per job, never workflow-level (audit F15)', () => {
+  let multiJob = 0;
+  for (const { name, text } of readWorkflows()) {
+    const jobsBlock = text.slice(text.search(/^jobs:\n/m));
+    const jobs = jobsBlock.match(/^ {2}[A-Za-z0-9_-]+:\s*$/gm) ?? [];
+    const perms = workflowPermissions(text);
+    if (jobs.length < 2) continue;
+    multiJob++;
+    assert.ok(perms, `${name}: declare a read-only workflow-level permissions block`);
+    assert.doesNotMatch(perms[0], /:\s*write\b|write-all/, `${name}: workflow-level permissions grant a write scope`);
+  }
+  assert.ok(multiJob >= 7, `expected the multi-job workflows to be scanned, saw ${multiJob}`);
+});
+
+test('pipeline workflows declare the inventoried scopes per job (ADR-0007 amendment)', () => {
+  const expected = {
+    'pr-review.yml': { evidence: ['contents: read'], review: ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
+    'auto-fix-pr.yml': { 'load-labels': ['contents: read', 'pull-requests: read'], 'auto-fix': ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
+    'code-generation.yml': { 'load-labels': ['contents: read'], 'generate-pr': ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
+    'validate-issue.yml': { validate: ['actions: write', 'contents: write', 'issues: write'] },
+    'reset-auto-fix.yml': { resolve: ['pull-requests: read'], reset: ['contents: write', 'issues: write', 'pull-requests: write'] },
+  };
+  for (const [name, jobs] of Object.entries(expected)) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    assert.match(text, /^permissions:\n  contents: read\n/m, `${name}: workflow-level default is contents: read`);
+    const jobsBlock = text.slice(text.search(/^jobs:\n/m));
+    const parts = jobsBlock.split(/^ {2}(?=[A-Za-z0-9_-]+:\s*$)/m).slice(1);
+    const byName = Object.fromEntries(parts.map((p) => [p.slice(0, p.indexOf(':')), p]));
+    assert.deepEqual(Object.keys(byName).sort(), Object.keys(jobs).sort(), `${name}: jobs`);
+    for (const [job, scopes] of Object.entries(jobs)) {
+      const block = byName[job].match(/\n {4}permissions:\n((?: {6}.+\n)+)/)?.[1] ?? '';
+      const got = block.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).sort();
+      assert.deepEqual(got, scopes, `${name} ${job}: permissions`);
+    }
+  }
+});
+
+test('jobs that never git push check out without persisting the token (audit F15)', () => {
+  const checkouts = (text) => text.match(/uses: actions\/checkout@v4(\n\s+with:(\n\s{10}.+)+)?/g) ?? [];
+  for (const name of ['validate-issue.yml', 'code-generation.yml', 'reset-auto-fix.yml']) {
+    const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
+    assert.ok(!runScripts(text).some(({ body }) => /\bgit push\b/.test(body)), `${name} has no git push`);
+    const found = checkouts(text);
+    assert.ok(found.length > 0, `${name}: expected a checkout`);
+    for (const c of found) assert.match(c, /persist-credentials: false/, `${name}: ${c}`);
+  }
+  // auto-fix pushes with the credential persisted by its PR-branch checkout (AI_PR_TOKEN || GITHUB_TOKEN).
+  const autofix = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+  const prCheckout = autofix.slice(autofix.indexOf('- name: Checkout PR branch'), autofix.indexOf('- name: Checkout trusted pipeline'));
+  assert.match(prCheckout, /token: \$\{\{ secrets\.AI_PR_TOKEN \|\| secrets\.GITHUB_TOKEN \}\}/);
+  assert.doesNotMatch(prCheckout, /persist-credentials: false/, 'the auto-fix push needs the persisted credential');
+  assert.match(autofix, /git push origin HEAD:"\$\{PR_BRANCH\}"/);
+});
