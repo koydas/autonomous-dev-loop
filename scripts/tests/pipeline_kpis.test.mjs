@@ -81,3 +81,40 @@ test('every indicator has a source, method, period, population and known limits'
   assert.match(DEFINITIONS.needs_attention.limits, /not recorded/);
   assert.match(DEFINITIONS.lead_time.limits, /not the item lifetime/);
 });
+
+test('windows: the latest N days against the N before, per-day series, providers, active items', async () => {
+  const { computeWindow, computeWindows, providerBreakdown, WINDOWS } = await import('../lib/pipeline_kpis.mjs');
+  const runs = [
+    run('1', { t: T, events: verdict('APPROVE'), llm: [{ provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1000, tokens_out: 1000 }] }),
+    run('2', { t: T - 2 * DAY, events: verdict('WITHHELD'), llm: [{ provider: 'groq', model: 'm', tokens_in: 1, tokens_out: 1 }] }),
+    run('3', { t: T - 8 * DAY, runOutcome: 'failed', outcome: 'failed' }),
+    { ...run('4', { t: T - 9 * DAY, events: verdict('APPROVE') }), duration_ms: 3000 },
+    run('5', { t: null }),
+  ];
+  const model = { runs };
+  const journeys = [{ last_activity: T }, { last_activity: T - 10 * DAY }, { last_activity: null }];
+  const w = computeWindow({ model, journeys, days: 7 });
+  assert.equal(w.days, 7);
+  assert.equal(w.series.length, 7);
+  assert.equal(w.series.at(-1).day, '2026-10-20');
+  assert.deepEqual([w.current.runs, w.current.progressed, w.current.adverse, w.current.verdicts, w.current.approve], [2, 1, 1, 2, 1]);
+  assert.equal(w.current.approve_rate, 0.5);
+  assert.deepEqual([w.previous.runs, w.previous.failed, w.previous.approve_rate], [2, 1, 1]);
+  assert.deepEqual(w.current.duration, { n: 2, mean: 1000, p95: 1000 });
+  assert.equal(w.previous.duration.mean, 2000);
+  assert.equal(w.series.at(-1).usd, 0.024 + 0, 'the day with the Opus call');
+  assert.equal(w.series.at(-2).usd, null, 'a day without any call has no cost, not $0');
+  assert.equal(w.series.at(-3).usd, 0, 'a Groq-only day costs $0');
+  assert.equal(w.series.at(-2).approve_rate, null);
+  assert.deepEqual(w.providers.map((p) => [p.provider, p.calls, p.usd_share, p.call_share]), [['anthropic', 1, 1, 0.5], ['groq', 1, 0, 0.5]]);
+  assert.equal(w.items.length, 1);
+  assert.ok(!('selected' in w.current), 'no run list in the published window');
+  assert.deepEqual(Object.keys(computeWindows({ model, journeys })).map(Number), WINDOWS);
+  assert.deepEqual(computeWindow({ model: { runs: [run('x', { t: null })] } }), { days: 7, empty: true, current: null, previous: null, series: [], providers: [], items: [] });
+  assert.equal(computeWindow().empty, true);
+  // Providers: no call → empty; unknown provider kept; no priced call → shares null.
+  assert.deepEqual(providerBreakdown([]), []);
+  const unpriced = providerBreakdown([run('u', { llm: [{ model: 'x' }] })]);
+  assert.deepEqual([unpriced[0].provider, unpriced[0].usd_share, unpriced[0].call_share], ['unknown', null, 1]);
+  for (const id of ['executions', 'run_duration', 'providers']) assert.ok(DEFINITIONS[id].limits);
+});

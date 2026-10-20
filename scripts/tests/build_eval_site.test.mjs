@@ -521,9 +521,13 @@ test('a pipeline-only build (no eval result, history read back from the live sit
   assert.ok(second.files['pipeline/runs/702-1.html'], 'the pipeline half took the new run');
   // ADR-0043: the home page leads with the pipeline's health, before the evaluations, with its styles.
   assert.ok(afterHome.indexOf('class="status-banner') < afterHome.indexOf('id="evaluations"'));
-  assert.match(afterHome, /data-kpi="needs_attention"/);
+  assert.match(afterHome, /data-kpi="executions"/);
+  assert.match(afterHome, /<link rel="stylesheet" href="pipeline\/console\.css">/);
+  assert.match(afterHome, /<span class="nav-badge" data-diag-badge>\d*<\/span>/);
+  assert.match(afterHome, /data-generated="" data-ts="/);
+  assert.match(afterHome, /<div class="side-filters"><p class="side-title">Filter pipelines/);
   assert.match(afterHome, /href="pipeline\/diagnostics\.html"/);
-  assert.match(afterHome, /\.kpi-grid \{/);
+  assert.match(second.files['pipeline/console.css'], /\.kpi-grid4 \{/);
   assert.doesNotMatch(afterHome, /<!-- pipeline-overview -->/);
   assert.ok(second.files['pipeline/diagnostics.html'], 'the diagnostics page is built');
   assert.ok(logs.some((m) => /^Pipeline views: 3 record\(s\), 1 trace index\(es\), \d+ page\(s\), [\d.]+ MB$/.test(m)));

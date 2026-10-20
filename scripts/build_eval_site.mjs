@@ -36,7 +36,9 @@ import { buildSite } from './lib/eval_site.mjs';
 import { SUITES } from './lib/eval_suites.mjs';
 import { buildPipelineModel, MONTH_RE } from './lib/pipeline_model.mjs';
 import { computeHealth, modelUsage } from './lib/pipeline_health.mjs';
-import { consoleContext, consoleOverview, CONSOLE_STYLE } from './lib/console_views.mjs';
+import { consoleContext } from './lib/console_views.mjs';
+import { consoleOverview } from './lib/console_overview.mjs';
+import { pipelineFacets } from './lib/flow_dashboard.mjs';
 import { buildPipelineSite } from './lib/pipeline_site.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -170,6 +172,8 @@ export function assemblePipeline({ pipeline, scorecard, generatedAt = null, log 
   return { files, model, console: ctx };
 }
 
+const escapeAttr = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
 const siteBytes = (files) => Object.values(files).reduce((n, c) => n + Buffer.byteLength(c, 'utf8'), 0);
 
 // runs/<id>.json is keyed by run_id alone: two suites under one id would overwrite each other's detail.
@@ -233,8 +237,17 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   const assembled = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }) : null;
   const pipelineFiles = assembled?.files ?? {};
   // The home page leads with the pipeline's health (ADR-0043); the eval sections follow it.
-  if (assembled) files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', () => consoleOverview(assembled.console, 'pipeline/')).replace('</style>', () => `${CONSOLE_STYLE}</style>`);
-  return { files: { ...files, ...pipelineFiles }, scorecard, skipped, pipelineFiles, rebaseline: rebase && { rebaselined: rebase.rebaselined, noops: rebase.noops, refused: rebase.refused } };
+  if (assembled) {
+    files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', () => consoleOverview(assembled.console, 'pipeline/'))
+      .replace('</nav></aside>', () => `</nav><div class="side-filters">${pipelineFacets(assembled.console.journeys)}</div></aside>`);
+  }
+  // Header facts known only here: the build time ("Updated …") and, with pipeline views, the findings count.
+  const findings = assembled ? String(assembled.console.diagnosis.findings.filter((f) => f.severity !== 'info').length || '') : '';
+  const all = { ...files, ...pipelineFiles };
+  for (const [p, c] of Object.entries(all)) {
+    if (p.endsWith('.html')) all[p] = c.replace('data-generated=""', `data-generated="" data-ts="${escapeAttr(generatedAt)}"`).replace('<span class="nav-badge" data-diag-badge></span>', () => `<span class="nav-badge" data-diag-badge>${findings}</span>`);
+  }
+  return { files: all, scorecard, skipped, pipelineFiles: Object.fromEntries(Object.keys(pipelineFiles).map((k) => [k, all[k]])), rebaseline: rebase && { rebaselined: rebase.rebaselined, noops: rebase.noops, refused: rebase.refused } };
 }
 
 // The current dataset of each suite in the batch: sha256 of the file and case ids, as run_evals.mjs reads them.

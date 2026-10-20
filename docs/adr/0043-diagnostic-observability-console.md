@@ -23,6 +23,16 @@ The Pipelines page (`flow_dashboard.mjs`, ADR-0042) lists **every recorded work 
 
 Navigation: Overview · Diagnostics · Pipelines · Investigation · Metrics. Every existing page, table and JSON file stays; the full event journal moves behind a disclosure on run pages, after the key events.
 
+### Visual design (2026-10-20, from the design mockup in the README)
+
+- Console shell (`dashboard_ui.mjs`): dark theme by default (light on demand, stored per browser, applied before paint), top tabs with icons, a sidebar with the sections and page filters (status, stage reached, LLM provider facets over the pipeline lists), a phone tab bar with a More menu, "Updated …" from the build time and the findings count on the Diagnostics link (both filled by `assembleSite`).
+- Overview (`console_overview.mjs`): windowed indicators (`computeWindows`: 7 / 14 / 30 days ending on the latest recorded run, all precomputed; a select shows one) with change vs the previous window and sparklines, results / duration / provider charts, issue cards, recent pipelines.
+- Pipelines rows (`flow_dashboard.mjs`): one table row per work item that opens into stage boxes and key information; the same rows serve the Overview.
+- Trace page: tabs (Overview, Timeline, LLM calls, Events, GitHub Actions, Traces), progressive enhancement over plain sections.
+- With pipeline views, the base and component CSS ships once in `pipeline/console.css` instead of inline on each of the ~120 pages (site 4.42 MB, was 4.33 MB before the console); an eval-only build keeps it inline.
+
+Deviations from the mockup, by data: no **Running** status or count (records are written on completion); **Success rate** became the review approval rate (no run failed in the sample, so a job success rate reads 100 % and hides the withheld reviews); PR titles come from the GitHub API in the browser (titles are not in the public record); Groq shows "free tier" with its share of calls next to its 0 % share of cost; the status badge never says "healthy", only what the rules found.
+
 ## Alternatives Considered
 
 - **A front-end framework (React/Vue) or a hosted observability backend**: rejected — the site is a static Pages build from the `metrics` branch with no credential (ADR-0027, ADR-0042); a framework adds a build chain for no capability the inline scripts lack.
@@ -36,4 +46,5 @@ Navigation: Overview · Diagnostics · Pipelines · Investigation · Metrics. Ev
 - ✅ Every indicator and finding is traceable to the runs and events it was computed from.
 - ⚠️ "Last recorded state" can be stale: a person may already have acted (labels, merge). Overview and Pipelines re-check merges live; label state is not recorded.
 - ⚠️ Rules have fixed thresholds: below them a pattern is not reported. Duration trends need ≥ 3 runs in each of the two latest 7-day periods; otherwise the gap is stated.
-- ⚠️ Inline console CSS on every page adds about 1 MB to the deployed site at the current record count.
+- ⚠️ Dark by default: a reader who prefers light switches once per browser.
+- ⚠️ Windows are relative to the latest recorded run, not to the build time: after a quiet week the "last 7 days" are the last 7 days with data, as the subtitle states.

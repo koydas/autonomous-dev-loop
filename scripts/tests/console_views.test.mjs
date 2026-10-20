@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Script, runInNewContext } from 'node:vm';
 import {
-  consoleContext, consoleOverview, diagnosticsBody, findingCard, journeyPanel, keyEvents, runSteps, trendChart, statusBanner, kpiCards,
-  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, CONSOLE_STYLE,
+  consoleContext, diagnosticsBody, findingCard, journeyPanel, keyEvents, runSteps, trendChart, statusBanner,
+  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE,
 } from '../lib/console_views.mjs';
+import { consoleOverview, kpiRow, delta, sparkline, statusBadge, durationChart, providerList, issueCards } from '../lib/console_overview.mjs';
 import { attemptOf, workItemJourney } from '../lib/pipeline_journey.mjs';
 import { DEFINITIONS } from '../lib/pipeline_kpis.mjs';
 import { buildPipelineModel, eventSummary } from '../lib/pipeline_model.mjs';
@@ -31,55 +32,6 @@ test('formatting helpers', () => {
   assert.equal(itemUrl({ kind: 'issue', number: 3 }), 'https://github.com/koydas/autonomous-dev-loop/issues/3');
   assert.equal(itemUrl({ kind: 'run', number: 3 }), null);
   assert.match(pill('warn', '<b>'), /class="pill tone-warn"><span class="tone-mark tone-warn" aria-hidden="true">!<\/span>&lt;b&gt;/);
-});
-
-test('overview: status, indicators with drill-down links, problems, states and definitions', () => {
-  const ctx = consoleContext(modelOf([withheld('800', T), withheld('801', T + 60000, 51), withheld('802', T + 120000, 52)]));
-  const html = consoleOverview(ctx, 'pipeline/');
-  assert.match(html, /Running with issues: \d+ problem\(s\) to look at/);
-  assert.match(html, /href="pipeline\/diagnostics\.html">Open diagnostics/);
-  // Each indicator links to what explains it.
-  assert.match(html, /<a class="kpi tone-warn" href="pipeline\/flows\.html\?state=attention" data-kpi="needs_attention">/);
-  assert.match(html, /href="pipeline\/index\.html\?result=failed#executions" data-kpi="runs_failed"/);
-  assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld" data-kpi="approve_rate"/);
-  assert.match(html, /href="pipeline\/health\.html#cost" data-kpi="llm_cost"/);
-  assert.match(html, /<span class="kpi-value">0 %<\/span><span class="kpi-note">0 of 3 verdicts · 3 withheld/);
-  assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld"><strong>Reviews withhold their verdict/);
-  assert.match(html, /href="pipeline\/flows\.html\?state=withheld">Approval withheld<\/a><span class="count">3/);
-  assert.match(html, /data-attention-item data-prs="50" data-issue=""/);
-  assert.deepEqual(/data-claimed="([^"]*)"/.exec(html)[1].split(',').sort(), ['50', '51', '52']);
-  for (const id of Object.keys(DEFINITIONS)) assert.ok(html.includes(`id="def-${id}"`), id);
-  for (const src of scripts(html)) new Script(src);
-});
-
-test('overview on an empty model: no data is said, nothing looks healthy', () => {
-  const html = consoleOverview(consoleContext(buildPipelineModel({})), '');
-  assert.match(html, /No pipeline run recorded yet/);
-  assert.match(html, /No run record on the metrics branch/);
-  assert.doesNotMatch(html, /tone-good/);
-  assert.match(html, /No verdict recorded/);
-  assert.match(html, /No dated run recorded/);
-  assert.match(html, /No work-item trace recorded/);
-  assert.match(html, /No work item waits on a person according to the records/);
-  assert.match(html, /No rule fired on the recorded data/);
-});
-
-test('ok status says that no finding is not proof of health; kpi tones follow the values', () => {
-  const ctx = consoleContext(modelOf([makeRecord({ runId: '810', start: T, events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 7 } }] })]));
-  assert.equal(ctx.diagnosis.status, 'ok');
-  assert.match(statusBanner(ctx.diagnosis, ctx.overview, ''), /No problem detected by the rules.*no finding is not proof of health/s);
-  const kpis = kpiCards(ctx.overview, ctx.diagnosis, '');
-  assert.match(kpis, /class="kpi tone-good" href="index\.html\?result=failed#executions"/);
-  assert.match(kpis, /class="kpi tone-good" href="health\.html#reviews" data-kpi="approve_rate"/);
-  assert.match(kpis, /data-kpi="recovered"><span class="kpi-label">[^<]+<\/span><span class="kpi-value">—/);
-  // A long list waiting on people is folded after six rows, and every row is still rendered.
-  const many = consoleContext(modelOf(Array.from({ length: 8 }, (_, i) => withheld(String(820 + i), T + i * 1000, 60 + i))));
-  const html = consoleOverview(many, '');
-  assert.equal((html.match(/<li data-attention-item/g) ?? []).length, 8);
-  assert.match(html, /<summary>2 more<\/summary>/);
-  // Critical status counts critical findings.
-  const failed = consoleContext(modelOf([makeRecord({ runId: '830', start: T, outcome: 'failed' })]));
-  assert.match(statusBanner(failed.diagnosis, failed.overview, ''), /Attention needed: 1 critical problem/);
 });
 
 test('a hostile string in any recorded field is escaped on the overview, diagnostics and journey', () => {
@@ -131,7 +83,7 @@ test('journey panel: final status and decision per step, attempts in order, inte
   const records = [withheld('860', T, 70), makeRecord({ runId: '861', start: T + 1000, prNumber: 70, events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 70 } }] })];
   const m = modelOf(records);
   const html = journeyPanel(workItemJourney(m.traces[0]), '../');
-  assert.match(html, /Journey · <span class="pill tone-good">/);
+  assert.match(html, /Journey <span class="pill tone-good">/);
   assert.match(html, /success · Approved/);
   assert.match(html, /2 attempts · 0 failed · 1 adverse · recovered/);
   assert.ok(html.indexOf('runs/860-1.html') < html.indexOf('runs/861-1.html'), 'attempts in chronological order');
@@ -186,8 +138,8 @@ test('trend chart: stacked days with a values table; empty trend said', () => {
 });
 
 test('client scripts parse and write text only', () => {
-  for (const src of [...scripts(PR_STATES_SCRIPT), ...scripts(FILTER_SCRIPT)]) new Script(src);
-  for (const s of [PR_STATES_SCRIPT, FILTER_SCRIPT]) assert.doesNotMatch(s, /innerHTML|document\.write|<script src/);
+  for (const src of [...scripts(PR_STATES_SCRIPT), ...scripts(FILTER_SCRIPT), ...scripts(TABS_SCRIPT)]) new Script(src);
+  for (const s of [PR_STATES_SCRIPT, FILTER_SCRIPT, TABS_SCRIPT]) assert.doesNotMatch(s, /innerHTML|document\.write|<script src/);
   assert.match(PR_STATES_SCRIPT, /page <= 10/);
   assert.match(PR_STATES_SCRIPT, /sessionStorage/);
 });
@@ -198,13 +150,13 @@ function filterDom(params, items) {
   const count = { textContent: '' }, empty = { hidden: false };
   const box = {
     dataset: { ref: String(params.ref ?? 0) },
-    querySelectorAll: (sel) => (sel === '[data-filter-key]' ? controls : items),
+    querySelectorAll: (sel) => (sel === '[data-filter-key]' ? controls : sel === '[data-chip]' ? [] : items),
     querySelector: (sel) => (sel === '[data-filter-count]' ? count : empty),
     addEventListener: () => {},
   };
   const replaced = [];
   runInNewContext(scripts(FILTER_SCRIPT)[0], {
-    document: { querySelectorAll: () => [box] }, URLSearchParams,
+    document: { querySelectorAll: (sel) => (sel === '[data-filter-scope]' ? [box] : sel === '[data-facet]' ? (params.facets ?? []) : []), addEventListener: () => {} }, URLSearchParams,
     location: { search: params.search ?? '', pathname: '/p/flows.html', hash: '' },
     history: { replaceState: (a, b, url) => replaced.push(url) },
   });
@@ -226,6 +178,11 @@ test('filter bar: token, text and period filters, URL kept in sync and restored'
   // Period: 7 days before the reference (the latest recorded activity), and free text.
   filterDom({ controls: { period: '7' }, ref: 10 * day }, items);
   assert.deepEqual(items.map((i) => i.hidden), [false, true]);
+  // Sidebar facets: all checked filters nothing; an unchecked value hides the items carrying only it.
+  filterDom({ facets: [{ dataset: { facet: 'state' }, value: 'withheld', checked: false }, { dataset: { facet: 'state' }, value: 'approved', checked: true }] }, items);
+  assert.deepEqual(items.map((i) => i.hidden), [true, false]);
+  filterDom({ facets: [{ dataset: { facet: 'state' }, value: 'withheld', checked: true }, { dataset: { facet: 'state' }, value: 'approved', checked: true }] }, items);
+  assert.deepEqual(items.map((i) => i.hidden), [false, false]);
   const { empty } = filterDom({ controls: { q: 'nothing' } }, items);
   assert.deepEqual(items.map((i) => i.hidden), [true, true]);
   assert.equal(empty.hidden, false, 'the empty message shows');
@@ -239,4 +196,16 @@ test('merge join in the browser: recorded PRs, issue hints, claimed PRs', () => 
   assert.equal(run('adlMergeOf([], "7", pulls, new Set([5, 6])).state', { pulls }), 'unknown', 'claimed PRs are not borrowed');
   assert.equal(run('adlMergeOf([9], "7", pulls).state', { pulls }), 'unknown', 'recorded PRs replace the hint');
   assert.equal(run("adlIssueHint({ head: { ref: 'ai/issue-12', repo: { full_name: 'koydas/autonomous-dev-loop' } } })", {}), '12');
+});
+
+test('tabs: one tab per section, the hash picks the open one, no JavaScript shows every section', () => {
+  const src = scripts(TABS_SCRIPT)[0];
+  new Script(src);
+  assert.match(src, /:scope > section\[data-tab\]/);
+  assert.match(src, /setAttribute\('role', 'tablist'\)/);
+  assert.match(src, /'#' \+ p\.id === location\.hash/);
+  assert.match(src, /ArrowRight/);
+  assert.match(CONSOLE_STYLE, /\.tab\[aria-selected="true"\]/);
+  // Without the script nothing is hidden: panels only get role/hidden from it.
+  assert.doesNotMatch(TABS_SCRIPT, /innerHTML/);
 });

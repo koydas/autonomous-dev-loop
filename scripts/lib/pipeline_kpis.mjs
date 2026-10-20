@@ -27,6 +27,9 @@ export const DEFINITIONS = Object.freeze({
   review_runs_per_pr: { label: 'Review runs per PR', source: RECORDS, method: 'Review runs that recorded a verdict ÷ PRs with at least one verdict', period: WINDOW, population: 'PRs with a recorded verdict', limits: 'Counts duplicate triggers (push + pull_request on one head) as separate runs.' },
   rate_limit_wait: { label: 'Time waiting on rate limits', source: RECORDS + ', `retry.wait` events with status 429', method: 'Σ wait_ms of 429 retry waits', period: WINDOW, population: 'Every loaded run record', limits: 'Waits logged by the retry helper only; provider queueing is not visible.' },
   llm_cost: { label: 'LLM cost (estimate)', source: RECORDS + ', `llm_call` spans priced by `llm_cost.mjs`', method: 'List price × tokens (measured where the record has usage, chars/4 estimate otherwise); Groq free tier at $0', period: WINDOW, population: 'Every recorded LLM call', limits: 'List price, never a bill. Unpriced calls are counted apart, not as $0.' },
+  executions: { label: 'Pipeline executions', source: RECORDS, method: 'Runs started in the window, by class: moved forward, adverse decision, failed, skip / no decision; the change is against the same number of days just before', period: 'The selected window (7, 14 or 30 days) ending on the latest recorded run', population: 'Runs with a start time', limits: 'A run in progress is not recorded yet, so there is no running count.' },
+  run_duration: { label: 'Average run duration', source: RECORDS, method: 'Mean of run durations (start → end of the workflow job record) in the window; p95 by nearest rank', period: 'The selected window', population: 'Runs with both timestamps', limits: 'Job time only: queueing before the job and waiting between runs are not included (see lead time).' },
+  providers: { label: 'LLM providers', source: RECORDS + ', `llm_call` spans', method: 'Calls and list-price cost per provider in the window; shares of the window total', period: 'The selected window', population: 'Recorded LLM calls', limits: 'Groq free-tier calls cost $0: their share of cost is 0 while their share of calls can be large.' },
   trend: { label: 'Runs per day', source: RECORDS, method: 'Runs per UTC day by class (failed, adverse decision, moved forward, skipped / no decision), last 14 days ending on the latest recorded run; the 7-day comparison sets the latest 7 days against the 7 before', period: '14 days ending on the latest recorded run (not the build time)', population: 'Runs with a start time', limits: 'Small daily counts: a rate on a few runs is noisy; n is shown next to every rate.' },
 });
 
@@ -109,4 +112,78 @@ export function computeOverview({ model, journeys = [] } = {}) {
     cost: sumCosts(runs.flatMap((r) => r.llm)),
     trend: trend(runs),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Time windows of the overview (7 / 14 / 30 days ending on the latest recorded run, never the build time)
+// ---------------------------------------------------------------------------
+
+export const WINDOWS = Object.freeze([7, 14, 30]);
+
+const mean = (v) => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : null);
+
+// Indicators of the runs started in [from, to).
+function slice(runs, from, to) {
+  const sel = runs.filter((r) => r.started_at != null && r.started_at >= from && r.started_at < to);
+  const classes = sel.map(runClass);
+  const verdicts = sel.flatMap((r) => r.events.filter((e) => e.event === 'review.verdict').map((e) => e.meta.verdict));
+  const durations = sel.map((r) => r.duration_ms).filter((v) => typeof v === 'number');
+  const approve = verdicts.filter((v) => v === 'APPROVE').length;
+  return {
+    runs: sel.length,
+    ...Object.fromEntries(RUN_CLASSES.map((c) => [c, classes.filter((x) => x === c).length])),
+    verdicts: verdicts.length,
+    approve,
+    withheld: verdicts.filter((v) => v === 'WITHHELD').length,
+    request_changes: verdicts.filter((v) => v === 'REQUEST_CHANGES').length,
+    approve_rate: ratio(approve, verdicts.length),
+    duration: { n: durations.length, mean: mean(durations), p95: percentile(durations, 95) },
+    cost: sumCosts(sel.flatMap((r) => r.llm)),
+    selected: sel,
+  };
+}
+
+/** LLM cost and calls per provider, most expensive first (then most calls); shares of the total. */
+export function providerBreakdown(runs) {
+  const by = new Map();
+  for (const c of runs.flatMap((r) => r.llm)) {
+    const k = c.provider ?? 'unknown';
+    by.set(k, [...(by.get(k) ?? []), c]);
+  }
+  const rows = [...by.entries()].map(([provider, calls]) => ({ provider, ...sumCosts(calls) }));
+  const usd = rows.reduce((t, r) => t + r.usd, 0);
+  const calls = rows.reduce((t, r) => t + r.calls, 0);
+  return rows.map((r) => ({ ...r, usd_share: usd ? r.usd / usd : null, call_share: calls ? r.calls / calls : null }))
+    .sort((a, b) => b.usd - a.usd || b.calls - a.calls || a.provider.localeCompare(b.provider));
+}
+
+/**
+ * The overview of one window: `days` days ending on the latest recorded run's UTC day, the same length
+ * before it as the comparison (`previous`, whose `runs` is 0 when nothing was recorded then — no delta is
+ * shown), a per-day series, the providers and the work items active in the window.
+ */
+export function computeWindow({ model, journeys = [], days = 7 } = {}) {
+  const runs = (model?.runs ?? []).filter((r) => r.started_at != null);
+  if (!runs.length) return { days, empty: true, current: null, previous: null, series: [], providers: [], items: [] };
+  const end = Date.parse(`${day(Math.max(...runs.map((r) => r.started_at)))}T00:00:00Z`) + DAY_MS;
+  const from = end - days * DAY_MS;
+  const current = slice(runs, from, end);
+  const previous = slice(runs, from - days * DAY_MS, from);
+  const series = Array.from({ length: days }, (_, i) => {
+    const s = slice(current.selected, from + i * DAY_MS, from + (i + 1) * DAY_MS);
+    return { day: day(from + i * DAY_MS), total: s.runs, failed: s.failed, adverse: s.adverse, progressed: s.progressed, neutral: s.neutral, approve_rate: s.approve_rate, verdicts: s.verdicts, avg_ms: s.duration.mean, p95_ms: s.duration.p95, usd: s.cost.calls ? s.cost.usd : null };
+  });
+  const strip = ({ selected, ...rest }) => rest;
+  return {
+    days, empty: false, from, to: end - 1,
+    current: strip(current), previous: strip(previous),
+    series,
+    providers: providerBreakdown(current.selected),
+    items: journeys.filter((j) => j.last_activity != null && j.last_activity >= from),
+  };
+}
+
+/** Every overview window, keyed by its length in days. */
+export function computeWindows({ model, journeys = [] } = {}) {
+  return Object.fromEntries(WINDOWS.map((d) => [d, computeWindow({ model, journeys, days: d })]));
 }

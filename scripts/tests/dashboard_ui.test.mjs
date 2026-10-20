@@ -101,7 +101,7 @@ test('all widget text and attributes escape hostile record content', () => {
 test('shared navigation respects depth and the progressive enhancements need no external assets', () => {
   const header = dashboardHeader('../../', true);
   for (const [href, label] of [['index.html', 'Overview'], ['pipeline/diagnostics.html', 'Diagnostics'], ['pipeline/flows.html', 'Pipelines'], ['pipeline/index.html', 'Investigation'], ['pipeline/health.html', 'Metrics']]) {
-    assert.ok(header.includes(`<a href="../../${href}">${label}</a>`), label);
+    assert.ok(new RegExp(`<a href="\\.\\./\\.\\./${href.replace(/[./]/g, '\\$&')}"><svg class="nav-icon"[^>]*>.*?</svg>${label}</a>`).test(header), label);
   }
   assert.doesNotMatch(dashboardHeader('', false), /pipeline\//);
   assert.match(DASHBOARD_STYLE, /@media\(max-width:600px\)/);
@@ -160,4 +160,28 @@ test('execution cards and flow history show the LLM cost of a run with calls onl
  const none = modelOf(makeRecord({ runId: '701' }));
  none.runs[0].llm = [];
  assert.doesNotMatch(executionBrowser(none), /LLM \$/);
+});
+
+test('console shell: dark theme by default with a stored light choice, sidebar, phone tab bar, relative times', async () => {
+  const { sidebar, mobileNav, navIcon } = await import('../lib/dashboard_ui.mjs');
+  // Dark tokens on :root, light ones only under data-theme="light"; the choice is applied before paint.
+  assert.match(DASHBOARD_STYLE, /:root, :root:where\(:not\(\[data-theme="light"\]\)\) \{ color-scheme:dark;/);
+  assert.match(DASHBOARD_STYLE, /:root\[data-theme="light"\] \{ color-scheme:light;/);
+  const header = dashboardHeader('', true);
+  assert.ok(header.indexOf("localStorage.getItem('adl-theme')") < header.indexOf('<header'), 'theme set before the header renders');
+  assert.match(header, /<span class="updated-dot" data-generated="" data-prefix="Updated "><\/span>/);
+  assert.match(header, /data-theme-toggle/);
+  // The emitted relative-time code keeps its \d (a template literal would eat a single backslash).
+  assert.ok(DASHBOARD_SCRIPT.includes('/^\\d+$/.test(el.dataset.ts)'));
+  assert.match(DASHBOARD_SCRIPT, /MutationObserver/);
+  const side = sidebar('../', true, '<p>filters</p>');
+  assert.match(side, /<a href="\.\.\/pipeline\/diagnostics\.html">.*Diagnostics<span class="nav-badge" data-diag-badge><\/span><\/a>/);
+  assert.match(side, /<div class="side-filters"><p>filters<\/p><\/div><\/aside>$/);
+  assert.match(sidebar('', false), /<nav class="side-nav" aria-label="Sections"><a href="index\.html">.*Overview<\/a><\/nav><\/aside>$/);
+  const tabs = mobileNav('../../', true);
+  for (const label of ['Overview', 'Diagnostics', 'Pipelines', 'Investigation', 'More', 'Metrics', 'Models', 'Trace table', 'Evaluations']) assert.ok(tabs.includes(label), label);
+  assert.match(tabs, /href="\.\.\/\.\.\/pipeline\/models\.html"/);
+  assert.equal(mobileNav('', false), '');
+  assert.match(navIcon('pipelines'), /^<svg class="nav-icon"[^>]*aria-hidden="true">/);
+  assert.doesNotThrow(() => new Script(header.match(/<script>([\s\S]*?)<\/script>/)[1]));
 });

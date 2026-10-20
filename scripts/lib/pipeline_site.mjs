@@ -3,12 +3,13 @@
 // eval pages. Pure: the model (pipeline_model.mjs) and the health data (pipeline_health.mjs) in, a map
 // of { path: html } out. Every record string is escaped (escapeHtml); numbers are formatted here;
 // inline styles carry computed numbers only. No external script: the feed filter is inline.
-import { escapeHtml, page, modelAnchor } from './eval_site.mjs';
+import { escapeHtml, page, modelAnchor, BASE_STYLE } from './eval_site.mjs';
 import { feedEntries, eventSummary } from './pipeline_model.mjs';
-import { flowDashboard, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
+import { flowDashboard, pipelineFacets, keyInformation, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
+import { OVERVIEW_STYLE } from './console_overview.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
-import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps } from './dashboard_ui.mjs';
-import { consoleContext, diagnosticsBody, journeyPanel, keyEvents, runSteps, itemTitle, CONSOLE_STYLE } from './console_views.mjs';
+import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps, DASHBOARD_STYLE } from './dashboard_ui.mjs';
+import { consoleContext, diagnosticsBody, journeyPanel, keyEvents, runSteps, itemTitle, itemUrl, pill, CONSOLE_STYLE, TABS_SCRIPT } from './console_views.mjs';
 import { workItemJourney, attemptOf } from './pipeline_journey.mjs';
 import { callCost, sumCosts, formatUsd, costAmount, meanAmount, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
 
@@ -36,6 +37,7 @@ const STYLE = `
 td.wrap { white-space: normal; word-break: break-word; min-width: 200px; }
 svg text { font-family: inherit; }
 .wf .status { white-space: nowrap; }
+@media (max-width: 760px) { .nav2 { flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; } }
 `;
 
 // ---------------------------------------------------------------------------
@@ -81,7 +83,7 @@ function nav(root, months = []) {
   return `<p class="nav2"><a href="${root}diagnostics.html">Diagnostics</a><a href="${root}flows.html">Pipelines</a><a href="${root}index.html">Executions & journal</a><a href="${root}traces/index.html">Trace table</a><a href="${root}health.html">Metrics</a><a href="${root}models.html">Models</a>${monthLinks ? `<span class="muted">Months: ${monthLinks}</span>` : ''}</p>`;
 }
 
-const pipelinePage = (title, body, depth) => page(title, body, { depth, pipeline: true, style: STYLE + CONSOLE_STYLE });
+const pipelinePage = (title, body, depth, filters = '') => page(title, body, { depth, pipeline: true, style: STYLE, filters });
 const emptyCard = (text) => `<div class="card muted">${e(text)}</div>`;
 
 // ---------------------------------------------------------------------------
@@ -319,22 +321,31 @@ export function renderTracePage(trace, model) {
 <p class="sub">${costSub(cost)}${missing ? ` ${e(missing)} run(s) without a loaded record are not counted.` : ''}</p>
 ${table(STAGE_COST_HEAD, stageCostRows(loaded))}
 ${table(['Run', 'Workflow', { label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Output', num: true }, 'Cost'], loaded.filter((r) => r.llm.length).map((r) => { const c = r.cost ?? sumCosts(r.llm); return [`<a href="${runHref('../', r.run_id)}">${e(r.run_id)}</a>`, e(r.workflow ?? '—'), e(c.calls), e(compact(c.tokens_in)), e(compact(c.tokens_out)), e(costLine(c))]; }))}</details>` : '';
-  return pipelinePage(`Trace ${itemLabel(trace.item)}`, `<p class="crumbs"><a href="../flows.html">Pipelines</a> › ${e(itemTitle(trace.item))}</p><h1>Work-item trace · ${e(itemLabel(trace.item))}</h1>
+  const j = workItemJourney(trace);
+  const gh = itemUrl(trace.item);
+  const actions = trace.runs.length ? table(['Run', 'Workflow', 'Trigger', 'Outcome', 'Started (UTC)', { label: 'Duration', num: true }, 'GitHub'], [...trace.runs].sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0)).map((r) => [
+    r.run ? `<a href="${runHref('../', r.run_id)}">${e(r.run_id)}</a>` : `${e(r.run_id)} <span class="muted">(record not loaded)</span>`, e(r.workflow ?? '—'), e(r.event_name ?? '—'), statusHtml(null, r.outcome), e(time(r.started_at)),
+    e(formatDuration(r.started_at != null && r.completed_at != null ? r.completed_at - r.started_at : null)), r.run?.run_url ? link(r.run.run_url, 'workflow run') : '<span class="muted">not recorded</span>',
+  ])) : emptyCard('No run listed.');
+  const events = loaded.map((run) => `<h3><a href="${runHref('../', run.run_id)}">${e(run.workflow ?? 'Run')} · ${e(run.run_id)}</a> <span class="muted">${e(time(run.started_at))}</span></h3>${keyEvents(run, eventSummary).replace(/href="#ev-/g, `href="${runHref('../', run.run_id)}#ev-`)}`).join('') || emptyCard('No run record loaded.');
+  return pipelinePage(`Trace ${itemLabel(trace.item)}`, `<p class="crumbs"><a href="../flows.html">Pipelines</a> › ${e(itemTitle(trace.item))}</p>
+<div class="page-head"><div><h1>Work-item trace · ${e(itemLabel(trace.item))} ${pill(j.tone, j.label)}</h1><p class="sub">Trace <code>${e(trace.trace_id)}</code>${trace.item?.key ? ` · <code>${e(trace.item.key)}</code>` : ''} · ${e(trace.runs.length)} run(s) · started ${e(time(trace.first_started_at))} UTC</p></div>${gh ? `<a class="button-link" href="${e(gh)}">View on GitHub →</a>` : ''}</div>
 ${nav('../', model.months)}
-<p class="sub">Trace <code>${e(trace.trace_id)}</code>${trace.item?.key ? ` · <code>${e(trace.item.key)}</code>` : ''} · ${e(trace.runs.length)} run(s)</p>
 <div class="tiles">
 <div class="tile"><div class="label">Lead time (first start → last end)</div><div class="value">${e(formatDuration(trace.lead_time_ms))}</div></div>
 <div class="tile"><div class="label">Running</div><div class="value">${e(formatDuration(running))}</div></div>
 <div class="tile"><div class="label">Waiting between runs</div><div class="value">${e(formatDuration(waiting))}</div></div>
 <div class="tile"><div class="label">LLM cost</div><div class="value">${e(costAmount(cost))}</div></div>
 </div>
-${journeyPanel(workItemJourney(trace), '../')}
 ${notes.map((n) => `<p class="note">${e(n)}</p>`).join('')}
-<p class="note">Runs are separate jobs on different runners: spans are placed by their own clocks, so offsets between runs are approximate (ADR-0041 §6).</p>
-${costPanel}
-<h2>Flow history</h2>${flowSteps(trace)}
-<details class="detail-panel"><summary>Full trace · Waterfall, spans, models & tokens</summary><h2>Waterfall</h2>
-${waterfall(rows, { t0: trace.first_started_at, t1: trace.last_completed_at })}</details>`, 2);
+<div data-tabs>
+<section data-tab="Overview" id="tab-overview"><h2>Overview</h2><div class="trace-overview">${journeyPanel(j, '../')}<aside>${keyInformation(trace, j, cost)}</aside></div></section>
+<section data-tab="Timeline" id="tab-timeline"><h2>Flow history</h2><p class="note">Runs are separate jobs on different runners: spans are placed by their own clocks, so offsets between runs are approximate (ADR-0041 §6).</p>${flowSteps(trace)}</section>
+<section data-tab="LLM calls" id="tab-llm"><h2>LLM calls</h2>${costPanel || emptyCard('No LLM call recorded for this work item.')}</section>
+<section data-tab="Events" id="tab-events"><h2>Key events</h2><p class="sub">Decisions, warnings, errors and side effects of each run; the full journal is on each run page.</p>${events}</section>
+<section data-tab="GitHub Actions" id="tab-actions"><h2>GitHub Actions runs</h2>${actions}</section>
+<section data-tab="Traces" id="tab-traces"><h2>Waterfall</h2>${waterfall(rows, { t0: trace.first_started_at, t1: trace.last_completed_at })}</section>
+</div>${TABS_SCRIPT}`, 2);
 }
 
 export function renderTraceIndex(model) {
@@ -559,7 +570,9 @@ ${sections || emptyCard('No LLM call or eval run recorded yet.')}`, 1);
 export function buildPipelineSite({ model, health, models, generatedAt = null, console: ctx = consoleContext(model) }) {
   const files = {
     'pipeline/diagnostics.html': pipelinePage('Diagnostics', `${nav('', model.months)}${diagnosticsBody(ctx, '')}`, 1),
-    'pipeline/flows.html': pipelinePage('Pipelines', `${nav('', model.months)}${flowDashboard(model)}${FLOW_SCRIPT}`, 1).replace('</style>', FLOW_STYLE + '</style>'),
+    'pipeline/flows.html': pipelinePage('Pipelines', `${nav('', model.months)}${flowDashboard(model)}${FLOW_SCRIPT}`, 1, pipelineFacets(ctx.journeys)),
+    // One stylesheet for the console components of every page (pipeline pages and the home page).
+    'pipeline/console.css': BASE_STYLE + DASHBOARD_STYLE + CONSOLE_STYLE + FLOW_STYLE + OVERVIEW_STYLE,
     'pipeline/index.html': renderFeedIndex(model, { generatedAt }),
     'pipeline/traces/index.html': renderTraceIndex(model),
     'pipeline/health.html': renderHealth(health, model),

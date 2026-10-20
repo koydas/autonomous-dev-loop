@@ -6,14 +6,14 @@
 import { escapeHtml as e } from './eval_site.mjs';
 import { safeUrl } from './pipeline_model.mjs';
 import { journeys as journeysOf, STATES, STEPS } from './pipeline_journey.mjs';
-import { computeOverview, DEFINITIONS, RUN_CLASSES } from './pipeline_kpis.mjs';
+import { computeOverview, computeWindows, DEFINITIONS, RUN_CLASSES } from './pipeline_kpis.mjs';
 import { diagnose, RULES } from './pipeline_diagnostics.mjs';
 import { costAmount, costBasis } from './llm_cost.mjs';
 
 /** Everything the console views render, computed once per build. */
 export function consoleContext(model) {
   const journeys = journeysOf(model);
-  return { journeys, overview: computeOverview({ model, journeys }), diagnosis: diagnose({ model, journeys }) };
+  return { journeys, traces: model?.traces ?? [], overview: computeOverview({ model, journeys }), windows: computeWindows({ model, journeys }), diagnosis: diagnose({ model, journeys }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -44,8 +44,7 @@ export function duration(v) {
 // ---------------------------------------------------------------------------
 
 export const CONSOLE_STYLE = `
-:root { --warn-ink:#8a5300; --bad-bg:color-mix(in srgb, var(--critical) 9%, var(--surface)); --warn-bg:color-mix(in srgb, var(--warning) 14%, var(--surface)); --good-bg:color-mix(in srgb, var(--good) 9%, var(--surface)); }
-@media(prefers-color-scheme:dark) { :root:where(:not([data-theme="light"])) { --warn-ink:#f2c063; --warning:#e0a325; } }
+:root { --bad-bg:color-mix(in srgb, var(--critical) 13%, var(--surface)); --warn-bg:color-mix(in srgb, var(--warning) 14%, var(--surface)); --good-bg:color-mix(in srgb, var(--good) 12%, var(--surface)); }
 .tone-good { --tone:var(--good); } .tone-bad { --tone:var(--critical); } .tone-warn { --tone:var(--warn-ink); } .tone-neutral { --tone:var(--ink-2); } .tone-unknown { --tone:var(--muted); }
 .tone-mark { display:inline-grid; place-items:center; width:20px; height:20px; border-radius:50%; border:1.5px solid var(--tone); color:var(--tone); font-size:12px; font-weight:800; line-height:1; flex:none; }
 .tone-unknown .tone-mark,.tone-mark.tone-unknown { border-style:dashed; }
@@ -103,6 +102,20 @@ export const CONSOLE_STYLE = `
 .filterbar label.grow { flex:1; min-width:180px; }
 .filterbar input,.filterbar select { min-height:40px; padding:6px 10px; border:1px solid var(--border); border-radius:8px; font:inherit; color:var(--ink); background:var(--surface); width:100%; }
 .filterbar [data-filter-count] { font-size:13px; color:var(--muted); margin-left:auto; }
+.tablist { display:flex; gap:2px; border-bottom:1px solid var(--border); margin:18px 0 0; overflow-x:auto; }
+.tab { border:0; border-radius:0; background:none; min-height:40px; padding:8px 14px; color:var(--ink-2); font-weight:600; box-shadow:inset 0 -2px 0 transparent; white-space:nowrap; }
+.tab:hover { background:var(--surface); }
+.tab[aria-selected="true"] { color:var(--ink); box-shadow:inset 0 -2px 0 var(--accent); }
+[data-tabs] > section[role="tabpanel"] > h2:first-child { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.trace-overview { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:16px; align-items:start; }
+.trace-overview .key-info { margin-top:16px; }
+@media(max-width:1000px) { .trace-overview { grid-template-columns:1fr; } }
+.finding-meta { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin:6px 0 0; }
+.chip-row { display:flex; flex-wrap:wrap; gap:6px; margin:14px 0 10px; }
+.chip { min-height:30px; padding:3px 12px; border-radius:16px; font-size:12px; font-weight:600; color:var(--ink-2); background:var(--surface); }
+.chip .n { color:var(--muted); font-variant-numeric:tabular-nums; }
+.chip[aria-pressed="true"] { color:var(--ink); background:var(--accent-soft); border-color:var(--accent); }
+@media(max-width:760px) { .status-banner { padding:12px 14px; gap:10px; } .status-banner h2 { font-size:16px; } .status-banner .tone-mark { width:26px; height:26px; font-size:14px; } .nav2 { flex-wrap:nowrap; overflow-x:auto; white-space:nowrap; } .finding { padding:14px; } .finding h2 { font-size:16px; } }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .crumbs { font-size:13px; color:var(--muted); margin:0 0 8px; }
 .crumbs a { color:var(--ink-2); }
@@ -164,9 +177,14 @@ export const FILTER_SCRIPT = `<script>
    const items = [...box.querySelectorAll('[data-filter-item]')];
    const want = controls.map(c => [c.dataset.filterKey, c.value.trim().toLowerCase()]).filter(([, v]) => v);
    const ref = Number(box.dataset.ref) || 0;
+   // Sidebar facets: a group with every box checked filters nothing; otherwise one checked token must match.
+   const facets = {};
+   for (const f of document.querySelectorAll('[data-facet]')) (facets[f.dataset.facet] = facets[f.dataset.facet] || []).push(f);
+   const groups = Object.entries(facets).filter(([, boxes]) => !boxes.every(b => b.checked));
    let n = 0;
    for (const it of items) {
-    const ok = want.every(([k, v]) => {
+    const tokens = (k) => String(it.dataset[k] || '').split(' ');
+    const ok = groups.every(([k, boxes]) => boxes.some(b => b.checked && tokens(k).includes(b.value))) && want.every(([k, v]) => {
      if (k === 'q') return it.textContent.toLowerCase().includes(v);
      if (k === 'period') return ref - (Number(it.dataset.last) || 0) <= Number(v) * 86400000;
      return String(it.dataset[k] || '').toLowerCase().split(' ').includes(v);
@@ -180,31 +198,30 @@ export const FILTER_SCRIPT = `<script>
    const qs = next.toString();
    try { history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash); } catch {}
   };
-  box.addEventListener('input', apply); box.addEventListener('change', apply); box.addEventListener('adl:refilter', apply); apply();
+  // Chips set the control they name (data-chip = its filter key) and show which value is active.
+  const chips = [...box.querySelectorAll('[data-chip]')];
+  const press = () => { for (const c of chips) { const ctl = controls.find(x => x.dataset.filterKey === c.dataset.chip); c.setAttribute('aria-pressed', String((ctl?.value || '') === c.dataset.chipValue)); } };
+  for (const c of chips) c.addEventListener('click', () => { const ctl = controls.find(x => x.dataset.filterKey === c.dataset.chip); if (ctl) { ctl.value = c.dataset.chipValue; ctl.dispatchEvent(new Event('change', { bubbles: true })); } });
+  box.addEventListener('input', apply); box.addEventListener('change', apply); box.addEventListener('change', press); box.addEventListener('adl:refilter', apply); apply(); press();
  }
+ document.addEventListener('change', (ev) => { if (ev.target.matches?.('[data-facet]')) for (const b of document.querySelectorAll('[data-filter-scope]')) b.dispatchEvent(new Event('adl:refilter')); });
 })();
 </script>`;
 
-// Overview: items listed as needing a person are rechecked against GitHub; a merged or closed PR resolves
-// the row (shown, dimmed), and the count says how many the live check resolved.
-const OVERVIEW_SCRIPT = `<script>
+// Tabs: each [data-tabs] > section[data-tab] becomes a tab panel; without JavaScript every section shows.
+// The open tab is kept in the URL hash (#tab-…).
+export const TABS_SCRIPT = `<script>
 (() => {
- const box = document.querySelector('[data-attention]'); if (!box) return;
- const status = box.querySelector('[data-attention-status]'), count = document.querySelector('[data-attention-count]');
- adlPullStates().then(({ pulls }) => {
-  let resolved = 0;
-  const rows = [...box.querySelectorAll('[data-attention-item]')];
-  const claimed = new Set((box.dataset.claimed || '').split(',').filter(Boolean).map(Number));
-  for (const row of rows) {
-   const prs = (row.dataset.prs || '').split(',').filter(Boolean).map(Number);
-   const m = adlMergeOf(prs, row.dataset.issue || '', pulls, claimed);
-   if (m.state !== 'merged' && m.state !== 'closed') continue;
-   resolved++; row.dataset.resolved = '';
-   const note = document.createElement('p'); note.textContent = (m.state === 'merged' ? 'Merged ' + m.pr.merged_at : 'PR closed without merge') + ' (PR #' + m.pr.number + '): no longer pending.'; row.querySelector('div').append(note);
-  }
-  if (count) count.textContent = String(rows.length - resolved);
-  status.textContent = resolved ? resolved + ' of ' + rows.length + ' resolved by a merge or close on GitHub (checked live).' : 'Checked live against GitHub: none merged or closed since.';
- }).catch(err => { status.textContent = 'Live merge check unavailable (' + err.message + '): counts are from the records only.'; });
+ for (const box of document.querySelectorAll('[data-tabs]')) {
+  const panels = [...box.querySelectorAll(':scope > section[data-tab]')];
+  const list = document.createElement('div'); list.className = 'tablist'; list.setAttribute('role', 'tablist');
+  const tabs = panels.map((p) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'tab'; b.setAttribute('role', 'tab'); b.textContent = p.dataset.tab; b.setAttribute('aria-controls', p.id); p.setAttribute('role', 'tabpanel'); list.append(b); return b; });
+  const show = (i, push) => { panels.forEach((p, k) => { p.hidden = k !== i; tabs[k].setAttribute('aria-selected', String(k === i)); tabs[k].tabIndex = k === i ? 0 : -1; }); if (push) try { history.replaceState(null, '', '#' + panels[i].id); } catch {} };
+  tabs.forEach((t, i) => { t.addEventListener('click', () => show(i, true)); t.addEventListener('keydown', (ev) => { const d = ev.key === 'ArrowRight' ? 1 : ev.key === 'ArrowLeft' ? -1 : 0; if (d) { const n = (i + d + tabs.length) % tabs.length; show(n, true); tabs[n].focus(); } }); });
+  box.prepend(list);
+  const start = panels.findIndex((p) => '#' + p.id === location.hash);
+  show(start < 0 ? 0 : start, false);
+ }
 })();
 </script>`;
 
@@ -228,48 +245,13 @@ export function statusBanner(diagnosis, overview, root) {
   return `<div class="status-banner tone-${STATUS_TONE[status]}" role="status">${toneMark(STATUS_TONE[status])}<div><h2>${e(STATUS_TEXT[status](status === 'critical' ? findings.filter((f) => f.severity === 'critical').length : serious))}</h2><p>${e(scope)} · ${e(gaps.length)} data gap(s) limit what the rules can see${status === 'ok' ? ': no finding is not proof of health' : ''}.</p></div><a class="button-link" href="${root}diagnostics.html">Open diagnostics →</a></div>`;
 }
 
-const kpi = (id, { value, note, href, tone = 'neutral' }) => `<a class="kpi tone-${tone}" href="${e(href)}" data-kpi="${id}"><span class="kpi-label">${e(DEFINITIONS[id].label)}</span><span class="kpi-value"${id === 'needs_attention' ? ' data-attention-count' : ''}>${e(value)}</span><span class="kpi-note">${e(note)}</span></a>`;
-
-export function kpiCards(o, d, root) {
-  const has = (id) => d.findings.some((f) => f.id === id);
-  const r = o.reviews;
-  const cards = [
-    kpi('needs_attention', { value: String(o.items.needs_attention), note: `of ${o.window.items} work item(s) · last recorded state`, href: `${root}flows.html?state=attention`, tone: o.items.needs_attention ? 'warn' : o.window.items ? 'good' : 'unknown' }),
-    kpi('runs_failed', { value: String(o.runs.failed), note: `of ${o.window.runs} run(s) · ${o.runs.adverse} with an adverse decision`, href: `${root}index.html?result=failed#executions`, tone: o.runs.failed ? 'bad' : o.window.runs ? 'good' : 'unknown' }),
-    kpi('approve_rate', { value: pct(r.approve_rate), note: r.verdicts ? `${r.approve} of ${r.verdicts} verdicts · ${r.withheld} withheld · ${r.request_changes} changes requested` : 'No verdict recorded', href: has('review-withheld') ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, tone: r.approve_rate == null ? 'unknown' : r.approve_rate < 0.5 ? 'warn' : 'good' }),
-    kpi('recovered', { value: o.recovery.troubled ? `${o.recovery.recovered} / ${o.recovery.troubled}` : '—', note: o.recovery.troubled ? 'steps with a failed or adverse attempt that ended moving forward' : 'No failed or adverse attempt recorded', href: `${root}flows.html?problem=any`, tone: o.recovery.troubled ? (o.recovery.recovered ? 'neutral' : 'warn') : 'unknown' }),
-    kpi('lead_time', { value: duration(o.lead_time.p50), note: o.lead_time.n ? `median of ${o.lead_time.n} item(s) · p90 ${duration(o.lead_time.p90)} · ${pct(o.running_share.value)} running` : 'No lead time recorded', href: `${root}health.html#performance`, tone: o.lead_time.n ? 'neutral' : 'unknown' }),
-    kpi('llm_cost', { value: costAmount(o.cost), note: o.cost.calls ? `${o.cost.calls} call(s) · ${costBasis(o.cost) ?? 'free tier only'} · list price` : 'No LLM call recorded', href: `${root}health.html#cost`, tone: o.cost.calls ? 'neutral' : 'unknown' }),
-  ];
-  return `<div class="kpi-grid">${cards.join('')}</div>`;
-}
-
-export function topProblems(d, root, limit = 4) {
-  const list = d.findings.slice(0, limit).map((f) => `<li>${toneMark(SEVERITY_TONE[f.severity])}<div><a href="${root}diagnostics.html#${e(f.id)}"><strong>${e(f.title)}</strong></a><p>${e(f.impact)} · ${e(f.frequency)}</p></div></li>`).join('');
-  const more = d.findings.length > limit ? `<a href="${root}diagnostics.html">All ${d.findings.length} findings →</a>` : `<a href="${root}diagnostics.html">Diagnostics →</a>`;
-  return `<section class="panel"><h3>Main problems ${more}</h3>${list ? `<ul class="problem-list">${list}</ul>` : `<p class="muted">No rule fired on the recorded data (${d.gaps.length} data gap(s)).</p>`}</section>`;
-}
-
-const STATE_ORDER = ['failed', 'escalated', 'withheld', 'rejected', 'changes_requested', 'approved', 'in_progress', 'no_data'];
-
-export function stateBreakdown(o, journeys, root) {
-  const total = o.window.items;
-  const bar = total ? `<div class="stackbar" role="img" aria-label="${e(STATE_ORDER.filter((s) => o.items.by_state[s]).map((s) => `${STATES[s].label} ${o.items.by_state[s]}`).join(', '))}">${STATE_ORDER.filter((s) => o.items.by_state[s]).map((s) => `<span class="tone-${STATES[s].tone}" style="width:${((o.items.by_state[s] / total) * 100).toFixed(2)}%"></span>`).join('')}</div>` : '';
-  const rows = STATE_ORDER.filter((s) => o.items.by_state[s]).map((s) => `<li>${toneMark(STATES[s].tone)}<a href="${root}flows.html?state=${s}">${e(STATES[s].label)}</a><span class="count">${e(o.items.by_state[s])}</span></li>`).join('');
-  const row = (j) => `<li data-attention-item data-prs="${j.prs.join(',')}" data-issue="${j.issue ?? ''}">${toneMark(j.tone)}<div><a href="${root}traces/${encodeURIComponent(j.trace_id)}.html"><strong>${e(itemTitle(j.item))}</strong></a> · ${e(j.label)}<p>${j.problem_steps.length ? `Steps with problems: ${e(j.problem_steps.join(', '))} · ` : ''}last activity ${e(time(j.last_activity))}</p></div></li>`;
-  const waiting = journeys.filter((j) => j.attention);
-  const attention = waiting.length ? `<ul class="state-list">${waiting.slice(0, 6).map(row).join('')}</ul>${waiting.length > 6 ? `<details><summary>${e(waiting.length - 6)} more</summary><ul class="state-list">${waiting.slice(6).map(row).join('')}</ul></details>` : ''}` : '';
-  return `<section class="panel"><h3>Work items by last recorded state <a href="${root}flows.html">Pipelines →</a></h3>${bar}${rows ? `<ul class="state-list">${rows}</ul>` : '<p class="muted">No work-item trace recorded.</p>'}</section>
-<section class="panel" data-attention data-claimed="${[...new Set(journeys.flatMap((j) => j.prs))].join(',')}"><h3>Waiting on a person <a href="${root}flows.html?state=attention">All →</a></h3><p class="trend-note" data-attention-status role="status">Merge status is checked live against GitHub when JavaScript and API access are available.</p>${attention || '<p class="muted">No work item waits on a person according to the records.</p>'}</section>`;
-}
-
 const CLASS_TONE = { failed: 'bad', adverse: 'warn', progressed: 'good', neutral: 'unknown' };
 const CLASS_LABEL = { failed: 'failed', adverse: 'adverse decision', progressed: 'moved forward', neutral: 'skip / no decision' };
 
 /** Runs per day stacked by class (inline SVG, values in a table below). */
-export function trendChart(trend) {
+export function trendChart(trend, { W = 720, H = 180 } = {}) {
   if (!trend.days.length) return '<p class="muted">No dated run recorded.</p>';
-  const W = 720, H = 180, L = 32, R = 8, T = 10, B = 26;
+  const L = 32, R = 8, T = 10, B = 26;
   const top = Math.max(1, ...trend.days.map((d) => d.total));
   const slot = (W - L - R) / trend.days.length;
   const bw = Math.min(28, slot - 6);
@@ -290,27 +272,9 @@ export function trendChart(trend) {
   return `${legend}<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Runs per day by class over ${trend.days.length} days; values in the table"><line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--axis)"/><text x="${L - 6}" y="${y(top) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${top}</text>${cols}</svg></div><details><summary>Values</summary><div class="table-wrap"><table><thead><tr><th>Day</th>${RUN_CLASSES.map((c) => `<th class="num">${e(CLASS_LABEL[c])}</th>`).join('')}<th class="num">Total</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
 }
 
-function comparison(trend) {
-  const { current: c, previous: p } = trend;
-  if (!c) return '';
-  const side = (s) => `${s.runs} run(s), ${s.failed} failed, ${s.adverse} adverse, approval ${s.verdicts ? `${pct(s.approve / s.verdicts)} (n=${s.verdicts})` : '— (no verdict)'}`;
-  return `<p class="trend-note"><strong>Latest 7 days:</strong> ${e(side(c))}. <strong>7 days before:</strong> ${p.runs ? e(side(p)) : 'no run recorded — not comparable'}.</p>`;
-}
-
 export function definitionsPanel() {
   const rows = Object.entries(DEFINITIONS).map(([id, d]) => `<tr id="def-${id}"><th>${e(d.label)}</th><td>${e(d.source)}</td><td>${e(d.method)}</td><td>${e(d.period)}</td><td>${e(d.population)}</td><td>${e(d.limits)}</td></tr>`).join('');
   return `<details class="detail-panel" id="definitions"><summary>Metric definitions · source, method, period, population, limits</summary><div class="table-wrap"><table><thead><tr><th>Indicator</th><th>Source</th><th>Method</th><th>Period</th><th>Population</th><th>Known limits</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
-}
-
-/** The overview block: status, indicators, problems, states, trend, definitions. root: path to pipeline/. */
-export function consoleOverview(ctx, root = '') {
-  const { overview: o, diagnosis: d, journeys } = ctx;
-  return `<section class="console" aria-label="System health">
-${statusBanner(d, o, root)}
-${kpiCards(o, d, root)}
-<div class="console-grid"><div>${topProblems(d, root)}<section class="panel"><h3>Runs per day <a href="${root}index.html#executions">Executions →</a></h3>${trendChart(o.trend)}${comparison(o.trend)}</section></div><div>${stateBreakdown(o, journeys, root)}</div></div>
-${definitionsPanel()}
-</section>${PR_STATES_SCRIPT}${OVERVIEW_SCRIPT}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +290,9 @@ function evidenceTable(f, root) {
 
 export function findingCard(f, root) {
   const tone = SEVERITY_TONE[f.severity];
-  return `<article class="finding tone-${tone}" id="${e(f.id)}" data-filter-item data-severity="${e(f.severity)}" data-category="${e(f.category.toLowerCase().replace(/[^a-z0-9]+/g, '-'))}"><header>${pill(tone, f.severity)}<span class="eyebrow">${e(f.category)}</span><h2>${e(f.title)}</h2></header>
+  const since = f.evidence.map((x) => x.ts).filter((t) => typeof t === 'number');
+  const meta = `<p class="finding-meta"><span>Affects ${e(f.runs.length)} run(s)${f.items.length ? ` · ${e(f.items.length)} item(s)` : ''}</span>${since.length ? `<span>Since <span data-ts="${Math.min(...since)}">${e(time(Math.min(...since)))} UTC</span></span>` : ''}</p>`;
+  return `<article class="finding tone-${tone}" id="${e(f.id)}" data-filter-item data-severity="${e(f.severity)}" data-category="${e(f.category.toLowerCase().replace(/[^a-z0-9]+/g, '-'))}"><header>${pill(tone, f.severity)}<span class="eyebrow">${e(f.category)}</span><h2>${e(f.title)}</h2></header>${meta}
 <dl class="facts"><div class="wide"><dt>Observed</dt><dd>${e(f.fact)}</dd></div><div><dt>Impact</dt><dd>${e(f.impact)}</dd></div><div><dt>Frequency</dt><dd>${e(f.frequency)}${f.runs.length ? ` · ${e(f.runs.length)} run(s) affected` : ''}</dd></div>${f.hypothesis ? `<div class="wide hypothesis"><dt>Hypothesis</dt><dd>${e(f.hypothesis)}</dd></div>` : ''}</dl>
 ${evidenceTable(f, root)}${f.link ? `<p><a class="button-link" href="${root}${e(f.link)}">Investigate →</a></p>` : ''}</article>`;
 }
@@ -335,12 +301,13 @@ export function diagnosticsBody(ctx, root = '') {
   const { diagnosis: d, overview: o } = ctx;
   const categories = [...new Set(d.findings.map((f) => f.category))];
   const counts = ['critical', 'warning', 'info'].map((s) => `${d.findings.filter((f) => f.severity === s).length} ${s}`).join(' · ');
-  const select = (key, label, values) => `<label>${e(label)}<select data-filter-key="${key}"><option value="">All</option>${values.map(([v, l]) => `<option value="${e(v)}">${e(l)}</option>`).join('')}</select></label>`;
+  // The severity select is driven by the chips above it: kept for the URL and the filter, not shown.
+  const select = (key, label, values) => `<label${key === 'severity' ? ' hidden' : ''}>${e(label)}<select data-filter-key="${key}"><option value="">All</option>${values.map(([v, l]) => `<option value="${e(v)}">${e(l)}</option>`).join('')}</select></label>`;
   const gaps = d.gaps.map((g) => `<li>${pill('unknown', 'insufficient data')} <strong>${e(g.title)}</strong><p class="muted">${e(g.detail)}</p></li>`).join('');
   return `<h1>Diagnostics</h1>
 <p class="sub">Problems detected by fixed rules over ${e(o.window.runs)} recorded run(s) and ${e(o.window.items)} work item(s) — no LLM involved. Each finding separates what was <strong>observed</strong> from a <strong>hypothesis</strong> about it, and lists the runs it was computed from.</p>
 ${statusBanner(d, o, root).replace(/<a class="button-link"[^>]*>[^<]*<\/a>/, '')}
-<section data-filter-scope><div class="filterbar">${select('severity', 'Severity', [['critical', 'Critical'], ['warning', 'Warning'], ['info', 'Info']])}${select('category', 'Category', categories.map((c) => [c.toLowerCase().replace(/[^a-z0-9]+/g, '-'), c]))}<span data-filter-count role="status">${e(counts)}</span></div>
+<section data-filter-scope><div class="chip-row" role="group" aria-label="Severity">${[['', 'All'], ['critical', 'Critical'], ['warning', 'Warning'], ['info', 'Info']].map(([v, l]) => `<button type="button" class="chip" data-chip="severity" data-chip-value="${v}">${l} <span class="n">${v ? d.findings.filter((f) => f.severity === v).length : d.findings.length}</span></button>`).join('')}</div><div class="filterbar">${select('severity', 'Severity', [['critical', 'Critical'], ['warning', 'Warning'], ['info', 'Info']])}${select('category', 'Category', categories.map((c) => [c.toLowerCase().replace(/[^a-z0-9]+/g, '-'), c]))}<span data-filter-count role="status">${e(counts)}</span></div>
 <p data-filter-empty class="muted" hidden>No finding matches these filters.</p>
 ${d.findings.map((f) => findingCard(f, root)).join('') || '<div class="panel"><p>No rule fired on the recorded data. That is not proof of health: see the data gaps below.</p></div>'}</section>
 <section class="panel" id="data-gaps"><h3>Data gaps · what the records cannot tell</h3><ul class="gap-list">${gaps || '<li class="muted">None detected.</li>'}</ul></section>
@@ -362,7 +329,7 @@ export function journeyPanel(j, root = '../') {
     return `<li class="tone-${tone}"><strong>${toneMark(tone)} ${e(s.name)}</strong><p>${final}</p>${history}${strip ? `<div class="attempt-strip" aria-label="Attempts in order">${strip}</div>` : ''}</li>`;
   }).join('');
   const esc = j.escalations.map((x) => `<li>${toneMark('warn')}<div><strong>${e(x.event)}</strong>${x.reason ? ` · ${e(x.reason)}` : ''} · ${e(time(x.ts))} · <a href="${runHref(root, x.run_id)}">run ${e(x.run_id)}</a>${x.url ? ` · <a href="${e(x.url)}">GitHub</a>` : ''}</div></li>`).join('');
-  return `<section class="panel"><h3>Journey · ${pill(j.tone, j.label)}</h3><ol class="journey" aria-label="Pipeline steps">${steps}</ol><p class="trend-note">Merge is not journaled: check the PR on GitHub${j.prs.length ? ` (${j.prs.map((n) => `<a href="https://github.com/koydas/autonomous-dev-loop/pull/${n}">#${n}</a>`).join(', ')})` : ''} or the Pipelines page.</p>${esc ? `<h3>Interventions</h3><ul class="problem-list">${esc}</ul>` : ''}</section>`;
+  return `<section class="panel"><h3>Journey ${pill(j.tone, j.label)}</h3><ol class="journey" aria-label="Pipeline steps">${steps}</ol><p class="trend-note">Merge is not journaled: check the PR on GitHub${j.prs.length ? ` (${j.prs.map((n) => `<a href="https://github.com/koydas/autonomous-dev-loop/pull/${n}">#${n}</a>`).join(', ')})` : ''} or the Pipelines page.</p>${esc ? `<h3>Interventions</h3><ul class="problem-list">${esc}</ul>` : ''}</section>`;
 }
 
 const KEY_EVENT = /(\.verdict|\.skipped|\.escalated|\.push|\.pass|\.fail|\.complete|\.error|\.max_attempts_reached|\.pr_operation|\.comment_posted|^llm_fallback|^llm_provider_error|^llm_call_failed)$/;

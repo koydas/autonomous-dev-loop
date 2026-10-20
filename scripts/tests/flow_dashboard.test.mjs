@@ -122,7 +122,7 @@ const staged = (id, stage, outcome, started_at) => ({ ...run, run_id: id, starte
 
 test('cards start collapsed with title and step icons in the summary (#236)', () => {
  const html = flowDashboard({ traces: [trace([staged('1-1', 'issue_validation', 'success', 1), staged('2-1', 'code_gen', 'failed', 2), staged('3-1', 'autofix', 'skipped', 3)])] });
- assert.match(html, /<details class="flow-details"><summary class="flow-summary"><h2 data-flow-title>issue #7<\/h2><span class="flow-status">/);
+ assert.match(html, /<details class="flow-details"><summary class="flow-summary"><span class="col-title"><h2 data-flow-title>Issue #7<\/h2><span class="live-title muted" data-live-title><\/span><\/span><span class="col-status">.*?<\/span><span class="flow-status col-stages">/);
  assert.doesNotMatch(html, /<details class="flow-details" open/);
  assert.deepEqual(statuses(html.slice(0, html.indexOf('</summary>'))), [
   ['success', 'Validation: success'], ['failed', 'Code generation: failed'], ['not-recorded', 'PR preparation: not recorded'],
@@ -132,7 +132,7 @@ test('cards start collapsed with title and step icons in the summary (#236)', ()
  assert.match(html, /class="flow-status-icon failed"[^>]*>✗</);
  assert.match(html, /class="flow-status-icon not-recorded"[^>]*>○</);
  assert.match(html, /class="flow-status-icon skipped"[^>]*>⊘</);
- assert.match(html, /<\/summary><p data-merge>/);
+ assert.match(html, /<\/summary>\n<div class="pl-detail">.*<span data-merge>Merge status: not checked<\/span>/s);
  assert.match(html, /<\/ol>.*<\/details><\/article>/s);
 });
 
@@ -181,7 +181,7 @@ test('client script turns the merge icon to success only on a confirmed merge (#
  assert.equal(m([{ number: 7, state: 'closed', merged_at: 'x' }, { number: 8, state: 'open' }], [7, 8]), 'merged');
  assert.equal(m([]), 'unknown');
  assert.match(FLOW_STYLE, /\.flow-status \{ display:flex; flex-wrap:wrap;/);
- assert.match(FLOW_STYLE, /\.flow-node summary, \.flow-summary \{ min-height:44px;/);
+ assert.match(FLOW_STYLE, /\.flow-summary \{ list-style:none; min-height:52px;/);
 });
 
 test('each step shows its own LLM cost, each execution its amount, the summary a cost chip', () => {
@@ -191,8 +191,8 @@ test('each step shows its own LLM cost, each execution its amount, the summary a
  const autofix = { ...run, run_id: '202-1', stages: [{ stage: 'autofix' }], llm: [{ ...opus, tokens_in: 10_000, tokens_out: 0 }] };
  const html = flowDashboard({ traces: [trace([review, review2, autofix])] });
  assert.match(html, /<span class="flow-cost-chip"[^>]*>\$0\.0880<\/span>/);
- assert.match(html, /<strong>Review<\/strong><p>2 execution\(s\)<\/p><p class="flow-step-cost" data-step-cost>LLM: \$0\.0480 USD · 2 call\(s\) · 2\.0k in \/ 2\.0k out · \$0\.0240 per execution<\/p>/);
- assert.match(html, /<strong>Auto-fix<\/strong><p>1 execution\(s\)<\/p><p class="flow-step-cost" data-step-cost>LLM: \$0\.0400 USD · 1 call\(s\) · 10\.0k in \/ 0 out<\/p>/, 'a call without a stage goes to the run\'s only stage');
+ assert.match(html, /<strong>Review<\/strong><\/span><span class="box-time">[^<]*<\/span><span class="box-status tone-\w+">[^<]*<\/span><p>2 execution\(s\)<\/p><p class="flow-step-cost" data-step-cost>LLM: \$0\.0480 USD · 2 call\(s\) · 2\.0k in \/ 2\.0k out · \$0\.0240 per execution<\/p>/);
+ assert.match(html, /<strong>Auto-fix<\/strong><\/span><span class="box-time">[^<]*<\/span><span class="box-status tone-\w+">[^<]*<\/span><p>1 execution\(s\)<\/p><p class="flow-step-cost" data-step-cost>LLM: \$0\.0400 USD · 1 call\(s\) · 10\.0k in \/ 0 out<\/p>/, 'a call without a stage goes to the run\'s only stage');
  assert.match(html, /partial · 1\.2 s · \$0\.0240<\/summary>/);
  assert.match(html, /1000 input \/ 1000 output tokens \(measured\) · \$0\.0240/);
  assert.match(html, /10000 input \/ 0 output tokens \(estimated\) · \$0\.0400/);
@@ -248,8 +248,8 @@ test('cards carry the filter attributes; the filter bar and URL-kept filters are
  const t = trace([{ ...staged('1-1', 'review', 'success', Date.parse('2026-10-20T00:00:00Z')), llm: [{ provider: 'groq', model: 'm', tokens_in: 1, tokens_out: 1 }] }]);
  t.runs[0].completed_at = Date.parse('2026-10-20T00:00:10Z');
  const html = flowDashboard({ traces: [t] });
- assert.match(html, /data-kind="issue" data-problem="" data-provider="groq" data-last="1792454410000"/);
- assert.match(html, /<section data-flow-dashboard data-filter-scope data-ref="1792454410000">/);
+ assert.match(html, /data-kind="issue" data-problem="" data-provider="groq" data-stage="review" data-last="1792454410000"/);
+ assert.match(html, /<section data-flow-dashboard data-filter-scope data-ref="1792454410000" data-append-merged>/);
  for (const key of ['q', 'state', 'problem', 'kind', 'provider', 'period']) assert.ok(html.includes(`data-filter-key="${key}"`), key);
  assert.match(html, /<option value="groq">groq<\/option>/);
  assert.match(html, /<option value="merged">Merged \(live\)<\/option>/);
@@ -258,8 +258,8 @@ test('cards carry the filter attributes; the filter bar and URL-kept filters are
  const pr = trace([staged('1-1', 'review', 'success', 1)]);
  pr.item = { kind: 'pr', number: 5 };
  const prHtml = flowDashboard({ traces: [pr] });
- assert.match(prHtml, /<strong>Validation<\/strong><p>No linked issue: not part of this flow<\/p>/);
- assert.match(prHtml, /<strong>Auto-fix<\/strong><p>Not triggered: no REQUEST_CHANGES verdict recorded<\/p>/);
+ assert.match(prHtml, /<strong>Validation<\/strong><\/span><p>No linked issue: not part of this flow<\/p>/);
+ assert.match(prHtml, /<strong>Auto-fix<\/strong><\/span><p>Not triggered: no REQUEST_CHANGES verdict recorded<\/p>/);
 });
 
 test('escalations are surfaced on the card with their comment link', () => {
@@ -267,4 +267,29 @@ test('escalations are surfaced on the card with their comment link', () => {
  const html = flowDashboard({ traces: [trace([esc])] });
  assert.match(html, /Escalated to a human: autofix\.escalated \(no changes\) · <a href="https:\/\/github\.com\/koydas\/autonomous-dev-loop\/pull\/9#c">comment<\/a>/);
  assert.match(html, /data-state="escalated attention"/);
+});
+
+test('pipeline list: newest rows first with a limit, links under the given root; sidebar facets with counts', async () => {
+ const { pipelineList, pipelineFacets, keyInformation } = await import('../lib/flow_dashboard.mjs');
+ const { workItemJourney } = await import('../lib/pipeline_journey.mjs');
+ const a = trace([staged('1-1', 'review', 'success', 1)]);
+ const b = { ...trace([staged('2-1', 'review', 'failed', 2)]), trace_id: 'b'.repeat(32), item: { kind: 'pr', number: 8 } };
+ const html = pipelineList([a, b], { root: 'pipeline/', limit: 1, toolbar: '<div id="tb"></div>' });
+ assert.equal((html.match(/<article class="flow-card/g) ?? []).length, 1);
+ assert.match(html, /<div id="tb"><\/div>/);
+ assert.match(html, /href="pipeline\/runs\/1-1\.html"/);
+ assert.match(html, /href="pipeline\/traces\/a{32}\.html">Full chronological flow/);
+ assert.doesNotMatch(html, /data-append-merged|<template/, 'only the Pipelines page appends merged PRs');
+ assert.match(pipelineList([]), /No recorded flows yet/);
+ const facets = pipelineFacets([a, b].map(workItemJourney));
+ assert.match(facets, /<input type="checkbox" data-facet="state" value="failed" checked>Execution failed<span class="n">1<\/span>/);
+ assert.match(facets, /data-facet="stage" value="review" checked>Review<span class="n">2<\/span>/);
+ assert.match(facets, /data-facet="stage" value="issue_validation" checked>Validation<span class="n">0<\/span>/);
+ assert.match(facets, /data-facet="provider" value="none" checked>No LLM call<span class="n">2<\/span>/);
+ assert.match(facets, /not to the indicators/);
+ const info = keyInformation(a, workItemJourney(a), { calls: 0 });
+ assert.match(info, /<dt>Issue<\/dt><dd><a href="https:\/\/github\.com\/koydas\/autonomous-dev-loop\/issues\/7">#7<\/a>/);
+ assert.match(info, /<dt>Pull request<\/dt><dd><a href="https:\/\/github\.com\/koydas\/autonomous-dev-loop\/pull\/9">#9<\/a>/);
+ assert.match(info, /<dt>Total cost \(est\.\)<\/dt><dd>—<\/dd>/);
+ assert.match(keyInformation({ runs: [] }, workItemJourney({ runs: [] }), { calls: 0 }), /No linked issue.*Not recorded.*<dt>Started<\/dt><dd>Not recorded/s);
 });
