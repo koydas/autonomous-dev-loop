@@ -1752,6 +1752,42 @@ test('pr_review falls back to the default model budgets when config/models.yaml 
   }
 });
 
+// ADR-0045: on a target repository the PR head's models file lives at ADL_CONFIG_PATH and holds only the
+// keys it changes. It is laid over the pipeline defaults; a copy the layering rejects is ignored with one
+// warn event (defaults), never an abort.
+test('pr_review on a target repository reads the PR head models file at the configured path, over the defaults', async () => {
+  const diffText = 'diff --git a/prompts/pr-review-system.md b/prompts/pr-review-system.md\n--- a/prompts/pr-review-system.md\n+++ b/prompts/pr-review-system.md\n@@ -1,1 +1,1 @@\n-old\n+new\n';
+  const configRel = '.autonomous-dev-loop';
+  const cases = {
+    'valid overlay': { models: 'review_max_input_tokens: 1234\n', budget: 1234, warns: 0 },
+    'unknown key': { models: 'review_max_input_tokens: 1234\nnot_a_real_key: 1\n', budget: REVIEW_MAX_INPUT_TOKENS, warns: 1 },
+  };
+  for (const [name, { models, budget, warns }] of Object.entries(cases)) {
+    const fixture = await makePrTree({ files: { 'prompts/pr-review-system.md': 'old\n', [`${configRel}/models.yaml`]: models } });
+    await fs.writeFile(path.join(fixture.tree, 'prompts/pr-review-system.md'), 'new prompt text\n');
+    const trusted = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-review-trusted-config-'));
+    const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile, { ADL_CONFIG_DIR: trusted, ADL_CONFIG_PATH: configRel }, { cwd: fixture.tree });
+      assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+      const ignored = result.stderr.split('\n').filter((l) => l.includes('"event":"review.models_config_ignored"'));
+      assert.equal(ignored.length, warns, `${name}: models_config_ignored events`);
+      if (warns) {
+        assert.match(ignored[0], /"level":"warn"/);
+        assert.ok(ignored[0].includes(`${configRel}/models.yaml`), `${name}: the warning names the configured path`);
+        assert.match(ignored[0], /unknown key \\?"not_a_real_key\\?"/);
+      }
+      assert.match(llmPrompt(server), new RegExp(`## Prompt budget impact[\\s\\S]*review_max_input_tokens ${budget}\\b`), `${name}: budget`);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fs.rm(trusted, { recursive: true, force: true });
+      await fixture.cleanup();
+    }
+  }
+});
+
 // Issue #195 / ADR-0023: a symlinked package.json is "no manifest" (one warn event), never an abort
 // (EISDIR on a directory target) nor an out-of-tree read (a file target).
 test('pr_review completes when package.json is a symlink (to a directory, to a file outside the tree)', async () => {
