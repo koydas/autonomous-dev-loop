@@ -4,6 +4,18 @@ import { PRICES_USD_PER_MTOK } from './eval_scorecard.mjs';
 
 const stages = [['Validation', 'issue_validation'], ['Code generation', 'code_gen'], ['PR preparation', 'pr_prepare'], ['Review', 'review'], ['Auto-fix', 'autofix']];
 const duration = v => v == null ? 'Not recorded' : `${(v / 1000).toFixed(1)} s`;
+// Collapsed-card icons: the latest execution's span outcome; anything else is not recorded, never success.
+const STATUS = new Map([['success', '✓'], ['failed', '✗'], ['skipped', '⊘']]);
+const statusIcon = (name, status) => {
+  const label = `${name}: ${status.replace('-', ' ')}`;
+  return `<span class="flow-status-icon ${status}" data-stage-status="${status}" role="img" aria-label="${label}" title="${label}">${STATUS.get(status) ?? '○'}</span>`;
+};
+function stageStatus(matching, stage) {
+  // Latest by started_at; undated runs rank last, ties keep trace order.
+  const latest = matching.reduce((a, r) => (a && (r.started_at ?? -Infinity) <= (a.started_at ?? -Infinity) ? a : r), null);
+  const outcome = latest?.stages.find(s => s.stage === stage)?.outcome;
+  return STATUS.has(outcome) ? outcome : 'not-recorded';
+}
 
 function card(trace) {
   const runs = trace.runs.map(r => r.run).filter(Boolean);
@@ -18,14 +30,17 @@ function card(trace) {
   }
   const numbers = [...new Set(runs.flatMap(r => [r.pr_number, ...r.events.map(ev => ev.meta?.prNumber)]).filter(n => Number.isSafeInteger(n) && n > 0))];
   if (trace.item?.kind === 'pr' && !numbers.includes(trace.item.number)) numbers.push(trace.item.number);
-  return `<article class="widget flow-card" data-flow data-prs="${numbers.join(',')}" data-issue="${trace.item?.kind === 'issue' ? trace.item.number : ''}"><h2 data-flow-title>${e(trace.item?.kind ?? 'Work item')} #${e(trace.item?.number ?? 'unknown')}</h2><p data-merge>Merge status: not checked</p><p data-related></p><div class="widget-meta"><span>Recorded running: ${duration(trace.running_ms)}</span><span>Waiting: ${duration(trace.waiting_ms)}</span><span>${trace.runs.length} executions</span></div><p>LLM cost estimate: ${calls.length ? `$${usd.toFixed(4)} USD${unpriced ? ` + ${unpriced} unpriced call(s)` : ''}${free ? ` (${free} Groq free-tier call(s) at no cost)` : ''}` : 'Not recorded'} · excludes thinking and cache adjustments; never a bill.</p><ol class="flow-pipeline">${stages.map(([name, stage]) => {
+  const steps = stages.map(([name, stage]) => {
     const matching = runs.filter(r => r.stages.some(s => s.stage === stage) || r.events.some(ev => ev.stage === stage));
+    return { name, matching, status: stageStatus(matching, stage) };
+  });
+  return `<article class="widget flow-card" data-flow data-prs="${numbers.join(',')}" data-issue="${trace.item?.kind === 'issue' ? trace.item.number : ''}"><details class="flow-details"><summary class="flow-summary"><h2 data-flow-title>${e(trace.item?.kind ?? 'Work item')} #${e(trace.item?.number ?? 'unknown')}</h2><span class="flow-status">${steps.map(s => statusIcon(s.name, s.status)).join('')}<span data-merge-status>${statusIcon('Merge', 'not-recorded')}</span></span></summary><p data-merge>Merge status: not checked</p><p data-related></p><div class="widget-meta"><span>Recorded running: ${duration(trace.running_ms)}</span><span>Waiting: ${duration(trace.waiting_ms)}</span><span>${trace.runs.length} executions</span></div><p>LLM cost estimate: ${calls.length ? `$${usd.toFixed(4)} USD${unpriced ? ` + ${unpriced} unpriced call(s)` : ''}${free ? ` (${free} Groq free-tier call(s) at no cost)` : ''}` : 'Not recorded'} · excludes thinking and cache adjustments; never a bill.</p><ol class="flow-pipeline">${steps.map(({ name, matching }) => {
     return `<li class="flow-node${matching.length ? '' : ' missing'}"><strong>${name}</strong><p>${matching.length ? `${matching.length} execution(s)` : 'Not recorded'}</p>${matching.map(r => `<details><summary>${e(r.outcome ?? 'Unknown')} · ${duration(r.duration_ms)}</summary><p>${e(r.workflow)} · ${e(r.actor ?? 'Unknown actor')} · ${e(r.head_sha ?? 'SHA not recorded')}</p><p>${e(r.llm.map(c => `${c.provider ?? '?'}:${c.model ?? '?'} · ${c.tokens_in ?? '?'} input / ${c.tokens_out ?? '?'} output tokens (estimated)${c.fallback ? ' · fallback' : ''}${c.failed ? ' · failed call' : ''}`).join(', ') || 'Model not recorded')}</p><p>${r.started_at == null ? 'Start not recorded' : e(new Date(r.started_at).toISOString())} · ${r.events.length} actions</p><a class="button-link" href="runs/${encodeURIComponent(r.run_id)}.html">Agent trace, events & spans →</a></details>`).join('')}</li>`;
-  }).join('')}<li class="flow-node missing" data-merge-node><strong>Merge</strong><p data-merge-step>Not checked</p></li></ol><p>${trace.runs.filter(r => !r.run).length} execution record(s) unavailable · ${e(trace.runs_overflow)} outside index</p>${trace.trace_id ? `<a class="button-link" href="traces/${trace.trace_id}.html">Full chronological flow →</a>` : ''}</article>`;
+  }).join('')}<li class="flow-node missing" data-merge-node><strong>Merge</strong><p data-merge-step>Not checked</p></li></ol><p>${trace.runs.filter(r => !r.run).length} execution record(s) unavailable · ${e(trace.runs_overflow)} outside index</p>${trace.trace_id ? `<a class="button-link" href="traces/${trace.trace_id}.html">Full chronological flow →</a>` : ''}</details></article>`;
 }
 
 export function flowDashboard(model) {
-  return `<h1>Flow map</h1><p>One box per merged PR. Every pipeline step stays visible; grey means no recorded evidence, not a failure or a skipped step. Metrics cover the retained work-item trace (which can include several PRs), not the entire PR lifetime. Review and auto-fix may repeat: expand an execution to debug it.</p><section data-flow-dashboard><button type="button" data-load-flows>Refresh merged PRs</button><p data-flow-status role="status">JavaScript and GitHub API access are needed to check merges. Recorded flows are available below.</p><label>Search flows <input type="search" data-flow-search placeholder="PR, issue, model, outcome…"></label><div data-flow-list class="flow-list">${model.traces.map(card).join('') || '<p>No recorded flows yet.</p>'}</div><template data-missing-flow>${card({ runs: [], item: null, running_ms: null, waiting_ms: null, runs_overflow: 0, trace_id: '' })}</template></section>`;
+  return `<h1>Flow map</h1><p>One box per merged PR. Every pipeline step stays visible; grey means no recorded evidence, not a failure or a skipped step. Metrics cover the retained work-item trace (which can include several PRs), not the entire PR lifetime. Review and auto-fix may repeat: expand an execution to debug it. Cards start collapsed; each icon is the latest execution's outcome for that step: ✓ success, ✗ failed, ⊘ skipped, ○ not recorded.</p><section data-flow-dashboard><button type="button" data-load-flows>Refresh merged PRs</button><p data-flow-status role="status">JavaScript and GitHub API access are needed to check merges. Recorded flows are available below.</p><label>Search flows <input type="search" data-flow-search placeholder="PR, issue, model, outcome…"></label><div data-flow-list class="flow-list">${model.traces.map(card).join('') || '<p>No recorded flows yet.</p>'}</div><template data-missing-flow>${card({ runs: [], item: null, running_ms: null, waiting_ms: null, runs_overflow: 0, trace_id: '' })}</template></section>`;
 }
 
 export const FLOW_STYLE = `
@@ -36,7 +51,12 @@ export const FLOW_STYLE = `
 .flow-node { position:relative; border:1px solid var(--border); border-left:4px solid var(--s1); border-radius:10px; padding:14px; min-width:0; }
 .flow-node:not(:last-child)::after { content:'↓'; position:absolute; bottom:-23px; left:50%; color:var(--muted); }
 .flow-node.missing { border-left-color:var(--muted); background:var(--page); color:var(--muted); }
-.flow-node summary { min-height:44px; cursor:pointer; }
+.flow-node summary, .flow-summary { min-height:44px; cursor:pointer; }
+.flow-summary h2 { display:inline; }
+.flow-status { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.flow-status-icon { display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:28px; border:1px solid var(--border); border-radius:50%; font-weight:700; }
+.flow-status-icon.success { color:var(--good); } .flow-status-icon.failed { color:var(--critical); border-color:var(--critical); }
+.flow-status-icon.skipped { color:var(--ink-2); } .flow-status-icon.not-recorded { color:var(--muted); border-style:dashed; }
 @media(max-width:600px) { .flow-pipeline { grid-template-columns:1fr; } .flow-card h2 { font-size:22px; } [data-flow-search] { width:100%; } }
 `;
 
@@ -78,6 +98,9 @@ export const FLOW_SCRIPT = `<script>
     if (c.dataset.issue) { const issue = document.createElement('a'); issue.href = 'https://github.com/koydas/autonomous-dev-loop/issues/' + c.dataset.issue; issue.textContent = 'Issue #' + c.dataset.issue; related.append(issue); }
     else related.textContent = 'Linked issue: not recorded';
     c.querySelector('[data-merge-node]').classList.remove('missing'); c.querySelector('[data-merge-step]').textContent = 'Merged · ' + pr.merged_at;
+    const mergeIcon = c.querySelector('[data-merge-status] [data-stage-status]');
+    mergeIcon.dataset.stageStatus = 'success'; mergeIcon.className = 'flow-status-icon success'; mergeIcon.textContent = '✓';
+    mergeIcon.setAttribute('aria-label', 'Merge: success'); mergeIcon.title = 'Merge: success';
     if (!source) c.querySelector('a.button-link')?.remove();
     fragment.append(c);
    }

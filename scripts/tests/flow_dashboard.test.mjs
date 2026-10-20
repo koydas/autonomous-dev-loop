@@ -103,3 +103,61 @@ test('fork heads retain local closing references and explicit PR identity takes 
  assert.equal(join(head, 'Closes #7', [issueRecord, prRecord]), prRecord);
  assert.equal(join(head, 'Closes someone/fork#7'), '');
 });
+
+// Collapsed cards (#236): one icon per step from the latest execution's span outcome.
+const statuses = html => [...html.matchAll(/data-stage-status="([^"]+)" role="img" aria-label="([^"]+)"/g)].map(m => [m[1], m[2]]);
+const staged = (id, stage, outcome, started_at) => ({ ...run, run_id: id, started_at, stages: [{ stage, ...(outcome === undefined ? {} : { outcome }) }] });
+
+test('cards start collapsed with title and step icons in the summary (#236)', () => {
+ const html = flowDashboard({ traces: [trace([staged('1-1', 'issue_validation', 'success', 1), staged('2-1', 'code_gen', 'failed', 2), staged('3-1', 'autofix', 'skipped', 3)])] });
+ assert.match(html, /<details class="flow-details"><summary class="flow-summary"><h2 data-flow-title>issue #7<\/h2><span class="flow-status">/);
+ assert.doesNotMatch(html, /<details class="flow-details" open/);
+ assert.deepEqual(statuses(html.slice(0, html.indexOf('</summary>'))), [
+  ['success', 'Validation: success'], ['failed', 'Code generation: failed'], ['not-recorded', 'PR preparation: not recorded'],
+  ['not-recorded', 'Review: not recorded'], ['skipped', 'Auto-fix: skipped'], ['not-recorded', 'Merge: not recorded'],
+ ]);
+ // Not recorded stays distinct from failed: own glyph and class.
+ assert.match(html, /class="flow-status-icon failed"[^>]*>✗</);
+ assert.match(html, /class="flow-status-icon not-recorded"[^>]*>○</);
+ assert.match(html, /class="flow-status-icon skipped"[^>]*>⊘</);
+ assert.match(html, /<\/summary><p data-merge>/);
+ assert.match(html, /<\/ol>.*<\/details><\/article>/s);
+});
+
+test('a step icon reflects the latest execution; undated runs rank last (#236)', () => {
+ const review = html => statuses(html).find(([, l]) => l.startsWith('Review'))[0];
+ assert.equal(review(flowDashboard({ traces: [trace([staged('2-1', 'review', 'success', 2000), staged('1-1', 'review', 'failed', 1000)])] })), 'success');
+ assert.equal(review(flowDashboard({ traces: [trace([staged('1-1', 'review', 'success', 1000), staged('2-1', 'review', 'failed', 2000)])] })), 'failed');
+ assert.equal(review(flowDashboard({ traces: [trace([staged('1-1', 'review', 'failed', 1000), staged('9-1', 'review', 'success', null)])] })), 'failed');
+ // Ties keep trace order.
+ assert.equal(review(flowDashboard({ traces: [trace([staged('1-1', 'review', 'failed', 5), staged('2-1', 'review', 'success', 5)])] })), 'failed');
+});
+
+test('missing or unknown span outcomes are not recorded, never success (#236)', () => {
+ for (const outcome of [undefined, null, 'running', 'constructor', '__proto__']) {
+  const html = flowDashboard({ traces: [trace([staged('1-1', 'review', outcome, 1)])] });
+  assert.ok(statuses(html).some(([s, l]) => s === 'not-recorded' && l === 'Review: not recorded'), String(outcome));
+ }
+ // A run matched by an event only has no span outcome for that stage.
+ const html = flowDashboard({ traces: [trace([{ ...run, stages: [], events: [{ stage: 'review' }] }])] });
+ assert.ok(statuses(html).some(([s, l]) => s === 'not-recorded' && l === 'Review: not recorded'));
+ // The template card for an unrecorded merged PR: six not-recorded icons.
+ const empty = flowDashboard({ traces: [] });
+ const tpl = empty.slice(empty.indexOf('<template'));
+ assert.deepEqual(statuses(tpl).map(([s]) => s), Array(6).fill('not-recorded'));
+});
+
+test('client script turns the merge icon to success only on a confirmed merge (#236)', () => {
+ const block = FLOW_SCRIPT.slice(FLOW_SCRIPT.indexOf("const mergeIcon"), FLOW_SCRIPT.indexOf("if (!source)"));
+ const icon = { dataset: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+ runInNewContext(block, { c: { querySelector: sel => (sel === '[data-merge-status] [data-stage-status]' ? icon : null) } });
+ assert.equal(icon.dataset.stageStatus, 'success');
+ assert.equal(icon.textContent, '✓');
+ assert.equal(icon.className, 'flow-status-icon success');
+ assert.equal(icon.attrs['aria-label'], 'Merge: success');
+ assert.equal(icon.title, 'Merge: success');
+ // It sits after the merged_at facts: the failure path restores recorded cards untouched.
+ assert.ok(FLOW_SCRIPT.indexOf('const mergeIcon') > FLOW_SCRIPT.indexOf("'Merged · ' + pr.merged_at"));
+ assert.match(FLOW_STYLE, /\.flow-status \{ display:flex; flex-wrap:wrap;/);
+ assert.match(FLOW_STYLE, /\.flow-node summary, \.flow-summary \{ min-height:44px;/);
+});
