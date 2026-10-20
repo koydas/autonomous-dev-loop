@@ -229,7 +229,9 @@ const STEP_ORDER = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'aut
 /**
  * LLM cost of the window (llm_cost.mjs, list price): the total, per pipeline stage (with the runs that
  * spent it, for a per-run mean), per workflow, per UTC day (last TOKEN_DAYS days with a call), and the
- * COST_TOP most expensive runs and work items. A call without a stage counts under `unattributed`.
+ * COST_TOP most expensive runs and work items. Only fully priced entries are ranked: one with an unpriced
+ * call has an incomplete cost, so it goes to unpriced_runs / unpriced_items (most calls first) instead.
+ * A call without a stage counts under `unattributed`.
  */
 function costs(runs, traces) {
   const groups = { stage: new Map(), workflow: new Map(), day: new Map() };
@@ -259,6 +261,8 @@ function costs(runs, traces) {
     return { trace_id: t.trace_id, item: t.item, runs: loaded.length, ...sumCosts(loaded.flatMap((r) => r.llm)) };
   }).filter((t) => t.calls);
   const byUsd = (a, b) => b.usd - a.usd || b.calls - a.calls;
+  const byUnpriced = (a, b) => b.unpriced - a.unpriced || b.usd - a.usd;
+  const runRows = priced.map((r) => ({ run_id: r.run_id, workflow: r.workflow, item: r.item, started_at: r.started_at, ...r.cost }));
   return {
     total: sumCosts(runs.flatMap((r) => r.llm)),
     runs: priced.length,
@@ -268,8 +272,10 @@ function costs(runs, traces) {
     by_stage: rows(groups.stage).sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key)),
     by_workflow: rows(groups.workflow).sort((a, b) => b.usd - a.usd || a.key.localeCompare(b.key)),
     by_day: rows(groups.day).sort((a, b) => a.key.localeCompare(b.key)).slice(-TOKEN_DAYS),
-    top_runs: priced.map((r) => ({ run_id: r.run_id, workflow: r.workflow, item: r.item, started_at: r.started_at, ...r.cost })).sort(byUsd).slice(0, COST_TOP),
-    top_items: items.sort(byUsd).slice(0, COST_TOP),
+    top_runs: runRows.filter((r) => !r.unpriced).sort(byUsd).slice(0, COST_TOP),
+    unpriced_runs: runRows.filter((r) => r.unpriced).sort(byUnpriced).slice(0, COST_TOP),
+    top_items: items.filter((it) => !it.unpriced).sort(byUsd).slice(0, COST_TOP),
+    unpriced_items: items.filter((it) => it.unpriced).sort(byUnpriced).slice(0, COST_TOP),
   };
 }
 

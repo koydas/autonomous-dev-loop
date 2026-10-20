@@ -220,3 +220,16 @@ test('groq tokens per day keep the estimated share: measured pipeline calls apar
   const d = computeHealth({ model: model(records), scorecard }).tokens.days.find((x) => x.day === '2026-10-14');
   assert.deepEqual([d.total, d.estimated], [1500, 500]);
 });
+
+test('costs: runs and items with an unpriced call are never ranked on their partial cost', () => {
+  const opus = { provider: 'anthropic', model: 'claude-opus-5-5' };
+  const records = [
+    makeRecord({ runId: '60', prNumber: 1, start: T0, ...opus, tokensIn: 1000, tokensOut: 1000 }),
+    makeRecord({ runId: '61', prNumber: 2, start: T0, provider: 'anthropic', model: 'claude-unknown' }),
+  ];
+  const { costs } = computeHealth({ model: model(records) });
+  assert.deepEqual(costs.top_runs.map((r) => r.run_id), ['60-1']);
+  assert.deepEqual(costs.unpriced_runs.map((r) => r.run_id), ['61-1']);
+  assert.deepEqual(costs.top_items.map((it) => it.item.number), [1]);
+  assert.deepEqual(costs.unpriced_items.map((it) => it.item.number), [2]);
+});

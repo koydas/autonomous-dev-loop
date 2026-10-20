@@ -233,7 +233,7 @@ export function waterfall(rows, { t0, t1, root = '../' } = {}) {
 const spanRows = (run, depthOffset = 0) => run.waterfall.map((s) => ({
   label: s.name, depth: s.depth + depthOffset, kind: s.kind, start: s.start, end: s.end, status: s.status, outcome: s.outcome,
   provider: s.provider, model: s.kind === 'llm' ? s.model : null, tokens: s.tokens, links: s.links.map((url) => ({ url, label: 'link' })),
-  cost: s.kind === 'llm' && s.tokens ? callCost(spanCall(s)) : null,
+  cost: s.kind === 'llm' ? callCost(spanCall(s)) : null,
 }));
 
 function runLinks(run) {
@@ -362,11 +362,14 @@ function colPath(x, y0, w, h, round = true) {
   return `M${x},${y0}V${y0 - h + r}Q${x},${y0 - h} ${x + r},${y0 - h}H${x + w - r}Q${x + w},${y0 - h} ${x + w},${y0 - h + r}V${y0}Z`;
 }
 
-/** One-series horizontal bars: rows `{ label, value, note? }`; value null → the note instead of a bar. */
-export function hbars(rows, { label = 'Bar chart', max = null, format = compact } = {}) {
+/**
+ * One-series horizontal bars: rows `{ label, value, note? }`; value null → the note instead of a bar.
+ * `minScale` floors the axis (1 for counts; a fractional-dollar chart passes a smaller one).
+ */
+export function hbars(rows, { label = 'Bar chart', max = null, format = compact, minScale = 1 } = {}) {
   if (!rows.length) return emptyCard('No data.');
   const W = 640, L = 260, R = 64, BAR = 16, GAP = 10;
-  const top = Math.max(1, max ?? Math.max(...rows.map((r) => r.value ?? 0)));
+  const top = Math.max(minScale, max ?? Math.max(...rows.map((r) => r.value ?? 0)));
   const H = rows.length * (BAR + GAP) + 4;
   const marks = rows.map((r, i) => {
     const y = 2 + i * (BAR + GAP);
@@ -488,6 +491,11 @@ const perRun = (g) => meanAmount(g, g.runs);
 const costRow = (label, g, extra = []) => [label, ...extra, e(g.calls), e(compact(g.tokens_in)), e(compact(g.cache_read)), e(compact(g.tokens_out)), e(costLine(g))];
 const COST_COLS = [{ label: 'Calls', num: true }, { label: 'Input', num: true }, { label: 'Cache reads', num: true }, { label: 'Output', num: true }, 'Cost'];
 
+const RUN_HEAD = [{ label: 'Run' }, 'Workflow', 'Work item', ...COST_COLS];
+const ITEM_HEAD = [{ label: 'Work item' }, { label: 'Runs', num: true }, ...COST_COLS];
+const runRow = (r) => costRow(`<a href="${runHref('', r.run_id)}">${e(r.run_id)}</a><br><span class="muted">${e(time(r.started_at))}</span>`, r, [e(r.workflow ?? '—'), e(itemLabel(r.item))]);
+const itemRow = (it) => costRow(`<a href="${traceHref('', it.trace_id)}">${e(itemLabel(it.item))}</a>`, it, [e(it.runs)]);
+
 /** Health panel: LLM cost of the window per stage, workflow, day, and the most expensive runs / work items. */
 export function costPanel(costs) {
   if (!costs?.total.calls) return `<details class="detail-panel" open><summary>LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
@@ -499,14 +507,17 @@ export function costPanel(costs) {
 <div class="tiles">${costTiles(t, extra)}</div>
 <p class="sub">${costSub(t)} The mean per work item counts work items with a trace index only.</p>
 <h3>Per stage</h3>
-${stages.length ? hbars(stages.map((g) => ({ label: g.key, value: g.usd })), { label: 'LLM cost in USD per pipeline stage', format: formatUsd }) : ''}
+${stages.length ? hbars(stages.map((g) => ({ label: g.key, value: g.usd })), { label: 'LLM cost in USD per pipeline stage', format: formatUsd, minScale: 1e-6 }) : ''}
 ${table([{ label: 'Stage' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_stage.map((g) => [...costRow(`<code>${e(g.key)}</code>`, g, [e(g.runs)]), e(perRun(g))]))}
 <h3>Per workflow</h3>
 ${table([{ label: 'Workflow' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_workflow.map((g) => [...costRow(e(g.key), g, [e(g.runs)]), e(perRun(g))]))}
 <h3>Most expensive runs</h3>
-${table([{ label: 'Run' }, 'Workflow', 'Work item', ...COST_COLS], costs.top_runs.map((r) => costRow(`<a href="${runHref('', r.run_id)}">${e(r.run_id)}</a><br><span class="muted">${e(time(r.started_at))}</span>`, r, [e(r.workflow ?? '—'), e(itemLabel(r.item))])))}
+<p class="sub">Ranked on fully priced runs only; a run with an unpriced call has an incomplete cost and is listed apart.</p>
+${costs.top_runs.length ? table(RUN_HEAD, costs.top_runs.map(runRow)) : emptyCard('No fully priced run.')}
+${costs.unpriced_runs.length ? `<h3>Runs with unpriced calls · cost incomplete, not ranked</h3>${table(RUN_HEAD, costs.unpriced_runs.map(runRow))}` : ''}
 <h3>Most expensive work items</h3>
-${costs.top_items.length ? table([{ label: 'Work item' }, { label: 'Runs', num: true }, ...COST_COLS], costs.top_items.map((it) => costRow(`<a href="${traceHref('', it.trace_id)}">${e(itemLabel(it.item))}</a>`, it, [e(it.runs)]))) : emptyCard('No work-item trace with an LLM call.')}
+${costs.items ? (costs.top_items.length ? table(ITEM_HEAD, costs.top_items.map(itemRow)) : emptyCard('No fully priced work item.')) : emptyCard('No work-item trace with an LLM call.')}
+${costs.unpriced_items.length ? `<h3>Work items with unpriced calls · cost incomplete, not ranked</h3>${table(ITEM_HEAD, costs.unpriced_items.map(itemRow))}` : ''}
 <h3>Per day (UTC)</h3>
 ${table([{ label: 'Day' }, { label: 'Runs', num: true }, ...COST_COLS], costs.by_day.slice().reverse().map((g) => costRow(e(g.key), g, [e(g.runs)])))}</details>`;
 }

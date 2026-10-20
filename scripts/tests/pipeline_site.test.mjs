@@ -305,3 +305,19 @@ test('token chart: tooltips say measured, est. (all estimated) or the estimated 
   assert.match(tokenChart(days(500, 400)), /2026-10-14: 900 tokens \(400 est\.\)/);
   assert.match(tokenChart(days(1, 0)), /provider-measured where recorded, chars\/4 estimates otherwise/);
 });
+
+test('cost: a usage-less LLM span reads unpriced in the waterfall; unpriced runs listed apart; sub-dollar bars scale to the max', () => {
+  const rec = makeRecord({ runId: '650', start: T0, provider: 'anthropic', model: 'claude-opus-5-5', llmStatus: 'error' });
+  const llm = rec.otlp.resourceSpans[0].scopeSpans[0].spans.find((s) => s.name === 'llm_call');
+  llm.attributes = llm.attributes.filter((a) => !a.key.startsWith('gen_ai.usage.') && a.key !== 'adl.usage.estimated');
+  const { files } = site([rec, makeRecord({ runId: '651', prNumber: 8, start: T0, provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1000, tokensOut: 1000 })]);
+  const wf = files['pipeline/runs/650-1.html'];
+  assert.match(wf.slice(wf.indexOf('<table class="wf">')), /<td class="num"><span class="muted">unpriced<\/span><\/td>/);
+  const health = files['pipeline/health.html'];
+  assert.match(health, /Runs with unpriced calls · cost incomplete, not ranked/);
+  assert.match(health, /Work items with unpriced calls · cost incomplete, not ranked/);
+  const bars = hbars([{ label: 'a', value: 0.01 }, { label: 'b', value: 0.02 }], { format: (v) => String(v), minScale: 1e-6 });
+  const widths = [...bars.matchAll(/<path d="M260,\d+H([\d.]+)/g)].map((m) => Number(m[1]) - 260);
+  // Path end = width − 4 (rounded corner): the largest value fills the 316 px plot, half of it half.
+  assert.ok(widths[1] + 4 === 316 && Math.abs((widths[0] + 4) * 2 - (widths[1] + 4)) < 2, `bars scale to the largest value: ${widths}`);
+});
