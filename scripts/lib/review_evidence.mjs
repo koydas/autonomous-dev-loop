@@ -9,10 +9,11 @@ export const EVIDENCE_CONFIG_PATH = 'config/review-evidence.yaml';
 export const DEFAULT_TIMEOUT_SECONDS = 300;
 export const OUTPUT_TAIL_CHARS = 2000;
 // Paths of the PR tree that still decide what the evidence job runs. The runner and its config come
-// from the default branch (ADR-0023); what `npm` executes and the workflow itself (GitHub reads it
+// from the pinned pipeline and the default branch (ADR-0023, ADR-0045); what `npm` executes and the
+// workflow itself (GitHub reads the caller pr-review.yml and, for a local call, the body adl-pr-review.yml
 // from the pushed branch) do not. A PR touching one of them ran its checks under its own rules, so
 // its passing results are not authoritative.
-export const EVIDENCE_TRUSTED_PATHS = ['package.json', '.github/workflows/pr-review.yml'];
+export const EVIDENCE_TRUSTED_PATHS = ['package.json', '.github/workflows/pr-review.yml', '.github/workflows/adl-pr-review.yml'];
 // Grace period after the process exits (or is killed) for its pipes to close; a grandchild that
 // left the process group can hold them open forever.
 export const CLOSE_GRACE_MS = 2000;

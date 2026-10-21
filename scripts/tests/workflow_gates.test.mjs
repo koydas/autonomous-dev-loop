@@ -106,7 +106,9 @@ function readWorkflows() {
 }
 
 test('every issue_comment-triggered workflow gates on trusted comment author_association', () => {
-  const commentWorkflows = readWorkflows().filter(({ text }) => /^\s+issue_comment:/m.test(text));
+  const commentWorkflows = readWorkflows().filter(({ text }) => /^\s+issue_comment:/m.test(text))
+    // The trigger is the caller's; the trust check stays in the body it calls (ADR-0045).
+    .map(({ name, text }) => ({ name, text: CALLERS.includes(name) ? `${text}\n${readFileSync(resolve(WORKFLOWS_DIR, `adl-${name}`), 'utf8')}` : text }));
   assert.ok(commentWorkflows.length > 0, 'expected at least one issue_comment workflow (auto-fix-pr.yml)');
   for (const { name, text } of commentWorkflows) {
     assert.match(text, /github\.event\.comment\.author_association/, `${name} must check comment author_association`);
@@ -119,26 +121,34 @@ test('every issue_comment-triggered workflow gates on trusted comment author_ass
 
 // Workflows whose jobs push commits or mutate labels/comments: a run must never be
 // cancelled halfway, so they queue (cancel-in-progress: false) instead.
-const MUTATING_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'adl-reset-auto-fix.yml', 'evals.yml', 'pr-evals.yml', 'pipeline-site.yml'];
+const MUTATING_WORKFLOWS = ['adl-auto-fix-pr.yml', 'pr-review.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'adl-reset-auto-fix.yml', 'evals.yml', 'pr-evals.yml', 'pipeline-site.yml'];
 // ADR-0045: the bodies of validate-issue, code-generation and reset-auto-fix are reusable workflows
 // (adl-*.yml); the files below are their thin callers in this repository. A caller holds the name, the
 // trigger and the permission ceiling, never a concurrency group (a group on both sides would deadlock the call).
-const CALLERS = ['validate-issue.yml', 'code-generation.yml', 'reset-auto-fix.yml'];
+const CALLERS = ['validate-issue.yml', 'code-generation.yml', 'reset-auto-fix.yml', 'pr-review.yml', 'auto-fix-pr.yml'];
+// pr-review is the one caller that keeps its group: it covers the whole run (evidence and review), and the
+// body declares none. Everywhere else the group is job-level in the body.
+const GROUP_ON_CALLER = ['pr-review.yml'];
+const GROUP_FREE_BODIES = ['adl-pr-review.yml'];
 // Pages hosts one site (ADR-0027 amendment, 2026-10-17): the two deploy jobs share this group, and
 // pipeline-site.yml serializes its own runs on one repository-wide group. Neither calls an LLM.
 const SITE_GROUP = 'pages-site-${{ github.repository }}';
 const SITE_WORKFLOW_GROUP = 'pipeline-site-${{ github.repository }}';
 // Triggers fire for unrelated labels/comments too; a workflow-level group would let a
 // skipped run replace the pending real one, so the group must sit on the gated job.
-const JOB_LEVEL_CONCURRENCY = ['auto-fix-pr.yml', 'adl-code-generation.yml', 'pr-evals.yml'];
+const JOB_LEVEL_CONCURRENCY = ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'pr-evals.yml'];
 
 test('every workflow declares a concurrency group keyed per PR/issue', () => {
   const workflows = readWorkflows();
-  assert.equal(workflows.length, 14, `expected 14 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  assert.equal(workflows.length, 16, `expected 16 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
   for (const { name, text } of workflows) {
     const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1].trim()).filter((g) => g !== SITE_GROUP);
-    if (CALLERS.includes(name)) {
+    if (CALLERS.includes(name) && !GROUP_ON_CALLER.includes(name)) {
       assert.equal(groups.length, 0, `${name} is a thin caller: its group lives in the reusable workflow`);
+      continue;
+    }
+    if (GROUP_FREE_BODIES.includes(name)) {
+      assert.equal(groups.length, 0, `${name}: its caller declares the group (a group on both sides would deadlock the call)`);
       continue;
     }
     assert.equal(groups.length, 1, `${name} must declare exactly one concurrency group besides the shared Pages group`);
@@ -151,7 +161,7 @@ test('every workflow declares a concurrency group keyed per PR/issue', () => {
 });
 
 test('mutating workflows never cancel an in-progress run', () => {
-  for (const { name, text } of readWorkflows().filter((w) => !CALLERS.includes(w.name))) {
+  for (const { name, text } of readWorkflows().filter((w) => (!CALLERS.includes(w.name) || GROUP_ON_CALLER.includes(w.name)) && !GROUP_FREE_BODIES.includes(w.name))) {
     const cancel = text.match(/^\s+cancel-in-progress:\s*(\S+)/m)?.[1];
     if (MUTATING_WORKFLOWS.includes(name)) {
       assert.equal(cancel, 'false', `${name} pushes or mutates labels and must use cancel-in-progress: false`);
@@ -161,8 +171,8 @@ test('mutating workflows never cancel an in-progress run', () => {
   }
 });
 
-test('auto-fix-pr.yml concurrency group handles both pull_request and issue_comment events', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+test('adl-auto-fix-pr.yml concurrency group handles both pull_request and issue_comment events', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-auto-fix-pr.yml'), 'utf8');
   const group = text.match(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/m)?.[1] ?? '';
   // pull_request carries the head ref; issue_comment does not, so load-labels resolves it.
   assert.match(group, /github\.event\.pull_request\.head\.ref/);
@@ -177,7 +187,7 @@ test('auto-fix-pr.yml concurrency group handles both pull_request and issue_comm
 test('pr-review, auto-fix-pr and reset-auto-fix share one per-PR concurrency group', () => {
   const expected = {
     'pr-review.yml': /^pr-pipeline-\$\{\{ github\.event\.pull_request\.head\.ref \|\| github\.ref_name \}\}$/,
-    'auto-fix-pr.yml': /^pr-pipeline-\$\{\{ github\.event\.pull_request\.head\.ref \|\| needs\.load-labels\.outputs\.head_ref \}\}$/,
+    'adl-auto-fix-pr.yml': /^pr-pipeline-\$\{\{ github\.event\.pull_request\.head\.ref \|\| needs\.load-labels\.outputs\.head_ref \}\}$/,
     'adl-reset-auto-fix.yml': /^pr-pipeline-\$\{\{ needs\.resolve\.outputs\.head_ref \}\}$/,
   };
   for (const [name, pattern] of Object.entries(expected)) {
@@ -198,8 +208,8 @@ test('label/comment-triggered mutating workflows scope concurrency to the gated 
   }
 });
 
-test('auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB_OUTPUT', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+test('adl-auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB_OUTPUT', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-auto-fix-pr.yml'), 'utf8');
   // Multi-line JSON written as `name=value` without a heredoc delimiter breaks the step.
   assert.ok(!/echo\s+"payload=\$\{?PAYLOAD\}?"\s*>>\s*"\$GITHUB_OUTPUT"/.test(text), 'payload must not be echoed to GITHUB_OUTPUT');
   assert.match(text, /echo "head_ref=\$\(echo "\$\{PAYLOAD\}" \| jq -r '\.head\.ref'\)" >> "\$GITHUB_OUTPUT"/, 'head_ref output must remain');
@@ -209,7 +219,7 @@ test('auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB_OUT
 // branch must come from a file outside it, never from the working-tree metrics/runs.jsonl.
 test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkout', () => {
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
-  assert.deepEqual(committing.map((w) => w.name).sort(), ['adl-code-generation.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml', 'auto-fix-pr.yml', 'pr-review.yml']);
+  assert.deepEqual(committing.map((w) => w.name).sort(), ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-pr-review.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml']);
   for (const { name, text } of committing) {
     assert.ok(!/(wc -l|tail|cat)[^\n]*metrics\/runs\.jsonl/.test(text), `${name} must not read the working-tree metrics file`);
     // ADR-0041: reset-auto-fix writes no runs.jsonl line, only its run record and the trace index.
@@ -249,45 +259,56 @@ test('workflows that commit metrics read and write the metrics branch, never the
 
 // ADR-0023: workflows triggered by branch/PR activity hold LLM secrets and AI_PR_TOKEN;
 // they must execute pipeline code from the default branch, never from the checked-out branch.
-const BRANCH_TRIGGERED_SECRET_WORKFLOWS = ['auto-fix-pr.yml', 'pr-review.yml'];
+const BRANCH_TRIGGERED_SECRET_WORKFLOWS = ['adl-auto-fix-pr.yml', 'adl-pr-review.yml'];
 
 test('branch-triggered workflows with secrets run pipeline scripts from the trusted default-branch copy', () => {
   for (const name of BRANCH_TRIGGERED_SECRET_WORKFLOWS) {
     const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
     assert.ok(!/run:\s*node\s+scripts\//.test(text), `${name} must not run scripts/ from the checked-out branch`);
     assert.match(text, /run: node "\$RUNNER_TEMP\/pipeline\/scripts\/[a-z_]+\.mjs"/, `${name} must run the trusted copy`);
-    assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+path: \.trusted-pipeline\n\s+persist-credentials: false/,
-      `${name} must check out the default branch as the trusted pipeline without credentials`);
+    // ADR-0045: the trusted copy is the pinned pipeline (a self-call: its default branch), never the checked-out branch.
+    assert.match(text, /repository: \$\{\{ inputs\.pipeline_repository \}\}\n\s+ref: \$\{\{ (steps\.pipeline\.outputs\.ref|needs\.[a-z-]+\.outputs\.(pipeline_ref|ref)) \}\}\n\s+path: \.trusted-pipeline\n\s+persist-credentials: false/,
+      `${name} must check out the pinned pipeline without credentials`);
     assert.match(text, /mv \.trusted-pipeline "\$RUNNER_TEMP\/pipeline"/, `${name} must move the trusted copy out of the workspace`);
+    assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+path: \.trusted-config\n\s+sparse-checkout: \$\{\{ inputs\.config_dir \}\}\n\s+persist-credentials: false/,
+      `${name}: the repository configuration comes from its default branch`);
   }
 });
 
-test('auto-fix-pr.yml load-labels job executes default-branch code only', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+test('adl-auto-fix-pr.yml load-labels job executes the pinned pipeline and reads default-branch configuration only', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-auto-fix-pr.yml'), 'utf8');
   const loadLabels = text.slice(text.indexOf('  load-labels:'), text.indexOf('\n  auto-fix:'));
   assert.match(loadLabels, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
-  assert.match(loadLabels, /persist-credentials: false/);
+  // No checkout of the pull request (merge ref) in a job that runs on every label and comment event.
+  const checkouts = loadLabels.match(/uses: actions\/checkout@v4(\n\s+with:(\n\s{10}.+)+)?/g) ?? [];
+  assert.equal(checkouts.length, 2, 'pipeline and configuration only');
+  for (const c of checkouts) assert.match(c, /persist-credentials: false/);
+  assert.match(loadLabels, /run: node "\$RUNNER_TEMP\/pipeline\/scripts\/resolve_labels\.mjs" review\.changes\.name changes_requested/);
 });
 
-test('pr-review.yml does not persist credentials in the PR-branch checkout', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+test('adl-pr-review.yml does not persist credentials in the PR-branch checkout', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-pr-review.yml'), 'utf8');
   const checkouts = text.match(/uses: actions\/checkout@v4(\n\s+with:(\n\s{10}.+)+)?/g) ?? [];
-  // review and evidence jobs (ADR-0024): PR branch + trusted pipeline each.
-  assert.equal(checkouts.length, 4);
+  // review and evidence jobs (ADR-0024): PR branch + pinned pipeline + default-branch configuration each.
+  assert.equal(checkouts.length, 6);
   for (const c of checkouts) assert.match(c, /persist-credentials: false/);
 });
 
-test('pr-review.yml evidence job runs PR checks without secrets, from the trusted pipeline (ADR-0024)', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+test('adl-pr-review.yml evidence job runs PR checks without secrets, from the trusted pipeline (ADR-0024)', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-pr-review.yml'), 'utf8');
   const evidence = text.slice(text.indexOf('\n  evidence:\n'), text.indexOf('\n  review:\n'));
+  assert.ok(!/secrets\.GITHUB_TOKEN/.test(evidence), 'no token expression in the evidence job');
   assert.ok(evidence.length > 0, 'expected an evidence job before the review job');
   assert.match(evidence, /\n    permissions:\n      contents: read\n/);
   assert.ok(!/secrets\./.test(evidence), 'evidence job must not reference secrets');
   assert.match(evidence, /node "\$RUNNER_TEMP\/pipeline\/scripts\/run_review_evidence\.mjs"/);
   assert.match(evidence, /REVIEW_EVIDENCE_PATH: \$\{\{ runner\.temp \}\}\//, 'evidence must be written outside the checkout');
   const review = text.slice(text.indexOf('\n  review:\n'));
-  assert.match(review, /needs: evidence/);
-  assert.match(review, /if: \$\{\{ !cancelled\(\) \}\}/);
+  assert.match(review, /needs: \[pipeline, evidence\]/);
+  assert.match(review, /if: \$\{\{ !cancelled\(\) && needs\.pipeline\.result == 'success' \}\}/);
+  // ADR-0045: the evidence job runs PR code, so it asks nothing of the run (no actions: read) and cannot reach a secret.
+  assert.doesNotMatch(evidence, /actions: read/, 'the evidence job keeps contents: read only');
+  assert.match(text, /\n  pipeline:\n[\s\S]*?\n    permissions:\n      # [^\n]+\n      actions: read\n/, 'the version lookup is a job of its own');
   assert.match(review, /REVIEW_EVIDENCE_PATH: \$\{\{ runner\.temp \}\}\//, 'review must read evidence from outside the checkout');
 });
 
@@ -312,7 +333,7 @@ test('test.yml runs the LangGraph prototype tests on Python 3.11 and 3.13', () =
 // `echo "ref=$(gh api ...)"` does not fail under `bash -e`: an API failure would yield an
 // empty ref and the global group `pr-pipeline-`. The lookup must fail the job instead.
 test('head-ref lookups fail closed instead of producing an empty concurrency key', () => {
-  for (const name of ['auto-fix-pr.yml', 'adl-reset-auto-fix.yml']) {
+  for (const name of ['adl-auto-fix-pr.yml', 'adl-reset-auto-fix.yml']) {
     const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
     assert.ok(!/echo "ref=\$\(gh api/.test(text), `${name} must not swallow gh api errors inside echo`);
     assert.match(text, /REF=\$\(gh api [^\n]+\)\n\s+\[ -n "\$REF" \] \|\| \{ echo "::error::[^"]+"; exit 1; \}\n\s+echo "ref=\$REF" >> "\$GITHUB_OUTPUT"/,
@@ -320,8 +341,8 @@ test('head-ref lookups fail closed instead of producing an empty concurrency key
   }
 });
 
-test('auto-fix-pr.yml resolves the head ref only for trusted rerun comments', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
+test('adl-auto-fix-pr.yml resolves the head ref only for trusted rerun comments', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-auto-fix-pr.yml'), 'utf8');
   const loadLabels = text.slice(text.indexOf('  load-labels:'), text.indexOf('\n  auto-fix:'));
   const headIf = loadLabels.match(/- id: head\n\s+if: (.+)/)?.[1] ?? '';
   assert.match(headIf, /github\.event\.comment\.author_association/);
@@ -331,9 +352,9 @@ test('auto-fix-pr.yml resolves the head ref only for trusted rerun comments', ()
 // ADR-0028 amendment: a Groq rate limit must never fail a job. Every workflow that hands
 // GROQ_API_KEY to a step must let that step wait out TPM windows (hint-less limits wait 60 s)
 // within an explicit job timeout, keeping 3 minutes for evidence, the call and the rest.
-const LLM_WORKFLOWS = ['pr-review.yml', 'auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'evals.yml', 'pr-evals.yml'];
+const LLM_WORKFLOWS = ['adl-pr-review.yml', 'adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'evals.yml', 'pr-evals.yml'];
 // The callers of this repository hand the key to the reusable workflow in a `secrets:` mapping (ADR-0045).
-const KEY_PASSING_CALLERS = ['code-generation.yml', 'validate-issue.yml'];
+const KEY_PASSING_CALLERS = ['code-generation.yml', 'validate-issue.yml', 'pr-review.yml', 'auto-fix-pr.yml'];
 
 // Splits a workflow into its jobs (2-space-indented keys under `jobs:`).
 function jobsOf(text) {
@@ -427,8 +448,8 @@ test('config/models.yaml: the review budget leaves room for a diff after the fix
 });
 
 // ADR-0028: a run that reviewed nothing must not replace the newest checkpoints-pr-<N> artifact.
-test('pr-review.yml uploads checkpoints only when the review step did not skip', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+test('adl-pr-review.yml uploads checkpoints only when the review step did not skip', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-pr-review.yml'), 'utf8');
   assert.match(text, /- name: Run automated review\n\s+id: review\n/);
   assert.match(text, /- name: Upload checkpoint artifact\n\s+if: \$\{\{ always\(\) && steps\.review\.outputs\.skipped != 'true' \}\}/);
 });
@@ -645,8 +666,8 @@ test('evals.yml passes the Anthropic overrides to the eval step only, never on s
 // Per-stage provider (ADR-0032 amendment): each production workflow passes its stage's AI_PROVIDER_<STAGE>.
 test('LLM workflows pass AI_PROVIDER_<STAGE> with AI_PROVIDER for the stages they run', () => {
   const stages = {
-    'adl-validate-issue.yml': ['VALIDATION'], 'adl-code-generation.yml': ['GENERATION'], 'pr-review.yml': ['REVIEW'],
-    'auto-fix-pr.yml': ['AUTOFIX'], 'pr-evals.yml': ['VALIDATION', 'REVIEW'],
+    'adl-validate-issue.yml': ['VALIDATION'], 'adl-code-generation.yml': ['GENERATION'], 'adl-pr-review.yml': ['REVIEW'],
+    'adl-auto-fix-pr.yml': ['AUTOFIX'], 'pr-evals.yml': ['VALIDATION', 'REVIEW'],
   };
   for (const [file, expected] of Object.entries(stages)) {
     const text = readFileSync(resolve(WORKFLOWS_DIR, file), 'utf8');
@@ -1024,8 +1045,8 @@ test('the run: script scanner sees one-line and block scripts', () => {
   assert.ok(!scripts.some((s) => s.body.includes('ref_name')), 'env: values are not part of the script');
 });
 
-test('pr-review.yml passes the branch to its shell steps through env (audit F14)', () => {
-  const text = readFileSync(resolve(WORKFLOWS_DIR, 'pr-review.yml'), 'utf8');
+test('adl-pr-review.yml passes the branch to its shell steps through env (audit F14)', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'adl-pr-review.yml'), 'utf8');
   const step = (name) => text.slice(text.indexOf(`- name: ${name}`)).split(/\n      - (?:name|uses): /)[0];
   assert.match(step('Resolve PR number for checkpoint'), /\n\s+BRANCH: \$\{\{ github\.ref_name \}\}\n/);
   assert.match(step('Find latest auto-fix run for checkpoint'), /\n\s+BRANCH: \$\{\{ github\.event\.pull_request\.head\.ref \|\| github\.ref_name \}\}\n/);
@@ -1071,8 +1092,8 @@ test('multi-job workflows grant write scopes per job, never workflow-level (audi
 
 test('pipeline workflows declare the inventoried scopes per job (ADR-0007 amendment)', () => {
   const expected = {
-    'pr-review.yml': { evidence: ['contents: read'], review: ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
-    'auto-fix-pr.yml': { 'load-labels': ['contents: read', 'pull-requests: read'], 'auto-fix': ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
+    'adl-pr-review.yml': { pipeline: ['actions: read'], evidence: ['contents: read'], review: ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
+    'adl-auto-fix-pr.yml': { 'load-labels': ['actions: read', 'contents: read', 'pull-requests: read'], 'auto-fix': ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
     // ADR-0045: load-labels and resolve also read the run (actions: read) to find the pinned pipeline commit.
     'adl-code-generation.yml': { 'load-labels': ['actions: read', 'contents: read'], 'generate-pr': ['actions: read', 'contents: write', 'issues: write', 'pull-requests: write'] },
     'adl-validate-issue.yml': { validate: ['actions: write', 'contents: write', 'issues: write'] },
@@ -1103,8 +1124,8 @@ test('jobs that never git push check out without persisting the token (audit F15
     for (const c of found) assert.match(c, /persist-credentials: false/, `${name}: ${c}`);
   }
   // auto-fix pushes with the credential persisted by its PR-branch checkout (AI_PR_TOKEN || GITHUB_TOKEN).
-  const autofix = readFileSync(resolve(WORKFLOWS_DIR, 'auto-fix-pr.yml'), 'utf8');
-  const prCheckout = autofix.slice(autofix.indexOf('- name: Checkout PR branch'), autofix.indexOf('- name: Checkout trusted pipeline'));
+  const autofix = readFileSync(resolve(WORKFLOWS_DIR, 'adl-auto-fix-pr.yml'), 'utf8');
+  const prCheckout = autofix.slice(autofix.indexOf('- name: Checkout PR branch'), autofix.indexOf('- name: Checkout pipeline', autofix.indexOf('- name: Checkout PR branch')));
   assert.match(prCheckout, /token: \$\{\{ secrets\.AI_PR_TOKEN \|\| secrets\.GITHUB_TOKEN \}\}/);
   assert.doesNotMatch(prCheckout, /persist-credentials: false/, 'the auto-fix push needs the persisted credential');
   assert.match(autofix, /git push origin HEAD:"\$\{PR_BRANCH\}"/);
@@ -1114,7 +1135,7 @@ test('jobs that never git push check out without persisting the token (audit F15
 // Reusable workflows and their callers (ADR-0045)
 // ---------------------------------------------------------------------------
 
-const REUSABLES = ['adl-validate-issue.yml', 'adl-code-generation.yml', 'adl-reset-auto-fix.yml'];
+const REUSABLES = ['adl-validate-issue.yml', 'adl-code-generation.yml', 'adl-reset-auto-fix.yml', 'adl-pr-review.yml', 'adl-auto-fix-pr.yml'];
 const reusable = (name) => readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
 const topKeys = (text) => [...text.matchAll(/^([a-z_-]+):/gm)].map((m) => m[1]);
 
@@ -1148,7 +1169,7 @@ test('no workflow of this repository or caller of the pipeline triggers on pull_
 });
 
 test('the callers of this repository keep their name and trigger, call the reusable body and map the secrets explicitly (ADR-0045)', () => {
-  const triggers = { 'validate-issue.yml': 'issues:', 'code-generation.yml': 'issues:', 'reset-auto-fix.yml': 'workflow_dispatch:' };
+  const triggers = { 'validate-issue.yml': 'issues:', 'code-generation.yml': 'issues:', 'reset-auto-fix.yml': 'workflow_dispatch:', 'pr-review.yml': 'push:', 'auto-fix-pr.yml': 'pull_request:' };
   for (const name of CALLERS) {
     const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
     const body = `adl-${name}`;
@@ -1194,11 +1215,11 @@ test('the reusable workflows run the pinned pipeline checkout, never a script of
     assert.doesNotMatch(text, /run:\s*node\s+scripts\//, `${name}: no node scripts/ from the workspace`);
     const nodeRuns = runScripts(text).filter(({ body }) => /\bnode\b/.test(body));
     assert.ok(nodeRuns.length >= 2, `${name}: expected the stage scripts, saw ${nodeRuns.length}`);
-    for (const { line, body } of nodeRuns) assert.match(body, /node "\$RUNNER_TEMP\/pipeline\/scripts\/[a-z_]+\.mjs"/, `${name}:${line} runs the pipeline checkout`);
+    for (const { line, body } of nodeRuns) assert.match(body, /\$RUNNER_TEMP\/pipeline\/scripts\/[a-z_]+\.mjs/, `${name}:${line} runs the pipeline checkout`);
     // Each job that checks out the pipeline gets the roots and the trusted configuration for its scripts.
     for (const job of jobsOf(text).filter((j) => j.text.includes('- name: Checkout pipeline'))) {
       assert.match(job.text, /\n    env:\n      ADL_PIPELINE_REPOSITORY: \$\{\{ inputs\.pipeline_repository \}\}\n      ADL_CONFIG_PATH: \$\{\{ inputs\.config_dir \}\}\n/, `${name} ${job.name}: ADL_* environment`);
-      assert.match(job.text, /- name: Checkout pipeline\n\s+uses: actions\/checkout@v4\n\s+with:\n\s+repository: \$\{\{ inputs\.pipeline_repository \}\}\n\s+ref: \$\{\{ (steps\.pipeline\.outputs\.ref|needs\.[a-z-]+\.outputs\.pipeline_ref) \}\}\n\s+path: \.trusted-pipeline\n\s+persist-credentials: false\n/, `${name} ${job.name}: pipeline checkout at the resolved ref, without credentials`);
+      assert.match(job.text, /- name: Checkout pipeline\n\s+uses: actions\/checkout@v4\n\s+with:\n\s+repository: \$\{\{ inputs\.pipeline_repository \}\}\n\s+ref: \$\{\{ (steps\.pipeline\.outputs\.ref|needs\.[a-z-]+\.outputs\.(pipeline_ref|ref)) \}\}\n\s+path: \.trusted-pipeline\n\s+persist-credentials: false\n/, `${name} ${job.name}: pipeline checkout at the resolved ref, without credentials`);
       assert.match(job.text, /- name: Checkout target configuration \(default branch\)\n\s+uses: actions\/checkout@v4\n\s+with:\n\s+ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+path: \.trusted-config\n\s+sparse-checkout: \$\{\{ inputs\.config_dir \}\}\n\s+persist-credentials: false\n/, `${name} ${job.name}: the configuration comes from the default branch, never the dispatched ref`);
       assert.match(job.text, /mv \.trusted-pipeline "\$RUNNER_TEMP\/pipeline"\n\s+mv \.trusted-config "\$RUNNER_TEMP\/target-config"\n\s+echo "ADL_CONFIG_DIR=\$RUNNER_TEMP\/target-config\/\$ADL_CONFIG_PATH" >> "\$GITHUB_ENV"/, `${name} ${job.name}: both moved out of the workspace, ADL_CONFIG_DIR exported`);
     }
@@ -1215,7 +1236,8 @@ function stepRun(text, stepName) {
   const block = end === -1 ? rest : rest.slice(0, end);
   const run = block.match(/\n        run: \|\n((?: {10}.*\n|\n)+)/)?.[1];
   assert.ok(run, `step "${stepName}" has no run block`);
-  return run.split('\n').map((l) => l.slice(10)).join('\n');
+  // A step that ends its job is followed by a blank line before the next job: not part of the script.
+  return run.split('\n').map((l) => l.slice(10)).join('\n').replace(/\n+$/, '\n');
 }
 
 const SHA = 'a'.repeat(40);
@@ -1245,7 +1267,7 @@ const entryOf = (pin, sha = SHA, ref = '') => `koydas/autonomous-dev-loop/.githu
 
 test('the pipeline version step is the same in every reusable workflow', () => {
   const scripts = REUSABLES.map((name) => stepRun(reusable(name), 'Resolve pipeline version'));
-  assert.equal(new Set(scripts).size, 1, 'one script, three copies');
+  assert.equal(new Set(scripts).size, 1, 'one script, one copy per reusable workflow');
   for (const name of REUSABLES) {
     const text = reusable(name);
     const step = text.slice(text.indexOf('- name: Resolve pipeline version'));

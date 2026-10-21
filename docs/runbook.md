@@ -163,7 +163,7 @@ git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[
 | Review comment shows **Verdict overridden to REQUEST_CHANGES** | A check in `config/review-evidence.yaml` exited non-zero on the PR head (ADR-0024) — expand the failing check's output tail in the `🧪 Tool Evidence` section; the fix belongs in the PR, not the review |
 | `🧪 Tool Evidence` says *missing* | The default branch has no `config/review-evidence.yaml` or no evidence runner yet (expected: evidence is opt-in and read from the default branch, the job logs `skipped: "no config"` or fails to find the script), the `evidence` job crashed (invalid config, see `review_evidence.error` in its log), or the artifact upload/download failed — review ran without evidence |
 | A check reports `ERROR (exit 127)` or `(exit 126)` | The command could not be executed: typo, binary not installed in the evidence job, or quotes/inline comment in `config/review-evidence.yaml` — fix the config; never forces `REQUEST_CHANGES` |
-| `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json` or `pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
+| `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json`, `pr-review.yml` or `adl-pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
 | `🧪 Tool Evidence` says *stale* | A push landed between the evidence run and the review's PR fetch; the review of the newer push will carry fresh evidence |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
@@ -207,7 +207,7 @@ Key steps to expand per workflow:
 - **Generate issue change** — prompt construction, LLM response, file write results
 - **Create Pull Request** — PR number or error from `peter-evans/create-pull-request`
 
-### `pr-review` (`pr-review.yml`)
+### `pr-review` (`pr-review.yml` calling `adl-pr-review.yml`)
 - **Run PR review** — PR resolution, LLM call, comment upsert, review submit, label swap, re-pulse guard result
 
 ### `changelog-check` (`changelog-check.yml`)
@@ -229,7 +229,7 @@ Key steps to expand per workflow:
 - **comment → Compare with the published run / Post PR comment / Remove run-evals label**
 - Traces: `run-trace-<run_id>-plan`, `-eval`, `-comment` (one per job, they share the run ID)
 
-### `auto-fix-pr` (`auto-fix-pr.yml`)
+### `auto-fix-pr` (`auto-fix-pr.yml` calling `adl-auto-fix-pr.yml`)
 - **Resolve PR payload for issue_comment** _(only for checkbox-rerun triggers)_ — GitHub PR API call; extracts `head.ref` branch name needed for the checkout step. Failure here means the checkout will not have the correct branch ref.
 - **Checkout PR branch** — verifies the correct PR branch is checked out (uses `head_ref` from the resolve step for `issue_comment` events, `pull_request.head.ref` for label events)
 - **Apply AI fixes** — attempt count read, LLM call, file writes, attempt label apply
