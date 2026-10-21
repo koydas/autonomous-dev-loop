@@ -1,7 +1,7 @@
 # ADR-0045: Reusable pipeline workflows for target repositories
 
 - **Date:** 2026-10-20
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-21; implemented in parts 0 to 3; A1, A3 and A4 below are still to be checked once in a scratch repository, their fallbacks stay documented)
 
 ## Context
 
