@@ -109,6 +109,20 @@ test('ensureLabels reports a color or description that differs, and only --updat
   assert.deepEqual(repo.labels[0], { name: 'a', color: '0075ca', description: 'd' });
 });
 
+test('ensureLabels calls onMutation after each label written, never for a dry run, a 422 or a failed write', async () => {
+  const seen = [];
+  const onMutation = (kind, name) => seen.push([kind, name]);
+  const repo = fakeRepo([def('a', 'ff0000', 'old')]);
+  await ensureLabels({ request: repo.request, definitions: [def('a'), def('new')], update: true, onMutation });
+  assert.deepEqual(seen, [['updated', 'a'], ['created', 'new']]);
+  seen.length = 0;
+  await ensureLabels({ request: fakeRepo([def('a', 'ff0000', 'old')]).request, definitions: [def('a'), def('n')], update: true, dryRun: true, onMutation });
+  await ensureLabels({ request: fakeRepo([], { postStatus: 422, raceCreates: true }).request, definitions: [def('r')], onMutation });
+  await assert.rejects(ensureLabels({ request: fakeRepo([], { postStatus: 500 }).request, definitions: [def('x')], onMutation }), /500/);
+  await assert.rejects(ensureLabels({ request: fakeRepo([def('a', 'ff0000', 'old')], { patchStatus: 500 }).request, definitions: [def('a')], update: true, onMutation }), /500/);
+  assert.deepEqual(seen, []);
+});
+
 test('ensureLabels with dryRun lists what it would create and update, and writes nothing', async () => {
   const repo = fakeRepo([def('a', 'ff0000', 'old')]);
   const result = await ensureLabels({ request: repo.request, definitions: [def('a'), def('new')], update: true, dryRun: true });
@@ -173,6 +187,7 @@ test('ensure_labels creates every label of the config in an empty repository, th
     assert.ok(api.requests.every((r) => r.url.startsWith('/repos/acme/app/labels')));
     assert.match(first.stderr, /"event":"labels_install\.start"/);
     assert.match(first.stderr, /"event":"labels_install\.complete".*"duration_ms":\d+/);
+    assert.equal(first.stderr.match(/"event":"labels_install\.label_created"/g).length, 9, 'one event per label written');
   } finally {
     api.server.close();
   }

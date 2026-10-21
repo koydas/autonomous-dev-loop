@@ -1427,5 +1427,7 @@ test('setup-labels.yml runs the pinned label installer with a token that reads c
   assert.match(text, /\n {12}node \.adl-pipeline\/scripts\/ensure_labels\.mjs\n/);
   assert.ok(readFileSync(resolve(ROOT, 'scripts/ensure_labels.mjs'), 'utf8').includes('--update'), 'the flag exists');
   assert.ok(!/secrets\.(?!GITHUB_TOKEN)/.test(text), 'only the workflow token');
+  assert.match(text, /GITHUB_RUN_ID: \$\{\{ github\.run_id \}\}/, 'the tracer needs the run id');
+  assert.match(text, /- name: Upload run trace\n\s+if: always\(\)\n\s+uses: actions\/upload-artifact@v4\n\s+with:\n\s+name: run-trace-\$\{\{ github\.run_id \}\}\n\s+path: \.\/observability\/traces\/\$\{\{ github\.run_id \}\}\.json\n/);
   for (const { body } of runScripts(text)) assert.doesNotMatch(body, /\$\{\{/, 'no expression inside a run script: inputs reach it through env');
 });

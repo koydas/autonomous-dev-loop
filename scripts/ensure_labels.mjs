@@ -7,9 +7,10 @@
  * the setup-labels.yml template (workflow_dispatch) or by hand.
  * Env: GITHUB_TOKEN (or GH_TOKEN), GITHUB_REPOSITORY, GITHUB_API_URL (optional), ADL_CONFIG_DIR / ADL_CONFIG_PATH.
  */
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadLabelsConfigAll } from './lib/layered_config.mjs';
-import { log as obsLog } from './lib/observability.mjs';
+import { log as obsLog, createTracer } from './lib/observability.mjs';
 
 const STAGE = 'labels_install';
 const PER_PAGE = 100;
@@ -50,10 +51,10 @@ async function listLabels(request) {
 
 /**
  * `request(method, path, body?)` resolves `{ status, ok, json? }` (path relative to /repos/<owner>/<repo>).
- * Returns { created, existing, updated, drift }: label names. A 422 on the POST counts as existing only when the
+ * `onMutation(kind, name)` is called after each label written (kind `created` | `updated`). Returns { created, existing, updated, drift }: label names. A 422 on the POST counts as existing only when the
  * label can then be read (someone created it between the listing and the POST); any other failure throws.
  */
-export async function ensureLabels({ request, definitions, update = false, dryRun = false }) {
+export async function ensureLabels({ request, definitions, update = false, dryRun = false, onMutation = () => {} }) {
   const present = new Map((await listLabels(request)).map((l) => [String(l.name).toLowerCase(), l]));
   const result = { created: [], existing: [], updated: [], drift: [] };
   for (const def of definitions) {
@@ -69,6 +70,7 @@ export async function ensureLabels({ request, definitions, update = false, dryRu
           throw new Error(`GitHub API POST /labels (${def.name}) → 422 and the label does not exist${res.json?.message ? `: ${res.json.message}` : ''}`);
         }
         if (!res.ok) throw new Error(`GitHub API POST /labels (${def.name}) → ${res.status}`);
+        onMutation('created', def.name);
       }
       result.created.push(def.name);
       continue;
@@ -80,6 +82,7 @@ export async function ensureLabels({ request, definitions, update = false, dryRu
     if (update && !dryRun) {
       const res = await request('PATCH', `/labels/${encodeURIComponent(found.name)}`, { color: def.color, description: def.description });
       if (!res.ok) throw new Error(`GitHub API PATCH /labels/${found.name} → ${res.status}`);
+      onMutation('updated', def.name);
       result.updated.push(def.name);
     }
   }
@@ -98,6 +101,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const token = (env.GITHUB_TOKEN || env.GH_TOKEN || '').trim();
     if (!repository || !token) throw new Error('GITHUB_REPOSITORY and GITHUB_TOKEN (or GH_TOKEN) are required');
     const definitions = labelDefinitions(loadLabelsConfigAll());
+    // In a workflow the journal of the run is kept as a trace (uploaded by the setup-labels.yml template).
+    if (env.GITHUB_RUN_ID) createTracer({ runId: env.GITHUB_RUN_ID, traceDir: path.join(process.cwd(), 'observability', 'traces') });
     obsLog({ stage: STAGE, event: 'labels_install.start', level: 'info', meta: { repository, labels: definitions.length, update: flags.has('--update'), dry_run: flags.has('--dry-run') } });
     const base = `${(env.GITHUB_API_URL || 'https://api.github.com').trim()}/repos/${repository}`;
     const request = async (method, apiPath, body) => {
@@ -110,7 +115,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       try { json = await res.json(); } catch { /* empty body */ }
       return { status: res.status, ok: res.ok, json };
     };
-    const result = await ensureLabels({ request, definitions, update: flags.has('--update'), dryRun: flags.has('--dry-run') });
+    const result = await ensureLabels({ request, definitions, update: flags.has('--update'), dryRun: flags.has('--dry-run'),
+      onMutation: (kind, name) => obsLog({ stage: STAGE, event: `labels_install.label_${kind}`, level: 'info', meta: { repository, label: name } }),
+    });
     const verb = flags.has('--dry-run') ? 'would create' : 'created';
     console.log(`${repository}: ${verb} ${result.created.length}, already present ${result.existing.length}${result.created.length ? ` (${verb}: ${result.created.join(', ')})` : ''}`);
     if (result.drift.length) {

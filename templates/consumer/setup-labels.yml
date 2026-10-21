@@ -51,6 +51,7 @@ jobs:
       - name: Create the labels
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
           ADL_CONFIG_DIR: ${{ github.workspace }}/.adl-config/.autonomous-dev-loop
           UPDATE: ${{ inputs.update }}
         run: |
@@ -59,3 +60,12 @@ jobs:
           else
             node .adl-pipeline/scripts/ensure_labels.mjs
           fi
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
