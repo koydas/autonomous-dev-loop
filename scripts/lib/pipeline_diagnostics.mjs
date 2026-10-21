@@ -326,7 +326,7 @@ function generationFindings(runs) {
   const blocked = events(runs, 'code_gen.skipped');
   const blockedRuns = new Set(runIds(blocked));
   const genRate = rateAtLastOccurrence(starts, ({ run }) => blockedRuns.has(run.run_id));
-  if (!starts.length || blocked.length < 2 || (blocked.length / starts.length < 0.5 && genRate.share < 0.5)) return [];
+  if (!starts.length || blocked.length < 2 || (blocked.length / starts.length < 0.5 && (genRate.n < RULES.minVerdicts || genRate.share < 0.5))) return [];
   const sources = {};
   for (const { e } of blocked) sources[e.meta.source ?? 'unspecified'] = (sources[e.meta.source ?? 'unspecified'] ?? 0) + 1;
   return [finding({

@@ -501,3 +501,16 @@ test('a finding that fired reaches its lifecycle after clean runs dilute its rat
   const af = find(diagnose({ model: model([attempt(0), attempt(1), ...Array.from({ length: 10 }, (_, i) => attempt(2 + i, true))]) }), 'autofix-ineffective');
   assert.equal(af?.status, 'resolved');
 });
+
+test('review PR #253: withheld and code generation resolve after dilution; the prefix rate keeps a sample floor', () => {
+  const w = (i, v) => run({ t: T + i * 1000, sha: String(i).padStart(40, '0'), events: [verdict(v)] });
+  // 3 WITHHELD then 10 APPROVE: 3 of 13 (23 %) under withheldShare, 3 of 3 when it last occurred.
+  const withheld = find(diagnose({ model: model([...[0, 1, 2].map((i) => w(i, 'WITHHELD')), ...Array.from({ length: 10 }, (_, i) => w(3 + i, 'APPROVE'))]) }), 'review-withheld');
+  assert.equal(withheld.status, 'resolved');
+  assert.match(withheld.fact, /^3 of 13 verdicts are WITHHELD/);
+  const gen = (i, blocked) => run({ t: T + i * 1000, stage: 'code_gen', events: [{ event: 'code_gen.start' }, ...(blocked ? [{ event: 'code_gen.skipped', meta: { source: 'model' } }] : [{ event: 'code_gen.complete' }])] });
+  const resolved = find(diagnose({ model: model([0, 1, 2].map((i) => gen(i, true)).concat(Array.from({ length: 10 }, (_, i) => gen(3 + i, false)))) }), 'codegen-blocked');
+  assert.equal(resolved.status, 'resolved');
+  // 2 blocked of 2 starts is below the floor of the prefix rate: not reported once diluted.
+  assert.equal(find(diagnose({ model: model([0, 1].map((i) => gen(i, true)).concat(Array.from({ length: 10 }, (_, i) => gen(2 + i, false)))) }), 'codegen-blocked'), undefined);
+});
