@@ -705,6 +705,23 @@ test('pr_review does not re-pulse changes-requested when auto-fix run is already
   }
 });
 
+test('pr_review looks for active auto-fix runs in the workflow file the caller names (AUTOFIX_WORKFLOW_FILE), auto-fix-pr.yml by default', async () => {
+  for (const [env, file] of [[{}, 'auto-fix-pr.yml'], [{ AUTOFIX_WORKFLOW_FILE: ' autofix caller.yml ' }, 'autofix%20caller.yml'], [{ AUTOFIX_WORKFLOW_FILE: '  ' }, 'auto-fix-pr.yml']]) {
+    const server = await startMockServer(makeHandler({ groqContent: 'Found issues.\n\nVerdict: REQUEST_CHANGES' }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runPrReview(server.address().port, eventFile, env);
+      assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+      const lookups = server.requests.filter((r) => r.method === 'GET' && /\/actions\/workflows\/[^/]+\/runs\?/.test(r.url));
+      assert.ok(lookups.length > 0, 'the auto-fix run lookup happens on REQUEST_CHANGES');
+      for (const lookup of lookups) assert.ok(lookup.url.includes(`/actions/workflows/${file}/runs?`), `${lookup.url} should target ${file}`);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+    }
+  }
+});
+
 test('pr_review does not re-pulse changes-requested when auto-fix status check is forbidden', async () => {
   const server = await startMockServer(
     makeHandler({

@@ -83,4 +83,4 @@ Full event requirements per existing stage (for reference):
 - `docs/observability.md` — full schema reference and event tables
 - `docs/adr/0018-structured-observability.md` — design rationale
 - `AGENTS.md` — "Observability Rules" section
-- Any existing workflow (e.g., `.github/workflows/code-generation.yml`) — shows the `GITHUB_RUN_ID` env + `upload-artifact` pattern
+- Any existing workflow (e.g., `.github/workflows/adl-code-generation.yml`) — shows the `GITHUB_RUN_ID` env + `upload-artifact` pattern

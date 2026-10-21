@@ -1,0 +1,221 @@
+{
+  "adl-auto-fix-pr.yml": {
+    "inputs": {
+      "config_dir": {
+        "type": "string",
+        "required": false,
+        "default": ".autonomous-dev-loop"
+      },
+      "pipeline_ref": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "pipeline_repository": {
+        "type": "string",
+        "required": false,
+        "default": "koydas/autonomous-dev-loop"
+      }
+    },
+    "secrets": {
+      "AI_PR_TOKEN": {
+        "required": false
+      },
+      "ANTHROPIC_API_KEY": {
+        "required": false
+      },
+      "GROQ_API_KEY": {
+        "required": false
+      }
+    },
+    "jobs": [
+      "load-labels",
+      "auto-fix"
+    ],
+    "ceiling": {
+      "actions": "read",
+      "contents": "write",
+      "issues": "write",
+      "pull-requests": "write"
+    }
+  },
+  "adl-code-generation.yml": {
+    "inputs": {
+      "config_dir": {
+        "type": "string",
+        "required": false,
+        "default": ".autonomous-dev-loop"
+      },
+      "issue_number": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "pipeline_ref": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "pipeline_repository": {
+        "type": "string",
+        "required": false,
+        "default": "koydas/autonomous-dev-loop"
+      },
+      "validate_run_id": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      }
+    },
+    "secrets": {
+      "AI_PR_TOKEN": {
+        "required": false
+      },
+      "ANTHROPIC_API_KEY": {
+        "required": false
+      },
+      "GROQ_API_KEY": {
+        "required": false
+      }
+    },
+    "jobs": [
+      "load-labels",
+      "generate-pr"
+    ],
+    "ceiling": {
+      "actions": "read",
+      "contents": "write",
+      "issues": "write",
+      "pull-requests": "write"
+    }
+  },
+  "adl-pr-review.yml": {
+    "inputs": {
+      "autofix_workflow_file": {
+        "type": "string",
+        "required": false,
+        "default": "auto-fix-pr.yml"
+      },
+      "config_dir": {
+        "type": "string",
+        "required": false,
+        "default": ".autonomous-dev-loop"
+      },
+      "pipeline_ref": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "pipeline_repository": {
+        "type": "string",
+        "required": false,
+        "default": "koydas/autonomous-dev-loop"
+      }
+    },
+    "secrets": {
+      "AI_PR_TOKEN": {
+        "required": false
+      },
+      "ANTHROPIC_API_KEY": {
+        "required": false
+      },
+      "GROQ_API_KEY": {
+        "required": false
+      }
+    },
+    "jobs": [
+      "pipeline",
+      "evidence",
+      "review"
+    ],
+    "ceiling": {
+      "actions": "read",
+      "contents": "write",
+      "issues": "write",
+      "pull-requests": "write"
+    }
+  },
+  "adl-reset-auto-fix.yml": {
+    "inputs": {
+      "config_dir": {
+        "type": "string",
+        "required": false,
+        "default": ".autonomous-dev-loop"
+      },
+      "pipeline_ref": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "pipeline_repository": {
+        "type": "string",
+        "required": false,
+        "default": "koydas/autonomous-dev-loop"
+      },
+      "pr_number": {
+        "type": "number",
+        "required": true
+      },
+      "retrigger": {
+        "type": "boolean",
+        "required": false,
+        "default": "true"
+      }
+    },
+    "secrets": {
+      "AI_PR_TOKEN": {
+        "required": false
+      }
+    },
+    "jobs": [
+      "resolve",
+      "reset"
+    ],
+    "ceiling": {
+      "actions": "read",
+      "contents": "write",
+      "issues": "write",
+      "pull-requests": "write"
+    }
+  },
+  "adl-validate-issue.yml": {
+    "inputs": {
+      "codegen_workflow_file": {
+        "type": "string",
+        "required": false,
+        "default": "code-generation.yml"
+      },
+      "config_dir": {
+        "type": "string",
+        "required": false,
+        "default": ".autonomous-dev-loop"
+      },
+      "pipeline_ref": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "pipeline_repository": {
+        "type": "string",
+        "required": false,
+        "default": "koydas/autonomous-dev-loop"
+      }
+    },
+    "secrets": {
+      "ANTHROPIC_API_KEY": {
+        "required": false
+      },
+      "GROQ_API_KEY": {
+        "required": false
+      }
+    },
+    "jobs": [
+      "validate"
+    ],
+    "ceiling": {
+      "actions": "write",
+      "contents": "write",
+      "issues": "write"
+    }
+  }
+}

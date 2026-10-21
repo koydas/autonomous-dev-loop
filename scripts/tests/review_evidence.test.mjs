@@ -244,6 +244,12 @@ test('findTouchedEvidencePaths: detects a newly added workflow file', () => {
   assert.deepEqual(findTouchedEvidencePaths(diff), ['.github/workflows/pr-review.yml']);
 });
 
+test('findTouchedEvidencePaths: the reusable review body counts too (ADR-0045)', () => {
+  const diff = 'diff --git a/.github/workflows/adl-pr-review.yml b/.github/workflows/adl-pr-review.yml\n--- a/.github/workflows/adl-pr-review.yml\n+++ b/.github/workflows/adl-pr-review.yml\n';
+  assert.deepEqual(findTouchedEvidencePaths(diff), ['.github/workflows/adl-pr-review.yml']);
+  assert.deepEqual(findTouchedEvidencePaths('diff --git a/.github/workflows/adl-auto-fix-pr.yml b/.github/workflows/adl-auto-fix-pr.yml\n'), []);
+});
+
 test('findTouchedEvidencePaths: ignores other files and empty diffs', () => {
   assert.deepEqual(findTouchedEvidencePaths('diff --git a/config/models.yaml b/config/models.yaml\n'), []);
   assert.deepEqual(findTouchedEvidencePaths('+ mentions package.json in a line\n'), []);
@@ -253,7 +259,8 @@ test('findTouchedEvidencePaths: ignores other files and empty diffs', () => {
 test('findTouchedEvidencePaths: covers every path that controls the evidence', () => {
   const diff = EVIDENCE_TRUSTED_PATHS.map((p) => `diff --git a/${p} b/${p}\n--- a/${p}\n+++ b/${p}\n`).join('');
   assert.deepEqual(findTouchedEvidencePaths(diff), EVIDENCE_TRUSTED_PATHS);
-  for (const p of ['package.json', '.github/workflows/pr-review.yml']) {
+  // The caller and, since ADR-0045, the reusable body: either one decides what the evidence job runs.
+  for (const p of ['package.json', '.github/workflows/pr-review.yml', '.github/workflows/adl-pr-review.yml']) {
     assert.ok(EVIDENCE_TRUSTED_PATHS.includes(p), `${p} must be a trusted path`);
   }
   // Runner and config are read from the default branch (ADR-0023): a PR cannot change them for its own run.

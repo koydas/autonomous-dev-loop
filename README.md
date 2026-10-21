@@ -67,9 +67,11 @@ graph LR
 
 Full setup, permissions, per-stage model keys and the end-to-end test: [docs/code-generation.md](docs/code-generation.md). Failure triage: [docs/runbook.md](docs/runbook.md).
 
+**In another repository:** five caller workflows pinned to a commit of this one, plus an optional configuration directory: [docs/installation.md](docs/installation.md). Versioning and what breaks a caller: [docs/releasing.md](docs/releasing.md).
+
 ### Code map
 
-- Workflows: `.github/workflows/` (orchestration only)
+- Workflows: `.github/workflows/` (orchestration only); `adl-*.yml` are the reusable bodies, the other pipeline files their callers here; `templates/consumer/` the callers for another repository
 - Entrypoints: `scripts/*.mjs`, modules: `scripts/lib/*.mjs`
 - Prompts: `prompts/*.md` (one file per prompt, loaded at runtime)
 - Evals: `scripts/run_evals.mjs`, suites in `scripts/lib/eval_suites.mjs`, datasets in `evals/datasets/`

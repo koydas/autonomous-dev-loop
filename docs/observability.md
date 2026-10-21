@@ -151,6 +151,18 @@ Emitted by `scripts/reset_auto_fix.mjs` (`reset-auto-fix.yml`, ADR-0041): the re
 | `autofix_reset.complete`       | info  | ✓             | `prNumber`, `retrigger` |
 | `autofix_reset.error`          | error | ✓             | `prNumber`, `error` |
 
+### `labels_install`
+
+Emitted by `scripts/ensure_labels.mjs` (the `setup-labels.yml` template, or by hand, ADR-0045): creates the labels of the effective labels config in a repository. An operator tool, not a pipeline stage: no metrics. In a workflow (`GITHUB_RUN_ID` set) the events are journaled in `observability/traces/<run_id>.json`, which the template uploads as the `run-trace-<run_id>` artifact (`if: always()`).
+
+| Event                     | Level | `duration_ms` | Key `meta` fields |
+|---------------------------|-------|---------------|-------------------|
+| `labels_install.start`    | info  | —             | `repository`, `labels`, `update`, `dry_run` |
+| `labels_install.label_created` | info | —          | `repository`, `label` — after each successful POST |
+| `labels_install.label_updated` | info | —          | `repository`, `label` — after each successful PATCH (`--update`) |
+| `labels_install.complete` | info  | ✓             | `repository`, `created`, `existing`, `updated`, `drift` |
+| `labels_install.error`    | error | ✓             | `repository`, `error` |
+
 ### `eval`
 
 Emitted by `run_evals.mjs` (ADR-0027).

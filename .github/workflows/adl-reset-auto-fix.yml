@@ -1,0 +1,182 @@
+name: ADL Reset Auto-Fix Counter (reusable)
+
+# Reusable workflow (ADR-0045): called by reset-auto-fix.yml in this repository and by the caller
+# template of a target repository. The trigger (workflow_dispatch) belongs to the caller.
+on:
+  workflow_call:
+    inputs:
+      pipeline_repository:
+        description: 'Repository holding the pipeline (scripts, prompts, default config)'
+        type: string
+        default: 'koydas/autonomous-dev-loop'
+      pipeline_ref:
+        description: 'Self-calls only: the default branch. Any other repository is pinned by the ref of its `uses:` line.'
+        type: string
+        default: ''
+      config_dir:
+        description: "Directory of the repository's own pipeline configuration"
+        type: string
+        default: '.autonomous-dev-loop'
+      pr_number:
+        description: 'PR number to reset'
+        required: true
+        type: number
+      retrigger:
+        description: 'Re-apply changes-requested to trigger a new auto-fix cycle'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      AI_PR_TOKEN:
+        required: false
+
+# Per job (ADR-0007 amendment 2026-10-20).
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    permissions:
+      # gh api on the PR (head ref).
+      pull-requests: read
+      # The run lookup that gives the pipeline commit of an external caller.
+      actions: read
+    outputs:
+      head_ref: ${{ steps.head.outputs.ref }}
+      pipeline_ref: ${{ steps.pipeline.outputs.ref }}
+    steps:
+      - name: Resolve pipeline version
+        id: pipeline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        # ADR-0045: one pin per caller, the `uses: …@<ref>` of the reusable workflow; its commit is read from the run.
+        # A call from the pipeline repository itself runs the default branch, as ADR-0023 requires.
+        run: |
+          set -euo pipefail
+          # pull_request_target runs the base workflow with secrets on the contents of a pull request: never.
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            echo "::error::The pipeline does not run on pull_request_target"
+            exit 1
+          fi
+          if [ "${PIPELINE_REPOSITORY,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            if [ -n "$PIPELINE_REF" ] && [ "$PIPELINE_REF" != "$DEFAULT_BRANCH" ]; then
+              echo "::error::pipeline_ref must be the default branch ($DEFAULT_BRANCH) when the pipeline repository calls itself, got $PIPELINE_REF"
+              exit 1
+            fi
+            echo "ref=$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ENTRY=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '[.referenced_workflows[]? | select((.path | ascii_downcase) | startswith((env.PIPELINE_REPOSITORY | ascii_downcase) + "/.github/workflows/adl-"))] | .[0] // empty | [.path, .sha, (.ref // "")] | @tsv')
+          if [ -z "$ENTRY" ]; then
+            echo "::error::This run does not reference a reusable workflow of $PIPELINE_REPOSITORY"
+            exit 1
+          fi
+          IFS=$'\t' read -r WORKFLOW_PATH SHA REF <<< "$ENTRY"
+          PIN="${WORKFLOW_PATH#*@}"
+          if ! [[ "$PIN" =~ ^[0-9a-f]{40}$ || "$PIN" =~ ^(refs/tags/)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The reusable workflow is pinned to \"$PIN\": pin a commit SHA or a vMAJOR.MINOR.PATCH tag, never a branch"
+            exit 1
+          fi
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The run does not give the commit of the reusable workflow"
+            exit 1
+          fi
+          # The API reports a tag pinned as `@v1.2.3` with ref `refs/tags/v1.2.3`: compare without the prefix.
+          if [ -n "$REF" ] && [ "${REF#refs/tags/}" != "${PIN#refs/tags/}" ]; then
+            echo "::error::The run reports the reusable workflow at \"$REF\" but its path pins \"$PIN\""
+            exit 1
+          fi
+          echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+
+      - id: head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        # Fail closed: an empty ref would put the job in the global group `pr-pipeline-`.
+        run: |
+          REF=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')
+          [ -n "$REF" ] || { echo "::error::Could not resolve PR head ref"; exit 1; }
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+  reset:
+    needs: resolve
+    runs-on: ubuntu-latest
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    permissions:
+      # Kept: label removal / re-apply on the PR (reset_auto_fix.mjs, AI_PR_TOKEN or this token); issues: write may suffice.
+      pull-requests: write
+      issues: write
+      # The `metrics` branch only (Commit metrics step, ADR-0040, ADR-0041).
+      contents: write
+    # Shared with pr-review and auto-fix-pr (ADR-0020): never reset labels mid auto-fix run.
+    concurrency:
+      group: pr-pipeline-${{ needs.resolve.outputs.head_ref }}
+      cancel-in-progress: false
+    steps:
+      # No step pushes: labels and metrics go through the API with an explicit token.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pipeline_repository }}
+          ref: ${{ needs.resolve.outputs.pipeline_ref }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      # ADR-0045: the target's own configuration comes from its default branch, never from the ref the run
+      # was dispatched on nor from a pull request tree.
+      - name: Checkout target configuration (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-config
+          sparse-checkout: ${{ inputs.config_dir }}
+          persist-credentials: false
+
+      - name: Move the pipeline and the configuration out of the workspace
+        run: |
+          mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+          mv .trusted-config "$RUNNER_TEMP/target-config"
+          echo "ADL_CONFIG_DIR=$RUNNER_TEMP/target-config/$ADL_CONFIG_PATH" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Reset auto-fix attempt labels
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          RETRIGGER: ${{ inputs.retrigger }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/reset_auto_fix.mjs"
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      # ADR-0041: the reset joins the trace of the PR's work item — record + trace index on `metrics`
+      # (ADR-0040). The checkout is the dispatching ref: no PR code runs here.
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_RECORD_MESSAGE: "metrics: pr ${{ inputs.pr_number }} reset-auto-fix [skip ci]"
+        run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"

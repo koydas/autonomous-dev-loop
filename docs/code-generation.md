@@ -111,7 +111,7 @@ To resume: merge the dependency or implement the protected part by hand, then re
 Step outputs carry untrusted text: the validation comment and the generation / auto-fix `summary` (model output), the issue body and title. A heredoc with a fixed delimiter (`EOF`, `__DELIM__`) let a value line equal to it close the block and forge the following lines as outputs (`valid=true` dispatching code generation, an injected `fixed_paths` / `attempt_number`), or fail the step on a stray line (2026-10-19 audit F04, F28).
 
 - **Scripts** write every output through `scripts/lib/github_output.mjs` (`appendOutputs`): a value without a line break is `name=value`; any other value is a heredoc whose delimiter is `ghadelim_<uuid>`, drawn per write and redrawn while the value contains it; `\r\n` / lone `\r` become `\n`; an invalid name throws before anything is written. Multi-line values are written first and single-line control outputs (`valid`, `score`, `attempt_number`, `rejected`, `blocked`) last, so the runner's last-value-wins can only favour them. A single path in `generated_paths` / `fixed_paths` is written as `name=value` (same value for consumers).
-- **`code-generation.yml` → Resolve issue data** draws `DELIM="ghadelim_$(openssl rand -hex 16)"` per run for the issue `body` and `title` heredocs, then writes `number` and `labels`. The body is read by `gh` at runtime, never interpolated into the script. An issue body containing `__DELIM__` no longer fails the step.
+- **`adl-code-generation.yml` → Resolve issue data** draws `DELIM="ghadelim_$(openssl rand -hex 16)"` per run for the issue `body` and `title` heredocs, then writes `number` and `labels`. The body is read by `gh` at runtime, never interpolated into the script. An issue body containing `__DELIM__` no longer fails the step.
 - `workflow_gates.test.mjs` fails on any workflow writing a fixed heredoc delimiter with `echo` / `printf`.
 
 ## Review and Auto-Fix Guardrails
@@ -166,7 +166,7 @@ When a PR changes a `prompts/*.md` file, `pr_review.mjs` reports what the change
 
 ## Tool Evidence for Review (ADR-0024)
 
-`pr-review.yml` runs an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer. Per ADR-0023, the runner and its config come from the default branch (`$RUNNER_TEMP/pipeline`); the PR tree is only the working directory the checks run in.
+`pr-review.yml` (body `adl-pr-review.yml`) runs a `pipeline` job (which pipeline commit this run uses), then an `evidence` job before `review`. It executes the checks declared in `config/review-evidence.yaml` on the PR head commit and passes the results to the reviewer. Per ADR-0023 and ADR-0045, the runner comes from the pinned pipeline (`$RUNNER_TEMP/pipeline`) and the repository's own config from its default branch (`$RUNNER_TEMP/target-config`); the PR tree is only the working directory the checks run in.
 
 - **Isolation:** the `evidence` job has `permissions: contents: read`, checks out with `persist-credentials: false`, and receives no secrets. `run_review_evidence.mjs` also strips credential-like env vars (name segment `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, `PASSWD`, `CREDENTIAL(S)`) and env-injected git config (`GIT_CONFIG_*`) from each check's environment.
 - **Config (opt-in per repo):** `checks.<name>.command` (run via `bash -c`; one pair of surrounding quotes is stripped, inline comments are rejected) and optional `checks.<name>.timeout_seconds` (default 300). Defaults for this repo: `npm test`, `npm run lint`. Without the file, the job exits 0 and the review reports the evidence as *missing*.
@@ -182,7 +182,7 @@ When a PR changes a `prompts/*.md` file, `pr_review.mjs` reports what the change
   - *unverified* — a check ended in `timeout` or `error`.
 
   The review is posted as `COMMENT`, `review-withheld` is applied instead of `review-approved` or `changes-requested` (auto-fix is not triggered; the next verdict clears it), and the comment says **Approval withheld** with the reason. Push again or re-run `pr-review` once the cause is fixed. Without `config/review-evidence.yaml` (evidence not opted in), missing evidence does not withhold approval. Unit-test coverage: 100% of verdicts (`decideVerdict()` branches and the `pr_review.mjs` verdict → review event and labels mapping; AGENTS.md, Test Coverage Policy).
-- **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
+- **Self-modification:** changes to the runner or `config/review-evidence.yaml` apply only once merged (default-branch execution). If the PR touches a PR-tree path that still controls the evidence (`package.json`, `.github/workflows/pr-review.yml`, `.github/workflows/adl-pr-review.yml`), passing results are flagged as not authoritative in both the prompt and the comment.
 
 To add a check (e.g. ADR-0019's import allowlist), add an entry to `config/review-evidence.yaml` — no workflow change is needed.
 
@@ -275,6 +275,33 @@ Neither `ADL_*` variable set (this repository, every workflow today): `config/` 
 - no self-modification skip in auto-fix (`scripts/auto_fix_pr.mjs` is only a path there).
 
 For this repository the assembled system prompt is the one it had before the split, verbatim (checked byte for byte when the file was split); the eval suites load it through the same function.
+
+## Reusable Workflows (ADR-0045)
+
+The bodies of the five pipeline workflows are reusable workflows (`on: workflow_call` only): `adl-validate-issue.yml`, `adl-code-generation.yml`, `adl-reset-auto-fix.yml`, `adl-pr-review.yml`, `adl-auto-fix-pr.yml`. `validate-issue.yml`, `code-generation.yml`, `reset-auto-fix.yml`, `pr-review.yml` and `auto-fix-pr.yml` stay as thin callers: they keep the workflow `name:` (so traces, run records and the `workflow_run` trigger of `pipeline-site.yml` see the same names), the trigger and the permission ceiling, and call the body with `uses: ./.github/workflows/adl-*.yml`. A caller declares no concurrency group, with one exception: each body declares its own at job level (a group on both sides would make the called job wait for its own caller). `pr-review.yml` keeps the per-PR group (`pr-pipeline-<head ref>`, shared with auto-fix and reset-auto-fix, ADR-0020) at workflow level, because it must cover the whole run, evidence and review; `adl-pr-review.yml` declares none, and a caller template copies the same group. In the Actions UI a job reads `<caller job> / <called job>`.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `pipeline_repository` | `koydas/autonomous-dev-loop` | Repository holding scripts, prompts and default config |
+| `pipeline_ref` | empty | Self-calls only: the default branch. Any other repository is pinned by the ref of its own `uses:` line |
+| `config_dir` | `.autonomous-dev-loop` | The repository's own configuration directory (this repository: `config`) |
+| `codegen_workflow_file` (validate-issue) | `code-generation.yml` | Caller workflow dispatched when the issue is valid |
+| `issue_number`, `validate_run_id` (code-generation) | empty | `workflow_dispatch` values of the caller (strings; empty on a label event) |
+| `pr_number`, `retrigger` (reset-auto-fix) | – / `true` | `workflow_dispatch` values of the caller |
+| `autofix_workflow_file` (pr-review) | `auto-fix-pr.yml` | Caller workflow whose active runs are looked up before the review label is re-pulsed (`AUTOFIX_WORKFLOW_FILE` for `pr_review.mjs`) |
+
+Secrets are optional and mapped one by one (never `secrets: inherit`): `ANTHROPIC_API_KEY`, `GROQ_API_KEY` (validate-issue, code-generation, pr-review, auto-fix-pr), `AI_PR_TOKEN` (code-generation, reset-auto-fix, pr-review, auto-fix-pr). A caller job grants exactly the union of its called jobs' scopes (a called job can only narrow the caller's token; `workflow_gates.test.mjs` checks the equality): validate-issue `contents: write`, `issues: write`, `actions: write`; code-generation `contents: write`, `pull-requests: write`, `issues: write`, `actions: read`; reset-auto-fix `contents: write`, `pull-requests: write`, `issues: write`, `actions: read`; pr-review and auto-fix-pr `contents: write`, `pull-requests: write`, `issues: write`, `actions: read`. Inside `adl-pr-review.yml` the `evidence` job, which runs the PR's code, declares `contents: read` only and references no secret; the version lookup is a job of its own (`pipeline`, `actions: read`) that `review` waits for (`needs: [pipeline, evidence]`, `!cancelled() && needs.pipeline.result == 'success'`: a crashed evidence job still degrades the review, a run without a pipeline version has none).
+
+Every job that runs a script first gets, in this order:
+
+1. **Resolve pipeline version** (`id: pipeline`, the same shell in the five files, executed by the gate tests with `gh` stubbed). A call from the pipeline repository itself uses the default branch, as ADR-0023 requires (`pipeline_ref`, if set, must equal it). Any other caller: the commit of the `uses:` pin, read from `referenced_workflows` of the run (`GET /repos/{repo}/actions/runs/{id}`, hence `actions: read`); the pin must be a 40-hex SHA or `vMAJOR.MINOR.PATCH` (`refs/tags/` accepted), never a branch; a missing entry, a branch pin or a `ref` that disagrees with the pin fails the job with a message (the API reports a tag pinned as `@v1.2.3` with ref `refs/tags/v1.2.3`: the `refs/tags/` prefix is ignored in the comparison). The step also refuses `pull_request_target`.
+2. **Checkout pipeline** at that commit and **Checkout target configuration (default branch)**: a sparse checkout of `config_dir` from `github.event.repository.default_branch`, never the ref a `workflow_dispatch` named. Both are moved to `$RUNNER_TEMP/pipeline` and `$RUNNER_TEMP/target-config` before any script runs (the workspace must hold only the repository for `create-pull-request`), and `ADL_CONFIG_DIR` is exported; `ADL_PIPELINE_REPOSITORY` and `ADL_CONFIG_PATH` are job environment. Scripts run as `node "$RUNNER_TEMP/pipeline/scripts/<name>.mjs"` with the workspace as working directory (see *Roots and Layered Configuration*).
+
+`load-labels` of `adl-code-generation.yml` resolves the trigger label with `scripts/resolve_labels.mjs issue.valid.name ready_for_dev` and `load-labels` of `adl-auto-fix-pr.yml` the changes-requested label with `review.changes.name changes_requested` (effective labels config, target layer included) instead of an inline Node program. In the pull-request workflows the pull request tree is only data: its checkout is a separate step, and the pipeline and the configuration are moved out of the workspace before any script runs (the auto-fix push cannot publish them).
+
+### Installing in another repository
+
+Setup requirements for a repository other than this one (prerequisites, the five callers, the `.autonomous-dev-loop/` configuration directory, updating) are in [installation.md](installation.md); releases and breaking changes in [releasing.md](releasing.md). Labels are created once with the `setup-labels.yml` template (**ADL Setup Labels**, `workflow_dispatch`, `contents: read` + `issues: write`), which runs `scripts/ensure_labels.mjs`: idempotent, `--update` converges color and description, `--dry-run` writes nothing. A run uploads its trace as `run-trace-<run_id>`.
 
 ## Observability
 

@@ -163,7 +163,7 @@ git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[
 | Review comment shows **Verdict overridden to REQUEST_CHANGES** | A check in `config/review-evidence.yaml` exited non-zero on the PR head (ADR-0024) — expand the failing check's output tail in the `🧪 Tool Evidence` section; the fix belongs in the PR, not the review |
 | `🧪 Tool Evidence` says *missing* | The default branch has no `config/review-evidence.yaml` or no evidence runner yet (expected: evidence is opt-in and read from the default branch, the job logs `skipped: "no config"` or fails to find the script), the `evidence` job crashed (invalid config, see `review_evidence.error` in its log), or the artifact upload/download failed — review ran without evidence |
 | A check reports `ERROR (exit 127)` or `(exit 126)` | The command could not be executed: typo, binary not installed in the evidence job, or quotes/inline comment in `config/review-evidence.yaml` — fix the config; never forces `REQUEST_CHANGES` |
-| `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json` or `pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
+| `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json`, `pr-review.yml` or `adl-pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
 | `🧪 Tool Evidence` says *stale* | A push landed between the evidence run and the review's PR fetch; the review of the newer push will carry fresh evidence |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
@@ -198,16 +198,16 @@ For every workflow run, navigate to:
 
 Key steps to expand per workflow:
 
-### `validate-issue` (`validate-issue.yml`)
+### `validate-issue` (`validate-issue.yml` calling `adl-validate-issue.yml`)
 - **Validate issue** — LLM call result, score, verdict
 - **Manage labels** — label create/apply/remove HTTP status
 - **Upsert issue comment** — comment POST/PATCH result
 
-### `code-generation` (`code-generation.yml`)
+### `code-generation` (`code-generation.yml` calling `adl-code-generation.yml`)
 - **Generate issue change** — prompt construction, LLM response, file write results
 - **Create Pull Request** — PR number or error from `peter-evans/create-pull-request`
 
-### `pr-review` (`pr-review.yml`)
+### `pr-review` (`pr-review.yml` calling `adl-pr-review.yml`)
 - **Run PR review** — PR resolution, LLM call, comment upsert, review submit, label swap, re-pulse guard result
 
 ### `changelog-check` (`changelog-check.yml`)
@@ -229,7 +229,7 @@ Key steps to expand per workflow:
 - **comment → Compare with the published run / Post PR comment / Remove run-evals label**
 - Traces: `run-trace-<run_id>-plan`, `-eval`, `-comment` (one per job, they share the run ID)
 
-### `auto-fix-pr` (`auto-fix-pr.yml`)
+### `auto-fix-pr` (`auto-fix-pr.yml` calling `adl-auto-fix-pr.yml`)
 - **Resolve PR payload for issue_comment** _(only for checkbox-rerun triggers)_ — GitHub PR API call; extracts `head.ref` branch name needed for the checkout step. Failure here means the checkout will not have the correct branch ref.
 - **Checkout PR branch** — verifies the correct PR branch is checked out (uses `head_ref` from the resolve step for `issue_comment` events, `pull_request.head.ref` for label events)
 - **Apply AI fixes** — attempt count read, LLM call, file writes, attempt label apply
@@ -246,6 +246,20 @@ ADL_CONFIG_DIR=/path/to/trusted/config ADL_CONFIG_PATH=.autonomous-dev-loop node
 ```
 
 `roots.mode` is `target` when `ADL_CONFIG_DIR` is set and `pipeline-repo` otherwise; `files` shows the default and the layer actually found; `modelsOverridden` lists the keys the target changed; `protectedPaths` is the effective denylist. Startup errors name the file and the key (`models.yaml (<file>): unknown key "…"`, `protected_paths[0] …`, `ADL_CONFIG_PATH "…" must be a relative path …`, `ADL_CONFIG_DIR "…" must be an absolute path`): fix the target's file, the defaults are never edited for a target.
+
+## A Reusable Workflow Fails Before Any Stage Script (ADR-0045)
+
+validate-issue, code-generation and reset-auto-fix are jobs of the form `<caller job> / <called job>`. If the first steps fail, read the message of **Resolve pipeline version**:
+
+| Message | Cause | Fix |
+|---|---|---|
+| `pipeline_ref must be the default branch (…) when the pipeline repository calls itself` | A self-call passes another `pipeline_ref` | Pass `${{ github.event.repository.default_branch }}` or nothing |
+| `This run does not reference a reusable workflow of <repository>` | The caller job is not a call to `<repository>/.github/workflows/adl-*.yml@…`, or `pipeline_repository` names the wrong repository | Fix `pipeline_repository` or the `uses:` line |
+| `The reusable workflow is pinned to "…": pin a commit SHA or a vMAJOR.MINOR.PATCH tag, never a branch` | The `uses:` ref is a branch or a floating tag | Pin a SHA (recommended) or an exact tag |
+| `The run reports the reusable workflow at "…" but its path pins "…"` / `does not give the commit` | The run data is inconsistent | Re-run once; if it persists, pin a SHA |
+| `The pipeline does not run on pull_request_target` | A caller was triggered by `pull_request_target` | Use `pull_request` or `push`; never `pull_request_target` |
+
+A later `models.yaml (…): unknown key` or `ADL_CONFIG_DIR … must be an absolute path` is a configuration error: see *Checking Which Configuration a Run Resolves*.
 
 ## Recovery Actions per Workflow
 
@@ -383,7 +397,7 @@ git commit --allow-empty -m "re-trigger pr-review" && git push
 
 Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset attempt labels and the `autofix` checkpoint, then start a fresh run from attempt 1.
 
-Or dispatch **Reset Auto-Fix Counter** (`reset-auto-fix.yml`, `pr_number`, `retrigger`): `scripts/reset_auto_fix.mjs` removes the `auto-fix-attempt-N` labels and, with `retrigger`, re-applies `changes-requested`. The run uploads its trace and commits its record (and the trace index of the PR's work item) to `metrics` (ADR-0041).
+Or dispatch **Reset Auto-Fix Counter** (`reset-auto-fix.yml`, calling `adl-reset-auto-fix.yml`; `pr_number`, `retrigger`): `scripts/reset_auto_fix.mjs` removes the `auto-fix-attempt-N` labels and, with `retrigger`, re-applies `changes-requested`. The run uploads its trace and commits its record (and the trace index of the PR's work item) to `metrics` (ADR-0041).
 
 ### Manually approve and close the loop
 

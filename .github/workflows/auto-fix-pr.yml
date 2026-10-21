@@ -1,62 +1,20 @@
 name: Auto-Fix PR
 
+# Thin caller (ADR-0045): the body is adl-auto-fix-pr.yml. The name, the triggers and the permission ceiling
+# stay here; the per-PR concurrency group (ADR-0020) and the trust check on the comment author are in the
+# body. This repository runs its own pipeline from its default branch (ADR-0023).
 on:
   pull_request:
     types: [labeled]
   issue_comment:
     types: [created, edited]
 
-# Per job (ADR-0007 amendment 2026-10-20): load-labels runs on every label/comment event and only reads.
+# Per job (ADR-0007 amendment 2026-10-20): the called load-labels job runs on every label/comment event and only reads.
 permissions:
   contents: read
 
 jobs:
-  load-labels:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # gh api on the PR (head ref for issue_comment events).
-      pull-requests: read
-    outputs:
-      changes_requested: ${{ steps.cfg.outputs.changes_requested }}
-      head_ref: ${{ steps.head.outputs.ref }}
-    steps:
-      # Default branch, not the PR merge ref: this job runs repository code (yaml.mjs).
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - id: cfg
-        run: |
-          LABEL=$(node --input-type=module <<'EOF'
-          import { readFileSync } from 'fs';
-          import { parseNestedYaml } from './scripts/lib/yaml.mjs';
-          process.stdout.write(parseNestedYaml(readFileSync('config/labels.yaml', 'utf8')).review.changes.name);
-          EOF
-          )
-          echo "changes_requested=$LABEL" >> "$GITHUB_OUTPUT"
-      # issue_comment payloads carry no head ref; the shared concurrency group needs it.
-      # Same conditions as the auto-fix job's issue_comment branch: no lookup for other comments.
-      - id: head
-        if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '- [x] Relancer Auto Fixer') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_API_URL: ${{ github.event.issue.pull_request.url }}
-        # Fail closed: an empty ref would put the job in the global group `pr-pipeline-`.
-        run: |
-          REF=$(gh api "$PR_API_URL" --jq '.head.ref')
-          [ -n "$REF" ] || { echo "::error::Could not resolve PR head ref"; exit 1; }
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-
   auto-fix:
-    needs: load-labels
-    if: ${{ (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == needs.load-labels.outputs.changes_requested) || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '- [x] Relancer Auto Fixer')) }}
-    runs-on: ubuntu-latest
-    # 15 Groq retries x 60 s + 5 min for checkout, push and labels (ADR-0028).
-    timeout-minutes: 20
     permissions:
       # git push to the PR branch when AI_PR_TOKEN is unset, and the `metrics` branch (Commit metrics).
       contents: write
@@ -64,145 +22,14 @@ jobs:
       pull-requests: write
       # Attempt / needs-human labels and comments (auto_fix_pr.mjs, this token).
       issues: write
-      # Checkpoint artifact list and download (read only).
+      # Checkpoint artifact list and download, and the run lookup (read only).
       actions: read
-    # Job-level: every PR comment/label triggers this workflow; a workflow-level group
-    # would let skipped runs displace the pending real one. Never cancel: this job pushes.
-    # Shared with pr-review and reset-auto-fix (ADR-0020).
-    concurrency:
-      group: pr-pipeline-${{ github.event.pull_request.head.ref || needs.load-labels.outputs.head_ref }}
-      cancel-in-progress: false
-
-    steps:
-      - name: Resolve PR payload for issue_comment
-        if: ${{ github.event_name == 'issue_comment' }}
-        id: pr
-        env:
-          GH_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_API_URL: ${{ github.event.issue.pull_request.url }}
-        run: |
-          PAYLOAD=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${PR_API_URL}")
-          echo "head_ref=$(echo "${PAYLOAD}" | jq -r '.head.ref')" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout PR branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}
-          token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
-      # ADR-0023: pipeline code runs from the default branch; the branch above is data only.
-      - name: Checkout trusted pipeline (default branch)
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          path: .trusted-pipeline
-          persist-credentials: false
-
-      - name: Move trusted pipeline out of the workspace
-        run: mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Download checkpoint artifact
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-        run: |
-          ARTIFACT_NAME="checkpoints-pr-${PR_NUMBER}"
-          ARTIFACT_URL=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1" \
-            --jq '[.artifacts[] | select(.expired == false)] | .[0].archive_download_url // ""' \
-            2>/dev/null || echo "")
-          if [ -n "$ARTIFACT_URL" ]; then
-            mkdir -p ./checkpoints
-            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" "${ARTIFACT_URL}" -o /tmp/checkpoint.zip
-            unzip -o /tmp/checkpoint.zip -d ./checkpoints/
-            rm -f /tmp/checkpoint.zip
-          else
-            echo "No checkpoint artifact found for ${ARTIFACT_NAME}"
-          fi
-
-      - name: Check prerequisite checkpoint
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-        run: |
-          RUNID="pr-${PR_NUMBER}"
-          if [ ! -f "./checkpoints/${RUNID}/review.json" ]; then
-            echo "::error::Checkpoint 'review' not found for run '${RUNID}'. The pr-review workflow must complete successfully before auto-fix can proceed."
-            exit 1
-          fi
-
-      - name: Apply AI fixes
-        id: fix
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
-          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
-          LLM_MAX_RETRY_WAIT_MS: '60000'
-          GROQ_MAX_RETRIES: '15'
-          CHECKPOINT_RUN_ID: pr-${{ github.event.pull_request.number || github.event.issue.number }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
-          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
-          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
-          AI_PROVIDER_AUTOFIX: ${{ vars.AI_PROVIDER_AUTOFIX }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
-          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
-          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
-        run: node "$RUNNER_TEMP/pipeline/scripts/auto_fix_pr.mjs"
-
-      - name: Upload checkpoint artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkpoints-pr-${{ github.event.pull_request.number || github.event.issue.number }}
-          path: ./checkpoints
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Commit and push fixes
-        id: push
-        if: steps.fix.outputs.fixed_paths != ''
-        env:
-          PR_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || steps.pr.outputs.head_ref }}
-          ATTEMPT: ${{ steps.fix.outputs.attempt_number }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git reset HEAD -- metrics/
-          git diff --staged --quiet || git commit -m "fix(ai): auto-fix attempt ${ATTEMPT}"
-          git push origin HEAD:"${PR_BRANCH}"
-
-      - name: Upload run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}
-          path: ./observability/traces/${{ github.run_id }}.json
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Commit metrics
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Only this run's records, written outside the checkout (ADR-0021): never the
-          # working-tree metrics/runs.jsonl, which generated code could have modified.
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          RUN_RECORD_MESSAGE: "metrics: pr ${{ github.event.pull_request.number || github.event.issue.number }} auto-fix [skip ci]"
-          RUN_RECORD_PUSH_OUTCOME: ${{ steps.push.outcome }}
-          RUN_RECORD_PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
-        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
-        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
-        # The trusted copy is the default branch: until it ships the script, a warning, not a red job.
-        run: |
-          SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
-          [ -f "$SCRIPT" ] || { echo "::warning::commit_run_record.mjs is not on the default branch yet; metrics not committed"; exit 0; }
-          node "$SCRIPT"
+    uses: ./.github/workflows/adl-auto-fix-pr.yml
+    with:
+      pipeline_repository: ${{ github.repository }}
+      pipeline_ref: ${{ github.event.repository.default_branch }}
+      config_dir: config
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}

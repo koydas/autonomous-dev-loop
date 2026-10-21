@@ -1,5 +1,8 @@
 name: PR Review
 
+# Thin caller (ADR-0045): the body is adl-pr-review.yml. The name, the triggers, the per-PR concurrency
+# group and the permission ceiling stay here; this repository runs its own pipeline from its default branch
+# (ADR-0023).
 on:
   push:
     # main never has an open PR to review: skip it instead of paying for the evidence job.
@@ -7,225 +10,35 @@ on:
   pull_request:
     types: [opened]
 
-# Per job (ADR-0007 amendment 2026-10-20): the default here is read-only; each job grants what it calls.
+# Per job (ADR-0007 amendment 2026-10-20): the default here is read-only; the called jobs grant what they call.
 permissions:
   contents: read
 
-# Shared with auto-fix-pr and reset-auto-fix (ADR-0020): one pipeline stage per PR branch at a time.
+# Shared with auto-fix-pr and reset-auto-fix (ADR-0020): one pipeline stage per PR branch at a time. On the
+# caller, so it covers the whole run (evidence and review); the reusable workflow declares none, which would
+# make the called jobs wait for this very group.
 concurrency:
   group: pr-pipeline-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  # ADR-0024: executes PR code with no secrets and a read-only token; the review job consumes the results.
-  evidence:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      # ADR-0023: the runner and its config come from the default branch; the PR tree is only checked.
-      - name: Checkout trusted pipeline (default branch)
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          path: .trusted-pipeline
-          persist-credentials: false
-
-      - name: Move trusted pipeline out of the workspace
-        run: mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Run review evidence checks
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          # Outside the checkout: the PR tree must not be able to ship or overwrite its own evidence file.
-          REVIEW_EVIDENCE_PATH: ${{ runner.temp }}/evidence/review-evidence.json
-        run: node "$RUNNER_TEMP/pipeline/scripts/run_review_evidence.mjs"
-
-      - name: Upload review evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: review-evidence-${{ github.run_id }}
-          path: ${{ runner.temp }}/evidence/review-evidence.json
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Upload evidence run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}-evidence
-          path: ./observability/traces/${{ github.run_id }}-evidence.json
-          if-no-files-found: ignore
-          overwrite: true
-
-  review:
-    needs: evidence
-    # A crashed evidence job degrades the review (evidence "missing"), it never blocks it.
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    # Long on purpose: the 8K TPM is shared by every PR and stage of the org, so a review may have to
-    # wait several windows. GROQ_MAX_RETRIES x LLM_MAX_RETRY_WAIT_MS = 12 min of waits, + 3 min for the
-    # rest of the job (ADR-0022, ADR-0028 amendment).
-    timeout-minutes: 15
+  pr-review:
     permissions:
       # The `metrics` branch only (Commit metrics, Git Data API).
       contents: write
-      # Review submit; pr_review.mjs uses AI_PR_TOKEN, this token when it is unset.
+      # Review submit; pr_review.mjs uses AI_PR_TOKEN, the workflow token when it is unset.
       pull-requests: write
       # Labels and the review comment, same fallback.
       issues: write
-      # gh run list, the auto-fix run check and the cross-run checkpoint download (read only).
+      # gh run list, the auto-fix run check, the cross-run checkpoint download and the run lookup (read only).
       actions: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          # Full history: pr_review.mjs reads changed prompts at the merge base (`git show`, ADR-0037).
-          fetch-depth: 0
-      # ADR-0023: pipeline code runs from the default branch; the branch above is data only.
-      - name: Checkout trusted pipeline (default branch)
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          path: .trusted-pipeline
-          persist-credentials: false
-
-      - name: Move trusted pipeline out of the workspace
-        run: mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Resolve PR number for checkpoint
-        id: ckpt
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Event values through env, never expanded into the script (audit F14): a ref name may hold `$(`, `;`, backticks.
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BRANCH: ${{ github.ref_name }}
-          RUN_ID: ${{ github.run_id }}
-        run: |
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
-          else
-            PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
-            if [ -z "$PR" ]; then
-              sleep 5
-              PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
-            fi
-            echo "pr_number=${PR:-$RUN_ID}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Find latest auto-fix run for checkpoint
-        id: fix_run
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # pull_request: the head ref; push: the pushed branch (same key as the concurrency group).
-          BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
-        run: |
-          RUN_ID=$(gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow auto-fix-pr.yml \
-            --branch "$BRANCH" \
-            --status completed \
-            --limit 20 \
-            --json databaseId,conclusion \
-            --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
-          if [ -z "$RUN_ID" ]; then
-            RUN_ID=$(gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow auto-fix-pr.yml \
-              --status completed \
-              --limit 20 \
-              --json databaseId,conclusion \
-              --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
-          fi
-          echo "id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-
-      - name: Download checkpoint artifact
-        if: steps.fix_run.outputs.id != ''
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
-          run-id: ${{ steps.fix_run.outputs.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: ./checkpoints
-
-      - name: Download review evidence
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: review-evidence-${{ github.run_id }}
-          path: ${{ runner.temp }}/evidence
-
-      - name: Run automated review
-        id: review
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          REVIEW_EVIDENCE_PATH: ${{ runner.temp }}/evidence/review-evidence.json
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
-          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
-          LLM_MAX_RETRY_WAIT_MS: '60000'
-          GROQ_MAX_RETRIES: '12'
-          CHECKPOINT_RUN_ID: pr-${{ steps.ckpt.outputs.pr_number }}
-          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
-          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
-          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
-          AI_PROVIDER_REVIEW: ${{ vars.AI_PROVIDER_REVIEW }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
-          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
-          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
-        run: node "$RUNNER_TEMP/pipeline/scripts/pr_review.mjs"
-
-      # A skipped run (head already reviewed, superseded, no open PR) wrote no checkpoint: uploading
-      # the copy it downloaded would replace the newest checkpoints-pr-<N> with an older one (ADR-0028).
-      - name: Upload checkpoint artifact
-        if: ${{ always() && steps.review.outputs.skipped != 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
-          path: ./checkpoints
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Upload run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}
-          path: ./observability/traces/${{ github.run_id }}.json
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Commit metrics
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Only this run's records, written outside the checkout (ADR-0021): never the
-          # working-tree metrics/runs.jsonl, which generated code could have modified.
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          RUN_RECORD_MESSAGE: "metrics: pr ${{ steps.ckpt.outputs.pr_number }} [skip ci]"
-        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
-        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
-        # The trusted copy is the default branch: until it ships the script, a warning, not a red job.
-        run: |
-          SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
-          [ -f "$SCRIPT" ] || { echo "::warning::commit_run_record.mjs is not on the default branch yet; metrics not committed"; exit 0; }
-          node "$SCRIPT"
+    uses: ./.github/workflows/adl-pr-review.yml
+    with:
+      pipeline_repository: ${{ github.repository }}
+      pipeline_ref: ${{ github.event.repository.default_branch }}
+      config_dir: config
+      autofix_workflow_file: auto-fix-pr.yml
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}
