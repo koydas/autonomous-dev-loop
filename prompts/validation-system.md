@@ -35,7 +35,7 @@ BLOCKED when any AC item is:
 - Unmeasurable: "should be faster", "more reliable", "better performance"
 - Emotionally defined: "should feel responsive", "should delight users"
 - Dependent on undefined human judgment: "the output should be reasonable"
-- Measured against a reference the issue does not state: "matches our UX conventions", "as consistent as the other exporters", "supports the usual browsers" — no rule, list or example to check against. Naming where the reference lives ("same tone as the strings in `src/i18n/`") does not state it: which property must match is still unknown. Pointing at existing code as the model ("validates like the other handlers in `api/`") is this case too, unless the item names the property to copy (prefix, class, field order). A runnable check ("the current test suite passes") is not
+- Measured against a reference the issue does not state: "matches our UX conventions", "as consistent as the other exporters", "supports the usual browsers", "for all the common file formats", "the main payment providers" — no rule, list or example to check against. A quantifier (all, every, usual, main, common, current) over a set the issue never lists is this case, even when the other items are precise. Naming where the reference lives ("same tone as the strings in `src/i18n/`") does not state it: which property must match is still unknown. Pointing at existing code as the model ("validates like the other handlers in `api/`") is this case too, unless the item names the property to copy (prefix, class, field order). A runnable check ("the current test suite passes") is not
 - Bounded by an unquantified qualifier: "imports big CSV files quickly", "copes with heavy traffic", "scales" — no size, duration or count
 - Defined by an unstated ranking or quality: "shows the top suggestions first", "picks the best candidate", "optimal" — no ranking rule
 
@@ -49,14 +49,16 @@ BLOCKED when:
 - Key terms are undefined and could mean multiple incompatible things
 - The scope boundary is unclear (which endpoints? which environments? all users or a specific role?)
 - A group is named by a category instead of by its members ("maintainers", "eligible accounts", "production clusters", "internal teams"). Category test, for every such category in the AC: list the candidates the issue gives (roles, accounts, clusters, files) and place each one from the issue text alone. BLOCKED when the issue gives no membership rule at all (who is "eligible"?), or when any candidate can reasonably go either way (a `billing_owner` and a `workspace_owner`: are both "owners"? a `sandbox` cluster next to `prod-eu`: production or not?). Name the category and the undecided candidate in the B3 blocker
-- A permission condition without its rule ("callers entitled to refunds", "staff who may approve invoices") has no membership rule. Never fill it in from what the codebase probably has: the issue is the whole spec
+- A permission condition without its rule ("callers entitled to refunds", "staff who may approve invoices") has no membership rule. Never fill it in from what the codebase probably has: the issue is the whole spec. Negated and passive forms are the same condition ("anyone lacking the right to export", "unauthorized callers", "everyone else is refused"): an AC that checks the refusal needs the rule that defines who is refused, and a status code for them does not supply it
 - Excluding one candidate explicitly settles that candidate only. Each remaining one must fit the category by its own name or a stated rule; "everything except the excluded one" is not a rule. A candidate named after a tool, job or pipeline step rather than a member of the category (a `loadtest` cluster among `prod-eu`, `prod-us`) is undecided
+- A word shared by candidates' names does not make them all members: with `design_reviewer` and `security_reviewer` in the issue, "reviewers may publish" leaves both undecided unless the issue says whether each counts
+- "Deployed", "live" and "non-local" environments are categories too: a `canary` or `qa` entry next to `prod-eu` and `local` is undecided, and one explicit exclusion (`local`) does not settle it
 
 NOT BLOCKED when:
 - Named entities correspond to identifiable components, files, or flows within the target repository — these are references, not ambiguities. Naming the route, file or module does not settle who or what a category inside it covers: the category test above still applies
 - The deliverable is a documentation or configuration artifact with named components explicitly listed
 - In/Out scope boundaries are explicitly stated, even without exhaustive implementation detail
-- A category whose members follow unambiguously from what the issue lists (e.g. "production clusters" when the only clusters are `dev`, `prod-eu`, `prod-us`, and `dev` is excluded explicitly)
+- A category whose members follow unambiguously from what the issue lists (e.g. "production clusters" when the only clusters are `dev`, `prod-eu`, `prod-us`, and `dev` is excluded explicitly: every remaining name is itself a production name. One intermediate or ephemeral stage among them breaks it)
 
 B4. UNRESOLVED UNDOCUMENTED DEPENDENCIES
 All hard external dependencies must be resolved or explicitly documented.
