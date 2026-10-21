@@ -210,3 +210,11 @@ test('tabs: one tab per section, the hash picks the open one, no JavaScript show
   // Without the script nothing is hidden: panels only get role/hidden from it.
   assert.doesNotMatch(TABS_SCRIPT, /innerHTML/);
 });
+
+test('finding card shows its lifecycle status and last seen', () => {
+  const base = { id: 'z', severity: 'info', category: 'c', title: 't', fact: 'f', impact: 'i', frequency: 'n', hypothesis: null, items: [], runs: ['1-1'], evidence: [], link: null };
+  const html = findingCard({ ...base, status: 'resolved', last_seen: Date.parse('2026-10-20T17:21:00Z') }, '');
+  assert.match(html, /<span>resolved · last seen <span data-ts="1792516860000">2026-10-20 17:21 UTC<\/span><\/span>/);
+  assert.doesNotMatch(findingCard(base, ''), /last seen/);
+  assert.match(findingCard({ ...base, status: 'active', last_seen: null }, ''), /<span>active<\/span>/);
+});
