@@ -148,11 +148,13 @@ function windowBlock(w, root, hasWithheld, hidden) {
 
 /** Problems that need attention: the top findings as cards. */
 export function issueCards(d, root, limit = 3) {
-  const cards = d.findings.slice(0, limit).map((f) => {
+  // Only what is happening now: a resolved or by-design (info) finding stays on the Diagnostics page.
+  const active = d.findings.filter((f) => f.status !== 'resolved' && f.severity !== 'info');
+  const cards = active.slice(0, limit).map((f) => {
     const since = f.evidence.map((x) => x.ts).filter((t) => typeof t === 'number');
     return `<a class="issue-card tone-${SEVERITY_TONE[f.severity]}" href="${root}diagnostics.html#${e(f.id)}"><span class="issue-head">${toneMark(SEVERITY_TONE[f.severity])}<strong>${e(f.title)}</strong>${pill(SEVERITY_TONE[f.severity], f.severity)}</span><span class="issue-text">${e(f.impact)}</span><span class="issue-meta"><span>Affects ${e(f.runs.length)} run(s)</span>${since.length ? `<span>Since: <span data-ts="${Math.min(...since)}">${e(new Date(Math.min(...since)).toISOString().slice(0, 10))}</span></span>` : ''}</span></a>`;
   }).join('');
-  return `<section class="panel attention-panel tone-${d.findings.length ? SEVERITY_TONE[d.findings[0].severity] : 'unknown'}"><h3><span>Issues requiring attention <small class="muted">${e(d.findings.length)} detected over the retained window</small></span><a href="${root}diagnostics.html">View all →</a></h3>${cards ? `<div class="issue-grid">${cards}</div>` : `<p class="muted">No rule fired on the recorded data (${e(d.gaps.length)} data gap(s): not proof of health).</p>`}</section>`;
+  return `<section class="panel attention-panel tone-${active.length ? SEVERITY_TONE[active[0].severity] : 'unknown'}"><h3><span>Issues requiring attention <small class="muted">${e(active.length)} active</small></span><a href="${root}diagnostics.html">View all →</a></h3>${cards ? `<div class="issue-grid">${cards}</div>` : `<p class="muted">${d.findings.length ? `No active warning or critical finding; ${e(d.findings.length)} resolved or informational on the Diagnostics page` : 'No rule fired on the recorded data'} (${e(d.gaps.length)} data gap(s): not proof of health).</p>`}</section>`;
 }
 
 function secondary(o, root) {

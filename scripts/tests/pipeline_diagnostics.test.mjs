@@ -187,7 +187,7 @@ test('evidence is capped and keeps run, event, summary, PR and an https source l
 });
 
 test('two reviews of one head are a duplicate even below the rate sample floor (PR #242 review)', () => {
-  const d = diagnose({ model: model([run({ trigger: 'pull_request', events: [verdict('WITHHELD')] }), run({ trigger: 'push', events: [verdict('WITHHELD')] })]) });
+  const d = diagnose({ model: model([run({ trigger: 'pull_request', events: [verdict('APPROVE')] }), run({ trigger: 'push', events: [verdict('APPROVE')] })]) });
   assert.ok(RULES.minVerdicts > 2);
   assert.deepEqual(ids(d), ['review-duplicates']);
   assert.equal(d.status, 'warning');
@@ -345,4 +345,98 @@ test('auto-fix anomaly: no_changes with every file shown, or a rule outside the 
   // One anomaly in three attempts (33 %) is under autofixNoPushShare: info, the card stays.
   const mostly = [runs[0], runs[2], attempt([{ event: 'autofix.skipped', meta: { reason: 'guardrail_rejected', rules: ['unshown_file'] } }])];
   assert.equal(find(diagnose({ model: model(mostly) }), 'autofix-ineffective').severity, 'info');
+});
+
+// Lifecycle: active / resolved over the last RULES.activeWindow eligible runs of a rule.
+const cutRun = (i, v = 'WITHHELD', cut = true) => run({ t: T + i * 60000, sha: String(i % 10).repeat(39) + String.fromCharCode(97 + (i % 26)), events: [
+  ...(cut ? [{ event: 'review.prompt_truncated', meta: { diff_truncated: true, unreviewed_code_files: 3, prNumber: 9 } }] : []),
+  verdict(v, v === 'WITHHELD' ? { withheld_from: 'APPROVE', unreviewed_code_files: 3 } : {}),
+] });
+const cutThenClean = (cutN, cleanN) => [...Array.from({ length: cutN }, (_, i) => cutRun(i)), ...Array.from({ length: cleanN }, (_, i) => cutRun(cutN + i, 'APPROVE', false))];
+
+test('lifecycle: a rule with an occurrence in its last N eligible runs stays active, with first_seen and last_seen', () => {
+  const runs = cutThenClean(8, 2);
+  const c = find(diagnose({ model: model(runs) }), 'review-coverage');
+  assert.equal(RULES.activeWindow, 10);
+  assert.equal(c.status, 'active');
+  assert.equal(c.clean_since, null);
+  assert.equal(c.first_seen, T);
+  assert.equal(c.last_seen, T + 7 * 60000);
+  assert.equal(c.title, 'Review diffs are cut by design (ADR-0038)', 'cut + WITHHELD only: guardrail, not an anomaly');
+  assert.equal(c.severity, 'info');
+});
+
+test('lifecycle: no occurrence in the last N eligible runs resolves the finding; history stays in fact and evidence', () => {
+  const runs = cutThenClean(30, 10);
+  const d = diagnose({ model: model(runs) });
+  const c = find(d, 'review-coverage');
+  assert.equal(c.status, 'resolved');
+  assert.equal(c.severity, 'info');
+  assert.equal(c.title, 'Review diffs are cut — resolved since 2026-10-20');
+  assert.equal(c.clean_since, T + 30 * 60000, 'the first run after the last occurrence');
+  assert.equal(c.last_seen, T + 29 * 60000);
+  assert.match(c.fact, /^30 of 40 reviews saw a truncated diff/);
+  assert.equal(c.runs.length, 30);
+  assert.ok(c.evidence.length > 0);
+  assert.equal(d.status, 'ok', 'a resolved finding does not raise the status');
+});
+
+test('lifecycle: an occurrence after a clean streak makes the finding active again; first_seen stays', () => {
+  const runs = [...cutThenClean(30, 10), cutRun(40), cutRun(41)];
+  const c = find(diagnose({ model: model(runs) }), 'review-coverage');
+  assert.equal(c.status, 'active');
+  assert.equal(c.first_seen, T);
+  assert.equal(c.last_seen, T + 41 * 60000);
+  assert.equal(c.clean_since, null);
+  assert.doesNotMatch(c.title, /resolved/);
+});
+
+test('lifecycle: a window shorter than N judges the runs it has', () => {
+  // 6 eligible runs < N: every occurrence is within the "last N", so a clean tail does not resolve it yet.
+  const c = find(diagnose({ model: model(cutThenClean(3, 3)) }), 'review-coverage');
+  assert.equal(c.status, 'active');
+  assert.equal(c.last_seen, T + 2 * 60000);
+  assert.equal(c.first_seen, T);
+});
+
+test('review-coverage: APPROVE on a cut diff is critical; REQUEST_CHANGES is an anomaly; resolved once clean', () => {
+  const approve = find(diagnose({ model: model([cutRun(0), cutRun(1), cutRun(2, 'APPROVE')]) }), 'review-coverage');
+  assert.equal(approve.severity, 'critical');
+  assert.equal(approve.status, 'active');
+  assert.match(approve.fact, /Guardrail \(WITHHELD, ADR-0038\): 2; anomaly: 1 \(APPROVE on a cut diff, impossible since ADR-0038: 1/);
+  const rc = find(diagnose({ model: model([cutRun(0), cutRun(1), cutRun(2, 'REQUEST_CHANGES')]) }), 'review-coverage');
+  assert.equal(rc.severity, 'warning');
+  assert.equal(rc.title, 'Review diffs are cut');
+  const old = find(diagnose({ model: model([cutRun(0, 'APPROVE'), ...Array.from({ length: 30 }, (_, i) => cutRun(1 + i)), ...Array.from({ length: 10 }, (_, i) => cutRun(31 + i, 'APPROVE', false))]) }), 'review-coverage');
+  assert.equal(old.status, 'resolved', 'an old impossible APPROVE does not stay critical');
+  assert.equal(old.severity, 'info');
+});
+
+test('review-duplicates: after WITHHELD or a manual re-run is by design; two runs claiming one head is the anomaly', () => {
+  const sha = 'd'.repeat(40);
+  const at = (i, v, extra = {}) => ({ ...run({ t: T + i * 1000, sha, events: [verdict(v)] }), ...extra });
+  const guardrail = find(diagnose({ model: model([at(0, 'WITHHELD'), at(1, 'WITHHELD')]) }), 'review-duplicates');
+  assert.equal(guardrail.severity, 'info');
+  assert.equal(guardrail.title, 'Same PR head reviewed again by design (ADR-0028)');
+  assert.match(guardrail.fact, /Guardrail: 1 \(after a WITHHELD verdict, ADR-0028: 1; manual re-run: 0\); anomaly: 0/);
+  const after = find(diagnose({ model: model([at(0, 'WITHHELD'), at(1, 'APPROVE')]) }), 'review-duplicates');
+  assert.equal(after.severity, 'info', 'WITHHELD never deduplicates');
+  const manual = find(diagnose({ model: model([at(0, 'APPROVE'), at(1, 'APPROVE', { run_id: '77-2' })]) }), 'review-duplicates');
+  assert.equal(manual.severity, 'info', 'run attempt 2 bypasses the marker');
+  const race = find(diagnose({ model: model([at(0, 'APPROVE', { event_name: 'push' }), at(1, 'APPROVE')]) }), 'review-duplicates');
+  assert.equal(race.severity, 'warning');
+  assert.equal(race.title, 'Same PR head reviewed more than once');
+  assert.match(race.fact, /anomaly: 1 \(two runs on one head, none skipped by the marker\)/);
+  assert.match(race.hypothesis, /push and the pull_request trigger/);
+});
+
+test('review-duplicates: resolved once later reviews, skipped by the marker, are clean', () => {
+  const race = [run({ t: T, trigger: 'push', events: [verdict('APPROVE')] }), run({ t: T + 1000, events: [verdict('APPROVE')] })];
+  const skipped = Array.from({ length: 10 }, (_, i) => run({ t: T + 10000 + i * 1000, sha: String(i).repeat(40), events: [{ event: 'review.skipped', meta: { reason: 'already_reviewed' } }] }));
+  const f = find(diagnose({ model: model([...race, ...skipped]) }), 'review-duplicates');
+  assert.equal(f.status, 'resolved');
+  assert.equal(f.severity, 'info');
+  assert.match(f.title, / — resolved since 2026-10-20$/);
+  assert.equal(f.first_seen, T);
+  assert.match(f.fact, /1 PR head\(s\) got 1 extra review run/);
 });
