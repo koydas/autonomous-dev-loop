@@ -1,5 +1,7 @@
 name: Reset Auto-Fix Counter
 
+# Thin caller (ADR-0045): the body is adl-reset-auto-fix.yml. The name, the trigger and the permission
+# ceiling stay here; this repository runs its own pipeline from its default branch (ADR-0023).
 on:
   workflow_dispatch:
     inputs:
@@ -18,68 +20,21 @@ permissions:
   contents: read
 
 jobs:
-  resolve:
-    runs-on: ubuntu-latest
+  reset-auto-fix:
     permissions:
-      # gh api on the PR (head ref).
-      pull-requests: read
-    outputs:
-      head_ref: ${{ steps.head.outputs.ref }}
-    steps:
-      - id: head
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-        # Fail closed: an empty ref would put the job in the global group `pr-pipeline-`.
-        run: |
-          REF=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')
-          [ -n "$REF" ] || { echo "::error::Could not resolve PR head ref"; exit 1; }
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-
-  reset:
-    needs: resolve
-    runs-on: ubuntu-latest
-    permissions:
-      # Kept: label removal / re-apply on the PR (reset_auto_fix.mjs, AI_PR_TOKEN or this token); issues: write may suffice.
+      # Label removal / re-apply on the PR (reset_auto_fix.mjs, AI_PR_TOKEN or the workflow token).
       pull-requests: write
       issues: write
       # The `metrics` branch only (Commit metrics step, ADR-0040, ADR-0041).
       contents: write
-    # Shared with pr-review and auto-fix-pr (ADR-0020): never reset labels mid auto-fix run.
-    concurrency:
-      group: pr-pipeline-${{ needs.resolve.outputs.head_ref }}
-      cancel-in-progress: false
-    steps:
-      # No step pushes: labels and metrics go through the API with an explicit token.
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Reset auto-fix attempt labels
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          RETRIGGER: ${{ inputs.retrigger }}
-        run: node scripts/reset_auto_fix.mjs
-
-      - name: Upload run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}
-          path: ./observability/traces/${{ github.run_id }}.json
-          if-no-files-found: ignore
-          overwrite: true
-
-      # ADR-0041: the reset joins the trace of the PR's work item — record + trace index on `metrics`
-      # (ADR-0040). The checkout is the dispatching ref: no PR code runs here.
-      - name: Commit metrics
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_RECORD_MESSAGE: "metrics: pr ${{ inputs.pr_number }} reset-auto-fix [skip ci]"
-        run: node scripts/commit_run_record.mjs
+      # The run lookup that gives the pipeline commit of an external caller (read only).
+      actions: read
+    uses: ./.github/workflows/adl-reset-auto-fix.yml
+    with:
+      pipeline_repository: ${{ github.repository }}
+      pipeline_ref: ${{ github.event.repository.default_branch }}
+      config_dir: config
+      pr_number: ${{ inputs.pr_number }}
+      retrigger: ${{ inputs.retrigger }}
+    secrets:
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}
