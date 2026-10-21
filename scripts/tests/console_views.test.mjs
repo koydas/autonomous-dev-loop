@@ -66,7 +66,7 @@ test('diagnostics: finding card separates observed facts from a labelled hypothe
   assert.match(html, /<a class="button-link" href="health\.html#reviews">Investigate →<\/a>/);
   assert.match(html, /<select data-filter-key="severity">/);
   assert.match(html, /<option value="review">Review<\/option>/);
-  assert.match(html, /id="data-gaps".*insufficient data.*Merge is not journaled/s);
+  assert.match(html, /id="data-gaps".*insufficient data.*Merge is journaled only from item-closed\.yml on/s);
   assert.match(html, /<code>withheldShare<\/code>/);
   assert.doesNotMatch(html, /Open diagnostics/, 'no self link');
   // Findings without hypothesis, evidence or link.

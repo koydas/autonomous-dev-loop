@@ -1,0 +1,71 @@
+name: Item Closed
+
+# Journals the end of a work item (ADR-0043 amendment, 2026-10-21): one `item.closed` event, so the
+# dashboard stops listing as "waiting on you" an issue or PR that was merged or closed. The run joins the
+# trace of the item like every other run (ADR-0041). No LLM, no secret: the only token is the workflow's
+# own, to write the run record to the `metrics` branch (ADR-0040). Closings before this workflow existed
+# have no event and are not inferred (Diagnostics → data gaps). This repository only: a target repository
+# would need a reusable adl-*.yml and a caller (ADR-0045).
+on:
+  issues:
+    types: [closed]
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+# One closing per item at a time; metrics commits are serialized by their own retry (ADR-0013).
+concurrency:
+  group: item-closed-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  journal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # The `metrics` branch only (Commit metrics step, ADR-0040). A pull request from a fork gets a read-only
+      # token: its closing is not recorded (the step warns, never fails).
+      contents: write
+    steps:
+      # ADR-0023: the scripts come from the default branch, never from a pull request tree. Nothing else is checked out.
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      - name: Move the pipeline out of the workspace
+        run: mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # The event payload gives the work item (ADR-0041); the published meta is state_reason or merged only.
+      - name: Journal the closing
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ITEM_KIND: ${{ github.event_name == 'issues' && 'issue' || 'pull_request' }}
+          ITEM_STATE_REASON: ${{ github.event.issue.state_reason }}
+          ITEM_MERGED: ${{ github.event.pull_request.merged }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/item_closed.mjs"
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      # Record + trace index only: no runs.jsonl line (the closing is not a pipeline execution).
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_RECORD_MESSAGE: "metrics: item ${{ github.event.issue.number || github.event.pull_request.number }} closed [skip ci]"
+        run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"

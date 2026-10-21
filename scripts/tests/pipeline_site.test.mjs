@@ -64,7 +64,7 @@ test('empty states: no record, no trace, no LLM call', () => {
   // No data is said, never shown as healthy.
   assert.match(files['pipeline/diagnostics.html'], /No pipeline run recorded yet/);
   assert.doesNotMatch(files['pipeline/diagnostics.html'], /No problem detected/);
-  assert.match(files['pipeline/diagnostics.html'], /Merge is not journaled/);
+  assert.match(files['pipeline/diagnostics.html'], /Merge is journaled only from item-closed\.yml on/);
   assert.match(files['pipeline/index.html'], /No run record on the <code>metrics<\/code> branch yet/);
   assert.match(files['pipeline/index.html'], /No pipeline action recorded in this period/);
   assert.match(files['pipeline/traces/index.html'], /No trace index on the metrics branch yet/);

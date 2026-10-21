@@ -70,6 +70,7 @@ Modules with CI-enforced ≥ 80% coverage (`c8 --check-coverage` in `test.yml`):
 - `scripts/lib/pipeline_model.mjs`
 - `scripts/lib/pipeline_health.mjs`
 - `scripts/lib/pipeline_site.mjs`
+- `scripts/lib/pipeline_waiting.mjs` (measured with `waiting_on_you.test.mjs`)
 - `scripts/build_eval_site.mjs` (entrypoint, measured with `build_eval_site.test.mjs`)
 
 Specific required paths for `scripts/lib/prompts.mjs`:

@@ -37,6 +37,7 @@ import { SUITES } from './lib/eval_suites.mjs';
 import { buildPipelineModel, MONTH_RE } from './lib/pipeline_model.mjs';
 import { computeHealth, modelUsage } from './lib/pipeline_health.mjs';
 import { consoleContext } from './lib/console_views.mjs';
+import { loadProtectedPaths } from './lib/protected_paths.mjs';
 import { consoleOverview } from './lib/console_overview.mjs';
 import { pipelineFacets } from './lib/flow_dashboard.mjs';
 import { buildPipelineSite } from './lib/pipeline_site.mjs';
@@ -165,9 +166,9 @@ export async function readPipelineDir(dir, { log = console.log } = {}) {
 }
 
 // Pure: pipeline inputs + the scorecard being deployed → the pipeline/ pages.
-export function assemblePipeline({ pipeline, scorecard, generatedAt = null, log = () => {} }) {
+export function assemblePipeline({ pipeline, scorecard, generatedAt = null, log = () => {}, protectedPaths }) {
   const model = buildPipelineModel({ ...pipeline, log });
-  const ctx = consoleContext(model);
+  const ctx = consoleContext(model, { protectedPaths });
   const files = buildPipelineSite({ model, health: computeHealth({ model, scorecard }), models: modelUsage(model.runs, scorecard), generatedAt, console: ctx });
   return { files, model, console: ctx };
 }
@@ -217,7 +218,7 @@ function rebaselineGate(datasets) {
 // pipeline: readPipelineDir() output, or null for an eval-only site (local preview, tests).
 // rebaseline: apply rebaselineScorecard first (datasets: loadSuiteDatasets output); the returned `rebaseline`
 // lists what it did, or is null without the flag.
-export function assembleSite({ previous, resultsList, pipeline = null, generatedAt = new Date().toISOString(), log = () => {}, rebaseline = false, datasets = {} }) {
+export function assembleSite({ previous, resultsList, pipeline = null, generatedAt = new Date().toISOString(), log = () => {}, rebaseline = false, datasets = {}, protectedPaths }) {
   const rebase = rebaseline ? rebaselineScorecard(previous.scorecard, resultsList, { gate: rebaselineGate(datasets) }) : null;
   const base = rebase?.scorecard ?? previous.scorecard;
   const valid = partitionPublishable(resultsList);
@@ -234,7 +235,7 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   for (const id of Object.keys(details)) if (!retained.has(id)) delete details[id];
   const thresholds = Object.fromEntries(Object.entries(SUITES).map(([name, s]) => [name, s.thresholds ?? {}]));
   const files = buildSite({ scorecard, details, thresholds, generatedAt, pipeline: pipeline != null });
-  const assembled = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log }) : null;
+  const assembled = pipeline ? assemblePipeline({ pipeline, scorecard, generatedAt, log, protectedPaths }) : null;
   const pipelineFiles = assembled?.files ?? {};
   // The home page leads with the pipeline's health (ADR-0043); the eval sections follow it.
   if (assembled) {
@@ -295,7 +296,10 @@ export async function buildEvalSite({ outDir, siteUrl, previousDir, pipelineDir,
   const resultsList = await Promise.all(resultFiles.map(async (f) => JSON.parse(await fs.readFile(f, 'utf8'))));
   const pipeline = pipelineDir ? await readPipelineDir(pipelineDir, { log }) : null;
   const datasets = rebaseline ? await loadSuiteDatasets(resultsList, datasetRoot) : {};
-  const { files, scorecard, skipped, pipelineFiles, rebaseline: rebase } = assembleSite({ previous, resultsList, pipeline, log, rebaseline, datasets, ...(generatedAt && { generatedAt }) });
+  // The repository's own denylist tells "waiting on you" which auto-fix targets were modifiable (ADR-0044); the hard floor alone otherwise.
+  let protectedPaths;
+  try { protectedPaths = loadProtectedPaths(); } catch (err) { log(`protected paths unreadable, using the hard floor: ${err.message}`); }
+  const { files, scorecard, skipped, pipelineFiles, rebaseline: rebase } = assembleSite({ previous, resultsList, pipeline, log, rebaseline, datasets, protectedPaths, ...(generatedAt && { generatedAt }) });
   const actions = process.env.GITHUB_ACTIONS === 'true';
   if (rebase) {
     logRebaseline(rebase, log, actions);

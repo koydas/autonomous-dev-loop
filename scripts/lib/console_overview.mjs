@@ -4,7 +4,7 @@
 import { escapeHtml as e } from './eval_site.mjs';
 import { costAmount, costBasis, formatUsd } from './llm_cost.mjs';
 import { DEFINITIONS, WINDOWS, RUN_CLASSES } from './pipeline_kpis.mjs';
-import { toneMark, pill, trendChart, definitionsPanel, duration } from './console_views.mjs';
+import { toneMark, pill, trendChart, definitionsPanel, duration, itemTitle } from './console_views.mjs';
 import { pipelineList, FLOW_SCRIPT } from './flow_dashboard.mjs';
 
 const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)} %`);
@@ -157,6 +157,17 @@ export function issueCards(d, root, limit = 3) {
   return `<section class="panel attention-panel tone-${active.length ? SEVERITY_TONE[active[0].severity] : 'unknown'}"><h3><span>Issues requiring attention <small class="muted">${e(active.length)} active</small></span><a href="${root}diagnostics.html">View all →</a></h3>${cards ? `<div class="issue-grid">${cards}</div>` : `<p class="muted">${d.findings.length ? `No active warning or critical finding; ${e(d.findings.length)} resolved or informational on the Diagnostics page` : 'No rule fired on the recorded data'} (${e(d.gaps.length)} data gap(s): not proof of health).</p>`}</section>`;
 }
 
+/**
+ * Waiting on you: the open work items whose last recorded state is an escalation to a human (ADR-0001), oldest
+ * first. Each row: item, step, the reason in plain words (files named), the escalation comment and the age.
+ * No severity: waiting here is the gate working; a finding is raised separately for what the design does not explain.
+ */
+export function waitingPanel(rows, root) {
+  const time = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
+  const list = rows.map((w) => `<li class="waiting-row"><div class="waiting-head"><a href="${root}traces/${encodeURIComponent(w.trace_id)}.html"><strong>${e(itemTitle(w.item))}</strong></a>${w.prs.filter((n) => n !== w.item?.number).map((n) => ` <span class="muted">PR #${e(n)}</span>`).join('')}<span class="pill tone-neutral">${e(w.step)}</span></div><p class="waiting-reason">${e(w.reason)}</p><p class="waiting-meta">${w.url ? `<a href="${e(w.url)}">Escalation comment</a>` : '<span class="muted">No comment link recorded</span>'} · ${w.since != null ? `waiting since <span data-ts="${w.since}">${e(time(w.since))} UTC</span>` : '<span class="muted">date not recorded</span>'}</p></li>`).join('');
+  return `<section class="panel waiting-panel" id="waiting"><h3><span>Waiting on you <small class="muted">${e(rows.length)} open item(s) escalated to a human</small></span><a href="${root}flows.html?state=escalated">Pipelines →</a></h3>${list ? `<ul class="waiting-list">${list}</ul>` : '<p class="muted">Nothing waits on you: no open work item has an escalation as its last recorded state. Items closed before closings were journaled are not inferred (Diagnostics → data gaps).</p>'}</section>`;
+}
+
 function secondary(o, root) {
   const items = [
     ['Waiting on a person', `${o.items.needs_attention} / ${o.window.items}`, `${root}flows.html?state=attention`, 'last recorded state; merges are re-checked on Pipelines'],
@@ -178,6 +189,7 @@ export function consoleOverview(ctx, root = '') {
 <div class="page-head"><div><h1>System overview</h1><p class="sub">What the recorded runs say about the pipeline. Windows end on the latest recorded run (${e(o.window.to ? new Date(o.window.to).toISOString().slice(0, 16).replace('T', ' ') : '—')} UTC).</p></div><div class="head-tools">${range}${statusBadge(d, root)}</div></div>
 ${WINDOWS.map((n, i) => windowBlock(windows[n], root, hasWithheld, i > 0)).join('')}
 ${secondary(o, root)}
+${waitingPanel(ctx.waiting ?? [], root)}
 ${issueCards(d, root)}
 ${pipelineList(recent, { root, limit: 10, toolbar })}
 ${definitionsPanel()}
@@ -235,6 +247,11 @@ export const OVERVIEW_STYLE = `
 .mini-stats span { font-size:11.5px; color:var(--muted); } .mini-stats strong { font-size:15px; font-variant-numeric:tabular-nums; }
 .attention-panel { border-color:color-mix(in srgb, var(--tone) 45%, var(--border)); background:linear-gradient(180deg, color-mix(in srgb, var(--tone) 7%, var(--surface)), var(--surface)); }
 .attention-panel h3 small { display:block; font-weight:500; font-size:12px; margin-top:2px; }
+.waiting-list { list-style:none; margin:0; padding:0; display:grid; gap:10px; }
+.waiting-row { padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+.waiting-head { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.waiting-reason { margin:6px 0 4px; overflow-wrap:anywhere; }
+.waiting-meta { margin:0; font-size:12px; color:var(--ink-2); }
 .issue-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .issue-card { display:grid; gap:8px; padding:14px; border:1px solid color-mix(in srgb, var(--tone) 40%, var(--border)); border-radius:10px; background:var(--surface); color:var(--ink); text-decoration:none; }
 .issue-card:hover { border-color:var(--tone); }

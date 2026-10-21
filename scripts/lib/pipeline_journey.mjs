@@ -1,8 +1,9 @@
 // Journey of a work item through the canonical pipeline (dashboard Pipelines view, ADR-0043): every
 // attempt of every step, its execution status (the stage span outcome) next to its decision (the journal
 // event that records what the step decided), so a failed or adverse attempt is never hidden behind the
-// latest one. Pure: the trace of pipeline_model.mjs in, plain data out. Merge is not journaled by any
-// workflow: it is never inferred here (the browser asks GitHub for merged_at).
+// latest one. Pure: the trace of pipeline_model.mjs in, plain data out. Merge and closing are journaled
+// (`item.closed`, item-closed.yml) only for items closed since that workflow exists: an earlier closing is
+// never inferred here (the browser asks GitHub for merged_at).
 
 import { safeUrl } from './pipeline_model.mjs';
 
@@ -27,6 +28,10 @@ export const STATES = Object.freeze({
   changes_requested: { label: 'Changes requested', tone: 'warn', attention: false },
   approved: { label: 'Approved by review', tone: 'good', attention: false },
   in_progress: { label: 'No decision recorded yet', tone: 'neutral', attention: false },
+  // ADR-0043 amendment (2026-10-21): the end of the item, from `item.closed` (item-closed.yml). It prevails over
+  // every state above: nobody has to act on a closed or merged item.
+  merged: { label: 'Merged', tone: 'good', attention: false },
+  closed: { label: 'Closed', tone: 'neutral', attention: false },
   no_data: { label: 'No run record loaded', tone: 'unknown', attention: false },
 });
 
@@ -108,7 +113,45 @@ export function stepDecision(run, step) {
 export function escalations(run) {
   return run.events.filter((e) => /\.escalated$/.test(e.event) || e.event === 'autofix.max_attempts_reached'
     || (Array.isArray(e.meta?.labels_added) && e.meta.labels_added.includes('needs-human')))
-    .map((e) => ({ ts: e.ts, run_id: run.run_id, stage: e.stage, event: e.event, reason: reasonText(e.meta?.reason), url: safeUrl(e.meta?.url) }));
+    .map((e) => ({ ts: e.ts, run_id: run.run_id, stage: e.stage, event: e.event, reason: reasonText(e.meta?.reason), url: safeUrl(e.meta?.url), pr: posInt(e.meta?.prNumber) ?? posInt(run.pr_number) }));
+}
+
+/**
+ * A run that only journals the end of a work item (item-closed.yml): it executed no pipeline step, so
+ * the execution indicators (run counts, classes, durations) leave it out.
+ */
+export const isLifecycleRun = (run) => run.events.length > 0 && run.stages.length === 0 && run.events.every((e) => /^item\./.test(e.event));
+
+/**
+ * Closings a run recorded (`item.closed`): `{ ts, run_id, object: 'issue' | 'pr', pr, merged, state_reason }`.
+ * The closed object is read from the event's meta (`merged` is only published for a pull request), else from
+ * the workflow event; `merged` is null when not recorded, never assumed.
+ */
+export function closings(run) {
+  return run.events.filter((e) => e.event === 'item.closed').map((e) => {
+    const meta = e.meta ?? {};
+    const object = typeof meta.merged === 'boolean' || run.event_name === 'pull_request' ? 'pr' : 'issue';
+    return {
+      ts: e.ts ?? run.started_at ?? null, run_id: run.run_id, object, pr: object === 'pr' ? posInt(run.pr_number) : null,
+      merged: typeof meta.merged === 'boolean' ? meta.merged : null, state_reason: reasonText(meta.state_reason),
+    };
+  });
+}
+
+/**
+ * The closing that ends the item, or null. A merged PR and a closed issue end it. A PR closed without a merge
+ * ends it only when it is the item's own (a PR without issue) or its latest PR: an earlier PR closed while a
+ * newer one is open does not. A run of any step that started after the closing reactivated the item (reopened,
+ * regenerated): the closing no longer counts.
+ */
+function endingClosing(all, steps, item, prs) {
+  const latestPr = Math.max(0, ...prs);
+  const ends = (c) => c.merged === true || c.object === 'issue' || item?.kind === 'pr' || (c.pr != null && c.pr === latestPr);
+  const attempts = steps.flatMap((s) => s.attempts);
+  const live = (c) => !attempts.some((a) => (a.started_at ?? -Infinity) > (c.ts ?? Infinity));
+  const effective = all.filter((c) => ends(c) && live(c));
+  // Merged beats closed (an issue closes after the merge of its PR); otherwise the latest.
+  return effective.find((c) => c.merged === true) ?? effective.at(-1) ?? null;
 }
 
 const runsOfStep = (runs, step) => runs.filter((r) => r.stages.some((s) => s.stage === step) || r.events.some((e) => e.stage === step));
@@ -160,8 +203,9 @@ export function stepJourney(runs, step) {
 }
 
 // Last recorded state from the step journeys and escalations (see STATES).
-function itemState(steps, escalated, runs) {
+function itemState(steps, escalated, runs, closing) {
   if (!runs.length) return 'no_data';
+  if (closing) return closing.merged ? 'merged' : 'closed';
   // A rejection is the validation's decision even when its span is closed as failed (the run is partial).
   const validation = steps.find((s) => s.key === 'issue_validation');
   if (validation.final?.decision?.key === 'fail' && steps.every((s) => s.key === 'issue_validation' || !s.attempts.length)) return 'rejected';
@@ -174,7 +218,7 @@ function itemState(steps, escalated, runs) {
   const approvedAt = Math.max(-Infinity, ...review.attempts.filter((a) => a.decision?.key === 'APPROVE').map((a) => a.ended_at ?? -Infinity));
   const standing = (t) => !(approvedAt > (t ?? -Infinity));
   const failedFinal = steps.some((s) => (s.final?.status === 'failed' || s.final?.decision?.tone === 'bad') && standing(s.final.ended_at))
-    || runs.some((r) => r.outcome === 'failed' && (!attempted.has(r.run_id) || finalRuns.has(r.run_id)) && standing(r.completed_at ?? r.started_at));
+    || runs.some((r) => r.outcome === 'failed' && !isLifecycleRun(r) && (!attempted.has(r.run_id) || finalRuns.has(r.run_id)) && standing(r.completed_at ?? r.started_at));
   if (failedFinal) return 'failed';
   const decisions = review.attempts.filter((a) => a.decision && a.decision.key !== 'skipped');
   const lastReview = decisions.at(-1);
@@ -203,9 +247,10 @@ export function workItemJourney(trace) {
     return { key: def.key, name: def.name, ...j, note };
   });
   const escalated = runs.flatMap(escalations).sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-  const state = itemState(steps, escalated, runs);
   const prs = [...new Set(runs.flatMap((r) => [r.pr_number, ...r.events.map((e) => e.meta?.prNumber)]).filter((n) => posInt(n)))];
   if (trace.item?.kind === 'pr' && !prs.includes(trace.item.number)) prs.push(trace.item.number);
+  const closing = endingClosing(runs.flatMap(closings).sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0)), steps, trace.item, prs);
+  const state = itemState(steps, escalated, runs, closing);
   const calls = runs.flatMap((r) => r.llm);
   const lastActivity = Math.max(...trace.runs.map((r) => r.completed_at ?? r.started_at ?? -Infinity));
   return {
@@ -217,6 +262,7 @@ export function workItemJourney(trace) {
     state,
     ...STATES[state],
     escalations: escalated,
+    closing,
     problem_steps: steps.filter((s) => s.failures || s.adverse).map((s) => s.key),
     failures: steps.reduce((n, s) => n + s.failures, 0),
     adverse: steps.reduce((n, s) => n + s.adverse, 0),
