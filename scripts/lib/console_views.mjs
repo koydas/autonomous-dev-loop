@@ -291,7 +291,7 @@ function evidenceTable(f, root) {
 export function findingCard(f, root) {
   const tone = SEVERITY_TONE[f.severity];
   const since = f.evidence.map((x) => x.ts).filter((t) => typeof t === 'number');
-  const meta = `<p class="finding-meta"><span>Affects ${e(f.runs.length)} run(s)${f.items.length ? ` · ${e(f.items.length)} item(s)` : ''}</span>${since.length ? `<span>Since <span data-ts="${Math.min(...since)}">${e(time(Math.min(...since)))} UTC</span></span>` : ''}</p>`;
+  const meta = `<p class="finding-meta"><span>Affects ${e(f.runs.length)} run(s)${f.items.length ? ` · ${e(f.items.length)} item(s)` : ''}</span>${since.length ? `<span>Since <span data-ts="${Math.min(...since)}">${e(time(Math.min(...since)))} UTC</span></span>` : ''}${f.status ? `<span>${e(f.status)}${Number.isFinite(f.last_seen) ? ` · last seen <span data-ts="${f.last_seen}">${e(time(f.last_seen))} UTC</span>` : ''}</span>` : ''}</p>`;
   return `<article class="finding tone-${tone}" id="${e(f.id)}" data-filter-item data-severity="${e(f.severity)}" data-category="${e(f.category.toLowerCase().replace(/[^a-z0-9]+/g, '-'))}"><header>${pill(tone, f.severity)}<span class="eyebrow">${e(f.category)}</span><h2>${e(f.title)}</h2></header>${meta}
 <dl class="facts"><div class="wide"><dt>Observed</dt><dd>${e(f.fact)}</dd></div><div><dt>Impact</dt><dd>${e(f.impact)}</dd></div><div><dt>Frequency</dt><dd>${e(f.frequency)}${f.runs.length ? ` · ${e(f.runs.length)} run(s) affected` : ''}</dd></div>${f.hypothesis ? `<div class="wide hypothesis"><dt>Hypothesis</dt><dd>${e(f.hypothesis)}</dd></div>` : ''}</dl>
 ${evidenceTable(f, root)}${f.link ? `<p><a class="button-link" href="${root}${e(f.link)}">Investigate →</a></p>` : ''}</article>`;

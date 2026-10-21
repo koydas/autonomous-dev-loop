@@ -12,13 +12,13 @@ const modelOf = (records) => buildPipelineModel({ records: asFiles(records), tra
 const scripts = (html) => [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
 const noRaw = (html) => { for (const raw of RAW_MARKERS) assert.ok(!html.includes(raw), `raw ${raw}`); };
 
-const withheld = (runId, t, pr = 50) => makeRecord({ runId, start: t, prNumber: pr, events: [
+const withheld = (runId, t, pr = 50, from = 'APPROVE') => makeRecord({ runId, start: t, prNumber: pr, events: [
   { event: 'review.prompt_truncated', level: 'warn', meta: { diff_truncated: true, unreviewed_code_files: 5, prNumber: pr } },
-  { event: 'review.verdict', meta: { verdict: 'WITHHELD', withheld_from: 'APPROVE', unreviewed_code_files: 5, prNumber: pr } },
+  { event: 'review.verdict', meta: { verdict: 'WITHHELD', withheld_from: from, unreviewed_code_files: 5, prNumber: pr } },
 ] });
 
 test('overview: status badge, windowed indicators with drill-down links, charts, problems, recent pipelines, definitions', () => {
-  const ctx = consoleContext(modelOf([withheld('800', T), withheld('801', T + 60000, 51), withheld('802', T + 120000, 52)]));
+  const ctx = consoleContext(modelOf([withheld('800', T), withheld('801', T + 60000, 51), withheld('802', T + 120000, 52, 'REQUEST_CHANGES')]));
   const html = consoleOverview(ctx, 'pipeline/');
   assert.match(html, /<h1>System overview<\/h1>/);
   assert.match(html, /<a class="status-badge tone-warn" href="pipeline\/diagnostics\.html">.*Running with issues/);
@@ -138,4 +138,17 @@ test('duration chart: a day without a timed run is a gap in both lines (PR #242 
   assert.equal((lone.match(/<polyline /g) ?? []).length, 0);
   assert.equal((lone.match(/<circle /g) ?? []).length, 4, 'average and p95 dots for each isolated day');
   assert.equal((lone.match(/class="dot-p95"/g) ?? []).length, 2);
+});
+
+test('issues requiring attention: only active warning / critical findings; resolved and by-design ones stay on Diagnostics', () => {
+  const f = (id, severity, status) => ({ id, severity, status, title: `T-${id}`, impact: 'i', runs: ['1-1'], evidence: [], category: 'Review' });
+  const d = { status: 'warning', gaps: [], findings: [f('a', 'critical', 'active'), f('b', 'warning', 'active'), f('c', 'info', 'resolved'), f('d', 'info', 'active')] };
+  const html = issueCards(d, '');
+  assert.match(html, /T-a/);
+  assert.match(html, /T-b/);
+  assert.doesNotMatch(html, /T-c|T-d/);
+  assert.match(html, /2 active/);
+  const none = issueCards({ ...d, findings: [f('c', 'info', 'resolved')] }, '');
+  assert.match(none, /No active warning or critical finding; 1 resolved or informational/);
+  assert.doesNotMatch(none, /issue-card/);
 });

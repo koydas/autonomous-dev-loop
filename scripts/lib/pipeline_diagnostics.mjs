@@ -19,6 +19,7 @@ export const RULES = Object.freeze({
   durationMinRuns: 3, // runs per 7-day period to compare stage durations
   durationRatio: 1.5, // p50 growth reported as a degradation
   stageFailures: 2, // failed spans of one stage
+  activeWindow: 10, // a finding is active while it occurs in the last N eligible runs of its rule; else resolved
 });
 
 export const SEVERITY_ORDER = Object.freeze(['critical', 'warning', 'info']);
@@ -42,8 +43,47 @@ const evidenceOf = (list) => capped(list).map(({ run, e }) => ({
 const runIds = (list) => [...new Set(list.map(({ run }) => run.run_id))];
 const prOf = ({ run, e }) => (Number.isSafeInteger(e?.meta?.prNumber) && e.meta.prNumber > 0 ? e.meta.prNumber : run.pr_number);
 
+// `eligible`: the runs the rule could have fired on (its population); null when the rule reads a current state
+// (a trailing streak, journeys), which is active by construction. `occ`: the eligible runs where the pattern
+// occurs (default `runs`). `anomaly` / `critical`: run ids whose occurrence is an anomaly / impossible by design;
+// without an anomaly in the active window a finding is a guardrail doing its job (info). `share`: for a rate rule,
+// the anomaly share of the active window from which the finding is a warning.
 function finding(f) {
-  return { hypothesis: null, items: [], runs: [], evidence: [], link: null, ...f };
+  return { hypothesis: null, items: [], runs: [], evidence: [], link: null, eligible: null, occ: null, anomaly: null, critical: null, titleByDesign: null, share: null, ...f };
+}
+
+const day = (ts) => new Date(ts).toISOString().slice(0, 10);
+const withStage = (runs, stage) => runs.filter((r) => r.stages.some((s) => s.stage === stage));
+const withEvent = (runs, ...names) => runs.filter((r) => r.events.some((e) => names.includes(e.event)));
+
+// first_seen / last_seen / status over the finding's own population, then severity from the active window:
+// `resolved` (no occurrence in the last RULES.activeWindow eligible runs) is info and says since when the rule
+// has been clean; the historical numbers stay in fact and evidence. Pure.
+function withLifecycle(f) {
+  const { eligible, occ, anomaly, critical, titleByDesign, share, ...rest } = f;
+  const occurrences = new Set(occ ?? f.runs);
+  const at = (r) => (Number.isFinite(r.started_at) ? r.started_at : null);
+  const ordered = (eligible ?? []).map((r, i) => [r, i]).sort((a, b) => (at(a[0]) ?? 0) - (at(b[0]) ?? 0) || a[1] - b[1]).map(([r]) => r);
+  const seen = ordered.filter((r) => occurrences.has(r.run_id)).map(at).filter((t) => t !== null);
+  const stamps = seen.length ? seen : f.evidence.map((x) => x.ts).filter(Number.isFinite);
+  const base = { ...rest, first_seen: stamps.length ? Math.min(...stamps) : null, last_seen: stamps.length ? Math.max(...stamps) : null, status: 'active', clean_since: null };
+  if (!eligible) return base;
+  const tail = ordered.slice(-RULES.activeWindow);
+  const inTail = (ids) => ids?.some((id) => tail.some((r) => r.run_id === id));
+  if (!tail.some((r) => occurrences.has(r.run_id))) {
+    const last = ordered.findLastIndex((r) => occurrences.has(r.run_id));
+    const clean = at(ordered[last + 1] ?? {}) ?? null;
+    return { ...base, severity: 'info', status: 'resolved', clean_since: clean, title: `${f.title}${clean !== null ? ` — resolved since ${day(clean)}` : ' — resolved'}` };
+  }
+  if (inTail(critical)) return { ...base, severity: 'critical' };
+  // Rate rules: the severity is judged on the active window, so recent anomalies promote and recent
+  // guardrails demote whatever the retained history says.
+  if (anomaly && share != null) {
+    const anomalous = tail.filter((r) => anomaly.includes(r.run_id)).length;
+    return anomalous / tail.length >= share ? { ...base, severity: 'warning' } : { ...base, severity: 'info', title: titleByDesign ?? f.title };
+  }
+  if (anomaly && !inTail(anomaly)) return { ...base, severity: 'info', title: titleByDesign ?? f.title };
+  return base;
 }
 
 // Execution failures: runs recorded as failed and failed stage spans without a decision explaining them.
@@ -55,7 +95,7 @@ function executionFailures(runs) {
       id: 'runs-failed', severity: 'critical', category: 'Execution', title: 'Runs ended in failure',
       fact: `${failedRuns.length} of ${runs.length} run(s) recorded the outcome failed.`,
       impact: `${failedRuns.length} run(s) stopped before completing their stage`, frequency: `${failedRuns.length} run(s)`,
-      runs: failedRuns.map((r) => r.run_id), evidence: evidenceOf(failedRuns.map((run) => ({ run, e: run.events.filter((e) => e.level === 'error').at(-1) ?? null }))),
+      eligible: runs, runs: failedRuns.map((r) => r.run_id), evidence: evidenceOf(failedRuns.map((run) => ({ run, e: run.events.filter((e) => e.level === 'error').at(-1) ?? null }))),
       link: 'index.html?result=failed#executions',
     }));
   }
@@ -77,7 +117,7 @@ function executionFailures(runs) {
       id: `stage-failures-${stage}`, severity: 'critical', category: 'Execution', title: `Repeated failures at ${stage}`,
       fact: `${list.length} of ${total} ${stage} span(s) closed as failed without a decision explaining it.`,
       impact: `${pct(list.length / total)} of ${stage} executions failed`, frequency: `${list.length} failure(s)`,
-      runs: list.map((r) => r.run_id), evidence: evidenceOf(list.map((run) => ({ run, e: run.events.filter((e) => e.stage === stage && e.level !== 'info').at(-1) ?? null }))),
+      eligible: withStage(runs, stage), runs: list.map((r) => r.run_id), evidence: evidenceOf(list.map((run) => ({ run, e: run.events.filter((e) => e.stage === stage && e.level !== 'info').at(-1) ?? null }))),
       link: 'index.html?result=failed#executions',
     }));
   }
@@ -126,7 +166,9 @@ function reviewFindings(runs) {
     const adrs = [guardrailCut ? 'ADR-0038' : null, guardrailEvidence ? 'ADR-0026' : null].filter(Boolean).join(', ');
     out.push(finding({
       id: 'review-withheld', severity: warning ? 'warning' : 'info', category: 'Review',
-      title: warning || !adrs ? 'Reviews withhold their verdict' : `Reviews withhold their verdict by design (${adrs})`,
+      title: 'Reviews withhold their verdict', share: RULES.withheldShare,
+      titleByDesign: adrs ? `Reviews withhold their verdict by design (${adrs})` : null,
+      anomaly: runIds(withheld.filter((_, i) => classes[i].anomaly)),
       fact: `${withheld.length} of ${verdicts.length} verdicts are WITHHELD (${pct(withheld.length / verdicts.length)}); ${cut} of them had code files not reviewed, ${fromApprove} would have been APPROVE (withheld_from). `
         + `They cover ${heads} PR head(s) on ${prs} PR(s). Guardrail: ${withheld.length - anomalies} (code cut, ADR-0038: ${guardrailCut}; CI evidence, ADR-0026: ${guardrailEvidence}); `
         + `anomaly: ${anomalies} (REQUEST_CHANGES on unseen code: ${count('rc_unseen')}; unknown cause: ${count('other')}; fallback answered a prompt cut to the primary's budget: ${count('fallback_capped')}). `
@@ -135,7 +177,7 @@ function reviewFindings(runs) {
         ? (count('fallback_capped') * 2 >= anomalies ? 'The fallback provider answered a prompt already cut to the primary\'s input budget: it saw no more code than the primary would have, so the cut, not the model, withheld the verdict.' : null)
         : guardrailCut > withheld.length / 2 ? 'The guardrail worked as designed: approval is withheld on code the review did not see (ADR-0038). The lever is the provider or its input budget (review_max_input_tokens, ADR-0025), not the review rule.' : null,
       impact: `${withheld.length} review(s) ended without a usable verdict; a person has to review`, frequency: `${withheld.length} verdict(s) on ${heads} head(s) of ${prs} PR(s)`,
-      items: [...new Set(withheld.map(prOf).filter(Boolean))], runs: runIds(withheld), evidence: evidenceOf(withheld), link: 'health.html#reviews',
+      items: [...new Set(withheld.map(prOf).filter(Boolean))], eligible: withEvent(runs, 'review.verdict'), runs: runIds(withheld), evidence: evidenceOf(withheld), link: 'health.html#reviews',
     }));
   }
   // Same population as the denominator: a cut review that errored before its verdict is not counted.
@@ -144,12 +186,22 @@ function reviewFindings(runs) {
   if (rated && truncated.length / verdicts.length >= RULES.truncatedShare) {
     const unseen = truncated.map(({ e }) => e.meta.unreviewed_code_files).filter((n) => typeof n === 'number');
     const budgets = [...new Set(truncated.map(({ e }) => e.meta.max_input_tokens).filter((n) => typeof n === 'number'))];
+    // A cut diff and its verdict (the run's last): WITHHELD is the ADR-0038 guardrail; APPROVE on unseen code is
+    // impossible since ADR-0038 (critical); anything else (REQUEST_CHANGES on a cut diff) is an anomaly.
+    const verdictOf = (run) => verdicts.filter((v) => v.run === run).at(-1)?.e.meta.verdict;
+    const cutClass = ({ run }) => (verdictOf(run) === 'WITHHELD' ? 'guardrail' : verdictOf(run) === 'APPROVE' ? 'approve' : 'anomaly');
+    const idsOf = (k) => runIds(truncated.filter((t) => cutClass(t) === k));
+    const guardrail = idsOf('guardrail'), approved = idsOf('approve'), other = idsOf('anomaly');
     out.push(finding({
-      id: 'review-coverage', severity: 'warning', category: 'Review', title: 'Review diffs are cut',
-      fact: `${truncated.length} of ${verdicts.length} reviews saw a truncated diff; median ${percentile(unseen, 50) ?? '?'} code file(s) not reviewed${budgets.length ? `, input budget ${budgets.join(' / ')} tokens` : ''}.`,
-      hypothesis: 'Approvals on these PRs cannot be trusted to cover the whole change; raising the budget or batching the review would reduce WITHHELD verdicts (quota permitting).',
+      id: 'review-coverage', severity: 'warning', category: 'Review', title: 'Review diffs are cut', titleByDesign: 'Review diffs are cut by design (ADR-0038)',
+      fact: `${truncated.length} of ${verdicts.length} reviews saw a truncated diff; median ${percentile(unseen, 50) ?? '?'} code file(s) not reviewed${budgets.length ? `, input budget ${budgets.join(' / ')} tokens` : ''}. `
+        + `Guardrail (WITHHELD, ADR-0038): ${guardrail.length}; anomaly: ${approved.length + other.length} (APPROVE on a cut diff, impossible since ADR-0038: ${approved.length}; other verdict: ${other.length}).`,
+      hypothesis: approved.length ? 'An APPROVE on a diff the review did not fully see contradicts the ADR-0038 backstop: either it did not apply or the record is wrong.'
+        : other.length ? 'Approvals on these PRs cannot be trusted to cover the whole change; raising the budget or batching the review would reduce WITHHELD verdicts (quota permitting).'
+          : 'The guardrail worked as designed: approval is withheld on code the review did not see (ADR-0038). The lever is the provider or its input budget (review_max_input_tokens, ADR-0025).',
       impact: `${pct(truncated.length / verdicts.length)} of reviews are incomplete`, frequency: `${truncated.length} review(s)`,
-      items: [...new Set(truncated.map(prOf).filter(Boolean))], runs: runIds(truncated), evidence: evidenceOf(truncated), link: 'health.html#reviews',
+      items: [...new Set(truncated.map(prOf).filter(Boolean))], eligible: withEvent(runs, 'review.verdict'), runs: runIds(truncated), anomaly: [...approved, ...other], critical: approved,
+      evidence: evidenceOf(truncated), link: 'health.html#reviews',
     }));
   }
   // The same PR head reviewed more than once: duplicate triggers or a re-run, each a model call.
@@ -159,17 +211,29 @@ function reviewFindings(runs) {
     const k = `${prOf(v)}@${v.run.head_sha}`;
     byHead.set(k, [...(byHead.get(k) ?? []), v]);
   }
-  const dup = [...byHead.values()].filter((l) => l.length > 1);
+  const dup = [...byHead.values()].filter((l) => l.length > 1).map((l) => [...l].sort((a, b) => (a.e.ts ?? a.run.started_at ?? 0) - (b.e.ts ?? b.run.started_at ?? 0)));
   if (dup.length) {
     const extra = dup.reduce((n, l) => n + l.length - 1, 0);
     const triggers = [...new Set(dup.flatMap((l) => l.map(({ run }) => run.event_name ?? 'unknown')))].sort();
     const flips = dup.filter((l) => new Set(l.map(({ e }) => e.meta.verdict)).size > 1);
+    // A second run is by design after a WITHHELD verdict (never deduplicated, ADR-0028) or as a manual re-run
+    // (run attempt > 1); otherwise the marker should have skipped it: two runs claimed one head (push /
+    // pull_request race).
+    // run_id is `<workflow run id>-<run attempt>` (run_record.mjs envelope), so the suffix is the attempt.
+    const rerun = ({ run }) => Number(/-(\d+)$/.exec(run.run_id)?.[1]) > 1;
+    // The WITHHELD must predate the later run's start: a run already started when it was emitted raced with it.
+    const sawWithheld = (prev, v) => prev.e.meta.verdict === 'WITHHELD' && !(Number.isFinite(prev.e.ts) && Number.isFinite(v.run.started_at) && prev.e.ts > v.run.started_at);
+    const extras = dup.flatMap((l) => l.slice(1).map((v, i) => ({ v, by: sawWithheld(l[i], v) ? 'withheld' : rerun(v) ? 'rerun' : 'race' })));
+    const count = (k) => extras.filter((x) => x.by === k).length;
+    const race = extras.filter((x) => x.by === 'race').map((x) => x.v.run.run_id);
     out.push(finding({
-      id: 'review-duplicates', severity: 'warning', category: 'Review', title: 'Same PR head reviewed more than once',
-      fact: `${dup.length} PR head(s) got ${extra} extra review run(s) (triggers: ${triggers.join(', ')})${flips.length ? `; ${flips.length} of them got different verdicts on the same code` : ''}.`,
-      hypothesis: triggers.includes('push') && triggers.includes('pull_request') ? 'Both the push and the pull_request trigger start a review of one head; the per-SHA marker does not claim the work atomically (docs/dashboard-partial-diagnosis.md, item 4).' : null,
+      id: 'review-duplicates', severity: 'warning', category: 'Review', title: 'Same PR head reviewed more than once', titleByDesign: 'Same PR head reviewed again by design (ADR-0028)',
+      fact: `${dup.length} PR head(s) got ${extra} extra review run(s) (triggers: ${triggers.join(', ')})${flips.length ? `; ${flips.length} of them got different verdicts on the same code` : ''}. `
+        + `Guardrail: ${count('withheld') + count('rerun')} (after a WITHHELD verdict, ADR-0028: ${count('withheld')}; manual re-run: ${count('rerun')}); anomaly: ${race.length} (two runs on one head, none skipped by the marker).`,
+      hypothesis: race.length && triggers.includes('push') && triggers.includes('pull_request') ? 'Both the push and the pull_request trigger start a review of one head; the per-SHA marker does not claim the work atomically (docs/dashboard-partial-diagnosis.md, item 4).' : null,
       impact: `${extra} redundant review run(s) and their LLM calls`, frequency: `${dup.length} head(s)`,
-      items: [...new Set(dup.map((l) => prOf(l[0])))], runs: runIds(dup.flat()), evidence: evidenceOf(dup.flat()), link: 'index.html#executions',
+      items: [...new Set(dup.map((l) => prOf(l[0])))], eligible: withEvent(runs, 'review.verdict', 'review.skipped'), runs: runIds(dup.flat()), anomaly: race,
+      evidence: evidenceOf(dup.flat()), link: 'index.html#executions',
     }));
   }
   // A PR whose last N verdicts are all non-APPROVE. An APPROVE ends a fix round (ADR-0034):
@@ -228,14 +292,16 @@ function autofixFindings(runs) {
   const warning = anomalies / attempts.length >= RULES.autofixNoPushShare;
   return [finding({
     id: 'autofix-ineffective', severity: warning ? 'warning' : 'info', category: 'Auto-fix',
-    title: warning ? 'Auto-fix rarely pushes a fix' : 'Auto-fix blocked by design (ADR-0021, ADR-0029)',
+    title: 'Auto-fix rarely pushes a fix', share: RULES.autofixNoPushShare,
     fact: `${pushes.length} delivered push(es) for ${attempts.length} attempt(s)${failedPushes ? `, ${failedPushes} whose git push failed` : ''}; skip reasons: ${Object.entries(reasons).map(([k, n]) => `${k} ${n}`).join(', ') || 'none recorded'}. `
       + `Blocked by design: ${blocked}${blocked ? ` (${Object.entries(designed).map(([k, n]) => `${k} ${n}`).join(', ')})` : ''}; anomaly: ${anomalies}.`,
     hypothesis: warning
       ? (noChanges ? '`no_changes` alone does not prove a fix was needed: the finding may be false, or the context given to the model did not include the files to change (docs/dashboard-partial-diagnosis.md, item 3).' : null)
       : 'The guardrails worked as designed: the attempts stopped on a protected or unshown target, or on files the budget withheld from the prompt. The lever is the input budget (autofix_max_input_tokens, ADR-0017) or a human fix, not the guardrail.',
     impact: `${noPush} attempt(s) ended without a change, usually escalated to a human`, frequency: `${noPush} of ${attempts.length} attempt(s)`,
-    items: [...new Set(attempts.map(prOf).filter(Boolean))], runs: runIds(attempts), evidence: evidenceOf(skips.length ? skips : attempts), link: 'health.html#autofix',
+    items: [...new Set(attempts.map(prOf).filter(Boolean))], eligible: withEvent(runs, 'autofix.start'), runs: runIds(attempts),
+    occ: attempts.filter(({ run }) => stepDecision(run, 'autofix')?.key !== 'pushed').map(({ run }) => run.run_id),
+    anomaly: attempts.filter(({ run }) => stepDecision(run, 'autofix')?.key !== 'pushed' && !blockedByDesign(run)).map(({ run }) => run.run_id), titleByDesign: 'Auto-fix blocked by design (ADR-0021, ADR-0029)', evidence: evidenceOf(skips.length ? skips : attempts), link: 'health.html#autofix',
   })];
 }
 
@@ -250,12 +316,14 @@ function generationFindings(runs) {
     fact: `${blocked.length} of ${starts.length} generation run(s) produced no patch (source: ${Object.entries(sources).map(([k, n]) => `${k} ${n}`).join(', ')}); ${events(runs, 'code_gen.complete').length} completed.`,
     hypothesis: 'A model-sourced block usually means the files to change were withheld from its context (size or protected paths); the escalation comment on the issue says which.',
     impact: `${blocked.length} issue(s) escalated instead of getting a PR`, frequency: `${blocked.length} run(s)`,
-    runs: runIds(blocked), evidence: evidenceOf(blocked), link: 'flows.html?state=escalated',
+    eligible: withEvent(runs, 'code_gen.start'), runs: runIds(blocked), evidence: evidenceOf(blocked), link: 'flows.html?state=escalated',
   })];
 }
 
 function providerFindings(runs) {
   const out = [];
+  // Runs that attempted an LLM call: a run that never reached a provider says nothing about its recovery.
+  const attemptedLlm = runs.filter((r) => r.llm.length || r.events.some((e) => e.event === 'llm_fallback' || e.event === 'retry.wait'));
   const fallbacks = events(runs, 'llm_fallback');
   const calls = runs.reduce((n, r) => n + r.llm.length, 0);
   if (fallbacks.length >= RULES.fallbackMin) {
@@ -268,7 +336,7 @@ function providerFindings(runs) {
       fact: `${fallbacks.length} fallback(s) for ${calls} LLM call(s): ${Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ×${n}`).join(', ')}.${unclassified ? ` ${unclassified} of them carry no classified error type: their cause is not recorded.` : ''}`,
       hypothesis: limited * 2 >= fallbacks.length ? 'The primary provider rate-limits the pipeline (429): the free-tier tokens-per-minute limit is the binding one (ADR-0025).' : null,
       impact: 'Answers come from the fallback model, at its price', frequency: `${fallbacks.length} fallback(s)`,
-      runs: runIds(fallbacks), evidence: evidenceOf(fallbacks), link: 'models.html',
+      eligible: attemptedLlm, runs: runIds(fallbacks), evidence: evidenceOf(fallbacks), link: 'models.html',
     }));
   }
   const waits = events(runs, 'retry.wait').filter(({ e }) => e.meta.status === 429);
@@ -278,7 +346,7 @@ function providerFindings(runs) {
       id: 'rate-limit-waits', severity: 'info', category: 'LLM provider', title: 'Time lost waiting on rate limits',
       fact: `${waits.length} retry wait(s) on HTTP 429, totalling ${minutes(ms)} across ${runIds(waits).length} run(s).`,
       impact: `${minutes(ms)} of run time spent waiting`, frequency: `${waits.length} wait(s)`,
-      runs: runIds(waits), evidence: evidenceOf(waits), link: 'health.html#providers',
+      eligible: attemptedLlm, runs: runIds(waits), evidence: evidenceOf(waits), link: 'health.html#providers',
     }));
   }
   return out;
@@ -303,7 +371,7 @@ function durationFindings(runs) {
         id: `duration-${stage}`, severity: 'warning', category: 'Performance', title: `${stage} got slower`,
         fact: `Median ${stage} span ${minutes(a)} over the latest 7 days (n=${cur.length}) vs ${minutes(b)} the 7 days before (n=${prev.length}).`,
         impact: `×${(a / b).toFixed(1)} median duration`, frequency: `${cur.length} run(s)`,
-        runs: cur.map((x) => x.run.run_id), evidence: evidenceOf(cur.map((x) => ({ run: x.run, e: null }))), link: 'health.html#performance',
+        eligible: withStage(dated, stage), runs: cur.map((x) => x.run.run_id), evidence: evidenceOf(cur.map((x) => ({ run: x.run, e: null }))), link: 'health.html#performance',
       }));
     }
   }
@@ -360,7 +428,7 @@ export function diagnose({ model, journeys = [] } = {}) {
   const findings = [
     ...executionFailures(runs), ...interventions(journeys), ...reviewFindings(runs), ...autofixFindings(runs),
     ...generationFindings(runs), ...providerFindings(runs), ...durations.findings,
-  ].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
+  ].map(withLifecycle).sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
   const status = findings.some((f) => f.severity === 'critical') ? 'critical' : findings.some((f) => f.severity === 'warning') ? 'warning' : 'ok';
   return { status, findings, gaps: [...telemetryGaps(model, journeys), ...durations.gaps] };
 }
