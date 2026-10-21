@@ -5,11 +5,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { diagnose } from '../lib/pipeline_diagnostics.mjs';
-import { journeys, closings, isLifecycleRun, STATES, workItemJourney } from '../lib/pipeline_journey.mjs';
+import { journeys, closings, isLifecycleRun, STATES } from '../lib/pipeline_journey.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
 import { waitingOnYou, explainEscalation } from '../lib/pipeline_waiting.mjs';
 import { consoleContext } from '../lib/console_views.mjs';
 import { consoleOverview, waitingPanel } from '../lib/console_overview.mjs';
+import { flowDashboard, pipelineFacets } from '../lib/flow_dashboard.mjs';
 import { computeOverview, computeWindow } from '../lib/pipeline_kpis.mjs';
 import { makeRecord, makeClosingRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
 
@@ -248,9 +249,17 @@ test('Overview: the queue replaces the escalation card, escapes record strings a
   assert.match(hostile, /No comment link recorded.*date not recorded/);
 });
 
-test('the closed item leaves the Pipelines facets as its own state, once', () => {
+test('Pipelines: merged and closed items are their own chips and facets, listed once', () => {
   const { model } = build([...ESCALATIONS(), ...CLOSINGS()]);
-  const ctx = consoleContext(model);
-  assert.equal(ctx.waiting.length, 1);
-  assert.equal(workItemJourney(model.traces[0]).closing === null || typeof workItemJourney(model.traces[0]).closing === 'object', true);
+  const html = flowDashboard(model);
+  const chip = (v) => [...html.matchAll(new RegExp(`data-chip="state" data-chip-value="${v}">([^<]*)<span class="n">(\\d+)`, 'g'))].map((m) => [m[1].trim(), m[2]]);
+  assert.deepEqual(chip('merged'), [['Merged', '3']]);
+  assert.deepEqual(chip('closed'), [['Closed', '3']]);
+  assert.deepEqual(chip('escalated'), [['Escalated to a human', '1']]);
+  // The State select already offers merged / closed (live GitHub state, same token): no second option.
+  assert.equal((html.match(/<option value="merged"/g) ?? []).length, 1);
+  assert.equal((html.match(/<option value="closed"/g) ?? []).length, 1);
+  const facets = pipelineFacets(journeys(model));
+  assert.equal((facets.match(/data-facet="state" value="merged"/g) ?? []).length, 1);
+  assert.equal((facets.match(/data-facet="state" value="closed"/g) ?? []).length, 1);
 });
