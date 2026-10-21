@@ -46,9 +46,10 @@ const prOf = ({ run, e }) => (Number.isSafeInteger(e?.meta?.prNumber) && e.meta.
 // `eligible`: the runs the rule could have fired on (its population); null when the rule reads a current state
 // (a trailing streak, journeys), which is active by construction. `occ`: the eligible runs where the pattern
 // occurs (default `runs`). `anomaly` / `critical`: run ids whose occurrence is an anomaly / impossible by design;
-// without an anomaly in the active window a finding is a guardrail doing its job (info).
+// without an anomaly in the active window a finding is a guardrail doing its job (info). `share`: for a rate rule,
+// the anomaly share of the active window from which the finding is a warning.
 function finding(f) {
-  return { hypothesis: null, items: [], runs: [], evidence: [], link: null, eligible: null, occ: null, anomaly: null, critical: null, titleByDesign: null, ...f };
+  return { hypothesis: null, items: [], runs: [], evidence: [], link: null, eligible: null, occ: null, anomaly: null, critical: null, titleByDesign: null, share: null, ...f };
 }
 
 const day = (ts) => new Date(ts).toISOString().slice(0, 10);
@@ -59,7 +60,7 @@ const withEvent = (runs, ...names) => runs.filter((r) => r.events.some((e) => na
 // `resolved` (no occurrence in the last RULES.activeWindow eligible runs) is info and says since when the rule
 // has been clean; the historical numbers stay in fact and evidence. Pure.
 function withLifecycle(f) {
-  const { eligible, occ, anomaly, critical, titleByDesign, ...rest } = f;
+  const { eligible, occ, anomaly, critical, titleByDesign, share, ...rest } = f;
   const occurrences = new Set(occ ?? f.runs);
   const at = (r) => (Number.isFinite(r.started_at) ? r.started_at : null);
   const ordered = (eligible ?? []).map((r, i) => [r, i]).sort((a, b) => (at(a[0]) ?? 0) - (at(b[0]) ?? 0) || a[1] - b[1]).map(([r]) => r);
@@ -75,6 +76,12 @@ function withLifecycle(f) {
     return { ...base, severity: 'info', status: 'resolved', clean_since: clean, title: `${f.title}${clean !== null ? ` — resolved since ${day(clean)}` : ' — resolved'}` };
   }
   if (inTail(critical)) return { ...base, severity: 'critical' };
+  // Rate rules: the severity is judged on the active window, so recent anomalies promote and recent
+  // guardrails demote whatever the retained history says.
+  if (anomaly && share != null) {
+    const anomalous = tail.filter((r) => anomaly.includes(r.run_id)).length;
+    return anomalous / tail.length >= share ? { ...base, severity: 'warning' } : { ...base, severity: 'info', title: titleByDesign ?? f.title };
+  }
   if (anomaly && !inTail(anomaly)) return { ...base, severity: 'info', title: titleByDesign ?? f.title };
   return base;
 }
@@ -159,7 +166,7 @@ function reviewFindings(runs) {
     const adrs = [guardrailCut ? 'ADR-0038' : null, guardrailEvidence ? 'ADR-0026' : null].filter(Boolean).join(', ');
     out.push(finding({
       id: 'review-withheld', severity: warning ? 'warning' : 'info', category: 'Review',
-      title: warning || !adrs ? 'Reviews withhold their verdict' : `Reviews withhold their verdict by design (${adrs})`,
+      title: 'Reviews withhold their verdict', share: RULES.withheldShare,
       titleByDesign: adrs ? `Reviews withhold their verdict by design (${adrs})` : null,
       anomaly: runIds(withheld.filter((_, i) => classes[i].anomaly)),
       fact: `${withheld.length} of ${verdicts.length} verdicts are WITHHELD (${pct(withheld.length / verdicts.length)}); ${cut} of them had code files not reviewed, ${fromApprove} would have been APPROVE (withheld_from). `
@@ -285,7 +292,7 @@ function autofixFindings(runs) {
   const warning = anomalies / attempts.length >= RULES.autofixNoPushShare;
   return [finding({
     id: 'autofix-ineffective', severity: warning ? 'warning' : 'info', category: 'Auto-fix',
-    title: warning ? 'Auto-fix rarely pushes a fix' : 'Auto-fix blocked by design (ADR-0021, ADR-0029)',
+    title: 'Auto-fix rarely pushes a fix', share: RULES.autofixNoPushShare,
     fact: `${pushes.length} delivered push(es) for ${attempts.length} attempt(s)${failedPushes ? `, ${failedPushes} whose git push failed` : ''}; skip reasons: ${Object.entries(reasons).map(([k, n]) => `${k} ${n}`).join(', ') || 'none recorded'}. `
       + `Blocked by design: ${blocked}${blocked ? ` (${Object.entries(designed).map(([k, n]) => `${k} ${n}`).join(', ')})` : ''}; anomaly: ${anomalies}.`,
     hypothesis: warning
