@@ -1,0 +1,349 @@
+name: ADL PR Review (reusable)
+
+# Reusable workflow (ADR-0045): called by pr-review.yml in this repository and by the caller template of
+# a target repository. The triggers (push to a branch, pull_request opened) and the per-PR concurrency
+# group (ADR-0020: the whole run, evidence and review, one stage per PR branch) belong to the caller.
+on:
+  workflow_call:
+    inputs:
+      pipeline_repository:
+        description: 'Repository holding the pipeline (scripts, prompts, default config)'
+        type: string
+        default: 'koydas/autonomous-dev-loop'
+      pipeline_ref:
+        description: 'Self-calls only: the default branch. Any other repository is pinned by the ref of its `uses:` line.'
+        type: string
+        default: ''
+      config_dir:
+        description: "Directory of the repository's own pipeline configuration"
+        type: string
+        default: '.autonomous-dev-loop'
+      autofix_workflow_file:
+        description: 'Workflow file of the caller that runs auto-fix (looked up to avoid re-pulsing the label mid-fix)'
+        type: string
+        default: 'auto-fix-pr.yml'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      GROQ_API_KEY:
+        required: false
+      AI_PR_TOKEN:
+        required: false
+
+# Per job (ADR-0007 amendment 2026-10-20): the default here is read-only; each job grants what it calls.
+permissions:
+  contents: read
+
+jobs:
+  # Which commit of the pipeline this run uses (ADR-0045). A job of its own: the evidence job, which runs PR
+  # code, keeps a token without actions: read, and the review job must not depend on the evidence job for it.
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # The run lookup that gives the pipeline commit of an external caller.
+      actions: read
+    outputs:
+      ref: ${{ steps.pipeline.outputs.ref }}
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+    steps:
+      - name: Resolve pipeline version
+        id: pipeline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        # ADR-0045: one pin per caller, the `uses: …@<ref>` of the reusable workflow; its commit is read from the run.
+        # A call from the pipeline repository itself runs the default branch, as ADR-0023 requires.
+        run: |
+          set -euo pipefail
+          # pull_request_target runs the base workflow with secrets on the contents of a pull request: never.
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            echo "::error::The pipeline does not run on pull_request_target"
+            exit 1
+          fi
+          if [ "${PIPELINE_REPOSITORY,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            if [ -n "$PIPELINE_REF" ] && [ "$PIPELINE_REF" != "$DEFAULT_BRANCH" ]; then
+              echo "::error::pipeline_ref must be the default branch ($DEFAULT_BRANCH) when the pipeline repository calls itself, got $PIPELINE_REF"
+              exit 1
+            fi
+            echo "ref=$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ENTRY=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '[.referenced_workflows[]? | select((.path | ascii_downcase) | startswith((env.PIPELINE_REPOSITORY | ascii_downcase) + "/.github/workflows/adl-"))] | .[0] // empty | [.path, .sha, (.ref // "")] | @tsv')
+          if [ -z "$ENTRY" ]; then
+            echo "::error::This run does not reference a reusable workflow of $PIPELINE_REPOSITORY"
+            exit 1
+          fi
+          IFS=$'\t' read -r WORKFLOW_PATH SHA REF <<< "$ENTRY"
+          PIN="${WORKFLOW_PATH#*@}"
+          if ! [[ "$PIN" =~ ^[0-9a-f]{40}$ || "$PIN" =~ ^(refs/tags/)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The reusable workflow is pinned to \"$PIN\": pin a commit SHA or a vMAJOR.MINOR.PATCH tag, never a branch"
+            exit 1
+          fi
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The run does not give the commit of the reusable workflow"
+            exit 1
+          fi
+          # The API reports a tag pinned as `@v1.2.3` with ref `refs/tags/v1.2.3`: compare without the prefix.
+          if [ -n "$REF" ] && [ "${REF#refs/tags/}" != "${PIN#refs/tags/}" ]; then
+            echo "::error::The run reports the reusable workflow at \"$REF\" but its path pins \"$PIN\""
+            exit 1
+          fi
+          echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+
+  # ADR-0024: executes PR code with no secrets and a read-only token; the review job consumes the results.
+  evidence:
+    needs: pipeline
+    runs-on: ubuntu-latest
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      # ADR-0023, ADR-0045: the runner and its config come from the pinned pipeline and the default branch;
+      # the PR tree is only checked.
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pipeline_repository }}
+          ref: ${{ needs.pipeline.outputs.ref }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      # ADR-0045: the target's own configuration comes from its default branch, never from the ref the run
+      # was dispatched on nor from a pull request tree.
+      - name: Checkout target configuration (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-config
+          sparse-checkout: ${{ inputs.config_dir }}
+          persist-credentials: false
+
+      - name: Move the pipeline and the configuration out of the workspace
+        run: |
+          mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+          mv .trusted-config "$RUNNER_TEMP/target-config"
+          echo "ADL_CONFIG_DIR=$RUNNER_TEMP/target-config/$ADL_CONFIG_PATH" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run review evidence checks
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          # Outside the checkout: the PR tree must not be able to ship or overwrite its own evidence file.
+          REVIEW_EVIDENCE_PATH: ${{ runner.temp }}/evidence/review-evidence.json
+        run: node "$RUNNER_TEMP/pipeline/scripts/run_review_evidence.mjs"
+
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/review-evidence.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload evidence run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-evidence
+          path: ./observability/traces/${{ github.run_id }}-evidence.json
+          if-no-files-found: ignore
+          overwrite: true
+
+  review:
+    needs: [pipeline, evidence]
+    # A crashed evidence job degrades the review (evidence "missing"), it never blocks it; a run that cannot
+    # tell which pipeline to use has no review to give.
+    if: ${{ !cancelled() && needs.pipeline.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    # Long on purpose: the 8K TPM is shared by every PR and stage of the org, so a review may have to
+    # wait several windows. GROQ_MAX_RETRIES x LLM_MAX_RETRY_WAIT_MS = 12 min of waits, + 3 min for the
+    # rest of the job (ADR-0022, ADR-0028 amendment).
+    timeout-minutes: 15
+    permissions:
+      # The `metrics` branch only (Commit metrics, Git Data API).
+      contents: write
+      # Review submit; pr_review.mjs uses AI_PR_TOKEN, this token when it is unset.
+      pull-requests: write
+      # Labels and the review comment, same fallback.
+      issues: write
+      # gh run list, the auto-fix run check and the cross-run checkpoint download (read only).
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Full history: pr_review.mjs reads changed prompts at the merge base (`git show`, ADR-0037).
+          fetch-depth: 0
+      # ADR-0023, ADR-0045: pipeline code runs from the pinned pipeline; the branch above is data only.
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pipeline_repository }}
+          ref: ${{ needs.pipeline.outputs.ref }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      # ADR-0045: the target's own configuration comes from its default branch, never from the ref the run
+      # was dispatched on nor from a pull request tree.
+      - name: Checkout target configuration (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-config
+          sparse-checkout: ${{ inputs.config_dir }}
+          persist-credentials: false
+
+      - name: Move the pipeline and the configuration out of the workspace
+        run: |
+          mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+          mv .trusted-config "$RUNNER_TEMP/target-config"
+          echo "ADL_CONFIG_DIR=$RUNNER_TEMP/target-config/$ADL_CONFIG_PATH" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Resolve PR number for checkpoint
+        id: ckpt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Event values through env, never expanded into the script (audit F14): a ref name may hold `$(`, `;`, backticks.
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          else
+            PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
+            if [ -z "$PR" ]; then
+              sleep 5
+              PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // ""' 2>/dev/null || echo "")
+            fi
+            echo "pr_number=${PR:-$RUN_ID}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find latest auto-fix run for checkpoint
+        id: fix_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # pull_request: the head ref; push: the pushed branch (same key as the concurrency group).
+          BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          AUTOFIX_WORKFLOW_FILE: ${{ inputs.autofix_workflow_file }}
+        run: |
+          RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "$AUTOFIX_WORKFLOW_FILE" \
+            --branch "$BRANCH" \
+            --status completed \
+            --limit 20 \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "$AUTOFIX_WORKFLOW_FILE" \
+              --status completed \
+              --limit 20 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // ""' 2>/dev/null || echo "")
+          fi
+          echo "id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Download checkpoint artifact
+        if: steps.fix_run.outputs.id != ''
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
+          run-id: ${{ steps.fix_run.outputs.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./checkpoints
+
+      - name: Download review evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: review-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+
+      - name: Run automated review
+        id: review
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          REVIEW_EVIDENCE_PATH: ${{ runner.temp }}/evidence/review-evidence.json
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '12'
+          CHECKPOINT_RUN_ID: pr-${{ steps.ckpt.outputs.pr_number }}
+          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          AI_PROVIDER_REVIEW: ${{ vars.AI_PROVIDER_REVIEW }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
+          AUTOFIX_WORKFLOW_FILE: ${{ inputs.autofix_workflow_file }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/pr_review.mjs"
+
+      # A skipped run (head already reviewed, superseded, no open PR) wrote no checkpoint: uploading
+      # the copy it downloaded would replace the newest checkpoints-pr-<N> with an older one (ADR-0028).
+      - name: Upload checkpoint artifact
+        if: ${{ always() && steps.review.outputs.skipped != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-pr-${{ steps.ckpt.outputs.pr_number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only this run's records, written outside the checkout (ADR-0021): never the
+          # working-tree metrics/runs.jsonl, which generated code could have modified.
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+          RUN_RECORD_MESSAGE: "metrics: pr ${{ steps.ckpt.outputs.pr_number }} [skip ci]"
+        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
+        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
+        # The trusted copy is the default branch: until it ships the script, a warning, not a red job.
+        run: |
+          SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
+          [ -f "$SCRIPT" ] || { echo "::warning::commit_run_record.mjs is not on the default branch yet; metrics not committed"; exit 0; }
+          node "$SCRIPT"

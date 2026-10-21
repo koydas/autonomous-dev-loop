@@ -180,6 +180,9 @@ async function removeLabel(labelName) {
   }
 }
 
+// The caller workflow that runs auto-fix: a repository using the pipeline from elsewhere names its own file (ADR-0045).
+const autofixWorkflowFile = encodeURIComponent((process.env.AUTOFIX_WORKFLOW_FILE ?? '').trim() || 'auto-fix-pr.yml');
+
 async function hasActiveAutoFixRun(branchName) {
   const encodedBranch = encodeURIComponent(branchName);
   // `pending` = waiting on the per-PR concurrency group (ADR-0020).
@@ -187,7 +190,7 @@ async function hasActiveAutoFixRun(branchName) {
     let runsRes;
     try {
       runsRes = await ghFetch(
-        `/repos/${owner}/${repo}/actions/workflows/auto-fix-pr.yml/runs?branch=${encodedBranch}&event=pull_request&status=${status}&per_page=20`,
+        `/repos/${owner}/${repo}/actions/workflows/${autofixWorkflowFile}/runs?branch=${encodedBranch}&event=pull_request&status=${status}&per_page=20`,
       );
     } catch (err) {
       logError('Auto-fix run status check failed; defaulting to skip re-pulse', { prNumber, status, error: err.message });
