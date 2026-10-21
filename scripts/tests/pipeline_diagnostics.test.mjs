@@ -485,3 +485,8 @@ test('review-duplicates (review PR #252): a WITHHELD emitted after the later run
   const after = { ...run({ t: T + 6000, sha, events: [{ ...verdict('APPROVE'), ts: T + 9000 }] }) };
   assert.equal(find(diagnose({ model: model([first, after]) }), 'review-duplicates').severity, 'info');
 });
+
+test('a finding is computed over the whole window: it leaves the list once its historical share falls under the threshold', () => {
+  assert.ok(find(diagnose({ model: model(cutThenClean(30, 10)) }), 'review-coverage'), '30 of 40 cut');
+  assert.equal(find(diagnose({ model: model(cutThenClean(30, 40)) }), 'review-coverage'), undefined, '30 of 70 cut: below truncatedShare, no card');
+});

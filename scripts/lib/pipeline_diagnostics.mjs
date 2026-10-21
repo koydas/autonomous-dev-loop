@@ -212,6 +212,7 @@ function reviewFindings(runs) {
     // A second run is by design after a WITHHELD verdict (never deduplicated, ADR-0028) or as a manual re-run
     // (run attempt > 1); otherwise the marker should have skipped it: two runs claimed one head (push /
     // pull_request race).
+    // run_id is `<workflow run id>-<run attempt>` (run_record.mjs envelope), so the suffix is the attempt.
     const rerun = ({ run }) => Number(/-(\d+)$/.exec(run.run_id)?.[1]) > 1;
     // The WITHHELD must predate the later run's start: a run already started when it was emitted raced with it.
     const sawWithheld = (prev, v) => prev.e.meta.verdict === 'WITHHELD' && !(Number.isFinite(prev.e.ts) && Number.isFinite(v.run.started_at) && prev.e.ts > v.run.started_at);
