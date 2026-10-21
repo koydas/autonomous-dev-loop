@@ -1,0 +1,33 @@
+name: Auto-Fix PR
+
+# Caller of the autonomous-dev-loop pipeline (docs/installation.md of koydas/autonomous-dev-loop).
+# Replace <PIPELINE_SHA> with the full commit SHA of the release you install and <PIPELINE_VERSION> with its
+# tag (vMAJOR.MINOR.PATCH): that line is the only pin, a branch name is refused at run time.
+# The trust check on the comment author and the per-PR concurrency group are in the reusable workflow.
+on:
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  auto-fix:
+    permissions:
+      # git push to the PR branch when AI_PR_TOKEN is unset, and the `metrics` branch.
+      contents: write
+      # Labels on the PR through the issues API.
+      pull-requests: write
+      # Attempt / needs-human labels and comments.
+      issues: write
+      # Checkpoint artifact list and download, and the run lookup (read only).
+      actions: read
+    uses: koydas/autonomous-dev-loop/.github/workflows/adl-auto-fix-pr.yml@<PIPELINE_SHA> # <PIPELINE_VERSION>
+    with:
+      config_dir: .autonomous-dev-loop
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}

@@ -25,6 +25,23 @@ test('matchesTrigger: docs/adr/README.md is not a trigger', () => {
   assert.equal(matchesTrigger('docs/adr/README.md'), false);
 });
 
+test('matchesTrigger: the reusable workflows, the caller templates and the interface snapshot are triggers (ADR-0045)', () => {
+  assert.equal(matchesTrigger('.github/workflows/adl-pr-review.yml'), true);
+  assert.equal(matchesTrigger('.github/workflows/adl-validate-issue.yml'), true);
+  assert.equal(matchesTrigger('templates/consumer/pr-review.yml'), true);
+  assert.equal(matchesTrigger('templates/consumer/setup-labels.yml'), true);
+  assert.equal(matchesTrigger('docs/workflow-interface.json'), true);
+});
+
+test('matchesTrigger: the callers of this repository, other workflows and nested paths are not triggers', () => {
+  assert.equal(matchesTrigger('.github/workflows/pr-review.yml'), false);
+  assert.equal(matchesTrigger('.github/workflows/adl-pr-review.yml.bak'), false);
+  assert.equal(matchesTrigger('.github/workflows/sub/adl-x.yml'), false);
+  assert.equal(matchesTrigger('templates/consumer/README.md'), false);
+  assert.equal(matchesTrigger('templates/other/pr-review.yml'), false);
+  assert.equal(matchesTrigger('docs/workflow-interface.md'), false);
+});
+
 test('matchesTrigger: other changed files are not triggers', () => {
   assert.equal(matchesTrigger('CHANGELOG.md'), false);
   assert.equal(matchesTrigger('CONTRIBUTING.md'), false);

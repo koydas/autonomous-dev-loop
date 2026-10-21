@@ -1343,3 +1343,88 @@ test('the jq filter of the pipeline version step picks the pipeline repository e
   assert.equal(run([{ path: `koydas/autonomous-dev-loop/.github/workflows/test.yml@${SHA}`, sha: SHA }]), '', 'only adl-* reusable workflows count');
   assert.equal(run(null), '', 'a run without referenced workflows');
 });
+
+// ---------------------------------------------------------------------------
+// Caller templates for another repository (ADR-0045): templates/consumer/
+// ---------------------------------------------------------------------------
+
+const TEMPLATES_DIR = resolve(ROOT, 'templates/consumer');
+const template = (name) => readFileSync(resolve(TEMPLATES_DIR, name), 'utf8');
+const PIPELINE_WORKFLOWS = 'koydas/autonomous-dev-loop/.github/workflows';
+
+// A caller without what a repository changes by installing it: comments, the called workflow and its inputs.
+function callerSkeleton(text) {
+  return text
+    .split('\n')
+    .filter((l) => l.trim() && !l.trim().startsWith('#'))
+    .join('\n')
+    .replace(/\n    uses: .+/, '\n    uses: <body>')
+    .replace(/\n    with:\n(?: {6}.+\n?)+/, '\n');
+}
+
+test('templates/consumer holds one caller per pipeline workflow and the label setup, nothing else', () => {
+  assert.deepEqual(readdirSync(TEMPLATES_DIR).sort(), [...CALLERS, 'setup-labels.yml'].sort());
+});
+
+test('each caller template pins the body of its workflow in one line, SHA and version to fill in (the only pin)', () => {
+  for (const name of CALLERS) {
+    const text = template(name);
+    const body = `adl-${name}`;
+    assert.ok(readFileSync(resolve(WORKFLOWS_DIR, body), 'utf8').length > 0, `${body} exists in the pipeline`);
+    assert.match(text, new RegExp(`\\n    uses: ${PIPELINE_WORKFLOWS.replace(/[./]/g, '\\$&')}/${body.replace('.', '\\.')}@<PIPELINE_SHA> # <PIPELINE_VERSION>\\n`), `${name}: one pinned line`);
+    assert.equal(text.split('\n').filter((l) => !l.trim().startsWith('#') && l.includes('<PIPELINE_SHA>')).length, 1, `${name}: a single place to change`);
+    // Rendered, the pin is what the version step of the reusable workflow accepts.
+    const rendered = text.replace(/(\n    uses: \S+@)<PIPELINE_SHA> # <PIPELINE_VERSION>/, `$1${'c'.repeat(40)} # v1.0.0`);
+    assert.match(rendered, /@[0-9a-f]{40} # v\d+\.\d+\.\d+\n/, name);
+    assert.ok(!rendered.split('\n').some((l) => !l.trim().startsWith('#') && l.includes('<PIPELINE_')), `${name}: nothing else to fill in`);
+  }
+});
+
+test('the caller templates never pass pipeline_ref or pipeline_repository, use secrets: inherit or trigger on pull_request_target', () => {
+  for (const name of [...CALLERS, 'setup-labels.yml']) {
+    const text = template(name);
+    assert.doesNotMatch(text, /^\s+pull_request_target:/m, `${name}: pull_request_target`);
+    assert.doesNotMatch(text, /secrets:\s*inherit/, `${name}: secrets: inherit`);
+    assert.doesNotMatch(text, /\n {6}pipeline_ref:/, `${name}: pipeline_ref is for self-calls only`);
+    assert.doesNotMatch(text, /\n {6}pipeline_repository:/, `${name}: the default repository is the pipeline`);
+  }
+});
+
+test('a caller template is this repository caller of the same name, minus the pin and the inputs (no drift in triggers, ceilings, group, secrets)', () => {
+  for (const name of CALLERS) {
+    const own = callerSkeleton(readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8'));
+    const shipped = callerSkeleton(template(name));
+    assert.equal(shipped, own, `${name}: templates/consumer/${name} differs from .github/workflows/${name} beyond the pin and the inputs`);
+  }
+});
+
+test('a caller template gives the called workflow its declared inputs, the required ones included, and grants exactly its ceiling', async () => {
+  const { readInterface } = await import('./../workflow_interface.mjs');
+  for (const name of CALLERS) {
+    const text = template(name);
+    const iface = readInterface(readFileSync(resolve(WORKFLOWS_DIR, `adl-${name}`), 'utf8'));
+    const given = [...(text.match(/\n    with:\n((?: {6}.+\n?)+)/)?.[1] ?? '').matchAll(/^ {6}([a-z_]+):/gm)].map((m) => m[1]);
+    for (const input of given) assert.ok(iface.inputs[input], `${name}: passes ${input}, which adl-${name} does not declare`);
+    for (const [input, spec] of Object.entries(iface.inputs)) {
+      if (spec.required && spec.default === undefined) assert.ok(given.includes(input), `${name}: ${input} is required`);
+    }
+    assert.ok(given.includes('config_dir'), `${name}: the configuration directory is explicit`);
+    assert.match(text, /\n      config_dir: \.autonomous-dev-loop\n/, `${name}: the default directory`);
+    const scopes = jobScopes(jobsOf(text)[0].text);
+    assert.deepEqual(scopes, iface.ceiling, `${name}: the job grants exactly the ceiling of the called workflow`);
+  }
+});
+
+test('setup-labels.yml runs the pinned label installer with a token that can only write issues, configuration from the default branch', () => {
+  const text = template('setup-labels.yml');
+  assert.match(text, /^on:\n  workflow_dispatch:\n/m);
+  assert.deepEqual(jobScopes(jobsOf(text)[0].text), { issues: 'write' });
+  assert.match(text, /- name: Checkout pipeline\n\s+uses: actions\/checkout@v4\n\s+with:\n\s+repository: koydas\/autonomous-dev-loop\n\s+ref: <PIPELINE_SHA> # <PIPELINE_VERSION>\n\s+path: \.adl-pipeline\n\s+persist-credentials: false\n/);
+  assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+path: \.adl-config\n\s+sparse-checkout: \.autonomous-dev-loop\n\s+persist-credentials: false\n/);
+  assert.match(text, /ADL_CONFIG_DIR: \$\{\{ github\.workspace \}\}\/\.adl-config\/\.autonomous-dev-loop/);
+  assert.match(text, /node \.adl-pipeline\/scripts\/ensure_labels\.mjs --update/);
+  assert.match(text, /\n {12}node \.adl-pipeline\/scripts\/ensure_labels\.mjs\n/);
+  assert.ok(readFileSync(resolve(ROOT, 'scripts/ensure_labels.mjs'), 'utf8').includes('--update'), 'the flag exists');
+  assert.ok(!/secrets\.(?!GITHUB_TOKEN)/.test(text), 'only the workflow token');
+  for (const { body } of runScripts(text)) assert.doesNotMatch(body, /\$\{\{/, 'no expression inside a run script: inputs reach it through env');
+});

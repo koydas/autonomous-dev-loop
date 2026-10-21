@@ -1,0 +1,28 @@
+name: Issue Validation Agent
+
+# Caller of the autonomous-dev-loop pipeline (docs/installation.md of koydas/autonomous-dev-loop).
+# Replace <PIPELINE_SHA> with the full commit SHA of the release you install and <PIPELINE_VERSION> with its
+# tag (vMAJOR.MINOR.PATCH): that line is the only pin, a branch name is refused at run time.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    permissions:
+      # The `metrics` branch only (run records, Git Data API).
+      contents: write
+      # Validation comment and labels.
+      issues: write
+      # gh workflow run code-generation.yml: a dispatch is the one call that needs actions: write.
+      actions: write
+    uses: koydas/autonomous-dev-loop/.github/workflows/adl-validate-issue.yml@<PIPELINE_SHA> # <PIPELINE_VERSION>
+    with:
+      config_dir: .autonomous-dev-loop
+      codegen_workflow_file: code-generation.yml
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

@@ -48,6 +48,7 @@ Update `CHANGELOG.md` whenever your PR modifies:
 
 - **Entrypoint scripts** — any `scripts/*.mjs` file (not `scripts/lib/` or `scripts/tests/`)
 - **ADR files** — any `docs/adr/NNNN-*.md` record
+- **What other repositories depend on (ADR-0045)** — `.github/workflows/adl-*.yml`, `templates/consumer/*.yml` and `docs/workflow-interface.json`; a change that a caller can notice goes under `### Breaking` (see `docs/releasing.md`)
 
 Add your entry under the `[Unreleased]` section using [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) conventions:
 

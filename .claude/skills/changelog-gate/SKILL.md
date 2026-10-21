@@ -1,15 +1,16 @@
 ---
-description: CI gate requiring a CHANGELOG.md entry under [Unreleased] whenever a PR touches scripts/*.mjs entrypoints or docs/adr/NNNN-*.md files.
+description: CI gate requiring a CHANGELOG.md entry under [Unreleased] whenever a PR touches scripts/*.mjs entrypoints, docs/adr/NNNN-*.md files, the reusable workflows (adl-*.yml), the caller templates or the workflow interface snapshot.
 ---
 
 # changelog-gate
 
 ## When to Apply
 
-Any PR you open or push to that touches **either** of these file categories:
+Any PR you open or push to that touches **any** of these file categories:
 
 - `scripts/*.mjs` — top-level entrypoint scripts (NOT `scripts/lib/*.mjs` or `scripts/tests/*.mjs`)
 - `docs/adr/NNNN-*.md` — ADR files (four-digit prefix, under `docs/adr/` only)
+- `.github/workflows/adl-*.yml`, `templates/consumer/*.yml`, `docs/workflow-interface.json` — what a repository using the pipeline from elsewhere depends on (ADR-0045); a change a caller can notice goes under `### Breaking` (see `docs/releasing.md`)
 
 CI workflow `changelog-check.yml` enforces this gate and will fail the PR if the requirement is not met.
 
@@ -29,6 +30,7 @@ CI workflow `changelog-check.yml` enforces this gate and will fail the PR if the
 
 - Entrypoint regex: `/^scripts\/[^/]+\.mjs$/` — matches `scripts/foo.mjs` but NOT `scripts/lib/foo.mjs` or `scripts/tests/foo.mjs`
 - ADR regex: `/^docs\/adr\/\d{4}-[^/]+\.md$/` — matches `docs/adr/0019-my-decision.md`
+- Reusable workflow regex: `/^\.github\/workflows\/adl-[^/]+\.yml$/`; caller template regex: `/^templates\/consumer\/[^/]+\.yml$/`; snapshot: exactly `docs/workflow-interface.json`
 
 ## Constraints
 
