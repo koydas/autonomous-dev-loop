@@ -1,5 +1,7 @@
 name: Issue Validation Agent
 
+# Thin caller (ADR-0045): the body is adl-validate-issue.yml. The name, the trigger and the permission
+# ceiling stay here; this repository runs its own pipeline from its default branch (ADR-0023).
 on:
   issues:
     types: [opened, edited]
@@ -8,121 +10,21 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: validate-issue-${{ github.event.issue.number }}
-  cancel-in-progress: false
-
 jobs:
   validate:
-    runs-on: ubuntu-latest
-    # 12 Groq retries x 60 s + 3 min for the comment and labels (ADR-0028).
-    timeout-minutes: 15
     permissions:
       # The `metrics` branch only (Commit metrics, Git Data API).
       contents: write
-      # Validation comment and labels (this token).
+      # Validation comment and labels.
       issues: write
       # gh workflow run code-generation.yml: a dispatch is the one call that needs actions: write.
       actions: write
-
-    steps:
-      # No step pushes: metrics go through the API with an explicit token.
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Download checkpoint artifact
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: checkpoints-issue-${{ github.event.issue.number }}
-          path: ./checkpoints
-
-      - name: Validate issue
-        id: validate
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
-          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
-          LLM_MAX_RETRY_WAIT_MS: '60000'
-          GROQ_MAX_RETRIES: '12'
-          CHECKPOINT_RUN_ID: issue-${{ github.event.issue.number }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
-          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
-          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
-          AI_PROVIDER_VALIDATION: ${{ vars.AI_PROVIDER_VALIDATION }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
-          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
-          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
-        run: node scripts/validate_issue.mjs
-
-      - name: Upsert validation comment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          COMMENT_BODY: ${{ steps.validate.outputs.comment }}
-        run: node scripts/upsert_issue_validation_comment.mjs
-
-      - name: Manage labels
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          IS_VALID: ${{ steps.validate.outputs.valid }}
-        run: node scripts/manage_labels.mjs
-
-      - name: Upload checkpoint artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkpoints-issue-${{ github.event.issue.number }}
-          path: ./checkpoints
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Upload run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}
-          path: ./observability/traces/${{ github.run_id }}.json
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Commit metrics
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Only this run's records, written outside the checkout (ADR-0021): never the
-          # working-tree metrics/runs.jsonl, which generated code could have modified.
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          RUN_RECORD_MESSAGE: "metrics: issue ${{ github.event.issue.number }} [skip ci]"
-        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
-        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
-        run: node scripts/commit_run_record.mjs
-
-      - name: Trigger Code Generation
-        if: steps.validate.outputs.valid == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          gh workflow run code-generation.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref "$DEFAULT_BRANCH" \
-            -f issue_number="$ISSUE_NUMBER" \
-            -f validate_run_id="$GITHUB_RUN_ID"
+    uses: ./.github/workflows/adl-validate-issue.yml
+    with:
+      pipeline_repository: ${{ github.repository }}
+      pipeline_ref: ${{ github.event.repository.default_branch }}
+      config_dir: config
+      codegen_workflow_file: code-generation.yml
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

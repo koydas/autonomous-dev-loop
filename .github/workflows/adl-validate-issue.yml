@@ -1,0 +1,227 @@
+name: ADL Issue Validation (reusable)
+
+# Reusable workflow (ADR-0045): called by validate-issue.yml in this repository and by the caller
+# template of a target repository. The trigger (issues opened / edited) belongs to the caller.
+on:
+  workflow_call:
+    inputs:
+      pipeline_repository:
+        description: 'Repository holding the pipeline (scripts, prompts, default config)'
+        type: string
+        default: 'koydas/autonomous-dev-loop'
+      pipeline_ref:
+        description: 'Self-calls only: the default branch. Any other repository is pinned by the ref of its `uses:` line.'
+        type: string
+        default: ''
+      config_dir:
+        description: "Directory of the repository's own pipeline configuration"
+        type: string
+        default: '.autonomous-dev-loop'
+      codegen_workflow_file:
+        description: 'Workflow file of the caller that is dispatched when the issue is valid'
+        type: string
+        default: 'code-generation.yml'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      GROQ_API_KEY:
+        required: false
+
+# Per job (ADR-0007 amendment 2026-10-20).
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    # 12 Groq retries x 60 s + 3 min for the comment and labels (ADR-0028).
+    timeout-minutes: 15
+    permissions:
+      # The `metrics` branch only (Commit metrics, Git Data API).
+      contents: write
+      # Validation comment and labels (this token).
+      issues: write
+      # gh workflow run code-generation.yml: a dispatch is the one call that needs actions: write.
+      actions: write
+    # Per issue (ADR-0028): a job-level group, the caller declares none.
+    concurrency:
+      group: validate-issue-${{ github.event.issue.number }}
+      cancel-in-progress: false
+
+    steps:
+      # No step pushes: metrics go through the API with an explicit token.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve pipeline version
+        id: pipeline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        # ADR-0045: one pin per caller, the `uses: …@<ref>` of the reusable workflow; its commit is read from the run.
+        # A call from the pipeline repository itself runs the default branch, as ADR-0023 requires.
+        run: |
+          set -euo pipefail
+          # pull_request_target runs the base workflow with secrets on the contents of a pull request: never.
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            echo "::error::The pipeline does not run on pull_request_target"
+            exit 1
+          fi
+          if [ "${PIPELINE_REPOSITORY,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            if [ -n "$PIPELINE_REF" ] && [ "$PIPELINE_REF" != "$DEFAULT_BRANCH" ]; then
+              echo "::error::pipeline_ref must be the default branch ($DEFAULT_BRANCH) when the pipeline repository calls itself, got $PIPELINE_REF"
+              exit 1
+            fi
+            echo "ref=$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ENTRY=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '[.referenced_workflows[]? | select((.path | ascii_downcase) | startswith((env.PIPELINE_REPOSITORY | ascii_downcase) + "/.github/workflows/adl-"))] | .[0] // empty | [.path, .sha, (.ref // "")] | @tsv')
+          if [ -z "$ENTRY" ]; then
+            echo "::error::This run does not reference a reusable workflow of $PIPELINE_REPOSITORY"
+            exit 1
+          fi
+          IFS=$'\t' read -r WORKFLOW_PATH SHA REF <<< "$ENTRY"
+          PIN="${WORKFLOW_PATH#*@}"
+          if ! [[ "$PIN" =~ ^[0-9a-f]{40}$ || "$PIN" =~ ^(refs/tags/)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The reusable workflow is pinned to \"$PIN\": pin a commit SHA or a vMAJOR.MINOR.PATCH tag, never a branch"
+            exit 1
+          fi
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The run does not give the commit of the reusable workflow"
+            exit 1
+          fi
+          if [ -n "$REF" ] && [ "$REF" != "$PIN" ]; then
+            echo "::error::The run reports the reusable workflow at \"$REF\" but its path pins \"$PIN\""
+            exit 1
+          fi
+          echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pipeline_repository }}
+          ref: ${{ steps.pipeline.outputs.ref }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      # ADR-0045: the target's own configuration comes from its default branch, never from the ref the run
+      # was dispatched on nor from a pull request tree.
+      - name: Checkout target configuration (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-config
+          sparse-checkout: ${{ inputs.config_dir }}
+          persist-credentials: false
+
+      - name: Move the pipeline and the configuration out of the workspace
+        run: |
+          mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+          mv .trusted-config "$RUNNER_TEMP/target-config"
+          echo "ADL_CONFIG_DIR=$RUNNER_TEMP/target-config/$ADL_CONFIG_PATH" >> "$GITHUB_ENV"
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download checkpoint artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: checkpoints-issue-${{ github.event.issue.number }}
+          path: ./checkpoints
+
+      - name: Validate issue
+        id: validate
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '12'
+          CHECKPOINT_RUN_ID: issue-${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          AI_PROVIDER_VALIDATION: ${{ vars.AI_PROVIDER_VALIDATION }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/validate_issue.mjs"
+
+      - name: Upsert validation comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          COMMENT_BODY: ${{ steps.validate.outputs.comment }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/upsert_issue_validation_comment.mjs"
+
+      - name: Manage labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          IS_VALID: ${{ steps.validate.outputs.valid }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/manage_labels.mjs"
+
+      - name: Upload checkpoint artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkpoints-issue-${{ github.event.issue.number }}
+          path: ./checkpoints
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Only this run's records, written outside the checkout (ADR-0021): never the
+          # working-tree metrics/runs.jsonl, which generated code could have modified.
+          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
+          RUN_RECORD_MESSAGE: "metrics: issue ${{ github.event.issue.number }} [skip ci]"
+        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
+        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
+        run: node "$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
+
+      - name: Trigger Code Generation
+        if: steps.validate.outputs.valid == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CODEGEN_WORKFLOW_FILE: ${{ inputs.codegen_workflow_file }}
+        run: |
+          gh workflow run "$CODEGEN_WORKFLOW_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$DEFAULT_BRANCH" \
+            -f issue_number="$ISSUE_NUMBER" \
+            -f validate_run_id="$GITHUB_RUN_ID"

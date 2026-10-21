@@ -111,7 +111,7 @@ To resume: merge the dependency or implement the protected part by hand, then re
 Step outputs carry untrusted text: the validation comment and the generation / auto-fix `summary` (model output), the issue body and title. A heredoc with a fixed delimiter (`EOF`, `__DELIM__`) let a value line equal to it close the block and forge the following lines as outputs (`valid=true` dispatching code generation, an injected `fixed_paths` / `attempt_number`), or fail the step on a stray line (2026-10-19 audit F04, F28).
 
 - **Scripts** write every output through `scripts/lib/github_output.mjs` (`appendOutputs`): a value without a line break is `name=value`; any other value is a heredoc whose delimiter is `ghadelim_<uuid>`, drawn per write and redrawn while the value contains it; `\r\n` / lone `\r` become `\n`; an invalid name throws before anything is written. Multi-line values are written first and single-line control outputs (`valid`, `score`, `attempt_number`, `rejected`, `blocked`) last, so the runner's last-value-wins can only favour them. A single path in `generated_paths` / `fixed_paths` is written as `name=value` (same value for consumers).
-- **`code-generation.yml` → Resolve issue data** draws `DELIM="ghadelim_$(openssl rand -hex 16)"` per run for the issue `body` and `title` heredocs, then writes `number` and `labels`. The body is read by `gh` at runtime, never interpolated into the script. An issue body containing `__DELIM__` no longer fails the step.
+- **`adl-code-generation.yml` → Resolve issue data** draws `DELIM="ghadelim_$(openssl rand -hex 16)"` per run for the issue `body` and `title` heredocs, then writes `number` and `labels`. The body is read by `gh` at runtime, never interpolated into the script. An issue body containing `__DELIM__` no longer fails the step.
 - `workflow_gates.test.mjs` fails on any workflow writing a fixed heredoc delimiter with `echo` / `printf`.
 
 ## Review and Auto-Fix Guardrails
@@ -275,6 +275,28 @@ Neither `ADL_*` variable set (this repository, every workflow today): `config/` 
 - no self-modification skip in auto-fix (`scripts/auto_fix_pr.mjs` is only a path there).
 
 For this repository the assembled system prompt is the one it had before the split, verbatim (checked byte for byte when the file was split); the eval suites load it through the same function.
+
+## Reusable Workflows: validate-issue, code-generation, reset-auto-fix (ADR-0045)
+
+The bodies of these three workflows are reusable workflows (`on: workflow_call` only): `adl-validate-issue.yml`, `adl-code-generation.yml`, `adl-reset-auto-fix.yml`. `validate-issue.yml`, `code-generation.yml` and `reset-auto-fix.yml` stay as thin callers: they keep the workflow `name:` (so traces, run records and the `workflow_run` trigger of `pipeline-site.yml` see the same names), the trigger and the permission ceiling, and call the body with `uses: ./.github/workflows/adl-*.yml`. A caller declares no concurrency group: each body declares its own at job level (a group on both sides would make the called job wait for its own caller). In the Actions UI a job reads `<caller job> / <called job>`.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `pipeline_repository` | `koydas/autonomous-dev-loop` | Repository holding scripts, prompts and default config |
+| `pipeline_ref` | empty | Self-calls only: the default branch. Any other repository is pinned by the ref of its own `uses:` line |
+| `config_dir` | `.autonomous-dev-loop` | The repository's own configuration directory (this repository: `config`) |
+| `codegen_workflow_file` (validate-issue) | `code-generation.yml` | Caller workflow dispatched when the issue is valid |
+| `issue_number`, `validate_run_id` (code-generation) | empty | `workflow_dispatch` values of the caller (strings; empty on a label event) |
+| `pr_number`, `retrigger` (reset-auto-fix) | – / `true` | `workflow_dispatch` values of the caller |
+
+Secrets are optional and mapped one by one (never `secrets: inherit`): `ANTHROPIC_API_KEY`, `GROQ_API_KEY` (validate-issue, code-generation), `AI_PR_TOKEN` (code-generation, reset-auto-fix). A caller job grants exactly the union of its called jobs' scopes (a called job can only narrow the caller's token; `workflow_gates.test.mjs` checks the equality): validate-issue `contents: write`, `issues: write`, `actions: write`; code-generation `contents: write`, `pull-requests: write`, `issues: write`, `actions: read`; reset-auto-fix `contents: write`, `pull-requests: write`, `issues: write`, `actions: read`.
+
+Every job that runs a script first gets, in this order:
+
+1. **Resolve pipeline version** (`id: pipeline`, the same shell in the three files, executed by the gate tests with `gh` stubbed). A call from the pipeline repository itself uses the default branch, as ADR-0023 requires (`pipeline_ref`, if set, must equal it). Any other caller: the commit of the `uses:` pin, read from `referenced_workflows` of the run (`GET /repos/{repo}/actions/runs/{id}`, hence `actions: read`); the pin must be a 40-hex SHA or `vMAJOR.MINOR.PATCH` (`refs/tags/` accepted), never a branch; a missing entry, a branch pin or a `ref` that disagrees with the pin fails the job with a message. The step also refuses `pull_request_target`.
+2. **Checkout pipeline** at that commit and **Checkout target configuration (default branch)**: a sparse checkout of `config_dir` from `github.event.repository.default_branch`, never the ref a `workflow_dispatch` named. Both are moved to `$RUNNER_TEMP/pipeline` and `$RUNNER_TEMP/target-config` before any script runs (the workspace must hold only the repository for `create-pull-request`), and `ADL_CONFIG_DIR` is exported; `ADL_PIPELINE_REPOSITORY` and `ADL_CONFIG_PATH` are job environment. Scripts run as `node "$RUNNER_TEMP/pipeline/scripts/<name>.mjs"` with the workspace as working directory (see *Roots and Layered Configuration*).
+
+`load-labels` of `adl-code-generation.yml` resolves the trigger label with `scripts/resolve_labels.mjs issue.valid.name ready_for_dev` (effective labels config, target layer included) instead of an inline Node program.
 
 ## Observability
 

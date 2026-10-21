@@ -1,5 +1,7 @@
 name: Code Generation
 
+# Thin caller (ADR-0045): the body is adl-code-generation.yml. The name, the triggers and the permission
+# ceiling stay here; this repository runs its own pipeline from its default branch (ADR-0023).
 on:
   issues:
     types: [labeled]
@@ -14,196 +16,30 @@ on:
         required: false
         type: string
 
-# Per job (ADR-0007 amendment 2026-10-20): load-labels runs on every issue label event and only reads.
+# Per job (ADR-0007 amendment 2026-10-20): the reusable workflow's load-labels job runs on every issue label event and only reads.
 permissions:
   contents: read
 
 jobs:
-  load-labels:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      ready_for_dev: ${{ steps.cfg.outputs.ready_for_dev }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - id: cfg
-        run: |
-          LABEL=$(node --input-type=module <<'EOF'
-          import { readFileSync } from 'fs';
-          import { parseNestedYaml } from './scripts/lib/yaml.mjs';
-          process.stdout.write(parseNestedYaml(readFileSync('config/labels.yaml', 'utf8')).issue.valid.name);
-          EOF
-          )
-          echo "ready_for_dev=$LABEL" >> "$GITHUB_OUTPUT"
-
-  generate-pr:
-    needs: load-labels
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == needs.load-labels.outputs.ready_for_dev
-    runs-on: ubuntu-latest
-    # 15 Groq retries x 60 s + 5 min for checkout, PR creation and artifacts (ADR-0028).
-    timeout-minutes: 20
+  code-generation:
     permissions:
       # create-pull-request pushes ai/issue-<n> when AI_PR_TOKEN is unset; the `metrics` branch (Commit metrics).
       contents: write
       # create-pull-request opens / updates the PR, same fallback.
       pull-requests: write
-      # gh issue view; needs-human label and comment on escalation (generate_issue_change.mjs, this token).
+      # gh issue view; needs-human label and comment on escalation.
       issues: write
-      # Cross-run checkpoint download from the validate-issue run (read only).
+      # Cross-run checkpoint download from the validate-issue run, and the run lookup (read only).
       actions: read
-    # Job-level: any label added to the issue triggers this workflow (see auto-fix-pr.yml).
-    concurrency:
-      group: code-generation-${{ github.event.issue.number || inputs.issue_number }}
-      cancel-in-progress: false
-
-    steps:
-      # Nothing here runs git push: create-pull-request sets its own token for its push.
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Resolve issue data
-        id: issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_NUMBER: ${{ inputs.issue_number }}
-          EVENT_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            NUMBER="$INPUT_NUMBER"
-          else
-            NUMBER="$EVENT_NUMBER"
-          fi
-          TITLE=$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json title -q '.title')
-          LABELS=$(gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels | map(.name) | tojson')
-          # Issue text is untrusted: random heredoc delimiter per run, so a body line cannot close the
-          # block and forge outputs (audit F28); number/labels written last (last value wins).
-          DELIM="ghadelim_$(openssl rand -hex 16)"
-          {
-            echo "body<<$DELIM"
-            gh issue view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json body -q '.body'
-            echo "$DELIM"
-            echo "title<<$DELIM"
-            printf '%s\n' "$TITLE"
-            echo "$DELIM"
-            echo "number=$NUMBER"
-            echo "labels=$LABELS"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Download checkpoint artifact
-        if: inputs.validate_run_id != ''
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: checkpoints-issue-${{ steps.issue.outputs.number }}
-          run-id: ${{ inputs.validate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: ./checkpoints
-
-      - name: Check prerequisite checkpoint
-        if: inputs.validate_run_id != ''
-        env:
-          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
-        run: |
-          RUNID="issue-${ISSUE_NUMBER}"
-          if [ ! -f "./checkpoints/${RUNID}/validate.json" ]; then
-            echo "::error::Checkpoint 'validate' not found for run '${RUNID}'. The validate-issue job must complete successfully before code-generation can proceed."
-            exit 1
-          fi
-
-      - name: Generate AI change
-        id: generate
-        env:
-          GITHUB_RUN_ID: ${{ github.run_id }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_EVENT_PATH: ${{ github.event_path }}
-          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
-          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
-          LLM_MAX_RETRY_WAIT_MS: '60000'
-          GROQ_MAX_RETRIES: '15'
-          CHECKPOINT_RUN_ID: issue-${{ steps.issue.outputs.number }}
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
-          ISSUE_TITLE: ${{ steps.issue.outputs.title }}
-          ISSUE_BODY: ${{ steps.issue.outputs.body }}
-          ISSUE_LABELS: ${{ steps.issue.outputs.labels }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
-          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
-          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
-          AI_PROVIDER_GENERATION: ${{ vars.AI_PROVIDER_GENERATION }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
-          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
-          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
-        run: node scripts/generate_issue_change.mjs
-
-      # A guardrail rejection (ADR-0019) exits 0 with rejected=true, a blocked issue (ADR-0029
-      # amendment) with blocked=true: nothing was written, no branch is pushed, no PR is opened.
-      - name: Create pull request
-        id: cpr
-        if: steps.generate.outputs.rejected != 'true' && steps.generate.outputs.blocked != 'true'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
-          branch: ai/issue-${{ steps.issue.outputs.number }}
-          base: ${{ github.event.repository.default_branch }}
-          commit-message: "chore(ai): generate draft for issue #${{ steps.issue.outputs.number }}"
-          title: "[AI] Issue #${{ steps.issue.outputs.number }}: ${{ steps.issue.outputs.title }}"
-          body: |
-            ## AI Generated Change
-
-            ${{ steps.generate.outputs.summary }}
-
-            Closes #${{ steps.issue.outputs.number }}
-          add-paths: |
-            ${{ steps.generate.outputs.generated_paths }}
-
-      - name: Upload checkpoint artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: checkpoints-issue-${{ steps.issue.outputs.number }}
-          path: ./checkpoints
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Upload run trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: run-trace-${{ github.run_id }}
-          path: ./observability/traces/${{ github.run_id }}.json
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Commit metrics
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Only this run's records, written outside the checkout (ADR-0021): never the
-          # working-tree metrics/runs.jsonl, which generated code could have modified.
-          METRICS_FILE: ${{ runner.temp }}/pipeline-metrics.jsonl
-          RUN_RECORD_MESSAGE: "metrics: issue ${{ steps.issue.outputs.number }} code-generation [skip ci]"
-          RUN_RECORD_PR_OPERATION: ${{ steps.cpr.outputs.pull-request-operation }}
-          RUN_RECORD_PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
-          RUN_RECORD_PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
-        # One commit on the `metrics` branch, never main (PR-only; ADR-0013 amendment): the
-        # runs.jsonl lines + the redacted run record metrics/runs/<YYYY-MM>/<run_id>-<attempt>.json (ADR-0040).
-        run: node scripts/commit_run_record.mjs
+    uses: ./.github/workflows/adl-code-generation.yml
+    with:
+      pipeline_repository: ${{ github.repository }}
+      pipeline_ref: ${{ github.event.repository.default_branch }}
+      config_dir: config
+      # Strings: a label event has no inputs.
+      issue_number: ${{ format('{0}', inputs.issue_number) }}
+      validate_run_id: ${{ format('{0}', inputs.validate_run_id) }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}
