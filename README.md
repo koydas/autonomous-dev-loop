@@ -9,6 +9,16 @@
 
 Label an issue → an LLM writes the PR → a second LLM reviews it against real test/lint results → an auto-fix agent addresses the findings → **you** merge. Runs entirely on GitHub Actions; Groq (`openai/gpt-oss-120b`) by default, Anthropic optional.
 
+## Quickstart
+
+Install the pipeline in your own repository: five caller workflows pinned to a commit of this one, a label setup run and an optional `.autonomous-dev-loop/` configuration directory.
+
+1. Add `GROQ_API_KEY` and/or `ANTHROPIC_API_KEY` (and `AI_PR_TOKEN`, recommended) as repository secrets.
+2. Copy `templates/consumer/*.yml` into `.github/workflows/`, replacing `<PIPELINE_SHA>` with a commit of this repository, and merge to your default branch.
+3. Run **ADL Setup Labels** once, then open an issue.
+
+Prerequisites with indicative cost per review, the minimal caller, the first journey, troubleshooting and known limits (Groq budget, `review-withheld` on large PRs, protected paths, no auto-merge): **[docs/quickstart.md](docs/quickstart.md)**. Reference: [docs/installation.md](docs/installation.md).
+
 > Asked to fix one review finding, the auto-fix agent replaced a 690-line, 26-test suite with an 18-line stub that couldn't run ([ADR-0009](docs/adr/0009-llm-agent-guardrails.md)). Each boundary below links to the ADR recording the incident or exposure that forced it.
 
 | | |
@@ -59,7 +69,7 @@ graph LR
     H -->|No| J[Manual intervention requested]
 ```
 
-## Quick start
+## Quick start (this repository)
 
 1. Add `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) in **Settings → Secrets and variables → Actions**. `AI_PR_TOKEN` is recommended for PR/label/review writes.
 2. Open an issue. The validator scores it and applies `ready-for-dev` or `needs-refinement`; labels are created automatically.
