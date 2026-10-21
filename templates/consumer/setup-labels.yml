@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      # Reads the configuration of a private repository (a job block replaces the workflow default).
+      contents: read
       # Label creation (and update) only.
       issues: write
     env:

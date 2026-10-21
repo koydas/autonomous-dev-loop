@@ -50,8 +50,8 @@ async function listLabels(request) {
 
 /**
  * `request(method, path, body?)` resolves `{ status, ok, json? }` (path relative to /repos/<owner>/<repo>).
- * Returns { created, existing, updated, drift }: label names. A label created by someone else between the
- * listing and the POST (422) counts as existing; any other failure throws.
+ * Returns { created, existing, updated, drift }: label names. A 422 on the POST counts as existing only when the
+ * label can then be read (someone created it between the listing and the POST); any other failure throws.
  */
 export async function ensureLabels({ request, definitions, update = false, dryRun = false }) {
   const present = new Map((await listLabels(request)).map((l) => [String(l.name).toLowerCase(), l]));
@@ -61,7 +61,13 @@ export async function ensureLabels({ request, definitions, update = false, dryRu
     if (!found) {
       if (!dryRun) {
         const res = await request('POST', '/labels', def);
-        if (res.status === 422) { result.existing.push(def.name); continue; }
+        if (res.status === 422) {
+          // "already exists" when someone created it in between; also what GitHub answers to a name or color it
+          // rejects. Only a label that is there counts.
+          const again = await request('GET', `/labels/${encodeURIComponent(def.name)}`);
+          if (again.ok) { result.existing.push(def.name); continue; }
+          throw new Error(`GitHub API POST /labels (${def.name}) → 422 and the label does not exist${res.json?.message ? `: ${res.json.message}` : ''}`);
+        }
         if (!res.ok) throw new Error(`GitHub API POST /labels (${def.name}) → ${res.status}`);
       }
       result.created.push(def.name);

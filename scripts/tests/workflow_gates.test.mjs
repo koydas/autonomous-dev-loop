@@ -1415,10 +1415,11 @@ test('a caller template gives the called workflow its declared inputs, the requi
   }
 });
 
-test('setup-labels.yml runs the pinned label installer with a token that can only write issues, configuration from the default branch', () => {
+test('setup-labels.yml runs the pinned label installer with a token that reads contents and writes issues only, configuration from the default branch', () => {
   const text = template('setup-labels.yml');
   assert.match(text, /^on:\n  workflow_dispatch:\n/m);
-  assert.deepEqual(jobScopes(jobsOf(text)[0].text), { issues: 'write' });
+  // contents: read is explicit: a job-level block replaces the workflow default, and a private repository needs it to check out.
+  assert.deepEqual(jobScopes(jobsOf(text)[0].text), { contents: 'read', issues: 'write' });
   assert.match(text, /- name: Checkout pipeline\n\s+uses: actions\/checkout@v4\n\s+with:\n\s+repository: koydas\/autonomous-dev-loop\n\s+ref: <PIPELINE_SHA> # <PIPELINE_VERSION>\n\s+path: \.adl-pipeline\n\s+persist-credentials: false\n/);
   assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+path: \.adl-config\n\s+sparse-checkout: \.autonomous-dev-loop\n\s+persist-credentials: false\n/);
   assert.match(text, /ADL_CONFIG_DIR: \$\{\{ github\.workspace \}\}\/\.adl-config\/\.autonomous-dev-loop/);

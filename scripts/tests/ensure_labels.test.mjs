@@ -37,19 +37,23 @@ test('labelDefinitions rejects two entries naming the same label, in any letter 
 });
 
 // An in-memory repository behind the request function the script uses.
-function fakeRepo(initial = [], { postStatus = 201, listStatus = 200, patchStatus = 200 } = {}) {
+function fakeRepo(initial = [], { postStatus = 201, listStatus = 200, patchStatus = 200, raceCreates = false } = {}) {
   const labels = initial.map((l) => ({ ...l }));
   const calls = [];
   const request = async (method, apiPath, body) => {
     calls.push([method, apiPath, body]);
+    if (method === 'GET' && !apiPath.startsWith('/labels?')) {
+      const found = labels.find((l) => `/labels/${encodeURIComponent(l.name)}` === apiPath);
+      return found ? { status: 200, ok: true, json: found } : { status: 404, ok: false, json: null };
+    }
     if (method === 'GET') {
       if (listStatus !== 200) return { status: listStatus, ok: false, json: null };
       const page = Number(/[?&]page=(\d+)/.exec(apiPath)[1]);
       return { status: 200, ok: true, json: labels.slice((page - 1) * 100, page * 100) };
     }
     if (method === 'POST') {
-      if (postStatus === 201) labels.push({ ...body });
-      return { status: postStatus, ok: postStatus < 300, json: null };
+      if (postStatus === 201 || (postStatus === 422 && raceCreates)) labels.push({ ...body });
+      return { status: postStatus, ok: postStatus < 300, json: postStatus === 422 ? { message: 'Validation Failed' } : null };
     }
     if (method === 'PATCH') {
       const found = labels.find((l) => `/labels/${encodeURIComponent(l.name)}` === apiPath);
@@ -112,9 +116,12 @@ test('ensureLabels with dryRun lists what it would create and update, and writes
   assert.equal(repo.writes().length, 0);
 });
 
-test('ensureLabels treats a label created in between (422) as existing, and fails on any other error', async () => {
-  const race = fakeRepo([], { postStatus: 422 });
+test('ensureLabels treats a 422 as existing only when the label is there, and fails on any other error', async () => {
+  const race = fakeRepo([], { postStatus: 422, raceCreates: true });
   assert.deepEqual(await ensureLabels({ request: race.request, definitions: [def('a')] }), { created: [], existing: ['a'], updated: [], drift: [] });
+  assert.ok(race.calls.some(([m, p]) => m === 'GET' && p === '/labels/a'), 'the label is read again');
+  // A 422 for a name or color GitHub rejects leaves nothing behind: the installation must not succeed.
+  await assert.rejects(ensureLabels({ request: fakeRepo([], { postStatus: 422 }).request, definitions: [def('a')] }), /POST \/labels \(a\) → 422 and the label does not exist: Validation Failed/);
   await assert.rejects(ensureLabels({ request: fakeRepo([], { postStatus: 403 }).request, definitions: [def('a')] }), /POST \/labels \(a\) → 403/);
   await assert.rejects(ensureLabels({ request: fakeRepo([], { listStatus: 500 }).request, definitions: [def('a')] }), /GET \/labels \(page 1\) → 500/);
   await assert.rejects(ensureLabels({ request: fakeRepo([def('a', 'ff0000')], { patchStatus: 404 }).request, definitions: [def('a')], update: true }), /PATCH \/labels\/a → 404/);
