@@ -160,6 +160,8 @@ function reviewFindings(runs) {
     out.push(finding({
       id: 'review-withheld', severity: warning ? 'warning' : 'info', category: 'Review',
       title: warning || !adrs ? 'Reviews withhold their verdict' : `Reviews withhold their verdict by design (${adrs})`,
+      titleByDesign: adrs ? `Reviews withhold their verdict by design (${adrs})` : null,
+      anomaly: runIds(withheld.filter((_, i) => classes[i].anomaly)),
       fact: `${withheld.length} of ${verdicts.length} verdicts are WITHHELD (${pct(withheld.length / verdicts.length)}); ${cut} of them had code files not reviewed, ${fromApprove} would have been APPROVE (withheld_from). `
         + `They cover ${heads} PR head(s) on ${prs} PR(s). Guardrail: ${withheld.length - anomalies} (code cut, ADR-0038: ${guardrailCut}; CI evidence, ADR-0026: ${guardrailEvidence}); `
         + `anomaly: ${anomalies} (REQUEST_CHANGES on unseen code: ${count('rc_unseen')}; unknown cause: ${count('other')}; fallback answered a prompt cut to the primary's budget: ${count('fallback_capped')}). `
@@ -211,7 +213,9 @@ function reviewFindings(runs) {
     // (run attempt > 1); otherwise the marker should have skipped it: two runs claimed one head (push /
     // pull_request race).
     const rerun = ({ run }) => Number(/-(\d+)$/.exec(run.run_id)?.[1]) > 1;
-    const extras = dup.flatMap((l) => l.slice(1).map((v, i) => ({ v, by: l[i].e.meta.verdict === 'WITHHELD' ? 'withheld' : rerun(v) ? 'rerun' : 'race' })));
+    // The WITHHELD must predate the later run's start: a run already started when it was emitted raced with it.
+    const sawWithheld = (prev, v) => prev.e.meta.verdict === 'WITHHELD' && !(Number.isFinite(prev.e.ts) && Number.isFinite(v.run.started_at) && prev.e.ts > v.run.started_at);
+    const extras = dup.flatMap((l) => l.slice(1).map((v, i) => ({ v, by: sawWithheld(l[i], v) ? 'withheld' : rerun(v) ? 'rerun' : 'race' })));
     const count = (k) => extras.filter((x) => x.by === k).length;
     const race = extras.filter((x) => x.by === 'race').map((x) => x.v.run.run_id);
     out.push(finding({
@@ -288,7 +292,8 @@ function autofixFindings(runs) {
       : 'The guardrails worked as designed: the attempts stopped on a protected or unshown target, or on files the budget withheld from the prompt. The lever is the input budget (autofix_max_input_tokens, ADR-0017) or a human fix, not the guardrail.',
     impact: `${noPush} attempt(s) ended without a change, usually escalated to a human`, frequency: `${noPush} of ${attempts.length} attempt(s)`,
     items: [...new Set(attempts.map(prOf).filter(Boolean))], eligible: withEvent(runs, 'autofix.start'), runs: runIds(attempts),
-    occ: attempts.filter(({ run }) => stepDecision(run, 'autofix')?.key !== 'pushed').map(({ run }) => run.run_id), evidence: evidenceOf(skips.length ? skips : attempts), link: 'health.html#autofix',
+    occ: attempts.filter(({ run }) => stepDecision(run, 'autofix')?.key !== 'pushed').map(({ run }) => run.run_id),
+    anomaly: attempts.filter(({ run }) => stepDecision(run, 'autofix')?.key !== 'pushed' && !blockedByDesign(run)).map(({ run }) => run.run_id), titleByDesign: 'Auto-fix blocked by design (ADR-0021, ADR-0029)', evidence: evidenceOf(skips.length ? skips : attempts), link: 'health.html#autofix',
   })];
 }
 
@@ -309,6 +314,8 @@ function generationFindings(runs) {
 
 function providerFindings(runs) {
   const out = [];
+  // Runs that attempted an LLM call: a run that never reached a provider says nothing about its recovery.
+  const attemptedLlm = runs.filter((r) => r.llm.length || r.events.some((e) => e.event === 'llm_fallback' || e.event === 'retry.wait'));
   const fallbacks = events(runs, 'llm_fallback');
   const calls = runs.reduce((n, r) => n + r.llm.length, 0);
   if (fallbacks.length >= RULES.fallbackMin) {
@@ -321,7 +328,7 @@ function providerFindings(runs) {
       fact: `${fallbacks.length} fallback(s) for ${calls} LLM call(s): ${Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ×${n}`).join(', ')}.${unclassified ? ` ${unclassified} of them carry no classified error type: their cause is not recorded.` : ''}`,
       hypothesis: limited * 2 >= fallbacks.length ? 'The primary provider rate-limits the pipeline (429): the free-tier tokens-per-minute limit is the binding one (ADR-0025).' : null,
       impact: 'Answers come from the fallback model, at its price', frequency: `${fallbacks.length} fallback(s)`,
-      eligible: runs, runs: runIds(fallbacks), evidence: evidenceOf(fallbacks), link: 'models.html',
+      eligible: attemptedLlm, runs: runIds(fallbacks), evidence: evidenceOf(fallbacks), link: 'models.html',
     }));
   }
   const waits = events(runs, 'retry.wait').filter(({ e }) => e.meta.status === 429);
@@ -331,7 +338,7 @@ function providerFindings(runs) {
       id: 'rate-limit-waits', severity: 'info', category: 'LLM provider', title: 'Time lost waiting on rate limits',
       fact: `${waits.length} retry wait(s) on HTTP 429, totalling ${minutes(ms)} across ${runIds(waits).length} run(s).`,
       impact: `${minutes(ms)} of run time spent waiting`, frequency: `${waits.length} wait(s)`,
-      eligible: runs, runs: runIds(waits), evidence: evidenceOf(waits), link: 'health.html#providers',
+      eligible: attemptedLlm, runs: runIds(waits), evidence: evidenceOf(waits), link: 'health.html#providers',
     }));
   }
   return out;

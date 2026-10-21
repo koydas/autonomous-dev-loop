@@ -440,3 +440,48 @@ test('review-duplicates: resolved once later reviews, skipped by the marker, are
   assert.equal(f.first_seen, T);
   assert.match(f.fact, /1 PR head\(s\) got 1 extra review run/);
 });
+
+test('lifecycle (review PR #252): old anomalies do not keep a finding a warning when the active window holds only guardrails', () => {
+  const guard = (i) => cutRun(i);
+  const other = (i) => run({ t: T + i * 60000, sha: String(i % 10).repeat(39) + String.fromCharCode(97 + (i % 26)), events: [verdict('WITHHELD')] });
+  // 6 unknown-cause WITHHELD, then 12 cut-diff guardrails.
+  const w = find(diagnose({ model: model([...Array.from({ length: 6 }, (_, i) => other(i)), ...Array.from({ length: 12 }, (_, i) => guard(6 + i))]) }), 'review-withheld');
+  assert.equal(w.status, 'active');
+  assert.equal(w.severity, 'info');
+  assert.match(w.title, /by design \(ADR-0038\)/);
+  // The same anomalies inside the window keep the warning.
+  const recent = find(diagnose({ model: model([...Array.from({ length: 12 }, (_, i) => guard(i)), ...Array.from({ length: 6 }, (_, i) => other(12 + i))]) }), 'review-withheld');
+  assert.equal(recent.severity, 'warning');
+});
+
+test('lifecycle (review PR #252): auto-fix with only by-design attempts in the window is info', () => {
+  const attempt = (i, reason, rules) => run({ t: T + i * 1000, stage: 'autofix', events: [{ event: 'autofix.start', meta: { prNumber: 9 } }, { event: 'autofix.skipped', meta: { reason, rules } }] });
+  const anomalous = (i) => attempt(i, 'no_changes');
+  const designed = (i) => attempt(i, 'guardrail_rejected', ['protected_path']);
+  const f = find(diagnose({ model: model([...Array.from({ length: 6 }, (_, i) => anomalous(i)), ...Array.from({ length: 12 }, (_, i) => designed(6 + i))]) }), 'autofix-ineffective');
+  assert.equal(f.status, 'active');
+  assert.equal(f.severity, 'info');
+  assert.equal(f.title, 'Auto-fix blocked by design (ADR-0021, ADR-0029)');
+  const recent = find(diagnose({ model: model([...Array.from({ length: 12 }, (_, i) => designed(i)), ...Array.from({ length: 12 }, (_, i) => anomalous(12 + i))]) }), 'autofix-ineffective');
+  assert.equal(recent.severity, 'warning');
+});
+
+test('lifecycle (review PR #252): provider findings resolve only on runs that attempted an LLM call', () => {
+  const fb = (i) => run({ t: T + i * 1000, llm: [{ provider: 'groq', failed: false }], events: [{ event: 'llm_fallback', meta: { from: 'groq', to: 'anthropic', error_type: 'RATE_LIMIT', status: 429 } }] });
+  const idle = (i) => run({ t: T + i * 1000, sha: String(i).padStart(40, '0'), events: [{ event: 'review.skipped', meta: { reason: 'already_reviewed' } }] });
+  const skipped = find(diagnose({ model: model([fb(0), fb(1), ...Array.from({ length: 12 }, (_, i) => idle(2 + i))]) }), 'llm-fallbacks');
+  assert.equal(skipped.status, 'active', 'no provider attempt since: nothing shows recovery');
+  const ok = (i) => run({ t: T + i * 1000, llm: [{ provider: 'groq', failed: false }], events: [verdict('APPROVE')] });
+  const recovered = find(diagnose({ model: model([fb(0), fb(1), ...Array.from({ length: 10 }, (_, i) => ok(2 + i))]) }), 'llm-fallbacks');
+  assert.equal(recovered.status, 'resolved');
+});
+
+test('review-duplicates (review PR #252): a WITHHELD emitted after the later run started does not excuse it', () => {
+  const sha = 'e'.repeat(40);
+  const first = run({ t: T, sha, trigger: 'push', events: [{ ...verdict('WITHHELD'), ts: T + 5000 }] });
+  const lateStart = { ...run({ t: T + 1000, sha, events: [{ ...verdict('APPROVE'), ts: T + 9000 }] }) };
+  const raced = find(diagnose({ model: model([first, lateStart]) }), 'review-duplicates');
+  assert.equal(raced.severity, 'warning', 'started before the WITHHELD existed: still the race');
+  const after = { ...run({ t: T + 6000, sha, events: [{ ...verdict('APPROVE'), ts: T + 9000 }] }) };
+  assert.equal(find(diagnose({ model: model([first, after]) }), 'review-duplicates').severity, 'info');
+});
