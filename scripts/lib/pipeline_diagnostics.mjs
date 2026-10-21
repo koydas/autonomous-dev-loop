@@ -40,6 +40,17 @@ const evidenceOf = (list) => capped(list).map(({ run, e }) => ({
   run_id: run.run_id, ts: e?.ts ?? run.started_at, event: e?.event ?? null, summary: e ? eventSummary(e.meta) : run.workflow ?? '',
   pr: run.pr_number ?? (Number.isSafeInteger(e?.meta?.prNumber) ? e.meta.prNumber : null), url: safeUrl(e?.meta?.url),
 }));
+// Rate gate of a rule: the share of occurrences among `items` up to and including the last occurrence, with the
+// size of that prefix. A clean tail dilutes the whole-window rate; a finding that fired must reach its lifecycle
+// (and show as resolved) instead of vanishing once clean runs push the rate under its threshold. A rule fires on
+// the whole-window rate or on this one, each over its own sample floor.
+const at = ({ run, e }) => e?.ts ?? run.started_at ?? 0;
+function rateAtLastOccurrence(items, isOccurrence) {
+  const ordered = items.map((x, i) => [x, i]).sort((a, b) => at(a[0]) - at(b[0]) || a[1] - b[1]).map(([x]) => x);
+  const last = ordered.findLastIndex(isOccurrence);
+  const prefix = ordered.slice(0, last + 1);
+  return { n: prefix.length, share: prefix.length ? prefix.filter(isOccurrence).length / prefix.length : 0 };
+}
 const runIds = (list) => [...new Set(list.map(({ run }) => run.run_id))];
 const prOf = ({ run, e }) => (Number.isSafeInteger(e?.meta?.prNumber) && e.meta.prNumber > 0 ? e.meta.prNumber : run.pr_number);
 
@@ -148,7 +159,8 @@ function reviewFindings(runs) {
   // The sample floor guards the rate rules only; duplicate heads and stuck PRs are counts.
   const rated = verdicts.length >= RULES.minVerdicts;
   const withheld = verdicts.filter(({ e }) => e.meta.verdict === 'WITHHELD');
-  if (rated && withheld.length / verdicts.length >= RULES.withheldShare) {
+  const withheldRate = rateAtLastOccurrence(verdicts, ({ e }) => e.meta.verdict === 'WITHHELD');
+  if (rated && withheld.length && (withheld.length / verdicts.length >= RULES.withheldShare || (withheldRate.n >= RULES.minVerdicts && withheldRate.share >= RULES.withheldShare))) {
     const fromApprove = withheld.filter(({ e }) => e.meta.withheld_from === 'APPROVE').length;
     const cut = withheld.filter(({ e }) => typeof e.meta.unreviewed_code_files === 'number' && e.meta.unreviewed_code_files > 0).length;
     const classes = withheld.map(withheldClass);
@@ -183,12 +195,15 @@ function reviewFindings(runs) {
   // Same population as the denominator: a cut review that errored before its verdict is not counted.
   const verdictRuns = new Set(verdicts.map(({ run }) => run.run_id));
   const truncated = events(runs, 'review.prompt_truncated').filter(({ run, e }) => e.meta.diff_truncated === true && verdictRuns.has(run.run_id));
-  if (rated && truncated.length / verdicts.length >= RULES.truncatedShare) {
+  const truncatedRuns = new Set(runIds(truncated));
+  const coverageRate = rateAtLastOccurrence(verdicts, ({ run }) => truncatedRuns.has(run.run_id));
+  if (rated && truncated.length && (truncated.length / verdicts.length >= RULES.truncatedShare || (coverageRate.n >= RULES.minVerdicts && coverageRate.share >= RULES.truncatedShare))) {
     const unseen = truncated.map(({ e }) => e.meta.unreviewed_code_files).filter((n) => typeof n === 'number');
     const budgets = [...new Set(truncated.map(({ e }) => e.meta.max_input_tokens).filter((n) => typeof n === 'number'))];
     // A cut diff and its verdict (the run's last): WITHHELD is the ADR-0038 guardrail; APPROVE on unseen code is
     // impossible since ADR-0038 (critical); anything else (REQUEST_CHANGES on a cut diff) is an anomaly.
-    const verdictOf = (run) => verdicts.filter((v) => v.run === run).at(-1)?.e.meta.verdict;
+    const lastVerdict = new Map(verdicts.map((v) => [v.run, v.e.meta.verdict]));
+    const verdictOf = (run) => lastVerdict.get(run);
     const cutClass = ({ run }) => (verdictOf(run) === 'WITHHELD' ? 'guardrail' : verdictOf(run) === 'APPROVE' ? 'approve' : 'anomaly');
     const idsOf = (k) => runIds(truncated.filter((t) => cutClass(t) === k));
     const guardrail = idsOf('guardrail'), approved = idsOf('approve'), other = idsOf('anomaly');
@@ -278,7 +293,8 @@ function autofixFindings(runs) {
   const pushes = decided.filter((k) => k === 'pushed');
   const failedPushes = decided.filter((k) => k === 'push_failed').length;
   const noPush = attempts.length - pushes.length;
-  if (noPush / attempts.length < RULES.autofixNoPushShare) return [];
+  const pushRate = rateAtLastOccurrence(attempts, ({ run }) => stepDecision(run, 'autofix')?.key !== 'pushed');
+  if (!noPush || (noPush / attempts.length < RULES.autofixNoPushShare && (pushRate.n < RULES.autofixMinAttempts || pushRate.share < RULES.autofixNoPushShare))) return [];
   // Skip details from the attempts only: an approved head or the attempt limit skips before autofix.start.
   const attemptRuns = new Set(runIds(attempts));
   const skips = events(runs.filter((r) => attemptRuns.has(r.run_id)), 'autofix.skipped');
@@ -308,7 +324,9 @@ function autofixFindings(runs) {
 function generationFindings(runs) {
   const starts = events(runs, 'code_gen.start');
   const blocked = events(runs, 'code_gen.skipped');
-  if (!starts.length || blocked.length < 2 || blocked.length / starts.length < 0.5) return [];
+  const blockedRuns = new Set(runIds(blocked));
+  const genRate = rateAtLastOccurrence(starts, ({ run }) => blockedRuns.has(run.run_id));
+  if (!starts.length || blocked.length < 2 || (blocked.length / starts.length < 0.5 && genRate.share < 0.5)) return [];
   const sources = {};
   for (const { e } of blocked) sources[e.meta.source ?? 'unspecified'] = (sources[e.meta.source ?? 'unspecified'] ?? 0) + 1;
   return [finding({
