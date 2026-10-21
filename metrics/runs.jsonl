@@ -77,3 +77,4 @@
 {"type":"issue","run_id":"39538708615-1","issue_number":255,"verdict":"MANUAL","score":70,"started_at":"2026-10-21T03:28:04.942Z","ended_at":"2026-10-21T03:28:14.304Z","duration_ms":9358,"input_tokens_est":3029,"output_tokens_est":868}
 {"type":"issue","run_id":"39538723221-1","issue_number":199,"verdict":"MANUAL","score":70,"started_at":"2026-10-21T03:28:12.645Z","ended_at":"2026-10-21T03:28:23.029Z","duration_ms":10376,"input_tokens_est":3209,"output_tokens_est":912}
 {"type":"autofix_skip","run_id":"39540372924-1-autofix-skip","pr_number":256,"attempt":2,"reason":"no_changes","ts":"2026-10-21T03:46:28.073Z"}
+{"type":"pr","run_id":"39541299322-1","pr_number":256,"issue_number":null,"final_verdict":"APPROVE","review_cycles":3,"request_changes_count":2,"auto_fix_pushes":1,"started_at":"2026-10-21T03:42:33.835Z","ended_at":"2026-10-21T03:57:55.156Z","total_input_tokens_est":22602,"total_output_tokens_est":1257}
