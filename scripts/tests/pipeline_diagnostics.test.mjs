@@ -486,24 +486,31 @@ test('review-duplicates (review PR #252): a WITHHELD emitted after the later run
   assert.equal(find(diagnose({ model: model([first, after]) }), 'review-duplicates').severity, 'info');
 });
 
-test('a finding is computed over the whole window: it leaves the list once its historical share falls under the threshold', () => {
-  assert.ok(find(diagnose({ model: model(cutThenClean(30, 10)) }), 'review-coverage'), '30 of 40 cut');
-  assert.equal(find(diagnose({ model: model(cutThenClean(30, 40)) }), 'review-coverage'), undefined, '30 of 70 cut: below truncatedShare, no card');
+test('a finding that fired reaches its lifecycle after clean runs dilute its rate under the threshold (PR #252 review)', () => {
+  // 3 cut reviews then 10 clean: 3 of 13 under truncatedShare over the window, but 3 of 3 when it last occurred.
+  const c = find(diagnose({ model: model(cutThenClean(3, 10)) }), 'review-coverage');
+  assert.equal(c.status, 'resolved');
+  assert.equal(c.severity, 'info');
+  assert.match(c.fact, /^3 of 13 reviews saw a truncated diff/);
+  assert.ok(c.evidence.length > 0);
+  // A pattern that never reached its threshold stays unreported: 1 cut among 13 is under it at every point.
+  const never = [...Array.from({ length: 6 }, (_, i) => cutRun(i, 'APPROVE', false)), cutRun(6), ...Array.from({ length: 6 }, (_, i) => cutRun(7 + i, 'APPROVE', false))];
+  assert.equal(find(diagnose({ model: model(never) }), 'review-coverage'), undefined);
+  // Same for the other rate rules.
+  const attempt = (i, pushed) => run({ t: T + i * 1000, stage: 'autofix', events: [{ event: 'autofix.start', meta: { prNumber: 9 } }, pushed ? { event: 'autofix.push' } : { event: 'autofix.skipped', meta: { reason: 'no_changes' } }] });
+  const af = find(diagnose({ model: model([attempt(0), attempt(1), ...Array.from({ length: 10 }, (_, i) => attempt(2 + i, true))]) }), 'autofix-ineffective');
+  assert.equal(af?.status, 'resolved');
 });
 
-test('lifecycle (review PR #252): rate-rule severity follows the active window, promoting recent anomalies', () => {
-  const attempt = (i, reason, rules) => run({ t: T + i * 1000, stage: 'autofix', events: [{ event: 'autofix.start', meta: { prNumber: 9 } }, { event: 'autofix.skipped', meta: { reason, rules } }] });
-  const designed = (i) => attempt(i, 'guardrail_rejected', ['protected_path']);
-  // 100 attempts blocked by design, then 5 anomalies: 5 of the last 10 attempts, whatever the 5/105 history says.
-  const runs = [...Array.from({ length: 100 }, (_, i) => designed(i)), ...Array.from({ length: 5 }, (_, i) => attempt(100 + i, 'no_changes'))];
-  const f = find(diagnose({ model: model(runs) }), 'autofix-ineffective');
-  assert.equal(f.status, 'active');
-  assert.equal(f.severity, 'warning');
-  assert.equal(f.title, 'Auto-fix rarely pushes a fix');
-  // The same on the withheld rule: 12 cut-diff guardrails, then 4 unknown-cause WITHHELD (4 of the last 10).
-  const guard = (i) => cutRun(i);
-  const other = (i) => run({ t: T + i * 60000, sha: String(i % 10).repeat(39) + String.fromCharCode(97 + (i % 26)), events: [verdict('WITHHELD')] });
-  const w = find(diagnose({ model: model([...Array.from({ length: 40 }, (_, i) => guard(i)), ...Array.from({ length: 4 }, (_, i) => other(40 + i))]) }), 'review-withheld');
-  assert.equal(w.severity, 'warning');
-  assert.equal(w.title, 'Reviews withhold their verdict');
+test('review PR #253: withheld and code generation resolve after dilution; the prefix rate keeps a sample floor', () => {
+  const w = (i, v) => run({ t: T + i * 1000, sha: String(i).padStart(40, '0'), events: [verdict(v)] });
+  // 3 WITHHELD then 10 APPROVE: 3 of 13 (23 %) under withheldShare, 3 of 3 when it last occurred.
+  const withheld = find(diagnose({ model: model([...[0, 1, 2].map((i) => w(i, 'WITHHELD')), ...Array.from({ length: 10 }, (_, i) => w(3 + i, 'APPROVE'))]) }), 'review-withheld');
+  assert.equal(withheld.status, 'resolved');
+  assert.match(withheld.fact, /^3 of 13 verdicts are WITHHELD/);
+  const gen = (i, blocked) => run({ t: T + i * 1000, stage: 'code_gen', events: [{ event: 'code_gen.start' }, ...(blocked ? [{ event: 'code_gen.skipped', meta: { source: 'model' } }] : [{ event: 'code_gen.complete' }])] });
+  const resolved = find(diagnose({ model: model([0, 1, 2].map((i) => gen(i, true)).concat(Array.from({ length: 10 }, (_, i) => gen(3 + i, false)))) }), 'codegen-blocked');
+  assert.equal(resolved.status, 'resolved');
+  // 2 blocked of 2 starts is below the floor of the prefix rate: not reported once diluted.
+  assert.equal(find(diagnose({ model: model([0, 1].map((i) => gen(i, true)).concat(Array.from({ length: 10 }, (_, i) => gen(2 + i, false)))) }), 'codegen-blocked'), undefined);
 });
