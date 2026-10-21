@@ -1268,7 +1268,10 @@ test('pipeline version, this repository calling itself: the default branch, what
 test('pipeline version, an external caller: the commit of the pin, a SHA or a semver tag, never a branch', () => {
   const script = stepRun(reusable('adl-validate-issue.yml'), 'Resolve pipeline version');
   assert.equal(resolvePipeline(script, {}, { entry: entryOf(SHA) }).output, `ref=${SHA}\n`);
+  // The API shape: the path ends with the tag name, the ref field is the full ref (docs example: `@v2` with `refs/tags/v2`).
+  assert.equal(resolvePipeline(script, {}, { entry: entryOf('v1.2.3', OTHER_SHA, 'refs/tags/v1.2.3') }).output, `ref=${OTHER_SHA}\n`);
   assert.equal(resolvePipeline(script, {}, { entry: entryOf('v1.2.3', OTHER_SHA, 'v1.2.3') }).output, `ref=${OTHER_SHA}\n`);
+  assert.equal(resolvePipeline(script, {}, { entry: entryOf('v1.2.3', OTHER_SHA) }).output, `ref=${OTHER_SHA}\n`, 'no ref field');
   assert.equal(resolvePipeline(script, {}, { entry: entryOf('refs/tags/v1.2.3', OTHER_SHA, 'refs/tags/v1.2.3') }).output, `ref=${OTHER_SHA}\n`);
   assert.equal(resolvePipeline(script, {}, { entry: entryOf(SHA, SHA, SHA) }).output, `ref=${SHA}\n`, 'the optional ref field may repeat the pin');
 });
@@ -1286,6 +1289,8 @@ test('pipeline version, an external caller: every malformed answer fails with a 
   fails('floating tag', {}, { entry: entryOf('v1') }, /pinned to "v1"/);
   fails('no commit in the answer', {}, { entry: entryOf(SHA, 'main') }, /does not give the commit/);
   fails('ref and pin disagree', {}, { entry: entryOf(SHA, SHA, 'refs/heads/main') }, /reports the reusable workflow at "refs\/heads\/main" but its path pins/);
+  fails('tag ref and tag pin disagree', {}, { entry: entryOf('v1.2.3', SHA, 'refs/tags/v1.2.4') }, /reports the reusable workflow at "refs\/tags\/v1\.2\.4" but its path pins "v1\.2\.3"/);
+  fails('a branch named like the tag', {}, { entry: entryOf('v1.2.3', SHA, 'refs/heads/v1.2.3') }, /reports the reusable workflow at "refs\/heads\/v1\.2\.3"/);
   fails('no reusable workflow of the pipeline in the run', {}, { entry: '' }, /does not reference a reusable workflow of koydas\/autonomous-dev-loop/);
   fails('the lookup itself fails', {}, { ghStatus: 1 }, /^/);
 });

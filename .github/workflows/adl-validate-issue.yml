@@ -99,7 +99,8 @@ jobs:
             echo "::error::The run does not give the commit of the reusable workflow"
             exit 1
           fi
-          if [ -n "$REF" ] && [ "$REF" != "$PIN" ]; then
+          # The API reports a tag pinned as `@v1.2.3` with ref `refs/tags/v1.2.3`: compare without the prefix.
+          if [ -n "$REF" ] && [ "${REF#refs/tags/}" != "${PIN#refs/tags/}" ]; then
             echo "::error::The run reports the reusable workflow at \"$REF\" but its path pins \"$PIN\""
             exit 1
           fi
