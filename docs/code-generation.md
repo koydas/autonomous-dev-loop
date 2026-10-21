@@ -276,6 +276,10 @@ Neither `ADL_*` variable set (this repository, every workflow today): `config/` 
 
 For this repository the assembled system prompt is the one it had before the split, verbatim (checked byte for byte when the file was split); the eval suites load it through the same function.
 
+## Item Closed (ADR-0043 amendment)
+
+`item-closed.yml` runs on `issues: closed` and `pull_request: closed` and journals the end of the work item (`scripts/item_closed.mjs`, one `item.closed` event: `state_reason` for an issue, `merged` for a pull request). It is not a pipeline stage: no LLM call, no secret other than the workflow token, `contents: write` for the `metrics` branch only, scripts taken from the default branch. The dashboard uses it to move a merged or closed item out of "Waiting on you". It belongs to this repository (no `adl-` reusable version, no caller template); a pull request from a fork has a read-only token and is not recorded. Triage: `docs/runbook.md` → "An item shows as Waiting on you but was merged or closed".
+
 ## Reusable Workflows (ADR-0045)
 
 The bodies of the five pipeline workflows are reusable workflows (`on: workflow_call` only): `adl-validate-issue.yml`, `adl-code-generation.yml`, `adl-reset-auto-fix.yml`, `adl-pr-review.yml`, `adl-auto-fix-pr.yml`. `validate-issue.yml`, `code-generation.yml`, `reset-auto-fix.yml`, `pr-review.yml` and `auto-fix-pr.yml` stay as thin callers: they keep the workflow `name:` (so traces, run records and the `workflow_run` trigger of `pipeline-site.yml` see the same names), the trigger and the permission ceiling, and call the body with `uses: ./.github/workflows/adl-*.yml`. A caller declares no concurrency group, with one exception: each body declares its own at job level (a group on both sides would make the called job wait for its own caller). `pr-review.yml` keeps the per-PR group (`pr-pipeline-<head ref>`, shared with auto-fix and reset-auto-fix, ADR-0020) at workflow level, because it must cover the whole run, evidence and review; `adl-pr-review.yml` declares none, and a caller template copies the same group. In the Actions UI a job reads `<caller job> / <called job>`.

@@ -77,3 +77,37 @@ export function indexesOf(records) {
   }
   return [...byTrace.entries()].map(([id, index]) => ({ path: `metrics/traces/${id}.json`, text: JSON.stringify(index) }));
 }
+
+/**
+ * A v2 record of an `item-closed.yml` run (ADR-0043 amendment 2026-10-21): no stage span, no LLM call, one
+ * `item.closed` event. `eventName` is the workflow event (`issues` | `pull_request`); `meta` is `{ state_reason }`
+ * for an issue, `{ merged }` for a pull request.
+ */
+export function makeClosingRecord({
+  runId = '900', start = Date.parse('2026-10-20T10:00:00Z'), eventName = 'pull_request', prNumber = null, issueNumber = null, item = null,
+  meta = {}, repository = 'koydas/autonomous-dev-loop',
+} = {}) {
+  const root = sid(Number(runId) * 10 + 1);
+  const trace = {
+    schema_version: 2,
+    run_id: runId,
+    started_at: iso(start),
+    completed_at: iso(start + 3000),
+    outcome: 'success',
+    root_span_id: root,
+    item: item ?? (issueNumber ? { kind: 'issue', number: issueNumber, source: 'issue_event' } : { kind: 'pr', number: prNumber, source: 'pr' }),
+    envelope: {
+      workflow: 'Item Closed', run_id: runId, run_attempt: 1, event_name: eventName, actor: 'koydas', actor_type: 'human', repository,
+      issue_number: eventName === 'issues' ? issueNumber : null, pr_number: eventName === 'pull_request' ? prNumber : null, head_sha: null,
+      run_url: `https://github.com/koydas/autonomous-dev-loop/actions/runs/${runId}/attempts/1`, pr_url: null, issue_url: null, links: [], llm_calls: [],
+    },
+    spans: [],
+    child_spans: [],
+    events: [
+      { ts: iso(start + 100), stage: 'item', event: 'item.start', level: 'info', duration_ms: null, span_id: root, meta: {} },
+      { ts: iso(start + 200), stage: 'item', event: 'item.closed', level: 'info', duration_ms: 100, span_id: root, meta },
+    ],
+    events_overflow: { count: 0, bytes: 0 },
+  };
+  return redactTrace(trace, { env: { GITHUB_SERVER_URL: 'https://github.com' } });
+}

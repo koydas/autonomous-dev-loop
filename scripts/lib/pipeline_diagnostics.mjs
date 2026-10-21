@@ -5,7 +5,8 @@
 // missing data is never read as the absence of a problem. Pure.
 import { eventSummary, safeUrl } from './pipeline_model.mjs';
 import { percentile, withheldCause } from './pipeline_health.mjs';
-import { attemptOf, stepDecision } from './pipeline_journey.mjs';
+import { attemptOf, stepDecision, isLifecycleRun } from './pipeline_journey.mjs';
+import { DESIGN_RULES, waitingOnYou } from './pipeline_waiting.mjs';
 
 // Rule thresholds: below them a pattern is not reported (too few cases to separate it from noise).
 export const RULES = Object.freeze({
@@ -276,7 +277,6 @@ function reviewFindings(runs) {
 // not name the files the fix needed, so this is the closest observable cause). Anything else that did not
 // push is an anomaly. An approved head (ADR-0028) or the attempt limit (ADR-0034) exits before autofix.start:
 // such a run is not an attempt, so it never counts here.
-const DESIGN_RULES = new Set(['protected_path', 'unshown_file', 'withheld_file']);
 function blockedByDesign(run) {
   const d = stepDecision(run, 'autofix');
   const skip = run.events.filter((e) => e.event === 'autofix.skipped').at(-1);
@@ -397,24 +397,31 @@ function durationFindings(runs) {
   return { findings, gaps };
 }
 
-function interventions(journeys) {
-  const escalated = journeys.filter((j) => j.state === 'escalated');
-  if (!escalated.length) return [];
+// An open work item escalated to a human is the gate working (ADR-0001): it is listed in "Waiting on you"
+// (pipeline_waiting.mjs), not here. A finding is raised only for an escalation the design does not explain
+// (ADR-0043 amendment 2026-10-21): no change proposed although a modifiable file was shown, a patch rejected
+// for its content, an error of the stage, or a reason the record does not give. A closed or merged item is
+// not open (pipeline_journey.mjs), so it never counts.
+function interventions(waiting) {
+  const open = waiting.filter((w) => !w.by_design);
+  if (!open.length) return [];
+  const label = (w) => `${w.item?.kind ?? 'item'} #${w.item?.number ?? '?'}`;
   return [finding({
-    id: 'escalations', severity: 'warning', category: 'Interventions', title: 'Work items escalated to a human',
-    fact: `${escalated.length} work item(s) whose last recorded event is an escalation (needs-human): ${escalated.map((j) => `${j.item?.kind ?? 'item'} #${j.item?.number ?? '?'}`).join(', ')}.`,
-    impact: `${escalated.length} item(s) wait on a person`, frequency: `${escalated.length} item(s)`,
-    items: escalated.map((j) => j.item?.number).filter(Boolean),
-    runs: [...new Set(escalated.flatMap((j) => j.escalations.map((x) => x.run_id)))],
-    evidence: escalated.map((j) => j.escalations.at(-1)).map((x) => ({ run_id: x.run_id, ts: x.ts, event: x.event, summary: x.reason ? `reason=${x.reason}` : '', pr: null, url: x.url })),
-    link: 'flows.html?state=escalated',
+    id: 'escalations', severity: 'warning', category: 'Interventions', title: 'Escalations the design does not explain',
+    fact: `${open.length} of ${waiting.length} open work item(s) waiting on a person were escalated for a reason the guardrails do not explain: ${open.map((w) => `${label(w)} (${w.step}: ${w.reason})`).join('; ')}.`,
+    impact: `${open.length} item(s) wait on a person and the escalation looks avoidable`, frequency: `${open.length} item(s)`,
+    items: open.map((w) => w.item?.number).filter(Boolean),
+    runs: [...new Set(open.map((w) => w.run_id))],
+    evidence: open.map((w) => ({ run_id: w.run_id, ts: w.since, event: null, summary: w.reason, pr: w.prs.at(-1) ?? null, url: w.url })),
+    link: 'index.html#waiting',
   })];
 }
 
 // What the records cannot tell: listed as gaps, never as "no problem".
 function telemetryGaps(model, journeys) {
   const gaps = [
-    { id: 'merge-not-journaled', title: 'Merge is not journaled', detail: 'No workflow records a merge: the Pipelines page asks GitHub for merged_at in the browser; without it, merge stays unknown.' },
+    { id: 'merge-not-journaled', title: 'Merge is journaled only from item-closed.yml on', detail: 'A merge or a closing is recorded (item.closed) only for items closed after item-closed.yml existed, and only in this repository; the Pipelines page asks GitHub for merged_at in the browser for the rest.' },
+    { id: 'closure-before-journal', title: 'Closings before the closing journal are not recorded', detail: 'Only items closed or merged after item-closed.yml was merged have an item.closed event. An item closed before it that last escalated still reads as escalated: the dashboard does not infer a closing from GitHub or from silence. The Pipelines page re-checks pull requests live.' },
     { id: 'running-not-observable', title: 'Running state is not observable', detail: 'A record is written when its run completes, so a run in progress never appears; the latest state of an item can be older than GitHub.' },
   ];
   const missing = journeys.reduce((n, j) => n + j.missing_runs, 0);
@@ -439,12 +446,13 @@ function telemetryGaps(model, journeys) {
  * Every finding of a model and its journeys, most severe first, plus the telemetry gaps and the overall
  * status: `critical` / `warning` with a finding of that severity, `ok` with none, `no_data` without runs.
  */
-export function diagnose({ model, journeys = [] } = {}) {
-  const runs = model?.runs ?? [];
+export function diagnose({ model, journeys = [], protectedPaths } = {}) {
+  // Runs that only journal the end of an item executed no step: the rules below judge executions.
+  const runs = (model?.runs ?? []).filter((r) => !isLifecycleRun(r));
   if (!runs.length) return { status: 'no_data', findings: [], gaps: model ? telemetryGaps(model, journeys) : [] };
   const durations = durationFindings(runs);
   const findings = [
-    ...executionFailures(runs), ...interventions(journeys), ...reviewFindings(runs), ...autofixFindings(runs),
+    ...executionFailures(runs), ...interventions(waitingOnYou({ model, journeys, protectedPaths })), ...reviewFindings(runs), ...autofixFindings(runs),
     ...generationFindings(runs), ...providerFindings(runs), ...durations.findings,
   ].map(withLifecycle).sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
   const status = findings.some((f) => f.severity === 'critical') ? 'critical' : findings.some((f) => f.severity === 'warning') ? 'warning' : 'ok';

@@ -151,6 +151,16 @@ Emitted by `scripts/reset_auto_fix.mjs` (`reset-auto-fix.yml`, ADR-0041): the re
 | `autofix_reset.complete`       | info  | ✓             | `prNumber`, `retrigger` |
 | `autofix_reset.error`          | error | ✓             | `prNumber`, `error` |
 
+### `item`
+
+Emitted by `scripts/item_closed.mjs` (`item-closed.yml`, on `issues: closed` and `pull_request: closed`; ADR-0043 amendment 2026-10-21): the end of a work item. The run joins the trace of the item (ADR-0041), opens no stage span, calls no LLM and uses no secret. The dashboard reads `item.closed` to move the item out of "Waiting on you"; a closing before the workflow existed has no event and is never inferred.
+
+| Event         | Level | `duration_ms` | Key `meta` fields |
+|---------------|-------|---------------|-------------------|
+| `item.start`  | info  | —             | — |
+| `item.closed` | info  | ✓             | `state_reason` (issue: `completed` \| `not_planned` \| `duplicate`, else null) **or** `merged` (pull request: boolean). Both are published; nothing else (no number, title, body or actor: the work item comes from the run's envelope) |
+| `item.error`  | error | ✓             | `error` (unknown `ITEM_KIND`, or `ITEM_MERGED` that is not `true` / `false`) |
+
 ### `labels_install`
 
 Emitted by `scripts/ensure_labels.mjs` (the `setup-labels.yml` template, or by hand, ADR-0045): creates the labels of the effective labels config in a repository. An operator tool, not a pipeline stage: no metrics. In a workflow (`GITHUB_RUN_ID` set) the events are journaled in `observability/traces/<run_id>.json`, which the template uploads as the `run-trace-<run_id>` artifact (`if: always()`).
@@ -338,7 +348,7 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 
 ## Public Run Record
 
-`metrics/runs/<YYYY-MM>/<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>.json` on the `metrics` branch: the dashboard's source. Written by `scripts/commit_run_record.mjs` (the "Commit metrics" step of `validate-issue`, `code-generation`, `pr-review`, `auto-fix-pr` and — record only, no `runs.jsonl` line — `reset-auto-fix`) in **the same commit** as the run's `metrics/runs.jsonl` lines, with the same 3-attempt retry (ADR-0013, ADR-0040).
+`metrics/runs/<YYYY-MM>/<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>.json` on the `metrics` branch: the dashboard's source. Written by `scripts/commit_run_record.mjs` (the "Commit metrics" step of `validate-issue`, `code-generation`, `pr-review`, `auto-fix-pr` and — record only, no `runs.jsonl` line — `reset-auto-fix` and `item-closed`) in **the same commit** as the run's `metrics/runs.jsonl` lines, with the same 3-attempt retry (ADR-0013, ADR-0040).
 
 ### Redaction contract
 

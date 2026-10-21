@@ -91,7 +91,7 @@ export function pipelineRow(trace, root = '') {
 const ROW_HEAD = '<div class="pl-head" aria-hidden="true"><span>Work item</span><span>Status</span><span>Stages</span><span>Duration</span><span>Attempts</span><span>Cost (est.)</span><span>Updated</span><span></span></div>';
 
 const option = (v, l) => `<option value="${e(v)}">${e(l)}</option>`;
-const STATE_ORDER = ['failed', 'escalated', 'withheld', 'rejected', 'changes_requested', 'approved', 'in_progress', 'no_data'];
+const STATE_ORDER = ['failed', 'escalated', 'withheld', 'rejected', 'changes_requested', 'approved', 'in_progress', 'merged', 'closed', 'no_data'];
 
 /** Sidebar facets (status, stage, provider) with counts; every box checked shows everything. */
 export function pipelineFacets(journeys) {
@@ -115,7 +115,8 @@ export function flowDashboard(model) {
   const traces = model.traces ?? [];
   const js = traces.map(workItemJourney);
   const providers = [...new Set(js.flatMap(j => j.providers))].sort();
-  const states = Object.entries(STATES).filter(([k]) => k !== 'no_data');
+  // merged / closed have their own options below: the journaled state and the live GitHub state share the token.
+  const states = Object.entries(STATES).filter(([k]) => k !== 'no_data' && k !== 'merged' && k !== 'closed');
   const chips = `<div class="chip-row" role="group" aria-label="Status">${[['', 'All', js.length], ['attention', 'Needs a person', js.filter(j => j.attention).length], ...STATE_ORDER.filter(s => js.some(j => j.state === s)).map(s => [s, STATES[s].label, js.filter(j => j.state === s).length])].map(([v, l, n]) => `<button type="button" class="chip" data-chip="state" data-chip-value="${e(v)}">${e(l)} <span class="n">${e(n)}</span></button>`).join('')}</div>`;
   const filters = `<div class="filterbar"><label class="grow">Search <input type="search" data-filter-key="q" data-flow-search placeholder="Issue, PR, model, decision…"></label><label>State<select data-filter-key="state"><option value="">All</option>${option('attention', 'Needs a person')}${states.map(([k, s]) => option(k, s.label)).join('')}${option('merged', 'Merged (live)')}${option('open', 'PR open (live)')}${option('closed', 'Closed unmerged (live)')}</select></label><label>Step with problems<select data-filter-key="problem"><option value="">Any or none</option>${option('any', 'Any step')}${STEPS.map(s => option(s.key, s.name)).join('')}</select></label><label>Kind<select data-filter-key="kind"><option value="">All</option>${option('issue', 'Issue')}${option('pr', 'PR')}</select></label><label>Provider<select data-filter-key="provider"><option value="">All</option>${providers.map(p => option(p, p)).join('')}</select></label><label>Period<select data-filter-key="period"><option value="">All retained</option>${option('7', 'Last 7 days')}${option('30', 'Last 30 days')}</select></label><span data-filter-count role="status"></span><button type="button" data-load-flows>Refresh merge status</button></div>`;
   return `<div class="page-head"><div><h1>Pipelines</h1><p class="sub">Every recorded work item (issue, or PR without an issue). Each stage icon is the <strong>final</strong> attempt's execution status — ✓ success, ✗ failed, ⊘ skipped, ○ not recorded (never a failure) — with an amber ring when the stage completed but decided not to move the item forward, and ×N for its attempts. Open a row for every attempt. Merge comes only from GitHub's <code>merged_at</code>; a running stage is not observable.</p></div><a class="button-link" href="traces/index.html">Trace table & open issues</a></div>${pipelineList(traces, { root: '', appendMerged: true, toolbar: chips + filters })}`;

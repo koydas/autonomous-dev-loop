@@ -4,7 +4,7 @@
 // without a population is null and the page says so.
 import { sumCosts } from './llm_cost.mjs';
 import { percentile } from './pipeline_health.mjs';
-import { attemptOf, STATES } from './pipeline_journey.mjs';
+import { attemptOf, isLifecycleRun, STATES } from './pipeline_journey.mjs';
 
 export const TREND_DAYS = 14;
 const DAY_MS = 86400000;
@@ -20,7 +20,7 @@ export const DEFINITIONS = Object.freeze({
   runs_failed: { label: 'Failed executions', source: RECORDS, method: 'Runs whose recorded outcome is `failed`, plus runs with a stage span closed as failed and no decision event explaining it', period: WINDOW, population: 'Every loaded run record', limits: 'A run that crashed before its tracer wrote a record is absent (ADR-0040). `partial` is a business decision, not a failure.' },
   runs_adverse: { label: 'Runs with an adverse decision', source: RECORDS, method: 'Runs whose step decided not to move the item forward: WITHHELD or REQUEST_CHANGES review, rejected validation, blocked generation, auto-fix without a push', period: WINDOW, population: 'Every loaded run record', limits: 'An adverse decision can be correct (a real defect); it measures friction, not errors.' },
   approve_rate: { label: 'Review approval rate', source: RECORDS + ', `review.verdict` events', method: 'APPROVE verdicts ÷ all recorded verdicts (skipped reviews excluded)', period: WINDOW, population: 'Review runs that recorded a verdict', limits: 'Each review run counts, so a PR reviewed several times weighs more. Not a merge rate.' },
-  needs_attention: { label: 'Work items needing a person', source: TRACES, method: 'Work items whose last recorded state is failed, escalated (needs-human), approval withheld or rejected by validation', period: WINDOW, population: 'Work items with a trace index and at least one loaded run record', limits: 'The current label state on GitHub is not recorded: a person may already have acted. Merged PRs are only known live (Pipelines page).' },
+  needs_attention: { label: 'Work items needing a person', source: TRACES, method: 'Work items whose last recorded state is failed, escalated (needs-human), approval withheld or rejected by validation', period: WINDOW, population: 'Work items with a trace index and at least one loaded run record', limits: 'The current label state on GitHub is not recorded: a person may already have acted. Closings and merges are journaled (item.closed) only since item-closed.yml existed; before that a merged PR is only known live (Pipelines page).' },
   recovered: { label: 'Steps recovered automatically', source: TRACES, method: 'Steps whose final attempt moved the item forward after at least one failed or adverse attempt', period: WINDOW, population: 'Steps with at least one failed or adverse attempt', limits: 'Recovery within the retained window only.' },
   lead_time: { label: 'Lead time per work item', source: TRACES, method: 'First run start → last run end of the item; median and 90th percentile (nearest rank)', period: WINDOW, population: 'Work items with a lead time and at least one loaded run record', limits: 'Observed duration, not the item lifetime: time before the first run and after the last one (human merge) is not recorded. An item whose first runs predate the window keeps its full indexed lead time. Runner clocks differ (ADR-0041 §6).' },
   running_share: { label: 'Share of lead time spent running', source: TRACES, method: 'Σ time inside runs ÷ Σ lead time; the rest is waiting between runs', period: WINDOW, population: 'Work items with a lead time', limits: 'Approximate: runs are placed by their own runner clocks.' },
@@ -76,7 +76,8 @@ function trend(runs) {
 
 /** The overview indicators of a model and its journeys (pipeline_journey.mjs). */
 export function computeOverview({ model, journeys: all = [] } = {}) {
-  const runs = model?.runs ?? [];
+  // Runs that only journal the end of an item executed no step: they are not executions (item-closed.yml).
+  const runs = (model?.runs ?? []).filter((r) => !isLifecycleRun(r));
   // Work items of the retained window only: a trace index older than the loaded months has no loaded run.
   const journeys = all.filter((j) => (j.runs ?? 0) - (j.missing_runs ?? 0) > 0);
   const classes = runs.map(runClass);
@@ -167,7 +168,7 @@ export function providerBreakdown(runs) {
  * shown), a per-day series, the providers and the work items active in the window.
  */
 export function computeWindow({ model, journeys = [], days = 7 } = {}) {
-  const runs = (model?.runs ?? []).filter((r) => r.started_at != null);
+  const runs = (model?.runs ?? []).filter((r) => r.started_at != null && !isLifecycleRun(r));
   if (!runs.length) return { days, empty: true, current: null, previous: null, series: [], providers: [], items: [] };
   const end = Date.parse(`${day(Math.max(...runs.map((r) => r.started_at)))}T00:00:00Z`) + DAY_MS;
   const from = end - days * DAY_MS;

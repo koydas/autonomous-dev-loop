@@ -8,12 +8,16 @@ import { safeUrl } from './pipeline_model.mjs';
 import { journeys as journeysOf, STATES, STEPS } from './pipeline_journey.mjs';
 import { computeOverview, computeWindows, DEFINITIONS, RUN_CLASSES } from './pipeline_kpis.mjs';
 import { diagnose, RULES } from './pipeline_diagnostics.mjs';
+import { waitingOnYou } from './pipeline_waiting.mjs';
 import { costAmount, costBasis } from './llm_cost.mjs';
 
 /** Everything the console views render, computed once per build. */
-export function consoleContext(model) {
+export function consoleContext(model, { protectedPaths } = {}) {
   const journeys = journeysOf(model);
-  return { journeys, traces: model?.traces ?? [], overview: computeOverview({ model, journeys }), windows: computeWindows({ model, journeys }), diagnosis: diagnose({ model, journeys }) };
+  return {
+    journeys, traces: model?.traces ?? [], overview: computeOverview({ model, journeys }), windows: computeWindows({ model, journeys }),
+    diagnosis: diagnose({ model, journeys, protectedPaths }), waiting: waitingOnYou({ model, journeys, protectedPaths }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +333,7 @@ export function journeyPanel(j, root = '../') {
     return `<li class="tone-${tone}"><strong>${toneMark(tone)} ${e(s.name)}</strong><p>${final}</p>${history}${strip ? `<div class="attempt-strip" aria-label="Attempts in order">${strip}</div>` : ''}</li>`;
   }).join('');
   const esc = j.escalations.map((x) => `<li>${toneMark('warn')}<div><strong>${e(x.event)}</strong>${x.reason ? ` · ${e(x.reason)}` : ''} · ${e(time(x.ts))} · <a href="${runHref(root, x.run_id)}">run ${e(x.run_id)}</a>${x.url ? ` · <a href="${e(x.url)}">GitHub</a>` : ''}</div></li>`).join('');
-  return `<section class="panel"><h3>Journey ${pill(j.tone, j.label)}</h3><ol class="journey" aria-label="Pipeline steps">${steps}</ol><p class="trend-note">Merge is not journaled: check the PR on GitHub${j.prs.length ? ` (${j.prs.map((n) => `<a href="https://github.com/koydas/autonomous-dev-loop/pull/${n}">#${n}</a>`).join(', ')})` : ''} or the Pipelines page.</p>${esc ? `<h3>Interventions</h3><ul class="problem-list">${esc}</ul>` : ''}</section>`;
+  return `<section class="panel"><h3>Journey ${pill(j.tone, j.label)}</h3><ol class="journey" aria-label="Pipeline steps">${steps}</ol><p class="trend-note">${j.closing ? `Journaled: ${j.closing.merged ? 'merged' : 'closed'} ${e(time(j.closing.ts))} UTC.` : 'No merge or closing journaled (only items closed since item-closed.yml are): check the PR on GitHub'}${j.prs.length ? ` (${j.prs.map((n) => `<a href="https://github.com/koydas/autonomous-dev-loop/pull/${n}">#${n}</a>`).join(', ')})` : ''} or the Pipelines page.</p>${esc ? `<h3>Interventions</h3><ul class="problem-list">${esc}</ul>` : ''}</section>`;
 }
 
 const KEY_EVENT = /(\.verdict|\.skipped|\.escalated|\.push|\.pass|\.fail|\.complete|\.error|\.max_attempts_reached|\.pr_operation|\.comment_posted|^llm_fallback|^llm_provider_error|^llm_call_failed)$/;

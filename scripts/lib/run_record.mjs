@@ -92,6 +92,10 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'autofix_reset.retriggered': [...ID, 'label'],
   'autofix_reset.complete': [...ID, 'retrigger'],
   'autofix_reset.error': [...ID, ...ERR],
+  // ADR-0043 amendment (2026-10-21): the end of a work item, written by item-closed.yml. Only the closing
+  // reason of an issue (enum) and whether a PR was merged: no title, body or actor.
+  'item.closed': ['state_reason', 'merged'],
+  'item.error': ERR,
   trace_write_failed: ERR,
   start_span_failed: [...ERR, 'stage'],
   end_span_failed: [...ERR, 'stage'],

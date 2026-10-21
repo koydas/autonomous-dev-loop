@@ -121,7 +121,7 @@ test('every issue_comment-triggered workflow gates on trusted comment author_ass
 
 // Workflows whose jobs push commits or mutate labels/comments: a run must never be
 // cancelled halfway, so they queue (cancel-in-progress: false) instead.
-const MUTATING_WORKFLOWS = ['adl-auto-fix-pr.yml', 'pr-review.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'adl-reset-auto-fix.yml', 'evals.yml', 'pr-evals.yml', 'pipeline-site.yml'];
+const MUTATING_WORKFLOWS = ['adl-auto-fix-pr.yml', 'pr-review.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'adl-reset-auto-fix.yml', 'item-closed.yml', 'evals.yml', 'pr-evals.yml', 'pipeline-site.yml'];
 // ADR-0045: the bodies of validate-issue, code-generation and reset-auto-fix are reusable workflows
 // (adl-*.yml); the files below are their thin callers in this repository. A caller holds the name, the
 // trigger and the permission ceiling, never a concurrency group (a group on both sides would deadlock the call).
@@ -140,7 +140,7 @@ const JOB_LEVEL_CONCURRENCY = ['adl-auto-fix-pr.yml', 'adl-code-generation.yml',
 
 test('every workflow declares a concurrency group keyed per PR/issue', () => {
   const workflows = readWorkflows();
-  assert.equal(workflows.length, 16, `expected 16 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  assert.equal(workflows.length, 17, `expected 17 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
   for (const { name, text } of workflows) {
     const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1].trim()).filter((g) => g !== SITE_GROUP);
     if (CALLERS.includes(name) && !GROUP_ON_CALLER.includes(name)) {
@@ -219,11 +219,11 @@ test('adl-auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB
 // branch must come from a file outside it, never from the working-tree metrics/runs.jsonl.
 test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkout', () => {
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
-  assert.deepEqual(committing.map((w) => w.name).sort(), ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-pr-review.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml']);
+  assert.deepEqual(committing.map((w) => w.name).sort(), ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-pr-review.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml', 'item-closed.yml']);
   for (const { name, text } of committing) {
     assert.ok(!/(wc -l|tail|cat)[^\n]*metrics\/runs\.jsonl/.test(text), `${name} must not read the working-tree metrics file`);
     // ADR-0041: reset-auto-fix writes no runs.jsonl line, only its run record and the trace index.
-    if (name === 'adl-reset-auto-fix.yml') { assert.ok(!text.includes('METRICS_FILE'), `${name}: record only`); continue; }
+    if (name === 'adl-reset-auto-fix.yml' || name === 'item-closed.yml') { assert.ok(!text.includes('METRICS_FILE'), `${name}: record only`); continue; }
     const envLines = text.match(/METRICS_FILE: \$\{\{ runner\.temp \}\}\/pipeline-metrics\.jsonl/g) ?? [];
     assert.ok(envLines.length >= 2, `${name} must pass METRICS_FILE under runner.temp to the script and to "Commit metrics"`);
   }
@@ -238,7 +238,7 @@ test('workflows that commit metrics read and write the metrics branch, never the
   assert.equal(METRICS_BRANCH, 'metrics');
   assert.equal(RUNS_JSONL_PATH, 'metrics/runs.jsonl');
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
-  assert.equal(committing.length, 5);
+  assert.equal(committing.length, 6);
   for (const { name, text } of committing) {
     const step = text.slice(text.indexOf('- name: Commit metrics')).split(/\n      - name: /)[0];
     const trusted = BRANCH_TRIGGERED_SECRET_WORKFLOWS.includes(name);
@@ -1430,4 +1430,31 @@ test('setup-labels.yml runs the pinned label installer with a token that reads c
   assert.match(text, /GITHUB_RUN_ID: \$\{\{ github\.run_id \}\}/, 'the tracer needs the run id');
   assert.match(text, /- name: Upload run trace\n\s+if: always\(\)\n\s+uses: actions\/upload-artifact@v4\n\s+with:\n\s+name: run-trace-\$\{\{ github\.run_id \}\}\n\s+path: \.\/observability\/traces\/\$\{\{ github\.run_id \}\}\.json\n/);
   for (const { body } of runScripts(text)) assert.doesNotMatch(body, /\$\{\{/, 'no expression inside a run script: inputs reach it through env');
+});
+
+// ADR-0043 amendment (2026-10-21): item-closed.yml journals the end of a work item. It holds no LLM secret, no
+// AI_PR_TOKEN and no PR code: the scripts come from the default branch, the only write scope is the metrics branch.
+test('item-closed.yml: closed issues and PRs only, no secret, scripts from the default branch, one scope', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'item-closed.yml'), 'utf8');
+  const on = text.slice(text.indexOf('\non:\n') + 1, text.indexOf('\npermissions:'));
+  assert.match(on, /^on:\n  issues:\n    types: \[closed\]\n  pull_request:\n    types: \[closed\]\n$/);
+  assert.doesNotMatch(text, /secrets\.(?!GITHUB_TOKEN)/, 'no secret but the workflow token');
+  assert.doesNotMatch(text, /GROQ|ANTHROPIC|AI_PR_TOKEN|AI_PROVIDER/);
+  assert.match(text, /^permissions:\n  contents: read\n/m);
+  assert.deepEqual(Object.keys(jobScopes(jobsOf(text)[0].text)), ['contents']);
+  assert.equal(jobScopes(jobsOf(text)[0].text).contents, 'write');
+  assert.match(text, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}\n\s+path: \.trusted-pipeline\n\s+persist-credentials: false/);
+  assert.equal((text.match(/uses: actions\/checkout@v4/g) ?? []).length, 1, 'only the pipeline is checked out, never the PR');
+  assert.ok(!runScripts(text).some(({ body }) => /\bgit push\b/.test(body)), 'no git push');
+  assert.match(text, /run: node "\$RUNNER_TEMP\/pipeline\/scripts\/item_closed\.mjs"/);
+  assert.match(text, /GITHUB_RUN_ID: \$\{\{ github\.run_id \}\}/);
+  assert.match(text, /- name: Upload run trace\n\s+if: always\(\)/);
+  // The payload fields reach the script through env, never inside a shell command.
+  for (const { body } of runScripts(text)) assert.doesNotMatch(body, /\$\{\{ github\.event\.(issue|pull_request)/);
+});
+
+test('pipeline-site.yml rebuilds after Item Closed, the workflow name item-closed.yml declares', () => {
+  const site = readFileSync(resolve(WORKFLOWS_DIR, 'pipeline-site.yml'), 'utf8');
+  const name = readFileSync(resolve(WORKFLOWS_DIR, 'item-closed.yml'), 'utf8').match(/^name: (.+)$/m)[1];
+  assert.match(site, new RegExp(`workflows: \\[[^\\]]*\\b${name}\\b[^\\]]*\\]`));
 });

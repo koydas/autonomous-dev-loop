@@ -169,7 +169,8 @@ test('escalated work items and telemetry gaps from a real model', () => {
   const m = buildPipelineModel({ records: asFiles(records), traces: indexesOf(records) });
   const d = diagnose({ model: m, journeys: journeys(m) });
   const f = find(d, 'escalations');
-  assert.match(f.fact, /1 work item\(s\).*pr #40/);
+  // No prompt_budget event: what auto-fix was shown is unknown, so the escalation is not explained by design.
+  assert.match(f.fact, /1 of 1 open work item\(s\).*pr #40 \(Auto-fix: No change proposed, and the files shown to the model were not recorded\)/);
   assert.equal(f.evidence[0].url, 'https://github.com/koydas/autonomous-dev-loop/pull/40#c');
   assert.ok(d.gaps.some((g) => g.id === 'estimated-tokens'));
   assert.ok(!d.gaps.some((g) => g.id === 'untraced'));
