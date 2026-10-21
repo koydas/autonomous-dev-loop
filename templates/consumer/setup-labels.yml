@@ -1,0 +1,71 @@
+name: ADL Setup Labels
+
+# Creates the labels the pipeline uses (docs/installation.md of koydas/autonomous-dev-loop). Run it once from
+# the Actions tab, and again after changing labels.yaml in your configuration directory. Idempotent.
+# Replace <PIPELINE_SHA> with the full commit SHA of the release you install and <PIPELINE_VERSION> with its tag.
+on:
+  workflow_dispatch:
+    inputs:
+      update:
+        description: 'Bring the color and description of existing labels back to the configuration'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Reads the configuration of a private repository (a job block replaces the workflow default).
+      contents: read
+      # Label creation (and update) only.
+      issues: write
+    env:
+      ADL_PIPELINE_REPOSITORY: koydas/autonomous-dev-loop
+      ADL_CONFIG_PATH: .autonomous-dev-loop
+    steps:
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: koydas/autonomous-dev-loop
+          ref: <PIPELINE_SHA> # <PIPELINE_VERSION>
+          path: .adl-pipeline
+          persist-credentials: false
+
+      - name: Checkout configuration (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .adl-config
+          sparse-checkout: .autonomous-dev-loop
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Create the labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ADL_CONFIG_DIR: ${{ github.workspace }}/.adl-config/.autonomous-dev-loop
+          UPDATE: ${{ inputs.update }}
+        run: |
+          if [ "$UPDATE" = "true" ]; then
+            node .adl-pipeline/scripts/ensure_labels.mjs --update
+          else
+            node .adl-pipeline/scripts/ensure_labels.mjs
+          fi
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true

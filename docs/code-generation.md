@@ -299,6 +299,10 @@ Every job that runs a script first gets, in this order:
 
 `load-labels` of `adl-code-generation.yml` resolves the trigger label with `scripts/resolve_labels.mjs issue.valid.name ready_for_dev` and `load-labels` of `adl-auto-fix-pr.yml` the changes-requested label with `review.changes.name changes_requested` (effective labels config, target layer included) instead of an inline Node program. In the pull-request workflows the pull request tree is only data: its checkout is a separate step, and the pipeline and the configuration are moved out of the workspace before any script runs (the auto-fix push cannot publish them).
 
+### Installing in another repository
+
+Setup requirements for a repository other than this one (prerequisites, the five callers, the `.autonomous-dev-loop/` configuration directory, updating) are in [installation.md](installation.md); releases and breaking changes in [releasing.md](releasing.md). Labels are created once with the `setup-labels.yml` template (**ADL Setup Labels**, `workflow_dispatch`, `contents: read` + `issues: write`), which runs `scripts/ensure_labels.mjs`: idempotent, `--update` converges color and description, `--dry-run` writes nothing. A run uploads its trace as `run-trace-<run_id>`.
+
 ## Observability
 
 Every workflow run produces two observable outputs on top of GitHub Actions step logs.

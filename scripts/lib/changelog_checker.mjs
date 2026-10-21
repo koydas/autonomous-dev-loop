@@ -2,9 +2,15 @@
 
 export const ENTRYPOINT_RE = /^scripts\/[^/]+\.mjs$/;
 export const ADR_RE = /^docs\/adr\/\d{4}-[^/]+\.md$/;
+// What a repository using the pipeline from elsewhere depends on (ADR-0045): the reusable workflows, the
+// caller templates and the snapshot of the workflows' interface. Changing one is a release note.
+export const REUSABLE_WORKFLOW_RE = /^\.github\/workflows\/adl-[^/]+\.yml$/;
+export const CALLER_TEMPLATE_RE = /^templates\/consumer\/[^/]+\.yml$/;
+export const INTERFACE_SNAPSHOT_RE = /^docs\/workflow-interface\.json$/;
 
 export function matchesTrigger(filePath) {
-  return ENTRYPOINT_RE.test(filePath) || ADR_RE.test(filePath);
+  return ENTRYPOINT_RE.test(filePath) || ADR_RE.test(filePath) || REUSABLE_WORKFLOW_RE.test(filePath)
+    || CALLER_TEMPLATE_RE.test(filePath) || INTERFACE_SNAPSHOT_RE.test(filePath);
 }
 
 export function findTriggerFiles(changedFiles) {

@@ -1,0 +1,40 @@
+name: PR Review
+
+# Caller of the autonomous-dev-loop pipeline (docs/installation.md of koydas/autonomous-dev-loop).
+# Replace <PIPELINE_SHA> with the full commit SHA of the release you install and <PIPELINE_VERSION> with its
+# tag (vMAJOR.MINOR.PATCH): that line is the only pin, a branch name is refused at run time.
+on:
+  push:
+    # Your default branch never has an open PR to review: replace "main" if it is called otherwise.
+    branches: ["**", "!main"]
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+
+# Shared with auto-fix-pr and reset-auto-fix: one pipeline stage per PR branch at a time. It covers the whole
+# run, evidence and review; the reusable workflow declares none.
+concurrency:
+  group: pr-pipeline-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  pr-review:
+    permissions:
+      # The `metrics` branch only (run records, Git Data API).
+      contents: write
+      # Review submit; the AI_PR_TOKEN secret when set, the workflow token otherwise.
+      pull-requests: write
+      # Labels and the review comment, same fallback.
+      issues: write
+      # gh run list, the auto-fix run check, the cross-run checkpoint download and the run lookup (read only).
+      actions: read
+    uses: koydas/autonomous-dev-loop/.github/workflows/adl-pr-review.yml@<PIPELINE_SHA> # <PIPELINE_VERSION>
+    with:
+      config_dir: .autonomous-dev-loop
+      autofix_workflow_file: auto-fix-pr.yml
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}

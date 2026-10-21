@@ -1,0 +1,38 @@
+name: Reset Auto-Fix Counter
+
+# Caller of the autonomous-dev-loop pipeline (docs/installation.md of koydas/autonomous-dev-loop).
+# Replace <PIPELINE_SHA> with the full commit SHA of the release you install and <PIPELINE_VERSION> with its
+# tag (vMAJOR.MINOR.PATCH): that line is the only pin, a branch name is refused at run time.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to reset'
+        required: true
+        type: number
+      retrigger:
+        description: 'Re-apply changes-requested to trigger a new auto-fix cycle'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  reset-auto-fix:
+    permissions:
+      # Label removal / re-apply on the PR.
+      pull-requests: write
+      issues: write
+      # The `metrics` branch only (run record).
+      contents: write
+      # The run lookup that gives the pipeline commit (read only).
+      actions: read
+    uses: koydas/autonomous-dev-loop/.github/workflows/adl-reset-auto-fix.yml@<PIPELINE_SHA> # <PIPELINE_VERSION>
+    with:
+      config_dir: .autonomous-dev-loop
+      pr_number: ${{ inputs.pr_number }}
+      retrigger: ${{ inputs.retrigger }}
+    secrets:
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}
