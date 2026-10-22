@@ -49,3 +49,5 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0043: Diagnostic observability console](./0043-diagnostic-observability-console.md)
 - [ADR-0044: Protected write paths: hard-coded floor plus per-repository config](./0044-protected-paths-floor-and-repo-config.md)
 - [ADR-0045: Reusable pipeline workflows for target repositories](./0045-reusable-pipeline-workflows.md)
+- [ADR-0046: Meta-loop: a read-only function from run statistics to suggested levers](./0046-meta-loop-read-only-stats-to-levers.md)
+- [ADR-0047: Published findings export and the finding → lever table](./0047-findings-export-and-lever-table.md)

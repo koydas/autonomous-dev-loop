@@ -111,7 +111,7 @@ All instrumentation goes through `scripts/lib/observability.mjs`. Schema referen
 
 ### Dashboard
 
-**[koydas.github.io/autonomous-dev-loop →](https://koydas.github.io/autonomous-dev-loop/)** — a static console built from the redacted run records on the `metrics` branch, organised as **Overview → Diagnostics → Pipelines → Investigation** ([ADR-0043](docs/adr/0043-diagnostic-observability-console.md)): system status and windowed indicators, deterministic diagnostics (observed fact vs labelled hypothesis, with evidence), every work item with every attempt of every stage, and the run / trace journals. Reading guide: [`docs/runbook.md`](docs/runbook.md#reading-the-dashboard).
+**[koydas.github.io/autonomous-dev-loop →](https://koydas.github.io/autonomous-dev-loop/)** — a static console built from the redacted run records on the `metrics` branch, organised as **Overview → Diagnostics → Pipelines → Investigation** ([ADR-0043](docs/adr/0043-diagnostic-observability-console.md)): system status and windowed indicators, deterministic diagnostics (observed fact vs labelled hypothesis, with evidence), every work item with every attempt of every stage, and the run / trace journals. Reading guide: [`docs/runbook.md`](docs/runbook.md#reading-the-dashboard). Proposed next step, statistics → suggested changes to the loop with no write on GitHub: [`docs/meta-loop.md`](docs/meta-loop.md).
 
 ![Dashboard design mockup: overview, diagnostics, pipelines and pipeline detail, desktop and mobile](docs/images/dashboard-mockup.png)
 
