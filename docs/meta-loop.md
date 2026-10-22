@@ -47,16 +47,9 @@ On the Diagnostics page, an **active** `warning` or `critical` finding from a ma
 
 No block means no lever, which has five distinct causes: the finding is `resolved`, it is `info` (a guardrail doing its job), the rule is mapped to `NO_LEVER`, it is a telemetry gap, or the window is too thin for the rule to have fired. The block says where to look; the fact above it says what was observed; neither says the lever is the cause.
 
-### Rule → lever (v1)
+### Rule → lever
 
-| Rule id | Stage | Targets | Gate |
-|---|---|---|---|
-| `review-withheld` (anomaly share) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml#checks` | `review` suite |
-| `review-coverage` | review | the two budget keys, provider | `review` suite |
-| `autofix-ineffective` (anomaly share) | autofix | `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio`, `prompts/auto-fix-system.md` | none |
-| `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, `prompts/generation-system.md` (no gate); `prompts/validation-system.md` (`validation` suite) | per target |
-| `llm-fallbacks` | provider | `AI_PROVIDER_<STAGE>`, retry policy (ADR-0022), provider tier | none |
-| `review-duplicates`, `runs-failed`, `review-stuck`, `escalations`, duration, rate limits | — | no lever (reasons in ADR-0047; `review-duplicates` is fixed in `.github/`, which no lever may name) | — |
+The table is the dashboard's **Rules and levers** page (`pipeline/levers.html`), generated from `LEVERS` and `NO_LEVER` in `scripts/lib/meta_levers.mjs`: for each rule, the stage, what it governs, the targets with what a change to each requires (a live eval suite, or a check by hand), the decisions that explain them, and for the rules without a lever, the reason. A copy kept here would drift from the code; the v1 entries as decided are in [ADR-0047 §2](adr/0047-findings-export-and-lever-table.md#2-the-lever-table-scriptslibmeta_leversmjs). A test fails on a diagnostic rule that is neither mapped nor listed with a reason.
 
 ## `findings.json`
 

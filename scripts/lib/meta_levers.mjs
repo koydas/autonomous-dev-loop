@@ -67,6 +67,9 @@ const FORBIDDEN = [
   [/secrets?\.|\b(GH_TOKEN|AI_PR_TOKEN)\b|API_KEY\b|(^|\/)\.env/i, 'a secret or credential'],
 ];
 
+/** What no lever may point at (ADR-0046 §5), in words, for the page that lists the levers. */
+export const FORBIDDEN_REASONS = Object.freeze(FORBIDDEN.map(([, why]) => why));
+
 /** The reason a ref is a forbidden lever target (ADR-0046 §5), or null. */
 export function forbiddenTarget(ref) {
   const text = String(ref ?? '');

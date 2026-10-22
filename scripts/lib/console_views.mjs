@@ -9,7 +9,7 @@ import { journeys as journeysOf, STATES, STEPS } from './pipeline_journey.mjs';
 import { computeOverview, computeWindows, DEFINITIONS, RUN_CLASSES } from './pipeline_kpis.mjs';
 import { diagnose, RULES } from './pipeline_diagnostics.mjs';
 import { waitingOnYou } from './pipeline_waiting.mjs';
-import { leverFor } from './meta_levers.mjs';
+import { leverFor, LEVERS, NO_LEVER, FORBIDDEN_REASONS } from './meta_levers.mjs';
 import { costAmount, costBasis } from './llm_cost.mjs';
 
 /** Everything the console views render, computed once per build. */
@@ -92,7 +92,8 @@ export const CONSOLE_STYLE = `
 .hypothesis, .lever { border:1px dashed var(--axis); border-radius:8px; padding:8px 12px; background:var(--page); }
 .hypothesis dt::after { content:' — interpretation, not verified'; text-transform:none; letter-spacing:0; font-weight:500; color:var(--muted); }
 .lever dt::after { content:' — where to look, not verified'; text-transform:none; letter-spacing:0; font-weight:500; color:var(--muted); }
-.lever ul { margin:6px 0; padding-left:20px; }
+.lever ul, .targets { margin:6px 0; padding-left:20px; }
+.nowrap { white-space:nowrap; }
 .lever .copy { user-select:all; }
 @media(min-width:761px) and (max-width:1180px) { .finding { scroll-margin-top:130px; } }
 .gap-list li { padding:10px 0; border-top:1px solid var(--grid); }
@@ -307,11 +308,11 @@ export const requirementLabel = (target) => (target.requires === 'evals'
 /** The `ai-dev-tools` command that drafts a proposal for one finding; its `--finding` value is the finding's `key` in findings.json. */
 export const leverCommand = (f) => `/ai-dev-tools:loop-insights --finding ${f.id}`;
 
-function leverBlock(f) {
+function leverBlock(f, root) {
   const lever = leverFor(f);
   if (!lever) return '';
   const targets = lever.targets.map((t) => `<li><code>${e(t.ref)}</code> <span class="muted">· ${e(requirementLabel(t))}</span></li>`).join('');
-  return `<div class="wide lever"><dt>Suggested lever</dt><dd><p>${e(lever.summary)}</p><ul>${targets}</ul><p class="muted">Stage ${e(lever.stage)} · ${lever.adr.map((a) => `ADR-${e(a)}`).join(', ')} · every change also requires <code>docs-and-tests</code>; the lever says where to look, not what caused the finding.</p><p class="muted">Draft a proposal (read-only, nothing is posted or created): <code class="copy">${e(leverCommand(f))}</code></p></dd></div>`;
+  return `<div class="wide lever"><dt>Suggested lever</dt><dd><p>${e(lever.summary)}</p><ul>${targets}</ul><p class="muted">Stage ${e(lever.stage)} · ${lever.adr.map((a) => `ADR-${e(a)}`).join(', ')} · every change also requires <code>docs-and-tests</code>; the lever says where to look, not what caused the finding (<a href="${root}levers.html#rule-${e(f.id)}">this rule's entry</a>).</p><p class="muted">Draft a proposal (read-only, nothing is posted or created): <code class="copy">${e(leverCommand(f))}</code></p></dd></div>`;
 }
 
 export function findingCard(f, root) {
@@ -319,8 +320,25 @@ export function findingCard(f, root) {
   const since = f.evidence.map((x) => x.ts).filter((t) => typeof t === 'number');
   const meta = `<p class="finding-meta"><span>Affects ${e(f.runs.length)} run(s)${f.items.length ? ` · ${e(f.items.length)} item(s)` : ''}</span>${since.length ? `<span>Since <span data-ts="${Math.min(...since)}">${e(time(Math.min(...since)))} UTC</span></span>` : ''}${f.status ? `<span>${e(f.status)}${Number.isFinite(f.last_seen) ? ` · last seen <span data-ts="${f.last_seen}">${e(time(f.last_seen))} UTC</span>` : ''}</span>` : ''}</p>`;
   return `<article class="finding tone-${tone}" id="${e(f.id)}" data-filter-item data-severity="${e(f.severity)}" data-category="${e(f.category.toLowerCase().replace(/[^a-z0-9]+/g, '-'))}"><header>${pill(tone, f.severity)}<span class="eyebrow">${e(f.category)}</span><h2>${e(f.title)}</h2></header>${meta}
-<dl class="facts"><div class="wide"><dt>Observed</dt><dd>${e(f.fact)}</dd></div><div><dt>Impact</dt><dd>${e(f.impact)}</dd></div><div><dt>Frequency</dt><dd>${e(f.frequency)}${f.runs.length ? ` · ${e(f.runs.length)} run(s) affected` : ''}</dd></div>${f.hypothesis ? `<div class="wide hypothesis"><dt>Hypothesis</dt><dd>${e(f.hypothesis)}</dd></div>` : ''}${leverBlock(f)}</dl>
+<dl class="facts"><div class="wide"><dt>Observed</dt><dd>${e(f.fact)}</dd></div><div><dt>Impact</dt><dd>${e(f.impact)}</dd></div><div><dt>Frequency</dt><dd>${e(f.frequency)}${f.runs.length ? ` · ${e(f.runs.length)} run(s) affected` : ''}</dd></div>${f.hypothesis ? `<div class="wide hypothesis"><dt>Hypothesis</dt><dd>${e(f.hypothesis)}</dd></div>` : ''}${leverBlock(f, root)}</dl>
 ${evidenceTable(f, root)}${f.link ? `<p><a class="button-link" href="${root}${e(f.link)}">Investigate →</a></p>` : ''}</article>`;
+}
+
+// ---------------------------------------------------------------------------
+// Rules and levers page (ADR-0047): the lever table itself, so it cannot drift from the code
+// ---------------------------------------------------------------------------
+
+export function leversBody(root = '') {
+  const withLever = Object.entries(LEVERS).map(([rule, l]) => {
+    const targets = l.targets.map((t) => `<li><code>${e(t.ref)}</code> <span class="muted">· ${e(requirementLabel({ ...t, requires: t.gate ? 'evals' : 'no-eval-gate' }))}</span></li>`).join('');
+    return `<tr id="rule-${e(rule)}"><th><code>${e(rule)}</code></th><td class="nowrap">${e(l.stage)}</td><td>${e(l.summary)}</td><td><ul class="targets">${targets}</ul></td><td>${l.adr.map((a) => `ADR-${e(a)}`).join(', ')}</td></tr>`;
+  }).join('');
+  const without = Object.entries(NO_LEVER).map(([rule, why]) => `<tr id="rule-${e(rule)}"><th><code>${e(rule)}</code></th><td>${e(why)}</td></tr>`).join('');
+  return `<h1>Rules and levers</h1>
+<p class="sub">Which setting or prompt governs the pattern each diagnostic rule reports (<code>LEVERS</code> and <code>NO_LEVER</code> in <code>scripts/lib/meta_levers.mjs</code>, ADR-0047): this page is generated from that table. A lever says where to look, not what caused a finding. A Diagnostics card shows it only for an <strong>active</strong> <code>warning</code> or <code>critical</code> finding of a rule below; an <code>info</code> finding (a guardrail working as designed) or a resolved one has none. When the rule fires and what counts as an anomaly: <a href="${root}diagnostics.html#rules">Rules and thresholds</a>.</p>
+<section class="panel" id="with-lever"><h3>Rules with a lever</h3><div class="table-wrap"><table><thead><tr><th>Rule</th><th>Stage</th><th>What it governs</th><th>Where to look, and what a change requires</th><th>Decisions</th></tr></thead><tbody>${withLever}</tbody></table></div><p class="muted">Every change also needs docs and tests in the same pull request, and is applied by a person: the dashboard and <code>/loop-insights</code> create nothing on GitHub.</p></section>
+<section class="panel" id="without-lever"><h3>Rules without a lever</h3><div class="table-wrap"><table><thead><tr><th>Rule</th><th>Why there is none</th></tr></thead><tbody>${without}</tbody></table></div></section>
+<section class="panel" id="never"><h3>A lever never points at</h3><ul>${FORBIDDEN_REASONS.map((r) => `<li>${e(r)}</li>`).join('')}</ul><p class="muted">ADR-0046 §5: no lever lowers a threshold, removes a dataset case or weakens a gate.</p></section>`;
 }
 
 export function diagnosticsBody(ctx, root = '') {
@@ -337,7 +355,7 @@ ${statusBanner(d, o, root).replace(/<a class="button-link"[^>]*>[^<]*<\/a>/, '')
 <p data-filter-empty class="muted" hidden>No finding matches these filters.</p>
 ${d.findings.map((f) => findingCard(f, root)).join('') || '<div class="panel"><p>No rule fired on the recorded data. That is not proof of health: see the data gaps below.</p></div>'}</section>
 <section class="panel" id="data-gaps"><h3>Data gaps · what the records cannot tell</h3><ul class="gap-list">${gaps || '<li class="muted">None detected.</li>'}</ul></section>
-<details class="detail-panel" id="rules"><summary>Rules and thresholds</summary><p class="sub">A pattern is reported only above these thresholds (<code>RULES</code> in <code>scripts/lib/pipeline_diagnostics.mjs</code>); below them it is not separated from noise.</p><div class="table-wrap"><table><tbody>${Object.entries(RULES).map(([k, v]) => `<tr><th><code>${e(k)}</code></th><td class="num">${e(v)}</td></tr>`).join('')}</tbody></table></div></details>
+<details class="detail-panel" id="rules"><summary>Rules and thresholds</summary><p class="sub">A pattern is reported only above these thresholds (<code>RULES</code> in <code>scripts/lib/pipeline_diagnostics.mjs</code>); below them it is not separated from noise. Which setting governs each rule: <a href="${root}levers.html">Rules and levers</a>.</p><div class="table-wrap"><table><tbody>${Object.entries(RULES).map(([k, v]) => `<tr><th><code>${e(k)}</code></th><td class="num">${e(v)}</td></tr>`).join('')}</tbody></table></div></details>
 ${FILTER_SCRIPT}`;
 }
 

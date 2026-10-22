@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { Script, runInNewContext } from 'node:vm';
 import {
   consoleContext, diagnosticsBody, findingCard, journeyPanel, keyEvents, runSteps, trendChart, statusBanner,
-  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel, leverCommand,
+  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel, leverCommand, leversBody,
 } from '../lib/console_views.mjs';
 import { consoleOverview, kpiRow, delta, sparkline, statusBadge, durationChart, providerList, issueCards } from '../lib/console_overview.mjs';
 import { attemptOf, workItemJourney } from '../lib/pipeline_journey.mjs';
 import { DEFINITIONS } from '../lib/pipeline_kpis.mjs';
+import { LEVERS, NO_LEVER, FORBIDDEN_REASONS } from '../lib/meta_levers.mjs';
+import { escapeHtml } from '../lib/eval_site.mjs';
 import { buildPipelineModel, eventSummary } from '../lib/pipeline_model.mjs';
 import { makeRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
 
@@ -277,4 +279,49 @@ test('the lever block carries the read-only command that drafts a proposal for t
   // No lever, no command: /loop-insights only drafts findings that have one.
   assert.doesNotMatch(findingCard(leverFinding({ severity: 'info' }), ''), /loop-insights/);
   assert.doesNotMatch(findingCard(leverFinding({ id: 'review-stuck' }), ''), /loop-insights/);
+});
+
+// ---------------------------------------------------------------------------
+// Rules and levers page (generated from the lever table)
+// ---------------------------------------------------------------------------
+
+test('the Rules and levers page lists every rule of the table with its stage, summary, targets, requirement and decisions', () => {
+  const html = leversBody('');
+  for (const [rule, l] of Object.entries(LEVERS)) {
+    const row = html.slice(html.indexOf(`<tr id="rule-${rule}">`), html.indexOf('</tr>', html.indexOf(`<tr id="rule-${rule}">`)));
+    assert.ok(row.length > 0, `${rule} has a row`);
+    assert.ok(row.includes(`<code>${rule}</code>`) && row.includes(`<td class="nowrap">${l.stage}</td>`) && row.includes(l.summary), rule);
+    assert.match(CONSOLE_STYLE, /\.nowrap \{ white-space:nowrap; \}/, 'a stage name is never cut in the middle of a word');
+    for (const t of l.targets) assert.ok(row.includes(`<code>${escapeHtml(t.ref)}</code>`), `${rule}: ${t.ref}`);
+    for (const a of l.adr) assert.ok(row.includes(`ADR-${a}`), `${rule}: ADR-${a}`);
+  }
+  // A target with a suite names it; one without says to verify by hand.
+  assert.match(html, /prompts\/validation-system\.md<\/code> <span class="muted">· run the live evals\.yml \(suite validation\)/);
+  assert.match(html, /prompts\/generation-system\.md<\/code> <span class="muted">· no eval suite measures it: verify by hand and say so in the PR/);
+});
+
+test('the Rules and levers page explains every rule without a lever, and what no lever points at', () => {
+  const html = leversBody('');
+  for (const [rule, why] of Object.entries(NO_LEVER)) {
+    const at = html.indexOf(`<tr id="rule-${rule}">`);
+    assert.ok(at > 0, `${rule} has a row`);
+    assert.ok(html.slice(at, html.indexOf('</tr>', at)).includes(escapeHtml(why)), `${rule}: its reason`);
+  }
+  assert.ok(FORBIDDEN_REASONS.length >= 5);
+  for (const reason of FORBIDDEN_REASONS) assert.ok(html.includes(escapeHtml(reason)), reason);
+  assert.match(html, /<a href="diagnostics\.html#rules">Rules and thresholds<\/a>/);
+  assert.match(leversBody('../'), /<a href="\.\.\/diagnostics\.html#rules">/);
+  // Rule rows are anchors a card or a document can link to, and the page has no script.
+  assert.match(html, /<tr id="rule-review-withheld">/);
+  assert.doesNotMatch(html, /<script/);
+});
+
+test('the Diagnostics page links to the Rules and levers page', () => {
+  const html = diagnosticsBody(consoleContext(modelOf([makeRecord({ runId: '1', events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 7 } }] })])), '');
+  assert.match(html, /Which setting governs each rule: <a href="levers\.html">Rules and levers<\/a>/);
+});
+
+test('the lever block links to the entry of its rule on the Rules and levers page', () => {
+  assert.match(findingCard(leverFinding({ id: 'autofix-ineffective' }), ''), /not what caused the finding \(<a href="levers\.html#rule-autofix-ineffective">this rule's entry<\/a>\)/);
+  assert.match(findingCard(leverFinding(), '../'), /<a href="\.\.\/levers\.html#rule-review-coverage">/);
 });

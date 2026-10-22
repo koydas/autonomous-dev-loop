@@ -60,7 +60,7 @@ test('a hostile string in every rendered field is escaped on every page', () => 
 
 test('empty states: no record, no trace, no LLM call', () => {
   const { files } = site([]);
-  assert.deepEqual(Object.keys(files).sort(), ['pipeline/console.css', 'pipeline/diagnostics.html', 'pipeline/flows.html', 'pipeline/health.html', 'pipeline/index.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
+  assert.deepEqual(Object.keys(files).sort(), ['pipeline/console.css', 'pipeline/diagnostics.html', 'pipeline/flows.html', 'pipeline/health.html', 'pipeline/index.html', 'pipeline/levers.html', 'pipeline/models.html', 'pipeline/traces/index.html']);
   // No data is said, never shown as healthy.
   assert.match(files['pipeline/diagnostics.html'], /No pipeline run recorded yet/);
   assert.doesNotMatch(files['pipeline/diagnostics.html'], /No problem detected/);
@@ -341,4 +341,13 @@ test('trace page: header with state and GitHub link, six tabs (overview, timelin
   assert.match(html, /<a href="https:\/\/github\.com\/koydas\/autonomous-dev-loop\/actions\/runs\/930\/attempts\/1">workflow run<\/a>/);
   assert.match(html, /<h2>Waterfall<\/h2>/);
   assert.match(html, /role', 'tablist'/);
+});
+
+test('the Rules and levers page is part of every pipeline site and linked from the pipeline navigation', () => {
+  const { files } = site([makeRecord({ runId: '1', start: T0 })]);
+  assert.match(files['pipeline/levers.html'], /<h1>Rules and levers<\/h1>/);
+  assert.match(files['pipeline/levers.html'], /<tr id="rule-review-withheld">/);
+  for (const p of ['pipeline/diagnostics.html', 'pipeline/flows.html', 'pipeline/health.html', 'pipeline/levers.html']) {
+    assert.match(files[p], /<a href="levers\.html">Rules &amp; levers<\/a>|<a href="levers\.html">Rules & levers<\/a>/, p);
+  }
 });

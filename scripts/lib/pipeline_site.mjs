@@ -9,7 +9,7 @@ import { flowDashboard, pipelineFacets, keyInformation, FLOW_STYLE, FLOW_SCRIPT 
 import { OVERVIEW_STYLE } from './console_overview.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
 import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps, DASHBOARD_STYLE } from './dashboard_ui.mjs';
-import { consoleContext, diagnosticsBody, journeyPanel, keyEvents, runSteps, itemTitle, itemUrl, pill, CONSOLE_STYLE, TABS_SCRIPT } from './console_views.mjs';
+import { consoleContext, diagnosticsBody, leversBody, journeyPanel, keyEvents, runSteps, itemTitle, itemUrl, pill, CONSOLE_STYLE, TABS_SCRIPT } from './console_views.mjs';
 import { workItemJourney, attemptOf } from './pipeline_journey.mjs';
 import { callCost, sumCosts, formatUsd, costAmount, meanAmount, costLine, costBasis, pipelineStage } from './llm_cost.mjs';
 
@@ -80,7 +80,7 @@ function levelHtml(level) {
 
 function nav(root, months = []) {
   const monthLinks = months.map((m) => `<a href="${root}feed/${e(m)}.html">${e(m)}</a>`).join(' ');
-  return `<p class="nav2"><a href="${root}diagnostics.html">Diagnostics</a><a href="${root}flows.html">Pipelines</a><a href="${root}index.html">Executions & journal</a><a href="${root}traces/index.html">Trace table</a><a href="${root}health.html">Metrics</a><a href="${root}models.html">Models</a>${monthLinks ? `<span class="muted">Months: ${monthLinks}</span>` : ''}</p>`;
+  return `<p class="nav2"><a href="${root}diagnostics.html">Diagnostics</a><a href="${root}levers.html">Rules & levers</a><a href="${root}flows.html">Pipelines</a><a href="${root}index.html">Executions & journal</a><a href="${root}traces/index.html">Trace table</a><a href="${root}health.html">Metrics</a><a href="${root}models.html">Models</a>${monthLinks ? `<span class="muted">Months: ${monthLinks}</span>` : ''}</p>`;
 }
 
 const pipelinePage = (title, body, depth, filters = '') => page(title, body, { depth, pipeline: true, style: STYLE, filters });
@@ -570,6 +570,7 @@ ${sections || emptyCard('No LLM call or eval run recorded yet.')}`, 1);
 export function buildPipelineSite({ model, health, models, generatedAt = null, console: ctx = consoleContext(model) }) {
   const files = {
     'pipeline/diagnostics.html': pipelinePage('Diagnostics', `${nav('', model.months)}${diagnosticsBody(ctx, '')}`, 1),
+    'pipeline/levers.html': pipelinePage('Rules and levers', `${nav('', model.months)}${leversBody('')}`, 1),
     'pipeline/flows.html': pipelinePage('Pipelines', `${nav('', model.months)}${flowDashboard(model)}${FLOW_SCRIPT}`, 1, pipelineFacets(ctx.journeys)),
     // One stylesheet for the console components of every page (pipeline pages and the home page).
     'pipeline/console.css': BASE_STYLE + DASHBOARD_STYLE + CONSOLE_STYLE + FLOW_STYLE + OVERVIEW_STYLE,
