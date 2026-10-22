@@ -93,7 +93,12 @@ test('export ⊆ page: every string of the export appears in the Diagnostics pag
     // The page says what a target requires in words (requirementLabel); the contract tokens are the export's.
     for (const t of f.lever.targets) { onPage(`${f.key}.lever.target`, t.ref); onPage(`${f.key}.lever.requires`, requirementLabel(t)); }
     for (const a of f.lever.adr) onPage(`${f.key}.lever.adr`, `ADR-${a}`);
-    onPage(`${f.key}.lever.requires`, 'docs-and-tests');
+    // The root requires is the union of the targets' requirements plus docs-and-tests; each is on the page.
+    assert.deepEqual(f.lever.requires, [...new Set(f.lever.targets.map((t) => t.requires)), 'docs-and-tests'], `${f.key}: root requires`);
+    for (const r of f.lever.requires) {
+      if (r === 'docs-and-tests') onPage(`${f.key}.lever.requires`, r);
+      else assert.ok(f.lever.targets.some((t) => t.requires === r), `${f.key}: ${r} is the requirement of a target shown above`);
+    }
   }
   assert.deepEqual(missing, []);
   assert.ok(exported.gaps.length > 0);
