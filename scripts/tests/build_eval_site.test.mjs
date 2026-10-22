@@ -436,7 +436,8 @@ const pipelineRecords = () => [
   makeRecord({ runId: '700', start: PIPE_T0, events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 7 } }] }),
   makeRecord({ runId: '701', start: PIPE_T0 + 60000, workflow: 'Auto-Fix PR', stage: 'autofix', events: [{ event: 'autofix.push', meta: { prNumber: 7 } }] }),
 ];
-const evalFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => !p.startsWith('pipeline/')));
+// findings.json belongs to the pipeline half (ADR-0047): it follows the metrics branch like pipeline/.
+const evalFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => !p.startsWith('pipeline/') && p !== 'findings.json'));
 const pipelineFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => p.startsWith('pipeline/')));
 // The live site as a fetch stub: what fetchPreviousSite reads back.
 const siteFetch = (files) => async (url) => {

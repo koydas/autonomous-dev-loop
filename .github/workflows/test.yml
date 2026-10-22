@@ -402,6 +402,17 @@ jobs:
             --statements 80 \
             node --test scripts/tests/waiting_on_you.test.mjs
 
+      - name: Check findings_export coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/findings_export.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/findings_export.test.mjs
+
       - name: Check pipeline_kpis coverage (≥80%)
         run: |
           npx --yes c8 \

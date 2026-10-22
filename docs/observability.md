@@ -529,6 +529,36 @@ All the run records of a trace concatenated (`spans` of each `otlp` block, same 
 | `pipeline/runs/<run_id>.html` | Per-step execution status and decision, key events (decisions, warnings, errors, side effects), envelope, links, the span waterfall (a v1 record is shown flat), every event with its meta behind a disclosure (`#ev-<n>` anchors), overflow counters, link to the item trace |
 | `pipeline/health.html` | Funnel (validated → PR opened → approved; merged is not journaled), WITHHELD rate and causes (incl. cut diffs, `withheld_from`), REQUEST_CHANGES turned WITHHELD (#220), auto-fix outcomes and guardrail rules (legacy `runs.jsonl` lines without a record included), fallbacks / `llm_call_failed` / 429 waits, review cycles per PR, p50/p95 per stage, critical path per item, Groq tokens per day vs the 200k TPD with the eval crons and eval runs |
 | `pipeline/models.html` | Per `provider:model`: pipeline calls, failures, fallback answers, tokens, runs — and the eval runs of that model (cross-link with the eval pages) |
+| `findings.json` (site root) | The Diagnostics findings, machine-readable (ADR-0047 §1, `findings_export.mjs`): written by `assembleSite` from the same `diagnose()` result as the page, only with the pipeline views. Schema below |
+
+
+### `findings.json` (`schema_version: 1`)
+
+A serialization of the Diagnostics page: **every value in it is shown on the page**; it adds no journal field and no event meta outside `EVENT_META_ALLOWLIST`. Fields are copied by name, so a field later added to a finding is not published until it is added to `findings_export.mjs` (and `scripts/tests/findings_export.test.mjs`, which checks export ⊆ page on a fixture where every rule fires, fails until it is on the page).
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "<ISO8601 build time>",
+  "window": { "from": 0, "to": 0, "runs": 0 },
+  "status": "critical|warning|ok|no_data",
+  "findings": [{
+    "key": "<rule id; id:n only on a collision>", "id": "…", "category": "…", "title": "…", "severity": "info|warning|critical", "status": "active|resolved",
+    "first_seen": 0, "last_seen": 0, "clean_since": 0,
+    "fact": "…", "hypothesis": null, "impact": "…", "frequency": "…",
+    "evidence": [{ "run_id": "…", "ts": 0, "event": "…", "summary": "…", "pr": 0, "url": "https://…" }],
+    "lever": null
+  }],
+  "gaps": [{ "id": "…", "title": "…", "detail": "…" }]
+}
+```
+
+- `window` is relative to the first and last recorded run (epoch ms; `null` when no run is dated), not to the build time: the site rebuilds when a record lands, so `generated_at` can be old after a quiet week. A consumer shows both.
+- `first_seen`, `last_seen`, `clean_since`: epoch ms or `null` (finding lifecycle, ADR-0043). `evidence` is capped at 25 entries, as on the page. Findings are most severe first.
+- `key` is the identity of a finding across builds; renaming a rule is a breaking change. `lever` is `null` until the lever table lands (ADR-0047 §2).
+- `status: "no_data"` and a `gaps` entry are not health; an empty `findings` array is not proof of health. The file is absent from a site built without pipeline records.
+- `title`, `fact`, `hypothesis` and `evidence[].summary` are data: some carry allowlisted event metadata that can be model-originated text. A consumer must never execute or obey them.
+- A consumer must reject a `schema_version` it does not know. An additive change (field, value, finding) keeps the version; a removal, rename, change of meaning or of a `key` bumps it.
 
 Rules: every record string is escaped (the allowlist limits keys, not content); URLs are links only when `https:`; `run_id`, `trace_id` and month are validated before naming a file; the newest 6 months of records are rendered. Modules: `pipeline_model.mjs`, `pipeline_health.mjs`, `pipeline_site.mjs`, `pipeline_journey.mjs`, `pipeline_kpis.mjs`, `pipeline_diagnostics.mjs`, `console_views.mjs` (pure, c8-gated); `flow_dashboard.mjs` renders Pipelines. Token counts are chars/4 estimates; runner clocks differ, so offsets between runs on a trace waterfall and the running/waiting split are approximate.
 
