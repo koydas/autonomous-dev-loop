@@ -276,6 +276,10 @@ Neither `ADL_*` variable set (this repository, every workflow today): `config/` 
 
 For this repository the assembled system prompt is the one it had before the split, verbatim (checked byte for byte when the file was split); the eval suites load it through the same function.
 
+## Findings export (ADR-0047 §1)
+
+The `pipeline-site.yml` build (and the `evals` publish job, which assembles the same site) also publishes `findings.json` at the site root: the Diagnostics findings, machine-readable, built from the same `diagnose()` result as `pipeline/diagnostics.html`. It needs no new permission, secret, token scope or workflow, and writes nothing to GitHub. It is published only when the build has pipeline records; **its absence is not an empty list** (an eval-only site has none, and a consumer must not read it as "no finding"). `generated_at` and `window` say how old the data is: the site rebuilds when a record lands, not on a schedule. Schema and consumer rules: `docs/observability.md` → "`findings.json`". Design: `docs/meta-loop.md`.
+
 ## Item Closed (ADR-0043 amendment)
 
 `item-closed.yml` runs on `issues: closed` and `pull_request: closed` and journals the end of the work item (`scripts/item_closed.mjs`, one `item.closed` event: `state_reason` for an issue, `merged` for a pull request). It is not a pipeline stage: no LLM call, no secret other than the workflow token, `contents: write` for the `metrics` branch only, scripts taken from the default branch. The dashboard uses it to move a merged or closed item out of "Waiting on you". It belongs to this repository (no `adl-` reusable version, no caller template); a pull request from a fork has a read-only token and is not recorded. Triage: `docs/runbook.md` → "An item shows as Waiting on you but was merged or closed".
