@@ -56,6 +56,22 @@ test('the test-protocol skill points at the gate list instead of keeping a copy'
   assert.doesNotMatch(skill, /^- `scripts\/lib\/[\w-]+\.mjs`/m, 'a module list in the skill would drift');
 });
 
+test('a row of docs/testing.md that says "CI-enforced ≥ 80% via c8" names only modules that are gated', () => {
+  const gated = new Set(gatesConfig.gates.map((g) => g.module));
+  const claims = readFileSync(resolve(ROOT, 'docs/testing.md'), 'utf8').split('\n').filter((line) => line.startsWith('|') && /CI-enforced ≥ 80% via c8/.test(line));
+  assert.ok(claims.length >= 20, `the rows that claim a gate were found (${claims.length})`);
+  for (const row of claims) {
+    const modules = [...row.split('|')[1].matchAll(/`(scripts\/[^`]+\.mjs)`/g)].map((m) => m[1]);
+    assert.ok(modules.length > 0, `a row claims a gate but names no module: ${row.slice(0, 80)}`);
+    // "via c8 (`a.mjs`, `b.mjs`)" narrows the claim to the files named there.
+    const narrowed = row.match(/CI-enforced ≥ 80% via c8 \(([^)]*)\)/);
+    const named = narrowed ? [...narrowed[1].matchAll(/`([\w.-]+\.mjs)`/g)].map((m) => m[1]) : null;
+    for (const module of named ? modules.filter((m) => named.includes(m.split('/').pop())) : modules) {
+      assert.ok(gated.has(module), `docs/testing.md says ${module} is CI-enforced by c8, but config/coverage-gates.json does not list it`);
+    }
+  }
+});
+
 test('AGENTS.md Local Checks gives the command that reproduces a coverage gate', () => {
   const agents = readFileSync(resolve(ROOT, 'AGENTS.md'), 'utf8');
   assert.match(agents, /node scripts\/coverage_gates\.mjs --only scripts\/lib\/<m>\.mjs/);
