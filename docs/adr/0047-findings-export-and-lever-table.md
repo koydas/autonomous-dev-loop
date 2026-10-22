@@ -14,7 +14,7 @@
 
 ### 1. `findings.json`, a serialization of what the Diagnostics page shows
 
-`assembleSite` publishes `findings.json` at the root of the static site, built from the same `diagnose()` result as the Diagnostics page. **Invariant: every value in it is already visible on the Diagnostics page.** The export adds no field read from the journal and no event meta outside `EVENT_META_ALLOWLIST` (ADR-0040): it is a second rendering, not a second disclosure. A test builds the page and the export from one fixture and fails if a string appears in the export but not in the page's data.
+`assembleSite` publishes `findings.json` at the root of the static site, built from the same `diagnose()` result as the Diagnostics page. **Invariant: it discloses nothing the Diagnostics page does not.** Every text field (`title`, `fact`, `hypothesis`, `impact`, `frequency`, `evidence[].summary`, `evidence[].url`, `gaps[]`) is shown on the page verbatim. The three lifecycle timestamps (`first_seen`, `last_seen`, `clean_since`) are epoch milliseconds computed from the start times of the same run records the page cites: the page shows `last_seen`, the day of `clean_since` (in the title of a resolved finding) and the oldest evidence time, not `first_seen` as such. The export adds no field read from the journal and no event meta outside `EVENT_META_ALLOWLIST` (ADR-0040) and copies its fields by name: it is a second rendering, not a second disclosure. A test builds the page and the export from one fixture and fails if a text field of the export is not in the page; the timestamps are not compared, being derived from records the page already links.
 
 Schema, `schema_version: 1`:
 

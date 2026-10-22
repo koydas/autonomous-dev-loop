@@ -60,7 +60,7 @@ No block means no lever, which has five distinct causes: the finding is `resolve
 
 ## `findings.json`
 
-Published at the site root with the other static files. A serialization of the Diagnostics page: **nothing in it is absent from the page**. Fields and compatibility rules: [ADR-0047 §1](adr/0047-findings-export-and-lever-table.md#1-findingsjson-a-serialization-of-what-the-diagnostics-page-shows). Points a consumer must respect:
+Published at the site root with the other static files. A serialization of the Diagnostics page: **it discloses nothing the page does not** (every text field is on the page; the lifecycle timestamps derive from the records it cites). Fields and compatibility rules: [ADR-0047 §1](adr/0047-findings-export-and-lever-table.md#1-findingsjson-a-serialization-of-what-the-diagnostics-page-shows). Points a consumer must respect:
 
 - Check `schema_version`; refuse an unknown one.
 - Show `generated_at` and `window`: the window is relative to the latest recorded run and the site rebuilds when a record lands, not on a schedule.
