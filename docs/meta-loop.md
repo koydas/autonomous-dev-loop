@@ -71,7 +71,7 @@ Published at the site root with the other static files. A serialization of the D
 ## Using it
 
 1. **Dashboard.** Open Diagnostics, filter on `warning`/`critical`, read the fact, then the suggested lever.
-2. **Drafting.** `/loop-insights` (once implemented, `ai-dev-tools` ADR-017) fetches `findings.json`, validates the version, and drafts one proposal per finding that has a lever. The output stays in the session. You decide whether to make the change, in which repository, and how.
+2. **Drafting.** `/loop-insights` (`ai-dev-tools` ADR-017; the card of a finding with a lever shows the command with its `--finding` key, one click selects it) fetches `findings.json`, validates the version, and drafts one proposal per finding that has a lever. The output stays in the session. You decide whether to make the change, in which repository, and how.
 3. **Applying.** As any change to the loop: branch, edit, `npm test`, live evals when the lever requires them, documentation and tests in the same PR, review, human merge.
 4. **Checking the effect.** The finding turns `resolved` once its pattern has left the last `RULES.activeWindow` runs of its rule (10 at the time of writing, `scripts/lib/pipeline_diagnostics.mjs`). There is no other tracking.
 

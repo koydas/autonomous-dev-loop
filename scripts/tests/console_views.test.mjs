@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Script, runInNewContext } from 'node:vm';
 import {
   consoleContext, diagnosticsBody, findingCard, journeyPanel, keyEvents, runSteps, trendChart, statusBanner,
-  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel,
+  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel, leverCommand,
 } from '../lib/console_views.mjs';
 import { consoleOverview, kpiRow, delta, sparkline, statusBadge, durationChart, providerList, issueCards } from '../lib/console_overview.mjs';
 import { attemptOf, workItemJourney } from '../lib/pipeline_journey.mjs';
@@ -267,4 +267,14 @@ test('the Diagnostics page carries a lever block for a real mapped warning and n
 test('requirementLabel: a live eval suite by name, or a check by hand when none measures the target', () => {
   assert.equal(requirementLabel({ requires: 'evals', gate: 'validation' }), 'run the live evals.yml (suite validation)');
   assert.equal(requirementLabel({ requires: 'no-eval-gate', gate: null }), 'no eval suite measures it: verify by hand and say so in the PR');
+});
+
+test('the lever block carries the read-only command that drafts a proposal for this finding, selectable in one click', () => {
+  const html = findingCard(leverFinding({ id: 'autofix-ineffective' }), '');
+  assert.match(html, /Draft a proposal \(read-only, nothing is posted or created\): <code class="copy">\/ai-dev-tools:loop-insights --finding autofix-ineffective<\/code>/);
+  assert.equal(leverCommand({ id: 'review-withheld' }), '/ai-dev-tools:loop-insights --finding review-withheld');
+  assert.match(CONSOLE_STYLE, /\.lever \.copy \{ user-select:all; \}/);
+  // No lever, no command: /loop-insights only drafts findings that have one.
+  assert.doesNotMatch(findingCard(leverFinding({ severity: 'info' }), ''), /loop-insights/);
+  assert.doesNotMatch(findingCard(leverFinding({ id: 'review-stuck' }), ''), /loop-insights/);
 });

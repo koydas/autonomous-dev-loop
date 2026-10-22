@@ -93,6 +93,7 @@ export const CONSOLE_STYLE = `
 .hypothesis dt::after { content:' — interpretation, not verified'; text-transform:none; letter-spacing:0; font-weight:500; color:var(--muted); }
 .lever dt::after { content:' — where to look, not verified'; text-transform:none; letter-spacing:0; font-weight:500; color:var(--muted); }
 .lever ul { margin:6px 0; padding-left:20px; }
+.lever .copy { user-select:all; }
 @media(min-width:761px) and (max-width:1180px) { .finding { scroll-margin-top:130px; } }
 .gap-list li { padding:10px 0; border-top:1px solid var(--grid); }
 .gap-list li:first-child { border-top:0; }
@@ -303,11 +304,14 @@ export const requirementLabel = (target) => (target.requires === 'evals'
   ? `run the live evals.yml (suite ${target.gate})`
   : 'no eval suite measures it: verify by hand and say so in the PR');
 
+/** The `ai-dev-tools` command that drafts a proposal for one finding; its `--finding` value is the finding's `key` in findings.json. */
+export const leverCommand = (f) => `/ai-dev-tools:loop-insights --finding ${f.id}`;
+
 function leverBlock(f) {
   const lever = leverFor(f);
   if (!lever) return '';
   const targets = lever.targets.map((t) => `<li><code>${e(t.ref)}</code> <span class="muted">· ${e(requirementLabel(t))}</span></li>`).join('');
-  return `<div class="wide lever"><dt>Suggested lever</dt><dd><p>${e(lever.summary)}</p><ul>${targets}</ul><p class="muted">Stage ${e(lever.stage)} · ${lever.adr.map((a) => `ADR-${e(a)}`).join(', ')} · every change also requires <code>docs-and-tests</code>; the lever says where to look, not what caused the finding.</p></dd></div>`;
+  return `<div class="wide lever"><dt>Suggested lever</dt><dd><p>${e(lever.summary)}</p><ul>${targets}</ul><p class="muted">Stage ${e(lever.stage)} · ${lever.adr.map((a) => `ADR-${e(a)}`).join(', ')} · every change also requires <code>docs-and-tests</code>; the lever says where to look, not what caused the finding.</p><p class="muted">Draft a proposal (read-only, nothing is posted or created): <code class="copy">${e(leverCommand(f))}</code></p></dd></div>`;
 }
 
 export function findingCard(f, root) {

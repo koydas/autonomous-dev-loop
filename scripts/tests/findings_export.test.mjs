@@ -99,6 +99,8 @@ test('export ⊆ page: every string of the export appears in the Diagnostics pag
       if (r === 'docs-and-tests') onPage(`${f.key}.lever.requires`, r);
       else assert.ok(f.lever.targets.some((t) => t.requires === r), `${f.key}: ${r} is the requirement of a target shown above`);
     }
+    // The command on the card takes the finding's key from the export: it is what /loop-insights accepts.
+    onPage(`${f.key}.lever.command`, `/ai-dev-tools:loop-insights --finding ${f.key}`);
   }
   assert.deepEqual(missing, []);
   assert.ok(exported.gaps.length > 0);
