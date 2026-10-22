@@ -218,3 +218,47 @@ test('finding card shows its lifecycle status and last seen', () => {
   assert.doesNotMatch(findingCard(base, ''), /last seen/);
   assert.match(findingCard({ ...base, status: 'active', last_seen: null }, ''), /<span>active<\/span>/);
 });
+
+// ---------------------------------------------------------------------------
+// Suggested lever (meta-loop step 3, ADR-0047 §3)
+// ---------------------------------------------------------------------------
+
+const leverFinding = (over = {}) => ({
+  id: 'review-coverage', severity: 'warning', status: 'active', category: 'Review', title: 't', fact: 'seen', impact: 'i', frequency: 'n',
+  hypothesis: 'maybe', items: [], runs: ['1-1'], evidence: [], link: null, ...over,
+});
+
+test('a mapped, active warning shows the suggested lever below the hypothesis, labelled not verified, with what applying it requires', () => {
+  const html = findingCard(leverFinding(), '');
+  assert.match(html, /<div class="wide lever"><dt>Suggested lever<\/dt>/);
+  assert.ok(html.indexOf('class="wide hypothesis"') < html.indexOf('class="wide lever"'), 'below the hypothesis');
+  assert.ok(html.indexOf('<dt>Observed</dt>') < html.indexOf('class="wide lever"'), 'never above the fact');
+  assert.match(html, /<code>config\/models\.yaml#review_max_input_tokens<\/code> <span class="muted">· requires <code>evals<\/code>/);
+  assert.match(html, /Stage review · ADR-0028, ADR-0038 · every change also requires <code>docs-and-tests<\/code>/);
+  assert.match(CONSOLE_STYLE, /\.lever dt::after \{ content:' — where to look, not verified'/);
+  // A stage with no eval suite says so on the card.
+  assert.match(findingCard(leverFinding({ id: 'autofix-ineffective' }), ''), /prompts\/auto-fix-system\.md<\/code> <span class="muted">· requires <code>no-eval-gate<\/code>/);
+});
+
+test('no lever block: resolved, info (a guardrail), an unmapped rule, a rule with no lever', () => {
+  for (const over of [{ status: 'resolved' }, { severity: 'info' }, { id: 'something-new' }, { id: 'review-stuck' }, { id: 'runs-failed', severity: 'critical' }, { status: undefined }]) {
+    assert.doesNotMatch(findingCard(leverFinding(over), ''), /Suggested lever|class="wide lever"/, JSON.stringify(over));
+  }
+});
+
+test('record text on a finding that has a lever is still escaped, and never reaches the lever block', () => {
+  const html = findingCard(leverFinding({ title: HOSTILE, fact: HOSTILE, hypothesis: HOSTILE, impact: HOSTILE, frequency: HOSTILE }), '');
+  noRaw(html);
+  const block = html.slice(html.indexOf('class="wide lever"'), html.indexOf('</dl>'));
+  assert.doesNotMatch(block, /alert|script|onerror/, 'the block is built from the lever table only');
+});
+
+test('the Diagnostics page carries a lever block for a real mapped warning and none for the guardrail findings', () => {
+  const records = [withheld('800', T, 50, 'REQUEST_CHANGES'), withheld('801', T + 1000, 51, 'REQUEST_CHANGES'), withheld('802', T + 2000, 52, 'REQUEST_CHANGES')];
+  const html = diagnosticsBody(consoleContext(modelOf(records)), '');
+  const cards = html.split('<article class="finding').slice(1);
+  const withheldCard = cards.find((c) => c.includes('id="review-withheld"'));
+  assert.ok(withheldCard, 'the finding is raised');
+  assert.equal(/class="wide lever"/.test(withheldCard), /tone-warn/.test(withheldCard.slice(0, 40)), 'a lever exactly when the finding is a warning');
+  for (const c of cards.filter((x) => /tone-neutral/.test(x.slice(0, 40)))) assert.doesNotMatch(c, /class="wide lever"/, 'info findings have none');
+});

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildFindingsExport, findingsExportJson, FINDINGS_SCHEMA_VERSION } from '../lib/findings_export.mjs';
 import { diagnose } from '../lib/pipeline_diagnostics.mjs';
+import { leverFor } from '../lib/meta_levers.mjs';
 import { consoleContext, diagnosticsBody } from '../lib/console_views.mjs';
 import { journeys } from '../lib/pipeline_journey.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
@@ -83,8 +84,33 @@ test('export ⊆ page: every string of the export appears in the Diagnostics pag
     for (const ev of f.evidence) for (const k of ['run_id', 'summary', 'url']) onPage(`${f.key}.evidence.${k}`, ev[k]);
   }
   for (const g of exported.gaps) for (const k of ['title', 'detail']) onPage(`gap ${g.id}.${k}`, g[k]);
+  // The lever (ADR-0047 §3) is shown on the card: its text is on the page as well.
+  const levers = exported.findings.filter((f) => f.lever);
+  assert.ok(levers.length >= 3, 'the fixture has several mapped warnings');
+  for (const f of levers) {
+    onPage(`${f.key}.lever.summary`, f.lever.summary);
+    onPage(`${f.key}.lever.stage`, f.lever.stage);
+    for (const t of f.lever.targets) { onPage(`${f.key}.lever.target`, t.ref); onPage(`${f.key}.lever.requires`, t.requires); }
+    for (const a of f.lever.adr) onPage(`${f.key}.lever.adr`, `ADR-${a}`);
+    for (const r of f.lever.requires) onPage(`${f.key}.lever.requires`, r);
+  }
   assert.deepEqual(missing, []);
   assert.ok(exported.gaps.length > 0);
+});
+
+test('lever in the export is leverFor(finding): only active warning / critical findings of a mapped rule have one', () => {
+  const { model, journeys: j } = everyRule();
+  const diagnosis = diagnose({ model, journeys: j });
+  const exported = buildFindingsExport({ diagnosis, window: {}, generatedAt: 'T' });
+  assert.deepEqual(exported.findings.map((f) => f.lever), diagnosis.findings.map((f) => leverFor(f)));
+  for (const f of exported.findings) {
+    if (f.lever) { assert.ok(f.status === 'active' && f.severity !== 'info', f.key); assert.equal(f.lever.verified, false); }
+  }
+  for (const key of ['runs-failed', 'review-stuck', 'escalations', 'review-duplicates']) assert.equal(exported.findings.find((f) => f.key === key).lever, null, key);
+  assert.deepEqual(exported.findings.filter((f) => f.lever).map((f) => f.key).sort(), ['autofix-ineffective', 'codegen-blocked', 'llm-fallbacks', 'review-withheld']);
+  // review-coverage is mapped, but here every cut diff was WITHHELD (the ADR-0038 guardrail): info, so no lever.
+  const coverage = exported.findings.find((f) => f.key === 'review-coverage');
+  assert.deepEqual([coverage.severity, coverage.lever], ['info', null]);
 });
 
 test('the export copies a fixed list of fields: a field added to a finding is not published', () => {

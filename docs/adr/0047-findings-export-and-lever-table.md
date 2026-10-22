@@ -60,7 +60,7 @@ A pure module (c8 ≥ 80 %, listed in `test.yml`): a frozen table `LEVERS` keyed
 }
 ```
 
-`leverFor(finding)` returns `null` unless **all** hold: the rule id is in `LEVERS`; `finding.status === 'active'`; `finding.severity` is `warning` or `critical`. Otherwise `lever` is `null` and the page shows nothing extra. It returns `{ stage, summary, targets, adr, requires, verified: false }`, where each target carries its own `gate` (a suite can exist for one prompt of a stage and not for another: `prompts/validation-*` is measured by the `validation` suite, `prompts/generation-*` and `prompts/auto-fix-*` by none, `docs/evals.md`) and `requires` is derived per target, not stored: `evals` when its `gate` is set, `no-eval-gate` when it is `null`, plus `docs-and-tests` always (AGENTS.md Review Hygiene). `verified: false` is constant: the table says where to look, not that the lever is the cause.
+`leverFor(finding)` returns `null` unless **all** hold: the rule id is in `LEVERS`; `finding.status === 'active'`; `finding.severity` is `warning` or `critical`. Otherwise `lever` is `null` and the page shows nothing extra. It returns `{ stage, summary, targets, adr, requires, verified: false }`, where each target carries its own `gate` (a suite can exist for one prompt of a stage and not for another: `prompts/validation-*` is measured by the `validation` suite, `prompts/generation-*` and `prompts/auto-fix-*` by none, `docs/evals.md`) and `requires` is derived, not stored: each returned target carries `requires` (`evals` when its `gate` is set, `no-eval-gate` when it is `null`), and the root `requires` is the union of those plus `docs-and-tests` always (AGENTS.md Review Hygiene). `verified: false` is constant: the table says where to look, not that the lever is the cause.
 
 Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a reason, and a test fails on a rule id that is neither). A gate is per target:
 
@@ -79,7 +79,7 @@ Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a rea
 ### 3. Where it shows
 
 - `findings.json` carries `lever`.
-- The finding card on Diagnostics adds a "Suggested lever — not verified" block (stage, summary, targets, ADRs, what applying it requires), under the existing hypothesis, never above the fact.
+- The finding card on Diagnostics adds a "Suggested lever — not verified" block (stage, summary, targets each with its `requires`, ADRs, `docs-and-tests`), under the existing hypothesis, never above the fact. Every string of the block comes from the lever table, never from the finding's record text; the export-subset-of-page test also covers the lever.
 - Overview indicators, the navigation and every other page are unchanged.
 
 ## Alternatives Considered
