@@ -38,42 +38,7 @@ test('describes expected behavior', () => {
 
 When adding a new exported function to `scripts/lib/`, tests for **every failure branch** are required — not just the happy path. PRs lacking failure-branch tests are considered incomplete.
 
-Modules with CI-enforced ≥ 80% coverage (`c8 --check-coverage` in `test.yml`):
-- `scripts/lib/checkpoint.mjs`
-- `scripts/lib/config.mjs`
-- `scripts/lib/llm_client.mjs`
-- `scripts/lib/anthropic_client.mjs`
-- `scripts/lib/groq_client.mjs`
-- `scripts/lib/output_writer.mjs`
-- `scripts/lib/protected_paths.mjs`
-- `scripts/lib/roots.mjs`
-- `scripts/lib/layered_config.mjs`
-- `scripts/lib/static_verifier.mjs`
-- `scripts/lib/review_evidence.mjs`
-- `scripts/lib/eval_harness.mjs`
-- `scripts/lib/eval_scorecard.mjs`
-- `scripts/lib/eval_site.mjs`
-- `scripts/lib/eval_suites.mjs`
-- `scripts/lib/review_prompt.mjs`
-- `scripts/lib/eval_replay_ci.mjs`
-- `scripts/lib/pr_evals.mjs`
-- `scripts/lib/issue_validator.mjs`
-- `scripts/lib/stale_refs.mjs`
-- `scripts/lib/related_adrs.mjs`
-- `scripts/lib/prompt_budget.mjs`
-- `scripts/lib/event_docs.mjs`
-- `scripts/lib/generation_blocked.mjs`
-- `scripts/lib/run_journal.mjs`
-- `scripts/lib/run_record.mjs`
-- `scripts/lib/trace_context.mjs`
-- `scripts/lib/otlp_trace.mjs`
-- `scripts/lib/pipeline_model.mjs`
-- `scripts/lib/pipeline_health.mjs`
-- `scripts/lib/pipeline_site.mjs`
-- `scripts/lib/pipeline_waiting.mjs` (measured with `waiting_on_you.test.mjs`)
-- `scripts/lib/findings_export.mjs`
-- `scripts/lib/meta_levers.mjs`
-- `scripts/build_eval_site.mjs` (entrypoint, measured with `build_eval_site.test.mjs`)
+Modules with CI-enforced ≥ 80% coverage (lines, branches, functions, statements) are listed once, in `config/coverage-gates.json`, and run by `node scripts/coverage_gates.mjs` (`--only scripts/lib/<m>.mjs` runs one). To gate a new module, add it there (a bare path measured through `scripts/tests/<name>.test.mjs`, or `{ "module": …, "test": … }`), then run `node scripts/coverage_gates.mjs --sync` to refresh the list in the review prompt. `test.yml` has no per-module step to edit.
 
 Specific required paths for `scripts/lib/prompts.mjs`:
 - `loadPrompt`: file exists + non-empty (happy path), file-not-found (`Prompt file not found` error with path), empty file (`Prompt file is empty` error with path)

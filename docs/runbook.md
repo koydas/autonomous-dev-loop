@@ -149,6 +149,7 @@ git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[
 
 | Symptom | Probable Cause |
 |---------|----------------|
+| The `Check coverage gates` step of `test.yml` fails | The log names the module (`::error::coverage gate failed: <module>`) and the command that reproduces it: `node scripts/coverage_gates.mjs --only <module>`. Every gate runs, so several can fail at once. A module is gated by `config/coverage-gates.json` (not by a step of `test.yml`); after adding one, `node scripts/coverage_gates.mjs --sync` refreshes the list in the review prompt, and `workflow_gates.test.mjs` fails until it is done |
 | `changelog-check` fails on a PR | PR modifies an entrypoint (`scripts/*.mjs`) or ADR (`docs/adr/NNNN-*.md`) without adding a line under `## [Unreleased]` in `CHANGELOG.md` — add the entry and push |
 | `changelog-check` fails with "Failed to get changed files" | Checkout step is missing `fetch-depth: 0`; ensure `changelog-check.yml` has `fetch-depth: 0` on the `actions/checkout` step |
 | Pipeline views (`pipeline/` on the dashboard) do not show the latest run | The run exited before its tracer (no record, ADR-0040), or `pipeline-site.yml` is still queued behind a deploy (`pages-site-<repo>` group). Check that the record is on the `metrics` branch, then **Actions → Pipeline site → Run workflow** |
