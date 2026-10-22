@@ -8,7 +8,7 @@
 [ADR-0046](0046-meta-loop-read-only-stats-to-levers.md) makes the meta-loop a read-only function from statistics to suggested levers. Two pieces are missing for it to exist.
 
 - **The findings are only rendered as HTML.** `diagnose()` (`scripts/lib/pipeline_diagnostics.mjs`) returns `{ status, findings, gaps }`, consumed by `console_views.mjs`. Nothing machine-readable is published, so a consumer would have to scrape the Diagnostics page. The finding `id` is a rule id, but no document says it is stable, nor how a rule that yields several findings tells them apart.
-- **A finding names a hypothesis, not a lever.** `hypothesis` is free text rendered as "interpretation, not verified". Nothing says which setting, prompt or workflow governs the pattern, so each reader repeats the search, and an LLM asked to propose a change would invent the target.
+- **A finding names a hypothesis, not a lever.** `hypothesis` is free text rendered as "interpretation, not verified". Nothing says which setting or prompt governs the pattern, so each reader repeats the search, and an LLM asked to propose a change would invent the target.
 
 ## Decision
 
@@ -51,29 +51,28 @@ A pure module (c8 ≥ 80 %, listed in `test.yml`): a frozen table `LEVERS` keyed
   stage: 'review',
   summary: 'Reviews are cut or withheld on a prompt budget that does not fit the diffs',
   targets: [
-    { kind: 'config', ref: 'config/models.yaml#review_max_input_tokens' },
-    { kind: 'config', ref: 'config/models.yaml#anthropic_review_max_diff_chars' },
-    { kind: 'variable', ref: 'AI_PROVIDER_REVIEW' },
+    // gate: the eval suite that measures a change to this target; null = none exists for it
+    { kind: 'config', ref: 'config/models.yaml#review_max_input_tokens', gate: 'review' },
+    { kind: 'config', ref: 'config/models.yaml#anthropic_review_max_diff_chars', gate: 'review' },
+    { kind: 'variable', ref: 'AI_PROVIDER_REVIEW', gate: 'review' },
   ],
   adr: ['0028', '0038'],
-  gate: 'review',          // eval suite that gates a prompt / model change; null = none exists
 }
 ```
 
-`leverFor(finding)` returns `null` unless **all** hold: the rule id is in `LEVERS`; `finding.status === 'active'`; `finding.severity` is `warning` or `critical`. Otherwise `lever` is `null` and the page shows nothing extra. It returns `{ stage, summary, targets, adr, gate, requires, verified: false }`, where `requires` is derived, not stored: `evals` when a target is a prompt or a model/effort key and `gate` is set; `no-eval-gate` when it is a prompt and `gate` is `null`; `docs-and-tests` always (AGENTS.md Review Hygiene). `verified: false` is constant: the table says where to look, not that the lever is the cause.
+`leverFor(finding)` returns `null` unless **all** hold: the rule id is in `LEVERS`; `finding.status === 'active'`; `finding.severity` is `warning` or `critical`. Otherwise `lever` is `null` and the page shows nothing extra. It returns `{ stage, summary, targets, adr, requires, verified: false }`, where each target carries its own `gate` (a suite can exist for one prompt of a stage and not for another: `prompts/validation-*` is measured by the `validation` suite, `prompts/generation-*` and `prompts/auto-fix-*` by none, `docs/evals.md`) and `requires` is derived per target, not stored: `evals` when its `gate` is set, `no-eval-gate` when it is `null`, plus `docs-and-tests` always (AGENTS.md Review Hygiene). `verified: false` is constant: the table says where to look, not that the lever is the cause.
 
-Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a reason, and a test fails on a rule id that is neither):
+Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a reason, and a test fails on a rule id that is neither). A gate is per target:
 
 | Rule id | Stage | Targets | Gate |
 |---|---|---|---|
 | `review-withheld` (anomaly share only, ADR-0043) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml` | `review` |
 | `review-coverage` | review | the same two budget keys; provider | `review` |
-| `review-duplicates` (push / pull_request race) | review | `pr-review.yml` triggers and concurrency; the marker of ADR-0028 | none (workflow) |
 | `autofix-ineffective` (anomaly share only) | autofix | `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio`, `prompts/auto-fix-system.md` | none |
-| `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, `prompts/generation-system.md`, `prompts/validation-system.md` (scope rules) | none |
+| `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, `prompts/generation-system.md` (no gate); `prompts/validation-system.md`, scope rules (`validation` suite) | per target |
 | `llm-fallbacks` | provider | `AI_PROVIDER_<STAGE>`, retry policy (ADR-0022), provider tier | none |
 
-`NO_LEVER`: `runs-failed` (needs root cause; runbook), `review-stuck` (depends on the PR's content), `escalations` and the waiting queue (a person is the lever, ADR-0001), duration and rate-limit findings (a symptom of the provider tier; revisit with data).
+`NO_LEVER`: `review-duplicates` (the push / pull_request race is fixed in `.github/` workflow triggers, which a lever may not name, ADR-0046 §5; the ADR-0028 marker is code, not a setting), `runs-failed` (needs root cause; runbook), `review-stuck` (depends on the PR's content), `escalations` and the waiting queue (a person is the lever, ADR-0001), duration and rate-limit findings (a symptom of the provider tier; revisit with data).
 
 **Forbidden targets** (ADR-0046 §5) are enforced by a test: no `ref` may point at an eval threshold, a dataset case, `config/protected-paths.yaml`, `.github/` or an auto-fix attempt cap, and every `config` ref must resolve to an existing key of `config/models.yaml` so a rename cannot leave a stale lever.
 
@@ -99,7 +98,7 @@ Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a rea
 - ✅ The disclosure surface does not grow: the export is bounded by the page.
 - ⚠️ The finding `key` becomes a public identifier: renaming a rule is a breaking change of the export (`schema_version`).
 - ⚠️ The table is hand-maintained beside the rules; the exhaustiveness test turns a new rule without a decision into a red test, not a silent gap.
-- ⚠️ `gate: null` for generation, PR preparation and auto-fix says out loud that no eval suite protects a change to those prompts; it does not fix it.
+- ⚠️ A target without a `gate` (the generation and auto-fix prompts) says out loud that no eval suite protects a change to it; it does not fix it.
 - ⚠️ Only anomalies yield levers for the rate rules: on a window made of guardrail verdicts the export has findings and no lever.
 - ⚠️ The site rebuilds when a run record lands, not on a schedule: `generated_at` can be old after a quiet week; a consumer must show it.
 

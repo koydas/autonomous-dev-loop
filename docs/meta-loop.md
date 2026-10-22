@@ -41,9 +41,9 @@ On the Diagnostics page, an **active** `warning` or `critical` finding from a ma
 |---|---|
 | Stage | review, auto-fix, generation, provider |
 | Summary | what the setting or prompt governs |
-| Targets | keys of `config/models.yaml`, repository variables, workflow files or prompt files to look at |
+| Targets | keys of `config/models.yaml`, repository variables or prompt files to look at, each with its own gate |
 | ADRs | the decisions that explain the target |
-| Requires | `evals` (live `evals.yml` on the branch, ADR-0031 §1), `no-eval-gate` (the stage has no suite: verify by hand and say so in the PR), `docs-and-tests` (always, AGENTS.md Review Hygiene) |
+| Requires | per target: `evals` (live `evals.yml` on the branch, ADR-0031 §1) or `no-eval-gate` (no suite measures it: verify by hand and say so in the PR); `docs-and-tests` always (AGENTS.md Review Hygiene) |
 
 No block means no lever, which has five distinct causes: the finding is `resolved`, it is `info` (a guardrail doing its job), the rule is mapped to `NO_LEVER`, it is a telemetry gap, or the window is too thin for the rule to have fired. The block says where to look; the fact above it says what was observed; neither says the lever is the cause.
 
@@ -53,11 +53,10 @@ No block means no lever, which has five distinct causes: the finding is `resolve
 |---|---|---|---|
 | `review-withheld` (anomaly share) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml` | `review` suite |
 | `review-coverage` | review | the two budget keys, provider | `review` suite |
-| `review-duplicates` (race) | review | `pr-review.yml` triggers and concurrency, ADR-0028 marker | none |
 | `autofix-ineffective` (anomaly share) | autofix | `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio`, `prompts/auto-fix-system.md` | none |
-| `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, generation and validation prompts | none |
+| `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, `prompts/generation-system.md` (no gate); `prompts/validation-system.md` (`validation` suite) | per target |
 | `llm-fallbacks` | provider | `AI_PROVIDER_<STAGE>`, retry policy (ADR-0022), provider tier | none |
-| `runs-failed`, `review-stuck`, `escalations`, duration, rate limits | — | no lever (reasons in ADR-0047) | — |
+| `review-duplicates`, `runs-failed`, `review-stuck`, `escalations`, duration, rate limits | — | no lever (reasons in ADR-0047; `review-duplicates` is fixed in `.github/`, which no lever may name) | — |
 
 ## `findings.json`
 
@@ -94,6 +93,6 @@ Things steps 1 to 3 must not do: add a workflow, a token scope, a label or a cal
 
 - Pull, not push: a suggestion is seen by someone who looks.
 - A rejected suggestion reappears while its finding is active.
-- Three stages (generation, PR preparation, auto-fix) have no eval suite: their levers read `no-eval-gate`.
+- Generation and auto-fix prompts have no eval suite (`docs/evals.md`): their targets read `no-eval-gate`.
 - The statistics are a few days of runs; most WITHHELD verdicts are guardrails (ADR-0038). Only the anomaly share produces a lever, so early on most findings have none.
 - Free-text fields of the public record can hold model-originated text (audit `docs/audits/2026-10-19-cross-cutting-audit.md`, F01, F06): this is why a consumer that is an LLM treats them as data.

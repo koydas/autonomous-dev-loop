@@ -16,7 +16,7 @@ Two properties of the existing system constrain how it can emit those proposals:
 
 1. **The meta-loop is a pure, read-only function** `statistics → findings with a lever`. It has three layers, each usable without the next:
    1. **Contract.** The Diagnostics findings are exported as `findings.json` ([ADR-0047](0047-findings-export-and-lever-table.md)).
-   2. **Levers.** A fixed, versioned table maps a finding to the setting, prompt or workflow that governs it (ADR-0047). The Diagnostics card shows it as a *suggestion, not verified*, next to the existing labelled hypothesis.
+   2. **Levers.** A fixed, versioned table maps a finding to the setting or prompt that governs it (ADR-0047). The Diagnostics card shows it as a *suggestion, not verified*, next to the existing labelled hypothesis.
    3. **Drafting.** An on-demand command in `ai-dev-tools` (`/loop-insights`, its ADR-017) reads the export and drafts proposals in the session of the person who invoked it.
 2. **No write on GitHub, from any layer.** No issue, pull request, comment, label, Discussion, review or workflow dispatch is created by the meta-loop, and no workflow with a new write scope is added for it. Layers 1 and 2 are computed by the existing `pipeline-site.yml` build from the `metrics` branch (no new permission); layer 3 runs on a developer machine with no GitHub write tool.
 3. **No LLM in the build.** Export and lever lookup are deterministic (the ADR-0043 rule: a generated diagnosis could present a hypothesis as a fact). The only LLM use is layer 3, started by a human, reading only the published export.
@@ -45,7 +45,7 @@ Two properties of the existing system constrain how it can emit those proposals:
 - ⚠️ Pull, not push: a suggestion is seen only by someone who opens Diagnostics or runs the command. The existing findings count on the navigation link is the only nudge.
 - ⚠️ No memory of a rejected suggestion: it is shown again while its finding is active.
 - ⚠️ The suggestions are as good as the table: a rule without an entry gets none, and the table is maintained by hand with the rules (a test pins that every rule id is either mapped or explicitly listed as having no lever).
-- ⚠️ Three of the five LLM stages have no eval suite (generation, PR preparation, auto-fix): a lever on their prompts names that gap instead of a gate (ADR-0047, `gate: null`).
+- ⚠️ Two of the four LLM stages have no eval suite (generation, auto-fix): a lever on their prompts names that gap instead of a gate (ADR-0047, a target without `gate`).
 - ⚠️ The data in the public record is thin (a few days, mostly guardrail verdicts at the time of writing): the first levers will be few, which is the intended behavior.
 
 ## Revisit
