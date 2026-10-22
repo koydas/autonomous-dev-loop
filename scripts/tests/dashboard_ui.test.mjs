@@ -185,3 +185,8 @@ test('console shell: dark theme by default with a stored light choice, sidebar, 
   assert.match(navIcon('pipelines'), /^<svg class="nav-icon"[^>]*aria-hidden="true">/);
   assert.doesNotThrow(() => new Script(header.match(/<script>([\s\S]*?)<\/script>/)[1]));
 });
+
+test('the header wraps instead of overflowing the page between the mobile layout and a one-line header; anchors clear the taller header', () => {
+  assert.match(DASHBOARD_STYLE, /\.app-header-inner \{[^}]*flex-wrap:wrap;/);
+  assert.match(DASHBOARD_STYLE, /@media\(min-width:761px\) and \(max-width:1180px\) \{ \.header-tools \{ order:2; \} \.primary-nav \{ order:3; flex-basis:100%; \} section\[id\],article\[id\] \{ scroll-margin-top:130px; \} \}/);
+});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Script, runInNewContext } from 'node:vm';
 import {
   consoleContext, diagnosticsBody, findingCard, journeyPanel, keyEvents, runSteps, trendChart, statusBanner,
-  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE,
+  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel,
 } from '../lib/console_views.mjs';
 import { consoleOverview, kpiRow, delta, sparkline, statusBadge, durationChart, providerList, issueCards } from '../lib/console_overview.mjs';
 import { attemptOf, workItemJourney } from '../lib/pipeline_journey.mjs';
@@ -233,11 +233,12 @@ test('a mapped, active warning shows the suggested lever below the hypothesis, l
   assert.match(html, /<div class="wide lever"><dt>Suggested lever<\/dt>/);
   assert.ok(html.indexOf('class="wide hypothesis"') < html.indexOf('class="wide lever"'), 'below the hypothesis');
   assert.ok(html.indexOf('<dt>Observed</dt>') < html.indexOf('class="wide lever"'), 'never above the fact');
-  assert.match(html, /<code>config\/models\.yaml#review_max_input_tokens<\/code> <span class="muted">· requires <code>evals<\/code>/);
+  assert.match(html, /<code>config\/models\.yaml#review_max_input_tokens<\/code> <span class="muted">· run the live evals\.yml \(suite review\)<\/span>/);
   assert.match(html, /Stage review · ADR-0028, ADR-0038 · every change also requires <code>docs-and-tests<\/code>/);
   assert.match(CONSOLE_STYLE, /\.lever dt::after \{ content:' — where to look, not verified'/);
   // A stage with no eval suite says so on the card.
-  assert.match(findingCard(leverFinding({ id: 'autofix-ineffective' }), ''), /prompts\/auto-fix-system\.md<\/code> <span class="muted">· requires <code>no-eval-gate<\/code>/);
+  assert.match(findingCard(leverFinding({ id: 'autofix-ineffective' }), ''), /prompts\/auto-fix-system\.md<\/code> <span class="muted">· no eval suite measures it: verify by hand and say so in the PR<\/span>/);
+  assert.doesNotMatch(html, /requires <code>(evals|no-eval-gate)/, 'the contract tokens are not shown as such');
 });
 
 test('no lever block: resolved, info (a guardrail), an unmapped rule, a rule with no lever', () => {
@@ -261,4 +262,9 @@ test('the Diagnostics page carries a lever block for a real mapped warning and n
   assert.ok(withheldCard, 'the finding is raised');
   assert.equal(/class="wide lever"/.test(withheldCard), /tone-warn/.test(withheldCard.slice(0, 40)), 'a lever exactly when the finding is a warning');
   for (const c of cards.filter((x) => /tone-neutral/.test(x.slice(0, 40)))) assert.doesNotMatch(c, /class="wide lever"/, 'info findings have none');
+});
+
+test('requirementLabel: a live eval suite by name, or a check by hand when none measures the target', () => {
+  assert.equal(requirementLabel({ requires: 'evals', gate: 'validation' }), 'run the live evals.yml (suite validation)');
+  assert.equal(requirementLabel({ requires: 'no-eval-gate', gate: null }), 'no eval suite measures it: verify by hand and say so in the PR');
 });

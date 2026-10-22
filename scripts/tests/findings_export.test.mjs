@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildFindingsExport, findingsExportJson, FINDINGS_SCHEMA_VERSION } from '../lib/findings_export.mjs';
 import { diagnose } from '../lib/pipeline_diagnostics.mjs';
 import { leverFor } from '../lib/meta_levers.mjs';
-import { consoleContext, diagnosticsBody } from '../lib/console_views.mjs';
+import { consoleContext, diagnosticsBody, requirementLabel } from '../lib/console_views.mjs';
 import { journeys } from '../lib/pipeline_journey.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
 import { escapeHtml } from '../lib/eval_site.mjs';
@@ -90,9 +90,10 @@ test('export ⊆ page: every string of the export appears in the Diagnostics pag
   for (const f of levers) {
     onPage(`${f.key}.lever.summary`, f.lever.summary);
     onPage(`${f.key}.lever.stage`, f.lever.stage);
-    for (const t of f.lever.targets) { onPage(`${f.key}.lever.target`, t.ref); onPage(`${f.key}.lever.requires`, t.requires); }
+    // The page says what a target requires in words (requirementLabel); the contract tokens are the export's.
+    for (const t of f.lever.targets) { onPage(`${f.key}.lever.target`, t.ref); onPage(`${f.key}.lever.requires`, requirementLabel(t)); }
     for (const a of f.lever.adr) onPage(`${f.key}.lever.adr`, `ADR-${a}`);
-    for (const r of f.lever.requires) onPage(`${f.key}.lever.requires`, r);
+    onPage(`${f.key}.lever.requires`, 'docs-and-tests');
   }
   assert.deepEqual(missing, []);
   assert.ok(exported.gaps.length > 0);

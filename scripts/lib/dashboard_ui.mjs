@@ -25,7 +25,7 @@ a:hover { text-decoration-thickness:2px; }
 .skip-link { position:absolute; left:12px; top:-100px; z-index:30; background:var(--surface); padding:12px; }
 .skip-link:focus { top:12px; }
 .app-header { position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--border); }
-.app-header-inner { max-width:1480px; margin:auto; padding:10px 24px; display:flex; align-items:center; gap:22px; }
+.app-header-inner { max-width:1480px; margin:auto; padding:10px 24px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 22px; }
 .brand { display:flex; align-items:center; gap:10px; font-weight:750; font-size:16px; color:var(--ink); text-decoration:none; letter-spacing:-.3px; white-space:nowrap; }
 .brand-icon { display:grid; place-items:center; width:30px; height:30px; border-radius:9px; color:#fff; background:linear-gradient(135deg,#8b5cf6,#6366f1); font-size:17px; }
 .primary-nav { display:flex; gap:2px; }
@@ -99,6 +99,8 @@ button:disabled { opacity:.6; cursor:wait; }
 .detail-panel .card { box-shadow:none; }
 details summary { cursor:pointer; color:var(--ink); }
 section[id],article[id] { scroll-margin-top:90px; }
+/* Between the mobile layout and a one-line header it takes two lines (brand and tools, then the navigation: about 100px): anchors clear it. */
+@media(min-width:761px) and (max-width:1180px) { .header-tools { order:2; } .primary-nav { order:3; flex-basis:100%; } section[id],article[id] { scroll-margin-top:130px; } }
 .nav2 { display:flex; flex-wrap:wrap; padding:0 0 12px; gap:6px 16px; border-bottom:1px solid var(--border); margin:0 0 16px; font-size:13px; }
 .nav2 a { padding:4px 0; color:var(--ink-2); }
 .filters { background:var(--surface); border:1px solid var(--border); padding:12px; border-radius:var(--radius); }

@@ -43,7 +43,7 @@ On the Diagnostics page, an **active** `warning` or `critical` finding from a ma
 | Summary | what the setting or prompt governs |
 | Targets | keys of `config/models.yaml`, repository variables or prompt files to look at, each with its own gate |
 | ADRs | the decisions that explain the target |
-| Requires | per target: `evals` (live `evals.yml` on the branch, ADR-0031 §1) or `no-eval-gate` (no suite measures it: verify by hand and say so in the PR); `docs-and-tests` always (AGENTS.md Review Hygiene) |
+| Requires | per target, in words: "run the live evals.yml (suite <name>)" (`evals` in the export: ADR-0031 §1) or "no eval suite measures it: verify by hand and say so in the PR" (`no-eval-gate`); `docs-and-tests` always (AGENTS.md Review Hygiene) |
 
 No block means no lever, which has five distinct causes: the finding is `resolved`, it is `info` (a guardrail doing its job), the rule is mapped to `NO_LEVER`, it is a telemetry gap, or the window is too thin for the rule to have fired. The block says where to look; the fact above it says what was observed; neither says the lever is the cause.
 
