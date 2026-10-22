@@ -9,6 +9,7 @@ import { journeys as journeysOf, STATES, STEPS } from './pipeline_journey.mjs';
 import { computeOverview, computeWindows, DEFINITIONS, RUN_CLASSES } from './pipeline_kpis.mjs';
 import { diagnose, RULES } from './pipeline_diagnostics.mjs';
 import { waitingOnYou } from './pipeline_waiting.mjs';
+import { leverFor } from './meta_levers.mjs';
 import { costAmount, costBasis } from './llm_cost.mjs';
 
 /** Everything the console views render, computed once per build. */
@@ -88,8 +89,10 @@ export const CONSOLE_STYLE = `
 .facts dt { font-size:11px; font-weight:750; text-transform:uppercase; letter-spacing:.8px; color:var(--ink-2); }
 .facts dd { margin:2px 0 0; font-size:14px; }
 .facts .wide { grid-column:1 / -1; }
-.hypothesis { border:1px dashed var(--axis); border-radius:8px; padding:8px 12px; background:var(--page); }
+.hypothesis, .lever { border:1px dashed var(--axis); border-radius:8px; padding:8px 12px; background:var(--page); }
 .hypothesis dt::after { content:' — interpretation, not verified'; text-transform:none; letter-spacing:0; font-weight:500; color:var(--muted); }
+.lever dt::after { content:' — where to look, not verified'; text-transform:none; letter-spacing:0; font-weight:500; color:var(--muted); }
+.lever ul { margin:6px 0; padding-left:20px; }
 .gap-list li { padding:10px 0; border-top:1px solid var(--grid); }
 .gap-list li:first-child { border-top:0; }
 .key-events li { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; padding:8px 0; border-top:1px solid var(--grid); }
@@ -292,12 +295,21 @@ function evidenceTable(f, root) {
   return `<details><summary>Evidence · ${e(f.evidence.length)} entr${f.evidence.length === 1 ? 'y' : 'ies'}</summary><div class="table-wrap"><table><thead><tr><th>Time (UTC)</th><th>Run</th><th>PR</th><th>Event</th><th>Recorded detail</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table></div>${more}</details>`;
 }
 
+// ADR-0047 §3: where a mapped, active warning / critical finding may be acted on. Under the hypothesis, never
+// above the fact; absent without a lever. Every string comes from the lever table, escaped like the rest.
+function leverBlock(f) {
+  const lever = leverFor(f);
+  if (!lever) return '';
+  const targets = lever.targets.map((t) => `<li><code>${e(t.ref)}</code> <span class="muted">· requires <code>${e(t.requires)}</code></span></li>`).join('');
+  return `<div class="wide lever"><dt>Suggested lever</dt><dd><p>${e(lever.summary)}</p><ul>${targets}</ul><p class="muted">Stage ${e(lever.stage)} · ${lever.adr.map((a) => `ADR-${e(a)}`).join(', ')} · every change also requires <code>docs-and-tests</code>; the lever says where to look, not what caused the finding.</p></dd></div>`;
+}
+
 export function findingCard(f, root) {
   const tone = SEVERITY_TONE[f.severity];
   const since = f.evidence.map((x) => x.ts).filter((t) => typeof t === 'number');
   const meta = `<p class="finding-meta"><span>Affects ${e(f.runs.length)} run(s)${f.items.length ? ` · ${e(f.items.length)} item(s)` : ''}</span>${since.length ? `<span>Since <span data-ts="${Math.min(...since)}">${e(time(Math.min(...since)))} UTC</span></span>` : ''}${f.status ? `<span>${e(f.status)}${Number.isFinite(f.last_seen) ? ` · last seen <span data-ts="${f.last_seen}">${e(time(f.last_seen))} UTC</span>` : ''}</span>` : ''}</p>`;
   return `<article class="finding tone-${tone}" id="${e(f.id)}" data-filter-item data-severity="${e(f.severity)}" data-category="${e(f.category.toLowerCase().replace(/[^a-z0-9]+/g, '-'))}"><header>${pill(tone, f.severity)}<span class="eyebrow">${e(f.category)}</span><h2>${e(f.title)}</h2></header>${meta}
-<dl class="facts"><div class="wide"><dt>Observed</dt><dd>${e(f.fact)}</dd></div><div><dt>Impact</dt><dd>${e(f.impact)}</dd></div><div><dt>Frequency</dt><dd>${e(f.frequency)}${f.runs.length ? ` · ${e(f.runs.length)} run(s) affected` : ''}</dd></div>${f.hypothesis ? `<div class="wide hypothesis"><dt>Hypothesis</dt><dd>${e(f.hypothesis)}</dd></div>` : ''}</dl>
+<dl class="facts"><div class="wide"><dt>Observed</dt><dd>${e(f.fact)}</dd></div><div><dt>Impact</dt><dd>${e(f.impact)}</dd></div><div><dt>Frequency</dt><dd>${e(f.frequency)}${f.runs.length ? ` · ${e(f.runs.length)} run(s) affected` : ''}</dd></div>${f.hypothesis ? `<div class="wide hypothesis"><dt>Hypothesis</dt><dd>${e(f.hypothesis)}</dd></div>` : ''}${leverBlock(f)}</dl>
 ${evidenceTable(f, root)}${f.link ? `<p><a class="button-link" href="${root}${e(f.link)}">Investigate →</a></p>` : ''}</article>`;
 }
 

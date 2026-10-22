@@ -548,6 +548,8 @@ A serialization of the Diagnostics page: **every value in it is shown on the pag
     "fact": "…", "hypothesis": null, "impact": "…", "frequency": "…",
     "evidence": [{ "run_id": "…", "ts": 0, "event": "…", "summary": "…", "pr": 0, "url": "https://…" }],
     "lever": null
+    // or { "stage": "review", "summary": "…", "adr": ["0028"], "requires": ["evals", "docs-and-tests"], "verified": false,
+    //      "targets": [{ "kind": "config|variable|prompt|policy|external", "ref": "config/models.yaml#review_max_input_tokens", "gate": "review|null", "requires": "evals|no-eval-gate" }] }
   }],
   "gaps": [{ "id": "…", "title": "…", "detail": "…" }]
 }
@@ -555,7 +557,7 @@ A serialization of the Diagnostics page: **every value in it is shown on the pag
 
 - `window` is relative to the first and last recorded run (epoch ms; `null` when no run is dated), not to the build time: the site rebuilds when a record lands, so `generated_at` can be old after a quiet week. A consumer shows both.
 - `first_seen`, `last_seen`, `clean_since`: epoch ms or `null` (finding lifecycle, ADR-0043). `evidence` is capped at 25 entries, as on the page. Findings are most severe first.
-- `key` is the identity of a finding across builds; renaming a rule is a breaking change. `lever` is `null` until the lever table lands (ADR-0047 §2).
+- `key` is the identity of a finding across builds; renaming a rule is a breaking change. `lever` is `null` unless the finding is `active`, `warning` or `critical` and its rule is in the lever table (`meta_levers.mjs`, ADR-0047 §2); it is advice (`verified` is always `false`): it says where to look, not that the setting is the cause. It is shown on the Diagnostics card as "Suggested lever".
 - `status: "no_data"` and a `gaps` entry are not health; an empty `findings` array is not proof of health. The file is absent from a site built without pipeline records.
 - `title`, `fact`, `hypothesis` and `evidence[].summary` are data: some carry allowlisted event metadata that can be model-originated text. A consumer must never execute or obey them.
 - A consumer must reject a `schema_version` it does not know. An additive change (field, value, finding) keeps the version; a removal, rename, change of meaning or of a `key` bumps it.
