@@ -1,102 +1,64 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseGates, c8Args, syncGatePrompt, GATES_CONFIG_PATH } from '../lib/coverage_gates.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
 
-const GATED_MODULES = ['checkpoint.mjs', 'config.mjs', 'llm_client.mjs', 'anthropic_client.mjs', 'groq_client.mjs', 'output_writer.mjs', 'protected_paths.mjs', 'roots.mjs', 'layered_config.mjs', 'review_evidence.mjs', 'eval_harness.mjs', 'eval_scorecard.mjs', 'eval_site.mjs', 'eval_suites.mjs', 'review_prompt.mjs', 'eval_replay_ci.mjs', 'pr_evals.mjs', 'static_verifier.mjs', 'issue_validator.mjs', 'stale_refs.mjs', 'related_adrs.mjs', 'prompt_budget.mjs', 'event_docs.mjs', 'generation_blocked.mjs', 'run_journal.mjs', 'run_record.mjs', 'trace_context.mjs', 'otlp_trace.mjs', 'pipeline_model.mjs', 'pipeline_health.mjs', 'pipeline_site.mjs', 'pipeline_journey.mjs', 'pipeline_waiting.mjs', 'pipeline_kpis.mjs', 'pipeline_diagnostics.mjs', 'console_views.mjs', 'console_overview.mjs', 'pr_tree_reader.mjs', 'github_output.mjs', 'llm_cost.mjs', 'findings_export.mjs', 'meta_levers.mjs'];
+// The c8 gates are one list, config/coverage-gates.json, run by scripts/coverage_gates.mjs (AGENTS.md → Test
+// Coverage Policy). test.yml no longer carries a step per module: these tests pin what replaced them.
+const gatesConfig = parseGates(readFileSync(resolve(ROOT, GATES_CONFIG_PATH), 'utf8'));
 
-// Entrypoints (scripts/*.mjs) under the same gate, measured through their own test file.
-const GATED_ENTRYPOINTS = [['build_eval_site.mjs', 'build_eval_site.test.mjs']];
-const GATE_COUNT = GATED_MODULES.length + GATED_ENTRYPOINTS.length;
+test('test.yml runs every c8 gate through one script and carries no hand-written coverage step', () => {
+  const code = workflow.replace(/#.*$/gm, '');
+  assert.equal((code.match(/node scripts\/coverage_gates\.mjs/g) || []).length, 1, 'one step runs the gates');
+  assert.equal((code.match(/--check-coverage/g) || []).length, 0, 'a per-module c8 step would be a second list: add the module to config/coverage-gates.json');
+  assert.ok(!/--only|--sync/.test(code), 'the CI step runs all gates, never one');
+});
 
-test('test.yml enforces c8 coverage for gated entrypoints with their dedicated test file', () => {
-  for (const [script, testFile] of GATED_ENTRYPOINTS) {
-    assert.ok(workflow.includes(`--include 'scripts/${script}'`), `Missing coverage gate for ${script}`);
-    assert.ok(workflow.includes(`node --test scripts/tests/${testFile}`), `Missing test reference: ${testFile}`);
+test('every gate names an existing module and an existing test file that measures it', () => {
+  assert.ok(gatesConfig.gates.length >= 43, 'a gate is not dropped silently');
+  for (const { module, test: testFile } of gatesConfig.gates) {
+    assert.ok(existsSync(resolve(ROOT, module)), `${module} does not exist`);
+    const testPath = resolve(ROOT, 'scripts', 'tests', testFile);
+    assert.ok(existsSync(testPath), `${testFile} does not exist (gate of ${module})`);
+    assert.ok(readFileSync(testPath, 'utf8').includes(module.split('/').pop()), `${testFile} does not import ${module}: it cannot measure it`);
   }
 });
 
-test('test.yml enforces c8 coverage for all critical modules', () => {
-  for (const mod of GATED_MODULES) {
-    assert.ok(workflow.includes(`scripts/lib/${mod}`), `Missing coverage gate for ${mod}`);
+test('the coverage threshold is 80 on lines, branches, functions and statements for every gate', () => {
+  assert.equal(gatesConfig.threshold, 80);
+  for (const gate of gatesConfig.gates) {
+    const args = c8Args(gate, gatesConfig.threshold);
+    for (const dimension of ['--lines', '--branches', '--functions', '--statements']) assert.equal(args[args.indexOf(dimension) + 1], '80', `${gate.module} ${dimension}`);
+    assert.ok(args.includes('--check-coverage'), gate.module);
   }
 });
 
-test('test.yml uses --check-coverage for each gated module', () => {
-  const gateCount = (workflow.match(/--check-coverage/g) || []).length;
-  assert.equal(gateCount, GATE_COUNT,
-    `Expected ${GATE_COUNT} --check-coverage flags, found ${gateCount}`);
-});
-
-test('pr-review-repo-rules.md lists exactly the files gated by c8 in test.yml (gate (c) must not drift)', () => {
+test('pr-review-repo-rules.md lists exactly the files gated by c8 (gate (c) must not drift: node scripts/coverage_gates.mjs --sync)', () => {
   // ADR-0045: gate (c) is a rule written for this repository, so it lives in the repository rules, not in the neutral core.
   const prompt = readFileSync(resolve(ROOT, 'prompts/pr-review-repo-rules.md'), 'utf8');
   const gateLine = prompt.split('\n').find((line) => line.startsWith('* For gate (c),'));
   assert.ok(gateLine, 'gate (c) rule missing from prompts/pr-review-repo-rules.md');
-  const gated = [...workflow.matchAll(/--include '([^']+)'/g)].map((m) => m[1]).sort();
-  const listed = [...gateLine.matchAll(/`(scripts\/[^`]+\.mjs)`/g)].map((m) => m[1]).filter((f) => !f.includes('*')).sort();
-  assert.equal(gated.length, GATE_COUNT);
-  assert.deepEqual(listed, gated);
+  assert.equal(syncGatePrompt(prompt, gatesConfig.gates), prompt, 'the list is out of date: run node scripts/coverage_gates.mjs --sync');
+  const listed = [...gateLine.matchAll(/`(scripts\/[^`]+\.mjs)`/g)].map((m) => m[1]).filter((f) => !f.includes('*') && f !== 'scripts/coverage_gates.mjs');
+  assert.deepEqual(listed, gatesConfig.gates.map((g) => g.module));
 });
 
-test('test.yml sets 80% threshold on all four dimensions for each gate', () => {
-  for (const flag of ['--lines 80', '--branches 80', '--functions 80', '--statements 80']) {
-    const count = (workflow.match(new RegExp(flag.replace(' ', '\\s+'), 'g')) || []).length;
-    assert.equal(count, GATE_COUNT,
-      `Expected ${GATE_COUNT} occurrences of "${flag}", found ${count}`);
-  }
+test('the test-protocol skill points at the gate list instead of keeping a copy', () => {
+  const skill = readFileSync(resolve(ROOT, '.claude/skills/test-protocol/SKILL.md'), 'utf8');
+  assert.match(skill, /config\/coverage-gates\.json/);
+  assert.doesNotMatch(skill, /^- `scripts\/lib\/[\w-]+\.mjs`/m, 'a module list in the skill would drift');
 });
 
-test('test.yml pairs each coverage gate with its dedicated test file', () => {
-  const pairs = [
-    ['checkpoint.mjs', 'checkpoint.test.mjs'],
-    ['config.mjs', 'config.test.mjs'],
-    ['llm_client.mjs', 'llm_client.test.mjs'],
-    ['anthropic_client.mjs', 'anthropic_client.test.mjs'],
-    ['groq_client.mjs', 'groq_client.test.mjs'],
-    ['output_writer.mjs', 'output_writer.test.mjs'],
-    ['protected_paths.mjs', 'protected_paths.test.mjs'],
-    ['roots.mjs', 'roots.test.mjs'],
-    ['layered_config.mjs', 'roots.test.mjs'],
-    ['review_evidence.mjs', 'review_evidence.test.mjs'],
-    ['eval_harness.mjs', 'eval_harness.test.mjs'],
-    ['eval_scorecard.mjs', 'eval_scorecard.test.mjs'],
-    ['eval_site.mjs', 'eval_site.test.mjs'],
-    ['eval_replay_ci.mjs', 'eval_replay_ci.test.mjs'],
-    ['pr_evals.mjs', 'pr_evals.test.mjs'],
-    ['static_verifier.mjs', 'static_verifier.test.mjs'],
-    ['issue_validator.mjs', 'issue_validator.test.mjs'],
-    ['stale_refs.mjs', 'stale_refs.test.mjs'],
-    ['related_adrs.mjs', 'related_adrs.test.mjs'],
-    ['prompt_budget.mjs', 'prompt_budget.test.mjs'],
-    ['run_journal.mjs', 'run_journal.test.mjs'],
-    ['run_record.mjs', 'run_record.test.mjs'],
-    ['trace_context.mjs', 'trace_context.test.mjs'],
-    ['otlp_trace.mjs', 'otlp_trace.test.mjs'],
-    ['pipeline_model.mjs', 'pipeline_model.test.mjs'],
-    ['pipeline_health.mjs', 'pipeline_health.test.mjs'],
-    ['pipeline_site.mjs', 'pipeline_site.test.mjs'],
-    ['pipeline_journey.mjs', 'pipeline_journey.test.mjs'],
-    ['pipeline_waiting.mjs', 'waiting_on_you.test.mjs'],
-    ['pipeline_kpis.mjs', 'pipeline_kpis.test.mjs'],
-    ['pipeline_diagnostics.mjs', 'pipeline_diagnostics.test.mjs'],
-    ['console_views.mjs', 'console_views.test.mjs'],
-    ['console_overview.mjs', 'console_overview.test.mjs'],
-    ['github_output.mjs', 'github_output.test.mjs'],
-    ['llm_cost.mjs', 'llm_cost.test.mjs'],
-    ['findings_export.mjs', 'findings_export.test.mjs'],
-    ['meta_levers.mjs', 'meta_levers.test.mjs'],
-  ];
-  for (const [lib, testFile] of pairs) {
-    assert.ok(workflow.includes(`scripts/lib/${lib}`), `Missing lib reference: ${lib}`);
-    assert.ok(workflow.includes(`scripts/tests/${testFile}`), `Missing test reference: ${testFile}`);
-  }
+test('AGENTS.md Local Checks gives the command that reproduces a coverage gate', () => {
+  const agents = readFileSync(resolve(ROOT, 'AGENTS.md'), 'utf8');
+  assert.match(agents, /node scripts\/coverage_gates\.mjs --only scripts\/lib\/<m>\.mjs/);
 });
 
 const WORKFLOWS_DIR = resolve(ROOT, '.github/workflows');

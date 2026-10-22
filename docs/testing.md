@@ -39,6 +39,8 @@ Requires Node.js 20+. All tests should pass in under a few seconds.
 
 ## Unit Test Coverage
 
+**Coverage gates.** Modules that CI holds to ≥ 80 % c8 coverage (lines, branches, functions, statements) are listed once, in [`config/coverage-gates.json`](../config/coverage-gates.json): a bare module path is measured through `scripts/tests/<name>.test.mjs`, `{ "module": …, "test": … }` names another test file, and `note` keeps the reason for a gate. `node scripts/coverage_gates.mjs` runs every gate (the single coverage step of `test.yml`; all of them run, and each failure is named with its reproduction), `--only scripts/lib/<m>.mjs` runs one. To gate a module, add it to the file and run `node scripts/coverage_gates.mjs --sync`, which rewrites the list in the review prompt's gate (c) rule (`prompts/pr-review-repo-rules.md`); `workflow_gates.test.mjs` fails if that list, the config or `test.yml` disagree. The table below describes what each test file covers; a row saying "CI-enforced ≥ 80% via c8" is a description, the config is the list.
+
 | File | Tests | What is covered |
 |------|-------|-----------------|
 | `scripts/lib/output_writer.mjs` | 108 | JSON parsing (fence-first, case-insensitive fence detection, `JsonParseError` typed errors with full tier diagnostics), field validation, path safety (absolute paths, `..` traversal, `PROTECTED_WRITE_PATHS` denylist incl. normalization bypasses and `docs/` / `README.md` at any depth and case, symlink-redirected writes), shrink guard (`isDestructiveShrink` line and content boundaries incl. padded stub and emptied file, rejected batch writes nothing), `GuardrailError` vs malformed-response errors, 16 000-char size limit, type coercion. CI-enforced ≥ 80% via c8 |
@@ -131,4 +133,4 @@ It replaces the per-edit `PostToolUse` hook, which re-ran the whole suite after 
 
 ## CI
 
-The workflow `.github/workflows/test.yml` runs `node --test scripts/tests/*.test.mjs` on every push and pull request targeting any branch. Its `prototype-langgraph` job runs the Python tests of `prototypes/langgraph-loop/` (ADR-0039) on Python 3.11 and 3.13.
+The workflow `.github/workflows/test.yml` runs `node --test scripts/tests/*.test.mjs` on every push and pull request targeting any branch, then the observability event-docs check and `node scripts/coverage_gates.mjs` (the c8 gates of `config/coverage-gates.json`). Its `prototype-langgraph` job runs the Python tests of `prototypes/langgraph-loop/` (ADR-0039) on Python 3.11 and 3.13.
