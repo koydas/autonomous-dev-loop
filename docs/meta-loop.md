@@ -1,6 +1,6 @@
 # Meta-loop
 
-> **Status: accepted; steps 1 to 4 implemented (`findings.json`, lever table, card block, `/loop-insights` in `ai-dev-tools`), step 5 (the review) pending.** Design in [ADR-0046](adr/0046-meta-loop-read-only-stats-to-levers.md) and [ADR-0047](adr/0047-findings-export-and-lever-table.md); the on-demand command is `ai-dev-tools` ADR-017. This page describes the behavior and the order it was built in; it changes when the review of step 5 decides on a push channel.
+> **Status: accepted; steps 1 to 4 implemented (`findings.json`, lever table, card block, `/loop-insights` in `ai-dev-tools`), step 5 (the review) pending.** Design in [ADR-0046](adr/0046-meta-loop-read-only-stats-to-levers.md) and [ADR-0047](adr/0047-findings-export-and-lever-table.md), status and build in [ADR-0048](adr/0048-meta-loop-accepted-and-implemented.md); the on-demand command is `ai-dev-tools` ADR-017. This page describes the behavior and the order it was built in; it changes when the review of step 5 decides on a push channel.
 
 The meta-loop turns the loop's own statistics into **suggested changes to the loop**. It reads; it never writes to GitHub and never edits `prompts/`, `config/`, `scripts/` or `docs/`.
 

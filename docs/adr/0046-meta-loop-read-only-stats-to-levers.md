@@ -1,7 +1,7 @@
 # ADR-0046: Meta-loop: a read-only function from run statistics to suggested levers
 
 - **Date:** 2026-10-22
-- **Status:** Accepted (2026-10-22; implemented in steps 1 to 4 of [`docs/meta-loop.md`](../meta-loop.md#implementation-steps); step 5, the review that decides on a push channel, is pending)
+- **Status:** Accepted (2026-10-22) — point 8 superseded by [ADR-0048](./0048-meta-loop-accepted-and-implemented.md)
 
 ## Context
 
@@ -24,7 +24,7 @@ Two properties of the existing system constrain how it can emit those proposals:
 5. **Forbidden levers.** The table has no entry, and a drafting agent may not invent one, that: lowers a threshold, raises a `max`, marks a metric `optional`, removes or relabels a dataset case or runs a filtered subset (ADR-0031 §5); weakens the protected-paths floor or its config (ADR-0044); changes `.github/`, token scopes or secrets; or raises the auto-fix attempt cap (ADR-0034).
 6. **Only what is actionable yields a lever.** A finding gets a lever only while it is `active`, of severity `warning` or `critical` (so a guardrail doing its job, ADR-0043 amendments, never does), and from a rule that appears in the table. A `resolved` finding, an `info` finding, a telemetry gap ("insufficient data") and a finding without an entry have `lever: null`: an observation, not a proposal. The thresholds are the existing `RULES`; the meta-loop adds none of its own.
 7. **No state.** There is no proposal registry and no accepted / rejected tracking. The feedback signal is the one that exists: a finding turns `resolved` when its pattern leaves the last `RULES.activeWindow` runs.
-8. **Status of this ADR.** Accepted. Layers 1 and 2 ([ADR-0047](0047-findings-export-and-lever-table.md)) are implemented (`findings.json`, the lever table, the card block: #258, #259, #260) and layer 3 is the `ai-dev-tools` `/loop-insights` command (its ADR-017, accepted). The review after several weeks of data (step 5 of [`docs/meta-loop.md`](../meta-loop.md#implementation-steps)) decides whether a push channel is needed (Revisit).
+8. **Status of this ADR.** Proposed. Nothing is implemented; ADR-0047 and the ai-dev-tools ADR-017 are proposed with it. Accepting them is the go for the first implementation step in [`docs/meta-loop.md`](../meta-loop.md#implementation-steps).
 
 ## Alternatives Considered
 
