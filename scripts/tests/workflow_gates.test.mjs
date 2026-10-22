@@ -72,6 +72,42 @@ test('a row of docs/testing.md that says "CI-enforced ≥ 80% via c8" names only
   }
 });
 
+// The old structure, in the words the documents used for it: a c8 step per module in test.yml.
+const PER_MODULE_STEP = [
+  /dedicated (`c8 --check-coverage` |c8 )?step/i,
+  /`c8 --check-coverage` step in/,
+  /enforced in CI by `test\.yml` via `c8/,
+  /removes one of (those|these) steps/,
+  /c8 --check-coverage[^\n]*in `\.github\/workflows\/test\.yml`/,
+];
+
+test('no document describes the c8 gates as steps of test.yml: the list is config/coverage-gates.json', () => {
+  // The patterns do match the wording they forbid (a pattern that matches nothing would pin nothing).
+  for (const old of ['each enforced by a dedicated `c8 --check-coverage` step in `test.yml`', 'a dedicated step in `test.yml`', 'with a `c8 --check-coverage` step in `.github/workflows/test.yml`', 'enforced in CI by `test.yml` via `c8 --check-coverage`', 'when the diff removes one of those steps', '(`c8 --check-coverage --lines 80 --branches 80` in `.github/workflows/test.yml`)']) {
+    assert.ok(PER_MODULE_STEP.some((re) => re.test(old)), `no pattern matches: ${old}`);
+  }
+  const files = [
+    ...readdirSync(resolve(ROOT, 'docs')).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`),
+    'README.md', 'AGENTS.md', 'CLAUDE.md',
+    ...readdirSync(resolve(ROOT, 'prompts')).filter((f) => f.endsWith('.md')).map((f) => `prompts/${f}`),
+    ...readdirSync(resolve(ROOT, '.claude/skills')).map((d) => `.claude/skills/${d}/SKILL.md`),
+  ];
+  for (const file of files) {
+    const text = readFileSync(resolve(ROOT, file), 'utf8');
+    for (const re of PER_MODULE_STEP) assert.doesNotMatch(text, re, `${file} still describes a per-module c8 step of test.yml; the list is config/coverage-gates.json`);
+  }
+});
+
+test('the end-of-item journal and the findings export are described in docs/pipeline-operations.md, not in the code-generation setup guide', () => {
+  const ops = readFileSync(resolve(ROOT, 'docs/pipeline-operations.md'), 'utf8');
+  const setup = readFileSync(resolve(ROOT, 'docs/code-generation.md'), 'utf8');
+  for (const heading of ['## Findings export (ADR-0047 §1)', '## Item Closed (ADR-0043 amendment)']) {
+    assert.ok(ops.includes(heading), `${heading} is in pipeline-operations.md`);
+    assert.ok(!setup.includes(heading), `${heading} is no longer in code-generation.md`);
+  }
+  assert.match(setup, /\[`pipeline-operations\.md`\]\(pipeline-operations\.md\)/, 'the setup guide points at it');
+});
+
 test('AGENTS.md Local Checks gives the command that reproduces a coverage gate', () => {
   const agents = readFileSync(resolve(ROOT, 'AGENTS.md'), 'utf8');
   assert.match(agents, /node scripts\/coverage_gates\.mjs --only scripts\/lib\/<m>\.mjs/);

@@ -119,7 +119,7 @@ Step outputs carry untrusted text: the validation comment and the generation / a
 `prompts/pr-review-system.md` (with `prompts/pr-review-repo-rules.md`, see below) and `prompts/auto-fix-system.md` enforce the following beyond the base rubric:
 
 - **Test-coverage gate is not limited to automation paths:** whenever the diff's classification context reports `tests_expected: true` (any feature/bugfix/refactor change, regardless of path — not just `.github/workflows/`, `scripts/`, `prompts/`), the reviewer checks the `has_test_file_changes` field (computed from the full PR diff, independent of the truncation below — and only counting test files actually added/modified, not ones only deleted) rather than only what's visible in the diff text, reporting at least MEDIUM severity when it's false. This closes a gap where a diff could self-classify "Tests expected: yes" and still be `APPROVED` with no tests present. `has_test_file_changes: true` is a coarse signal, not proof of relevant coverage — when the test file's content is visible in the diff, the reviewer still judges whether it plausibly covers the new/changed logic rather than treating the boolean as conclusive, except when `diff_truncated` makes that judgment impossible.
-- **Coverage gate (c) reads the c8 gates, not the diff (ADR-0033):** `pr-review-repo-rules.md` lists every file with a `c8 --check-coverage` step in `.github/workflows/test.yml` (80% lines, branches, functions, statements). A changed file on that list satisfies the coverage gate even though `test.yml` is not in the diff. The reviewer reports HIGH only when the diff removes one of those steps or lowers its threshold, and MEDIUM when the diff adds a `scripts/lib/*.mjs` module without a step. Other automation files are judged on their tests (gate (a)). Before this, the prompt named only `checkpoint.mjs` and reported a false HIGH "missing coverage policy" on any other gated module (PR #184). `workflow_gates.test.mjs` fails when the prompt's list and `test.yml` drift apart.
+- **Coverage gate (c) reads the c8 gates, not the diff (ADR-0033):** `pr-review-repo-rules.md` lists every module of `config/coverage-gates.json`, the one list of the c8 gates (80% lines, branches, functions, statements), which `node scripts/coverage_gates.mjs` runs as the single coverage step of `test.yml`. A changed file on that list satisfies the coverage gate even though neither `test.yml` nor the config is in the diff. The reviewer reports HIGH only when the diff removes an entry from the config or lowers its threshold, and MEDIUM when the diff adds a `scripts/lib/*.mjs` module without an entry. Other automation files are judged on their tests (gate (a)). Before this, the prompt named only `checkpoint.mjs` and reported a false HIGH "missing coverage policy" on any other gated module (PR #184). `workflow_gates.test.mjs` fails when the prompt's list and the config drift apart (`node scripts/coverage_gates.mjs --sync` rewrites the prompt's list).
 - **Named defect checklist:** the reviewer explicitly checks every new/changed file for three specific patterns rather than relying on open-ended "look for bugs" judgment: read-only/getter-only property assignment (e.g. `AbortController.prototype.signal`), unauthorized dependency imports, and non-persistent "ref" patterns (state meant to survive across calls/renders stored in a re-initialized local variable instead of `useRef`/module state).
 - **Verdict parsing:** `pr_review.mjs` reads the verdict after the word `Verdict` in any of these forms: `### 🚀 Verdict` on its own line, `Verdict: APPROVED`, a bold verdict (`**APPROVED**`), a bold heading (`**🚀 Verdict**`) or a bold heading with colon (`**Verdict:** APPROVED`). Anything else — the template placeholder, prose, or no verdict — is treated as `REQUEST_CHANGES`. Unit-test coverage: 100% of these forms, both verdicts where they apply (AGENTS.md, Test Coverage Policy).
 - **Truncated-diff disclosure:** `pr_review.mjs` bounds the diff shown to the model by the provider's limit: on Groq the `review_max_input_tokens` budget, on Anthropic (no input budget) `anthropic_review_max_diff_chars`, 200,000 characters (ADR-0038 amendment 2026-10-19; it was 12,000 before). Before that bound, unchanged context lines inside hunks are cut to 200 characters with a visible ` …[+N chars]` marker, so long context (e.g. a 1–2k-char CHANGELOG entry) does not use up the budget. `+`/`-` lines and file/hunk headers are never cut, and this context cut alone never sets `diff_truncated`. When that bound actually cuts content, a `diff_truncated: true` field is added to the classification context and the reviewer is required to disclose in its output that only a partial diff was inspected, rather than implying full coverage in an unqualified `APPROVED`. When the cut reaches code (a file that is neither a test nor documentation), an `APPROVED` is not submitted as an approval: the verdict is `WITHHELD`, with `review-withheld` and a note naming the files (ADR-0038). A cut that removes only tests or documentation does not change the verdict. Both cuts (the Anthropic char cap and the Groq token budget) end on a whole line, preferably a hunk boundary, never inside a line or on a bare header, and are followed by a `… [diff cut: N more lines not shown, in <files>]` marker (`(partly shown)` for a file cut mid-way, which counts as unreviewed). A model `REQUEST_CHANGES` whose findings all cite only cut code files is posted as `WITHHELD` too ("Changes not requested", no auto-fix); a failing check, or any finding on a shown file, keeps it `REQUEST_CHANGES` (ADR-0038 amendment, #219).
@@ -278,13 +278,9 @@ Neither `ADL_*` variable set (this repository, every workflow today): `config/` 
 
 For this repository the assembled system prompt is the one it had before the split, verbatim (checked byte for byte when the file was split); the eval suites load it through the same function.
 
-## Findings export (ADR-0047 §1)
+## Pipeline operations
 
-The `pipeline-site.yml` build (and the `evals` publish job, which assembles the same site) also publishes `findings.json` at the site root: the Diagnostics findings, machine-readable, built from the same `diagnose()` result as `pipeline/diagnostics.html`. It needs no new permission, secret, token scope or workflow, and writes nothing to GitHub. It is published only when the build has pipeline records; **its absence is not an empty list** (an eval-only site has none, and a consumer must not read it as "no finding"). `generated_at` and `window` say how old the data is: the site rebuilds when a record lands, not on a schedule. Each finding may carry a `lever` (where to look, never verified): `docs/meta-loop.md` → "Reading a suggested lever". Schema and consumer rules: `docs/observability.md` → "`findings.json`". Design: `docs/meta-loop.md`.
-
-## Item Closed (ADR-0043 amendment)
-
-`item-closed.yml` runs on `issues: closed` and `pull_request: closed` and journals the end of the work item (`scripts/item_closed.mjs`, one `item.closed` event: `state_reason` for an issue, `merged` for a pull request). It is not a pipeline stage: no LLM call, no secret other than the workflow token, `contents: write` for the `metrics` branch only, scripts taken from the default branch. The dashboard uses it to move a merged or closed item out of "Waiting on you". It belongs to this repository (no `adl-` reusable version, no caller template); a pull request from a fork has a read-only token and is not recorded. Triage: `docs/runbook.md` → "An item shows as Waiting on you but was merged or closed".
+What runs beside the stages and is not a stage: the journal of the end of a work item (`item-closed.yml`, ADR-0043 amendment) and the machine-readable `findings.json` export of the dashboard (ADR-0047). They are described in [`pipeline-operations.md`](pipeline-operations.md).
 
 ## Reusable Workflows (ADR-0045)
 
@@ -399,18 +395,9 @@ logEnd('llm-call', 'ok');
 
 ## Minimum Test Coverage Policy
 
-The following module must maintain **≥ 80% test coverage**, enforced in CI by `test.yml` via `c8 --check-coverage`:
+Modules held to **≥ 80% test coverage** (statements, branches, functions, lines) are listed once, in [`config/coverage-gates.json`](../config/coverage-gates.json), and checked in CI by the single coverage step of `test.yml`, `node scripts/coverage_gates.mjs` (`--only scripts/lib/<m>.mjs` reproduces one gate locally). How to gate a module and what the tests pin: [`testing.md`](testing.md#unit-test-coverage).
 
-- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`): ≥ 80% across statements, branches, functions, and lines. Every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
-
-The following modules also maintain **≥ 80% test coverage**, each enforced by a dedicated `c8 --check-coverage` step in `test.yml`:
-
-- **Config** (`scripts/lib/config.mjs`)
-- **LLM client** (`scripts/lib/llm_client.mjs`)
-- **Anthropic client** (`scripts/lib/anthropic_client.mjs`)
-- **Groq client** (`scripts/lib/groq_client.mjs`)
-- **Output writer** (`scripts/lib/output_writer.mjs`)
-- **Review evidence** (`scripts/lib/review_evidence.mjs`)
+**Checkpoint resume** (`scripts/lib/checkpoint.mjs`) has a stricter rule than the threshold: every distinct failure branch (ENOENT vs non-ENOENT in `readCheckpoint`, `mkdir` propagation in `writeCheckpoint`) must have a dedicated test case.
 
 ## Per-Stage Model Keys
 
@@ -437,6 +424,8 @@ Anthropic keys (ADR-0032):
 | `review_eval_cut_<provider>_max_input_tokens` / `_max_diff_chars` | `6300` tokens (groq, anthropic) | Eval only, never read by production: the cut of the review eval cases marked `requires_cut` on that provider, as a token budget fit or a char cap (one of the two). Without either, the provider's production limits; a `requires_cut` case left whole is an errored run (ADR-0038 amendment, `docs/evals.md#provider-independent-cases`). |
 
 No temperature and no input budget for Anthropic: Opus 4.7+ / 5.x reject sampling parameters (400), and the 8K TPM limit is Groq's. Supported models (`claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5-5`, `claude-fable-5-1`) send `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) when `ANTHROPIC_API_URL` is unset: a safety-classifier refusal is re-run server-side on another Claude model. `claude-haiku-5-5` has no server-side fallback. A refusal that still comes back fails the call, and the Groq fallback takes over.
+
+Live eval results record the effective temperature (`null` for Anthropic); PR eval threshold comparisons are advisory until a baseline with matching recorded temperature is available. Legacy results without the setting are treated as unknown.
 
 ## Auto-Fix Token Budget
 
@@ -517,16 +506,3 @@ Automation scripts must fail before network calls when required startup inputs a
 - **Provider payload parsing**: response-shape failures include concrete expected paths:
   - Anthropic: the first `text` block of `content` (thinking blocks come first on Opus 5.x); `stop_reason: "refusal"` fails with its `stop_details.category`, `stop_reason: "max_tokens"` fails as truncated
   - Groq: `choices[0].message.content`
-
-## CI Coverage Enforcement
-
-The repository enforces a minimum test coverage policy through CI using `c8 --check-coverage`. The following modules must maintain **≥ 80% test coverage**, each enforced by a dedicated step in `test.yml`:
-
-- **Checkpoint resume** (`scripts/lib/checkpoint.mjs`)
-- **Configuration** (`scripts/lib/config.mjs`)
-- **LLM client** (`scripts/lib/llm_client.mjs`)
-- **Anthropic client** (`scripts/lib/anthropic_client.mjs`)
-- **Groq client** (`scripts/lib/groq_client.mjs`)
-- **Output writer** (`scripts/lib/output_writer.mjs`)
-- **Review evidence** (`scripts/lib/review_evidence.mjs`)
-Live eval results record the effective temperature (`null` for Anthropic); PR eval threshold comparisons are advisory until a baseline with matching recorded temperature is available. Legacy results without the setting are treated as unknown.
