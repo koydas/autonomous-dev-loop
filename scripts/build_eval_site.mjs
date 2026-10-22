@@ -41,6 +41,7 @@ import { loadProtectedPaths } from './lib/protected_paths.mjs';
 import { consoleOverview } from './lib/console_overview.mjs';
 import { pipelineFacets } from './lib/flow_dashboard.mjs';
 import { buildPipelineSite } from './lib/pipeline_site.mjs';
+import { findingsExportJson } from './lib/findings_export.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -247,6 +248,8 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   // pipeline-only builds (ADR-0027 amendment), so their header shows neither.
   const findings = assembled ? String(assembled.console.diagnosis.findings.filter((f) => f.severity !== 'info').length || '') : '';
   const all = { ...files, ...pipelineFiles };
+  // The Diagnostics findings, machine-readable (ADR-0047): same diagnose() result as the page, at the site root.
+  if (assembled) all['findings.json'] = findingsExportJson({ diagnosis: assembled.console.diagnosis, window: assembled.console.overview.window, generatedAt });
   for (const [p, c] of Object.entries(all)) {
     if (p === 'index.html' || (p.startsWith('pipeline/') && p.endsWith('.html'))) all[p] = c.replace('data-generated=""', `data-generated="" data-ts="${escapeAttr(generatedAt)}"`).replace('<span class="nav-badge" data-diag-badge></span>', () => `<span class="nav-badge" data-diag-badge>${findings}</span>`);
   }

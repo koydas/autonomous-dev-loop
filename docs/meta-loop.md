@@ -1,6 +1,6 @@
 # Meta-loop
 
-> **Status: proposed, nothing implemented.** Design in [ADR-0046](adr/0046-meta-loop-read-only-stats-to-levers.md) and [ADR-0047](adr/0047-findings-export-and-lever-table.md); the on-demand command is `ai-dev-tools` ADR-017. This page describes the target behavior and the order to build it. It changes when an ADR is accepted or a step lands.
+> **Status: proposed; step 1 (`findings.json`) implemented, steps 2 to 5 not.** Design in [ADR-0046](adr/0046-meta-loop-read-only-stats-to-levers.md) and [ADR-0047](adr/0047-findings-export-and-lever-table.md); the on-demand command is `ai-dev-tools` ADR-017. This page describes the target behavior and the order to build it. It changes when an ADR is accepted or a step lands.
 
 The meta-loop turns the loop's own statistics into **suggested changes to the loop**. It reads; it never writes to GitHub and never edits `prompts/`, `config/`, `scripts/` or `docs/`.
 
@@ -60,7 +60,7 @@ No block means no lever, which has five distinct causes: the finding is `resolve
 
 ## `findings.json`
 
-Published at the site root with the other static files. A serialization of the Diagnostics page: **nothing in it is absent from the page**. Fields and compatibility rules: [ADR-0047 §1](adr/0047-findings-export-and-lever-table.md#1-findingsjson-a-serialization-of-what-the-diagnostics-page-shows). Points a consumer must respect:
+Published at the site root with the other static files. A serialization of the Diagnostics page: **it discloses nothing the page does not** (every text field is on the page; the lifecycle timestamps derive from the records it cites). Fields and compatibility rules: [ADR-0047 §1](adr/0047-findings-export-and-lever-table.md#1-findingsjson-a-serialization-of-what-the-diagnostics-page-shows). Points a consumer must respect:
 
 - Check `schema_version`; refuse an unknown one.
 - Show `generated_at` and `window`: the window is relative to the latest recorded run and the site rebuilds when a record lands, not on a schedule.
@@ -81,7 +81,7 @@ Each step is mergeable alone; a step does not depend on the next being accepted.
 
 | # | Step | Accepted when |
 |---|---|---|
-| 1 | `scripts/lib/findings_export.mjs` (pure) + `findings.json` written by `assembleSite`; `key` made unique per finding | A fixture covering every rule yields unique `key`s; the export ⊆ page data test passes; schema documented in `docs/observability.md`; c8 ≥ 80 % and added to `test.yml` |
+| 1 ✅ | `scripts/lib/findings_export.mjs` (pure) + `findings.json` written by `assembleSite`; `key` made unique per finding | A fixture covering every rule yields unique `key`s; the export ⊆ page data test passes; schema documented in `docs/observability.md`; c8 ≥ 80 % and added to `test.yml` |
 | 2 | `scripts/lib/meta_levers.mjs` (`LEVERS`, `NO_LEVER`, `leverFor`) | Exhaustiveness test (every rule id mapped or in `NO_LEVER`); no forbidden target; every `config` ref resolves in the file it names (`config/<file>.yaml#<key>`); `leverFor` is `null` for `resolved`, `info` and unmapped findings |
 | 3 | "Suggested lever" block in `console_views.mjs`; `lever` in the export | Rendering test with hostile strings (escaped); the block is below the hypothesis; absent when `lever` is `null` |
 | 4 | `ai-dev-tools`: `scripts/loop-insights.mjs`, agent, command, docs (its ADR-017) | See that ADR |
