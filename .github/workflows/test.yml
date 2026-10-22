@@ -413,6 +413,17 @@ jobs:
             --statements 80 \
             node --test scripts/tests/findings_export.test.mjs
 
+      - name: Check meta_levers coverage (≥80%)
+        run: |
+          npx --yes c8 \
+            --include 'scripts/lib/meta_levers.mjs' \
+            --check-coverage \
+            --lines 80 \
+            --branches 80 \
+            --functions 80 \
+            --statements 80 \
+            node --test scripts/tests/meta_levers.test.mjs
+
       - name: Check pipeline_kpis coverage (≥80%)
         run: |
           npx --yes c8 \
