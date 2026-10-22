@@ -46,7 +46,7 @@ A finding:
 A pure module (c8 ≥ 80 %, listed in `test.yml`): a frozen table `LEVERS` keyed by rule `id` and `leverFor(finding)`.
 
 ```js
-// one entry
+// one entry (the `review-coverage` one)
 {
   stage: 'review',
   summary: 'Reviews are cut or withheld on a prompt budget that does not fit the diffs',
@@ -66,7 +66,7 @@ Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a rea
 
 | Rule id | Stage | Targets | Gate |
 |---|---|---|---|
-| `review-withheld` (anomaly share only, ADR-0043) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml` | `review` |
+| `review-withheld` (anomaly share only, ADR-0043) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml#checks` | `review` |
 | `review-coverage` | review | the same two budget keys; provider | `review` |
 | `autofix-ineffective` (anomaly share only) | autofix | `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio`, `prompts/auto-fix-system.md` | none |
 | `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, `prompts/generation-system.md` (no gate); `prompts/validation-system.md`, scope rules (`validation` suite) | per target |
@@ -74,7 +74,7 @@ Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a rea
 
 `NO_LEVER`: `review-duplicates` (the push / pull_request race is fixed in `.github/` workflow triggers, which a lever may not name, ADR-0046 §5; the ADR-0028 marker is code, not a setting), `runs-failed` (needs root cause; runbook), `review-stuck` (depends on the PR's content), `escalations` and the waiting queue (a person is the lever, ADR-0001), duration and rate-limit findings (a symptom of the provider tier; revisit with data).
 
-**Forbidden targets** (ADR-0046 §5) are enforced by a test: no `ref` may point at an eval threshold, a dataset case, `config/protected-paths.yaml`, `.github/` or an auto-fix attempt cap, and every `config` ref must resolve to an existing key of `config/models.yaml` so a rename cannot leave a stale lever.
+**Forbidden targets** (ADR-0046 §5) are enforced by a test: no `ref` may point at an eval threshold, a dataset case, `config/protected-paths.yaml`, `.github/` or an auto-fix attempt cap, and every `config` ref must resolve in the file it names (`config/<file>.yaml#<dotted.key>`: the file exists under `config/` and the key is present, e.g. `config/models.yaml#review_max_input_tokens`, `config/review-evidence.yaml#checks`), so a rename cannot leave a stale lever. A bare key such as `review_max_input_tokens` in the table is shorthand for `config/models.yaml#…`.
 
 ### 3. Where it shows
 

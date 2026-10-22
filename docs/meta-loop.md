@@ -51,7 +51,7 @@ No block means no lever, which has five distinct causes: the finding is `resolve
 
 | Rule id | Stage | Targets | Gate |
 |---|---|---|---|
-| `review-withheld` (anomaly share) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml` | `review` suite |
+| `review-withheld` (anomaly share) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml#checks` | `review` suite |
 | `review-coverage` | review | the two budget keys, provider | `review` suite |
 | `autofix-ineffective` (anomaly share) | autofix | `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio`, `prompts/auto-fix-system.md` | none |
 | `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, `prompts/generation-system.md` (no gate); `prompts/validation-system.md` (`validation` suite) | per target |
@@ -73,7 +73,7 @@ Published at the site root with the other static files. A serialization of the D
 1. **Dashboard.** Open Diagnostics, filter on `warning`/`critical`, read the fact, then the suggested lever.
 2. **Drafting.** `/loop-insights` (once implemented, `ai-dev-tools` ADR-017) fetches `findings.json`, validates the version, and drafts one proposal per finding that has a lever. The output stays in the session. You decide whether to make the change, in which repository, and how.
 3. **Applying.** As any change to the loop: branch, edit, `npm test`, live evals when the lever requires them, documentation and tests in the same PR, review, human merge.
-4. **Checking the effect.** The finding turns `resolved` once its pattern has left the last 10 runs of its rule (`RULES.activeWindow`). There is no other tracking.
+4. **Checking the effect.** The finding turns `resolved` once its pattern has left the last `RULES.activeWindow` runs of its rule (10 at the time of writing, `scripts/lib/pipeline_diagnostics.mjs`). There is no other tracking.
 
 ## Implementation steps
 
@@ -82,7 +82,7 @@ Each step is mergeable alone; a step does not depend on the next being accepted.
 | # | Step | Accepted when |
 |---|---|---|
 | 1 | `scripts/lib/findings_export.mjs` (pure) + `findings.json` written by `assembleSite`; `key` made unique per finding | A fixture covering every rule yields unique `key`s; the export ⊆ page data test passes; schema documented in `docs/observability.md`; c8 ≥ 80 % and added to `test.yml` |
-| 2 | `scripts/lib/meta_levers.mjs` (`LEVERS`, `NO_LEVER`, `leverFor`) | Exhaustiveness test (every rule id mapped or in `NO_LEVER`); no forbidden target; every `config` ref resolves to a `models.yaml` key; `leverFor` is `null` for `resolved`, `info` and unmapped findings |
+| 2 | `scripts/lib/meta_levers.mjs` (`LEVERS`, `NO_LEVER`, `leverFor`) | Exhaustiveness test (every rule id mapped or in `NO_LEVER`); no forbidden target; every `config` ref resolves in the file it names (`config/<file>.yaml#<key>`); `leverFor` is `null` for `resolved`, `info` and unmapped findings |
 | 3 | "Suggested lever" block in `console_views.mjs`; `lever` in the export | Rendering test with hostile strings (escaped); the block is below the hypothesis; absent when `lever` is `null` |
 | 4 | `ai-dev-tools`: `scripts/loop-insights.mjs`, agent, command, docs (its ADR-017) | See that ADR |
 | 5 | Review after several weeks of data | Levers acted on, or not: decide on a push channel (ADR-0046, Revisit) |
