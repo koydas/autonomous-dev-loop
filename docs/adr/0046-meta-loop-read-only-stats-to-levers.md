@@ -1,7 +1,7 @@
 # ADR-0046: Meta-loop: a read-only function from run statistics to suggested levers
 
 - **Date:** 2026-10-22
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-22) — point 8 superseded by [ADR-0048](./0048-meta-loop-accepted-and-implemented.md)
 
 ## Context
 

@@ -1,7 +1,7 @@
 # ADR-0047: Published findings export and the finding → lever table
 
 - **Date:** 2026-10-22
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-22); built as described in [ADR-0048](./0048-meta-loop-accepted-and-implemented.md)
 
 ## Context
 
