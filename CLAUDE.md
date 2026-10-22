@@ -31,6 +31,7 @@ Commands and the CI-gate checklist are in `AGENTS.md` → **Local Checks** (shar
 | Apply the fixes of that review and of human PR comments (blocking, then in-scope non-blocking and nits; bots ignored) | `/ai-dev-tools:pr-fixer` |
 | Interactive issue → patch (human-gated alternative to the `ready-for-dev` pipeline) | `/ai-dev-tools:issue-code-generation <n> [--strict]` |
 | Check a branch against an issue's acceptance criteria | `/ai-dev-tools:ac-check <n>` |
+| Draft proposals for changes to the loop from its published `findings.json` (read-only: nothing is posted or created; the Diagnostics card of a finding with a lever shows the command) | `/ai-dev-tools:loop-insights [--finding <key>]` |
 
 Its reviewer discovers checks from `CLAUDE.md`/`AGENTS.md` and `.github/workflows/`: the **Local Checks** table is the list it runs. Repo rules win over toolbox defaults — after fixing review threads, follow `pr-review-workflow` (`@Codex review` only when code changed).
 
