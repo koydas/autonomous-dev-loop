@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   GRADER_FAILURES as F, MODEL_OUTPUT_SCHEMA_VERSION, MAX_CHANGES, MAX_CONTENT_CHARS,
   digestTree, validateModelOutput, checkPatchPaths, isAllowedCommand, graderEnv, evaluatePatch,
-  applyPatchToCopy, restoreGraderFiles, runGraderChecks, sha256,
+  applyPatchToCopy, restoreGraderFiles, runGraderChecks, digestFiles, sha256,
 } from '../lib/eval_grader.mjs';
 
 let root;
@@ -185,13 +185,57 @@ test('restoreGraderFiles overwrites what the patch wrote at a hidden path', asyn
   await fs.rm(work, { recursive: true, force: true });
 });
 
-test('runGraderChecks: spawn errors and failing runs map to their status through an injected runner', async () => {
+test('runGraderChecks: spawn errors map to their status through an injected runner, and every copy is cleaned up', async () => {
   const calls = [];
+  let cleaned = 0;
+  const prepare = async () => ({ workDir: root, protectedFiles: [], cleanup: async () => { cleaned += 1; } });
   const run = async (check, opts) => { calls.push({ name: check.name, env: opts.env }); return { status: check.name === 'existing_tests' ? 'pass' : 'error', exit_code: null }; };
-  const r = await runGraderChecks(root, base.grader, { run });
+  const r = await runGraderChecks(prepare, base.grader, { run });
   assert.equal(r.failure, F.graderError);
   assert.equal(calls.length, 2);
+  assert.equal(cleaned, 2);
   assert.ok(!JSON.stringify(calls[0].env).includes('secret'));
+});
+
+test('runGraderChecks: a command outside the allowed shape stops before any copy is made', async () => {
+  let prepared = 0;
+  const r = await runGraderChecks(async () => { prepared += 1; return { workDir: root }; }, { existing_tests: 'npm test', hidden_tests: 'x' });
+  assert.equal(r.failure, F.graderError);
+  assert.equal(prepared, 0);
+});
+
+test('digestFiles: content, deletion and order are distinguished', async () => {
+  const d = await fs.mkdtemp(path.join(root, 'df-'));
+  await write(d, 'a', '1');
+  await write(d, 'b', '2');
+  const both = await digestFiles(d, ['a', 'b']);
+  assert.equal(await digestFiles(d, ['b', 'a']), both);
+  await write(d, 'b', '3');
+  assert.notEqual(await digestFiles(d, ['a', 'b']), both);
+  await fs.rm(path.join(d, 'b'));
+  assert.notEqual(await digestFiles(d, ['a', 'b']), both);
+  assert.notEqual(await digestFiles(d, ['a', 'b']), await digestFiles(d, ['a']));
+});
+
+const SELF_MODIFYING = (body) => `import fs from 'node:fs';\n${body}\n${FIXED}`;
+
+test('evaluatePatch: code that rewrites the hidden tests while the existing tests import it is GRADER_TAMPERING, not a pass', async () => {
+  const wrong = "import fs from 'node:fs';\nfs.writeFileSync(new URL('../test/hidden.test.mjs', import.meta.url), '');\nexport const find = () => 1;\n";
+  const r = await evaluatePatch({ ...base, output: patch('src/customers.mjs', wrong) });
+  assert.deepEqual([r.outcome, r.failure], ['FAIL', F.tampering]);
+});
+
+test('evaluatePatch: deleting or rewriting an existing test at runtime is GRADER_TAMPERING', async () => {
+  for (const body of ["fs.rmSync(new URL('../test/existing.test.mjs', import.meta.url));", "fs.writeFileSync(new URL('../test/existing.test.mjs', import.meta.url), '// weakened');"]) {
+    const r = await evaluatePatch({ ...base, output: patch('src/customers.mjs', SELF_MODIFYING(body)) });
+    assert.deepEqual([r.outcome, r.failure], ['FAIL', F.tampering], body);
+  }
+});
+
+test('evaluatePatch: each command runs in a fresh copy, so state left by the first run does not reach the second', async () => {
+  const stateful = SELF_MODIFYING("if (fs.existsSync('.flag')) throw new Error('state leaked'); fs.writeFileSync('.flag', '1');");
+  const r = await evaluatePatch({ ...base, output: patch('src/customers.mjs', stateful) });
+  assert.equal(r.outcome, 'PASS', JSON.stringify(r));
 });
 
 test('digestTree: framing is unambiguous, a file holding the next entry cannot collide with two files', async () => {

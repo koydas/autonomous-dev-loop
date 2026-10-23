@@ -143,23 +143,44 @@ export async function restoreGraderFiles(workDir, hiddenDir, files) {
   }
 }
 
+/** Digest of the given files of a work dir; a missing file has its own marker, so a deletion changes it too. */
+export async function digestFiles(workDir, files) {
+  const h = createHash('sha256');
+  for (const f of [...files].sort()) {
+    const content = await fs.readFile(path.join(workDir, f)).catch(() => null);
+    h.update(Buffer.concat([Buffer.from(content === null ? 'M' : 'F'), frame(Buffer.from(f)), frame(content ?? Buffer.alloc(0))]));
+  }
+  return h.digest('hex');
+}
+
 /**
- * Runs the grader's commands in `workDir`. `grader.hidden_tests` and `grader.existing_tests` are commands (allowlisted
- * shape); a command that does not pass is GRADER_ERROR (configuration), a timeout is TIMEOUT: neither is a success.
+ * Runs the grader's commands, each in a fresh copy of the patched fixture (`prepare()` returns
+ * `{ workDir, protectedFiles, cleanup }`): code the patch runs during the existing tests can neither rewrite the hidden
+ * tests for the next command nor leave state behind. The protected files (hidden tests, tests the fixture has) are
+ * digested around each run: a change, even by a process that exits 0, is GRADER_TAMPERING. `grader.existing_tests` and
+ * `grader.hidden_tests` are commands of the allowed shape; one that is not is GRADER_ERROR (configuration), a timeout
+ * is TIMEOUT: neither is a success.
  * @returns {Promise<{ passed: boolean, checks: { name: string, status: string, exit_code: number | null }[], failure: string | null }>}
  */
-export async function runGraderChecks(workDir, grader, { timeoutMs = DEFAULT_GRADER_TIMEOUT_MS, run = runCheck } = {}) {
+export async function runGraderChecks(prepare, grader, { timeoutMs = DEFAULT_GRADER_TIMEOUT_MS, run = runCheck } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-grader-home-'));
   const checks = [];
   try {
     for (const [name, failure] of [['existing_tests', GRADER_FAILURES.existingTests], ['hidden_tests', GRADER_FAILURES.hiddenTests]]) {
       const command = grader?.[name];
       if (!isAllowedCommand(command)) return { passed: false, checks, failure: GRADER_FAILURES.graderError };
-      const r = await run({ name, command, timeoutMs }, { cwd: workDir, env: graderEnv(home) });
-      checks.push({ name, status: r.status, exit_code: r.exit_code });
-      if (r.status === 'timeout') return { passed: false, checks, failure: GRADER_FAILURES.timeout };
-      if (r.status === 'error') return { passed: false, checks, failure: GRADER_FAILURES.graderError };
-      if (r.status === 'fail') return { passed: false, checks, failure };
+      const { workDir, protectedFiles = [], cleanup } = await prepare();
+      try {
+        const before = await digestFiles(workDir, protectedFiles);
+        const r = await run({ name, command, timeoutMs }, { cwd: workDir, env: graderEnv(home) });
+        checks.push({ name, status: r.status, exit_code: r.exit_code });
+        if ((await digestFiles(workDir, protectedFiles)) !== before) return { passed: false, checks, failure: GRADER_FAILURES.tampering };
+        if (r.status === 'timeout') return { passed: false, checks, failure: GRADER_FAILURES.timeout };
+        if (r.status === 'error') return { passed: false, checks, failure: GRADER_FAILURES.graderError };
+        if (r.status === 'fail') return { passed: false, checks, failure };
+      } finally {
+        await cleanup?.();
+      }
     }
     return { passed: true, checks, failure: null };
   } finally {
@@ -174,7 +195,6 @@ export async function runGraderChecks(workDir, grader, { timeoutMs = DEFAULT_GRA
  */
 export async function evaluatePatch(input, { timeoutMs, run } = {}) {
   const result = (outcome, failure, extra = {}) => ({ outcome, failure, path: null, checks: [], ...extra });
-  let work;
   try {
     const parsed = validateModelOutput(input?.output);
     if (!parsed.ok) return result('ERROR', parsed.reason);
@@ -184,15 +204,24 @@ export async function evaluatePatch(input, { timeoutMs, run } = {}) {
     const existingTestFiles = (await listFiles(input.fixtureDir)).map((f) => f.path).filter(isTestFile);
     const paths = checkPatchPaths(parsed.changes, { allowedPaths: input.allowedPaths, mustNotChange: input.mustNotChange, graderFiles: input.hiddenFiles, existingTestFiles });
     if (!paths.ok) return result('FAIL', paths.reason === GRADER_FAILURES.protectedPath ? GRADER_FAILURES.tampering : paths.reason, { path: paths.path });
-    work = await applyPatchToCopy(input.fixtureDir, parsed.changes);
-    await restoreGraderFiles(work, input.graderDir, input.hiddenFiles);
-    const checked = await runGraderChecks(work, input.grader, { timeoutMs, run });
+    const protectedFiles = [...new Set([...existingTestFiles, ...(input.hiddenFiles ?? [])])];
+    const prepare = async () => {
+      const workDir = await applyPatchToCopy(input.fixtureDir, parsed.changes);
+      const cleanup = () => fs.rm(workDir, { recursive: true, force: true });
+      try {
+        await restoreGraderFiles(workDir, input.graderDir, input.hiddenFiles);
+      } catch (err) {
+        await cleanup();
+        throw err;
+      }
+      return { workDir, protectedFiles, cleanup };
+    };
+    const checked = await runGraderChecks(prepare, input.grader, { timeoutMs, run });
     if (checked.passed) return result('PASS', null, { checks: checked.checks });
-    return result(checked.failure === GRADER_FAILURES.timeout || checked.failure === GRADER_FAILURES.graderError ? 'ERROR' : 'FAIL', checked.failure, { checks: checked.checks });
+    const isError = checked.failure === GRADER_FAILURES.timeout || checked.failure === GRADER_FAILURES.graderError;
+    return result(isError ? 'ERROR' : 'FAIL', checked.failure, { checks: checked.checks });
   } catch (err) {
     const code = Object.values(GRADER_FAILURES).includes(err?.code) ? err.code : GRADER_FAILURES.graderError;
     return result(code === GRADER_FAILURES.graderError ? 'ERROR' : 'FAIL', code);
-  } finally {
-    if (work) await fs.rm(work, { recursive: true, force: true });
   }
 }
