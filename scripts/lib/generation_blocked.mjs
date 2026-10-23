@@ -26,19 +26,32 @@ const MAX_TEXT_CHARS = 4000;
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 const cap = (value) => (value.length > MAX_TEXT_CHARS ? `${value.slice(0, MAX_TEXT_CHARS)}\n…(truncated)` : value);
 
+// A last segment with an extension names a file, even a new one (`App.csproj`, `evals.yml`): prose such as `old/new` has none.
+const FILE_EXTENSION = /\.[a-z0-9]{1,8}$/i;
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The extractor's `\b` drops a leading dot: `.github/workflows/x.yml` is read as `github/workflows/x.yml`, which
+// no protected-path rule matches. The dot comes back when the text has it right before the candidate.
+const withLeadingDot = (candidate, text) => (new RegExp(`(?<![\\w./-])\\.${escapeRegExp(candidate)}(?![\\w])`).test(text) ? `.${candidate}` : candidate);
+
 /**
  * Repo paths the issue says the change needs. URLs are dropped first (`…/autonomous-dev-loop/pull/188`
- * would read as a path). A bare file name counts only when it exists at the repository root and is
- * not the base name of a path the issue also names; `CHANGELOG.md` is a companion, never the change.
+ * would read as a path). A candidate with a `/` is a path only when it exists in the repository or ends in a
+ * file extension: prose such as `retry/fallback`, `401/403` or `old/new` is not (#134, #150, #209, #211, #236
+ * each had several, and one writable-looking token kept the deterministic block from firing). A bare file name
+ * counts only when it exists at the repository root and is not the base name of a path the issue also names;
+ * `CHANGELOG.md` is a companion, never the change.
  */
 export function findNeededPaths(issueTitle, issueBody, { fileExists = () => false } = {}) {
+  const text = `${String(issueTitle ?? '').replace(URL_PATTERN, ' ')}\n${String(issueBody ?? '').replace(URL_PATTERN, ' ')}`;
   const candidates = extractFilePaths(String(issueTitle ?? '').replace(URL_PATTERN, ' '), String(issueBody ?? '').replace(URL_PATTERN, ' '))
-    .map(normalizeRepoPath);
-  const named = new Set(candidates.filter((p) => p.includes('/')).map((p) => path.posix.basename(p).toLowerCase()));
+    .map((p) => normalizeRepoPath(withLeadingDot(p, text)));
+  const isPath = (p) => FILE_EXTENSION.test(p) || fileExists(p);
+  const named = new Set(candidates.filter((p) => p.includes('/') && isPath(p)).map((p) => path.posix.basename(p).toLowerCase()));
   const needed = candidates.filter((p) => {
     const base = path.posix.basename(p).toLowerCase();
     if (COMPANION_FILES.has(base) && !p.includes('/')) return false;
-    if (p.includes('/')) return true;
+    if (p.includes('/')) return isPath(p);
     return !named.has(base) && fileExists(p);
   });
   return [...new Set(needed)];

@@ -138,12 +138,19 @@ test('code generation blocked by design: protected-path rejections are a guardra
   const by = find(diagnose({ model: model([rejected(['protected_path']), rejected(['unshown_file', 'withheld_file']), gen(null)]) }), 'codegen-blocked');
   assert.equal(by.severity, 'info');
   assert.equal(by.title, 'Code generation blocked by design (ADR-0021, ADR-0029)');
-  assert.match(by.fact, /Blocked by design \(patch rejected on a protected or unshown target\): 2; anomaly: 0/);
+  assert.match(by.fact, /Blocked by design \(protected or withheld targets\): 2; anomaly: 0/);
   assert.match(by.hypothesis, /worked as designed/);
   const mixed = find(diagnose({ model: model([rejected(['protected_path']), gen({ reason: 'blocked', source: 'model' }), gen({ reason: 'blocked', source: 'model' })]) }), 'codegen-blocked');
   assert.equal(mixed.severity, 'warning');
-  assert.match(mixed.fact, /by design \(patch rejected on a protected or unshown target\): 1; anomaly: 2/);
+  assert.match(mixed.fact, /by design \(protected or withheld targets\): 1; anomaly: 2/);
   assert.match(mixed.hypothesis, /model-sourced block/);
+  // the deterministic check (source denylist) is by design; a model block is not, whatever its text says
+  const denied = find(diagnose({ model: model([gen({ reason: 'blocked', source: 'denylist' }), gen({ reason: 'blocked', source: 'denylist' }), gen(null)]) }), 'codegen-blocked');
+  assert.equal(denied.severity, 'info');
+  assert.match(denied.fact, /\(protected or withheld targets\): 2; anomaly: 0/);
+  const notes = find(diagnose({ model: model([gen({ reason: 'blocked', source: 'notes_only' }), gen({ reason: 'blocked', source: 'model' }), gen(null)]) }), 'codegen-blocked');
+  assert.equal(notes.severity, 'warning');
+  assert.match(notes.fact, /: 0; anomaly: 2/);
   // a rejection on a rule outside the design set, or without recorded rules, is an anomaly
   for (const meta of [{ reason: 'guardrail_rejected', rules: ['protected_path', 'test_shrink'] }, { reason: 'guardrail_rejected', rules: [] }, { reason: 'guardrail_rejected' }]) {
     const f = find(diagnose({ model: model([gen(meta), gen(meta), gen(null)]) }), 'codegen-blocked');

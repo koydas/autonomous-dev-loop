@@ -49,7 +49,7 @@ const atRoot = (...names) => (p) => names.includes(p);
 // ---------------------------------------------------------------------------
 
 test('findNeededPaths drops URL segments, CHANGELOG.md and bare names of paths the issue also names', () => {
-  const needed = findNeededPaths(ISSUE_190.issueTitle, ISSUE_190.issueBody, { fileExists: atRoot('CHANGELOG.md') });
+  const needed = findNeededPaths(ISSUE_190.issueTitle, ISSUE_190.issueBody, { fileExists: atRoot('CHANGELOG.md', 'scripts/lib') });
   assert.deepEqual(needed.sort(), ['config/models.yaml', 'scripts/lib', 'scripts/lib/observability.mjs', 'scripts/pr_review.mjs', 'scripts/tests/pr_review.test.mjs']);
 });
 
@@ -61,6 +61,25 @@ test('findNeededPaths keeps a nested CHANGELOG.md (only the root companion is dr
   assert.deepEqual(findNeededPaths('Edit packages/a/CHANGELOG.md', '', {}), ['packages/a/CHANGELOG.md']);
 });
 
+test('findNeededPaths drops prose with a slash that is neither an existing path nor a file name (#134, #150, #209, #211, #236)', () => {
+  const body = 'Retry/fallback on 401/403 and 500/502/503/504, old/new model, open/closed, TPD/RPD. Edit scripts/lib/llm_client.mjs and scripts/tests.';
+  assert.deepEqual(findNeededPaths('Chaos tests', body, { fileExists: atRoot('scripts/tests') }).sort(), ['scripts/lib/llm_client.mjs', 'scripts/tests']);
+  assert.deepEqual(findNeededPaths('Chaos tests', body).sort(), ['scripts/lib/llm_client.mjs'], 'a directory counts only when it exists');
+});
+
+test('findNeededPaths keeps a new file with a known extension even when it does not exist yet', () => {
+  assert.deepEqual(findNeededPaths('Add docs/new-note.md', ''), ['docs/new-note.md']);
+});
+
+test('findNeededPaths keeps a file whose extension the context injector does not list', () => {
+  assert.deepEqual(findNeededPaths('Update src/App/App.csproj', ''), ['src/App/App.csproj']);
+});
+
+test('findNeededPaths restores the leading dot the extractor drops', () => {
+  assert.deepEqual(findNeededPaths('Edit .github/workflows/evals.yml', 'and github/other.yml'), ['.github/workflows/evals.yml', 'github/other.yml']);
+  assert.deepEqual(findNeededPaths('See the my.github/x.yml file', ''), ['my.github/x.yml'], 'a dot inside another word is not a leading dot');
+});
+
 test('findNeededPaths returns nothing for an issue that names no path', () => {
   assert.deepEqual(findNeededPaths('Add a helper', undefined), []);
 });
@@ -68,6 +87,15 @@ test('findNeededPaths returns nothing for an issue that names no path', () => {
 // ---------------------------------------------------------------------------
 // findDeterministicBlock
 // ---------------------------------------------------------------------------
+
+test('findDeterministicBlock still blocks when the issue also contains prose with slashes (#134 shape)', () => {
+  const block = findDeterministicBlock({
+    issueTitle: 'Chaos test scenarios',
+    issueBody: 'Retry/fallback on 401/403 and 500/502/503/504; delays 200/400/800.\nScope: scripts/tests/retry.test.mjs, scripts/lib/llm_client.mjs, .github/workflows/evals.yml.',
+    fileExists: atRoot('scripts/tests'),
+  });
+  assert.deepEqual(block.paths.map((p) => p.path).sort(), ['.github/workflows/evals.yml', 'scripts/lib/llm_client.mjs', 'scripts/tests/retry.test.mjs']);
+});
 
 test('findDeterministicBlock blocks issue #190: every needed path is protected', () => {
   const block = findDeterministicBlock({ ...ISSUE_190, fileExists: atRoot('CHANGELOG.md') });

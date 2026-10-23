@@ -70,3 +70,12 @@ Consequences:
 - ⚠️ False positive of check 1: an issue that names only protected paths but whose fix belongs elsewhere (e.g. "implement what `README.md` describes" with no other path) is blocked. Visible, and fixed by naming the target file.
 - ⚠️ The review side is unchanged: a notes-only PR opened another way would still be approved. Follow-up proposed on the review stage.
 - ⚠️ `bug` / `feature` are matched by name (`CODE_CHANGE_LABELS`); a repository using other labels gets only checks 1 and 2.
+
+## Amendment (2026-10-23): which tokens of an issue count as needed paths
+
+Six blocked generation runs of October 2026 (#134, #150, #200, #209, #211, #236) were all `source: "model"`, although the real files each issue names were protected. `extractFilePaths` reads any `word/word` as a path, so prose such as `retry/fallback`, `401/403`, `old/new` or `TPD/RPD` became a "needed path"; it exists nowhere, is neither protected nor withheld, and one such writable-looking token is enough for check 1 not to fire (measured on the real issue texts: 5 of 5 readable issues returned no deterministic block). The extractor also drops a leading dot, so `.github/workflows/evals.yml` was read as `github/workflows/evals.yml`, which no protected-path rule matches.
+
+`findNeededPaths` now counts a candidate that contains a `/` only when it exists in the repository or ends in a file extension (a new file is still a path; any extension, as `App.csproj`), and restores the leading dot when the text has it right before the candidate. `extractFilePaths` itself is unchanged: the file-context injection still reads every candidate. The model is still called when check 1 fires (the comment keeps its planned fix); what changes is the recorded `source` (`denylist`), which Diagnostics reads as a block by design. On the same texts, 4 of 5 issues now fire check 1; #236 still does not, because it names `pipeline/flows.html`, a generated page that does not exist and has a file extension.
+
+Consequence: a path-looking word with a dotted ending that is not a file (`docs/v1.2`) is still a candidate, and an issue that names only protected files next to a new unprotected one is not blocked, as before.
+
