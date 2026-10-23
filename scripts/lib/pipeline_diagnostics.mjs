@@ -322,9 +322,11 @@ function autofixFindings(runs) {
 }
 
 // A generation run blocked by design: the patch was rejected only on protected, unshown or withheld targets
-// (ADR-0021, ADR-0029, same rule set as auto-fix). A `blocked` run (the model could not implement the issue)
-// records no cause, so it stays an anomaly: the records cannot tell a guardrail from a defect there.
+// (ADR-0021, ADR-0029, same rule set as auto-fix), or the deterministic check found every path the issue needs
+// protected or withheld (`reason: blocked`, `source: denylist`, ADR-0029 amendment). A `source: model` block
+// records no cause the records can verify, so it stays an anomaly.
 function codegenByDesign(e) {
+  if (e.meta.reason === 'blocked') return e.meta.source === 'denylist';
   return e.meta.reason === 'guardrail_rejected' && Array.isArray(e.meta.rules) && e.meta.rules.length > 0 && e.meta.rules.every((r) => DESIGN_RULES.has(r));
 }
 
@@ -343,9 +345,9 @@ function generationFindings(runs) {
     id: 'codegen-blocked', severity: 'warning', category: 'Code generation', title: 'Code generation is mostly blocked', share: 0.5,
     titleByDesign: 'Code generation blocked by design (ADR-0021, ADR-0029)',
     fact: `${blocked.length} of ${starts.length} generation run(s) produced no patch${sourceText ? ` (source: ${sourceText})` : ''}; ${events(runs, 'code_gen.complete').length} completed. `
-      + `Blocked by design (patch rejected on a protected or unshown target): ${designed.length}; anomaly: ${anomalies.length} (the model blocked the issue or the rejection is not a design rule).`,
+      + `Blocked by design (protected or withheld targets): ${designed.length}; anomaly: ${anomalies.length} (the model blocked the issue, or the rejection is not a design rule).`,
     hypothesis: anomalies.length ? 'A model-sourced block usually means the files to change were withheld from its context (size or protected paths); the escalation comment on the issue says which.'
-      : 'The guardrails worked as designed: the patches touched protected or unshown targets (ADR-0021, ADR-0029). The lever is a human change on those paths, not the guardrail.',
+      : 'The guardrails worked as designed: the issues need protected or withheld targets (ADR-0021, ADR-0029). The lever is a human change on those paths, not the guardrail.',
     impact: `${blocked.length} issue(s) escalated instead of getting a PR`, frequency: `${blocked.length} run(s)`,
     eligible: withEvent(runs, 'code_gen.start'), runs: runIds(blocked), anomaly: runIds(anomalies), evidence: evidenceOf(blocked), link: 'flows.html?state=escalated',
   })];
