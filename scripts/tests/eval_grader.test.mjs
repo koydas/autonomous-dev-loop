@@ -4,14 +4,14 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  ORACLE_FAILURES as F, MODEL_OUTPUT_SCHEMA_VERSION, MAX_CHANGES, MAX_CONTENT_CHARS,
-  digestTree, validateModelOutput, checkPatchPaths, isAllowedCommand, oracleEnv, evaluatePatch,
-  applyPatchToCopy, restoreOracleFiles, runOracleChecks, sha256,
-} from '../lib/eval_oracle.mjs';
+  GRADER_FAILURES as F, MODEL_OUTPUT_SCHEMA_VERSION, MAX_CHANGES, MAX_CONTENT_CHARS,
+  digestTree, validateModelOutput, checkPatchPaths, isAllowedCommand, graderEnv, evaluatePatch,
+  applyPatchToCopy, restoreGraderFiles, runGraderChecks, sha256,
+} from '../lib/eval_grader.mjs';
 
 let root;
 let fixtureDir;
-let oracleDir;
+let graderDir;
 let base;
 
 const write = async (dir, rel, content) => {
@@ -23,21 +23,21 @@ const BUGGY = 'export function find(list, id) {\n  return list.find((c) => c.id 
 const FIXED = 'export function find(list, id) {\n  return list.find((c) => c.id === id)?.name ?? null;\n}\n';
 
 before(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'oracle-test-'));
+  root = await fs.mkdtemp(path.join(os.tmpdir(), 'grader-test-'));
   fixtureDir = path.join(root, 'fixture');
-  oracleDir = path.join(root, 'oracle');
+  graderDir = path.join(root, 'grader');
   await write(fixtureDir, 'package.json', '{"type":"module"}\n');
   await write(fixtureDir, 'src/customers.mjs', BUGGY);
   await write(fixtureDir, 'test/existing.test.mjs', "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { find } from '../src/customers.mjs';\ntest('finds', () => assert.equal(find([{ id: 1, name: 'a' }], 1), 'a'));\n");
-  await write(oracleDir, 'test/hidden.test.mjs', "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { find } from '../src/customers.mjs';\ntest('unknown customer is null', () => assert.equal(find([], 9), null));\ntest('no secret reaches the oracle', () => { for (const k of ['GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'AI_PR_TOKEN', 'GITHUB_TOKEN']) assert.equal(process.env[k], undefined); });\n");
+  await write(graderDir, 'test/hidden.test.mjs', "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { find } from '../src/customers.mjs';\ntest('unknown customer is null', () => assert.equal(find([], 9), null));\ntest('no secret reaches the grader', () => { for (const k of ['GROQ_API_KEY', 'ANTHROPIC_API_KEY', 'AI_PR_TOKEN', 'GITHUB_TOKEN']) assert.equal(process.env[k], undefined); });\n");
   process.env.GROQ_API_KEY = 'secret-groq';
   process.env.GITHUB_TOKEN = 'secret-gh';
   base = {
     fixtureDir,
     fixtureSha256: await digestTree(fixtureDir),
-    oracleDir,
-    oracleSha256: await digestTree(oracleDir),
-    oracle: { existing_tests: 'node --test test/existing.test.mjs', hidden_tests: 'node --test test/hidden.test.mjs' },
+    graderDir,
+    graderSha256: await digestTree(graderDir),
+    grader: { existing_tests: 'node --test test/existing.test.mjs', hidden_tests: 'node --test test/hidden.test.mjs' },
     allowedPaths: ['src/customers.mjs'],
     mustNotChange: ['package.json', '.github/'],
     hiddenFiles: ['test/hidden.test.mjs'],
@@ -78,7 +78,7 @@ test('validateModelOutput accepts the schema and rejects every malformed shape w
 });
 
 test('checkPatchPaths: escape, absolute, duplicate, protected, existing test, not allowed', () => {
-  const opts = { allowedPaths: ['src/a.mjs', 'test/t.test.mjs'], mustNotChange: ['package.json', 'ci/'], oracleFiles: ['test/h.test.mjs'], existingTestFiles: ['test/t.test.mjs'] };
+  const opts = { allowedPaths: ['src/a.mjs', 'test/t.test.mjs'], mustNotChange: ['package.json', 'ci/'], graderFiles: ['test/h.test.mjs'], existingTestFiles: ['test/t.test.mjs'] };
   const one = (p) => checkPatchPaths([{ targetPath: p, content: '' }], opts);
   assert.equal(one('src/a.mjs').ok, true);
   for (const p of ['../x', '/etc/passwd', 'C:/x', '..']) assert.equal(one(p).reason, F.pathEscape, p);
@@ -95,8 +95,8 @@ test('isAllowedCommand accepts node --test <paths> only', () => {
   for (const c of ['npm test', 'node --test', 'node --test ../x', 'node --test a; rm -rf /', 'node --test $(id)', 'bash -c x', null]) assert.equal(isAllowedCommand(c), false, String(c));
 });
 
-test('oracleEnv is an allowlist: no secret of the parent can be in it', () => {
-  const env = oracleEnv('/tmp/h');
+test('graderEnv is an allowlist: no secret of the parent can be in it', () => {
+  const env = graderEnv('/tmp/h');
   assert.deepEqual(Object.keys(env).sort(), ['CI', 'HOME', 'LANG', 'NODE_ENV', 'PATH', 'TMPDIR']);
   assert.ok(!JSON.stringify(env).includes('secret'));
 });
@@ -120,7 +120,7 @@ test('evaluatePatch: breaking the existing behavior fails the existing tests fir
   assert.equal(r.failure, F.existingTests);
 });
 
-test('evaluatePatch: tampering with the manifest, an existing test or the hidden tests is ORACLE_TAMPERING and nothing runs', async () => {
+test('evaluatePatch: tampering with the manifest, an existing test or the hidden tests is GRADER_TAMPERING and nothing runs', async () => {
   for (const p of ['package.json', 'test/existing.test.mjs', 'test/hidden.test.mjs']) {
     const r = await evaluatePatch({ ...base, allowedPaths: [...base.allowedPaths, p], output: patch(p, 'x') });
     assert.equal(r.outcome, 'FAIL', p);
@@ -135,23 +135,23 @@ test('evaluatePatch: path escape and unlisted paths fail deterministically', asy
   assert.equal((await evaluatePatch({ ...base, output: patch('src/other.mjs', 'x') })).failure, F.notAllowed);
 });
 
-test('evaluatePatch: a malformed artifact, or a drifted fixture or oracle, is ERROR', async () => {
+test('evaluatePatch: a malformed artifact, or a drifted fixture or grader, is ERROR', async () => {
   assert.deepEqual([(await evaluatePatch({ ...base, output: { schema_version: 9 } })).outcome, (await evaluatePatch({ ...base, output: { schema_version: 9 } })).failure], ['ERROR', F.schema]);
   const drift = await evaluatePatch({ ...base, fixtureSha256: sha256('x'), output: patch('src/customers.mjs', FIXED) });
   assert.deepEqual([drift.outcome, drift.failure], ['ERROR', F.fixtureDigest]);
-  const oracleDrift = await evaluatePatch({ ...base, oracleSha256: sha256('x'), output: patch('src/customers.mjs', FIXED) });
-  assert.deepEqual([oracleDrift.outcome, oracleDrift.failure], ['ERROR', F.oracleDigest]);
+  const graderDrift = await evaluatePatch({ ...base, graderSha256: sha256('x'), output: patch('src/customers.mjs', FIXED) });
+  assert.deepEqual([graderDrift.outcome, graderDrift.failure], ['ERROR', F.graderDigest]);
 });
 
 test('evaluatePatch: a command outside the allowed shape is a configuration ERROR', async () => {
-  const r = await evaluatePatch({ ...base, oracle: { ...base.oracle, hidden_tests: 'npm test' }, output: patch('src/customers.mjs', FIXED) });
-  assert.deepEqual([r.outcome, r.failure], ['ERROR', F.oracleError]);
+  const r = await evaluatePatch({ ...base, grader: { ...base.grader, hidden_tests: 'npm test' }, output: patch('src/customers.mjs', FIXED) });
+  assert.deepEqual([r.outcome, r.failure], ['ERROR', F.graderError]);
 });
 
 test('evaluatePatch: a hanging test is a TIMEOUT error, never a success', async () => {
   const slow = await fs.mkdtemp(path.join(root, 'slow-'));
   await write(slow, 'test/hidden.test.mjs', "import { test } from 'node:test';\ntest('hangs', () => new Promise(() => setInterval(() => {}, 1000)));\n");
-  const r = await evaluatePatch({ ...base, oracleDir: slow, oracleSha256: await digestTree(slow), output: patch('src/customers.mjs', FIXED) }, { timeoutMs: 700 });
+  const r = await evaluatePatch({ ...base, graderDir: slow, graderSha256: await digestTree(slow), output: patch('src/customers.mjs', FIXED) }, { timeoutMs: 700 });
   assert.deepEqual([r.outcome, r.failure], ['ERROR', F.timeout]);
 });
 
@@ -177,19 +177,19 @@ test('applyPatchToCopy leaves the fixture untouched, and a planted symlink targe
   await assert.rejects(fs.access(path.join(root, 'outside.txt')));
 });
 
-test('restoreOracleFiles overwrites what the patch wrote at a hidden path', async () => {
+test('restoreGraderFiles overwrites what the patch wrote at a hidden path', async () => {
   const work = await applyPatchToCopy(fixtureDir, []);
   await write(work, 'test/hidden.test.mjs', 'tampered');
-  await restoreOracleFiles(work, oracleDir, ['test/hidden.test.mjs']);
-  assert.equal(await fs.readFile(path.join(work, 'test/hidden.test.mjs'), 'utf8'), await fs.readFile(path.join(oracleDir, 'test/hidden.test.mjs'), 'utf8'));
+  await restoreGraderFiles(work, graderDir, ['test/hidden.test.mjs']);
+  assert.equal(await fs.readFile(path.join(work, 'test/hidden.test.mjs'), 'utf8'), await fs.readFile(path.join(graderDir, 'test/hidden.test.mjs'), 'utf8'));
   await fs.rm(work, { recursive: true, force: true });
 });
 
-test('runOracleChecks: spawn errors and failing runs map to their status through an injected runner', async () => {
+test('runGraderChecks: spawn errors and failing runs map to their status through an injected runner', async () => {
   const calls = [];
   const run = async (check, opts) => { calls.push({ name: check.name, env: opts.env }); return { status: check.name === 'existing_tests' ? 'pass' : 'error', exit_code: null }; };
-  const r = await runOracleChecks(root, base.oracle, { run });
-  assert.equal(r.failure, F.oracleError);
+  const r = await runGraderChecks(root, base.grader, { run });
+  assert.equal(r.failure, F.graderError);
   assert.equal(calls.length, 2);
   assert.ok(!JSON.stringify(calls[0].env).includes('secret'));
 });

@@ -46,7 +46,7 @@
     "scripts/lib/coverage_gates.mjs",
     "scripts/lib/adversarial_review.mjs",
     "scripts/lib/review_decision.mjs",
-    "scripts/lib/eval_oracle.mjs",
+    "scripts/lib/eval_grader.mjs",
     "scripts/lib/circuit_breaker.mjs",
     "scripts/lib/lessons.mjs",
     {"module": "scripts/lib/lessons_loader.mjs", "test": "lessons.test.mjs"},
