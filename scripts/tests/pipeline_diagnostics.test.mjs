@@ -132,6 +132,26 @@ test('code generation mostly blocked', () => {
   assert.match(find(diagnose({ model: model([run({ stage: 'code_gen', events: [{ event: 'code_gen.start' }, { event: 'code_gen.skipped' }] }), run({ stage: 'code_gen', events: [{ event: 'code_gen.skipped' }] })]) }), 'codegen-blocked').fact, /unspecified 2/);
 });
 
+test('code generation blocked by design: protected-path rejections are a guardrail, not an anomaly', () => {
+  const gen = (skip) => run({ stage: 'code_gen', events: [{ event: 'code_gen.start' }, skip ? { event: 'code_gen.skipped', meta: skip } : { event: 'code_gen.complete' }] });
+  const rejected = (rules) => gen({ reason: 'guardrail_rejected', rules });
+  const by = find(diagnose({ model: model([rejected(['protected_path']), rejected(['unshown_file', 'withheld_file']), gen(null)]) }), 'codegen-blocked');
+  assert.equal(by.severity, 'info');
+  assert.equal(by.title, 'Code generation blocked by design (ADR-0021, ADR-0029)');
+  assert.match(by.fact, /Blocked by design \(patch rejected on a protected or unshown target\): 2; anomaly: 0/);
+  assert.match(by.hypothesis, /worked as designed/);
+  const mixed = find(diagnose({ model: model([rejected(['protected_path']), gen({ reason: 'blocked', source: 'model' }), gen({ reason: 'blocked', source: 'model' })]) }), 'codegen-blocked');
+  assert.equal(mixed.severity, 'warning');
+  assert.match(mixed.fact, /by design \(patch rejected on a protected or unshown target\): 1; anomaly: 2/);
+  assert.match(mixed.hypothesis, /model-sourced block/);
+  // a rejection on a rule outside the design set, or without recorded rules, is an anomaly
+  for (const meta of [{ reason: 'guardrail_rejected', rules: ['protected_path', 'test_shrink'] }, { reason: 'guardrail_rejected', rules: [] }, { reason: 'guardrail_rejected' }]) {
+    const f = find(diagnose({ model: model([gen(meta), gen(meta), gen(null)]) }), 'codegen-blocked');
+    assert.equal(f.severity, 'warning');
+    assert.match(f.fact, /by design .*: 0; anomaly: 2/);
+  }
+});
+
 test('provider fallbacks: unclassified causes are said, the rate-limit hypothesis needs a 429 majority', () => {
   const fb = (status, error_type) => ({ event: 'llm_fallback', meta: { from: 'groq', to: 'anthropic', status, error_type } });
   const mostlyUnknown = find(diagnose({ model: model([run({ events: [fb(429, 'rate_limit_exceeded'), fb(null, 'UNKNOWN'), fb(null, undefined)], llm: [{}, {}] })]) }), 'llm-fallbacks');
