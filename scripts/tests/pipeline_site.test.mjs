@@ -343,6 +343,11 @@ test('trace page: header with state and GitHub link, six tabs (overview, timelin
   assert.match(html, /role', 'tablist'/);
 });
 
+test('the Diagnostics page of the pipeline site links to findings.json with the build time', () => {
+  const { files } = site([makeRecord({ runId: '1', start: T0 })]);
+  assert.match(files['pipeline/diagnostics.html'], /<a href="\.\.\/findings\.json">findings\.json<\/a>[^]*generated <time datetime="2026-10-17T00:00:00Z">/);
+});
+
 test('the Rules and levers page is part of every pipeline site and linked from the pipeline navigation', () => {
   const { files } = site([makeRecord({ runId: '1', start: T0 })]);
   assert.match(files['pipeline/levers.html'], /<h1>Rules and levers<\/h1>/);

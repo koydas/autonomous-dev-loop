@@ -540,7 +540,7 @@ All the run records of a trace concatenated (`spans` of each `otlp` block, same 
 | `pipeline/runs/<run_id>.html` | Per-step execution status and decision, key events (decisions, warnings, errors, side effects), envelope, links, the span waterfall (a v1 record is shown flat), every event with its meta behind a disclosure (`#ev-<n>` anchors), overflow counters, link to the item trace |
 | `pipeline/health.html` | Funnel (validated → PR opened → approved; merged is not journaled), WITHHELD rate and causes (incl. cut diffs, `withheld_from`), REQUEST_CHANGES turned WITHHELD (#220), auto-fix outcomes and guardrail rules (legacy `runs.jsonl` lines without a record included), fallbacks / `llm_call_failed` / 429 waits, review cycles per PR, p50/p95 per stage, critical path per item, Groq tokens per day vs the 200k TPD with the eval crons and eval runs |
 | `pipeline/models.html` | Per `provider:model`: pipeline calls, failures, fallback answers, tokens, runs — and the eval runs of that model (cross-link with the eval pages) |
-| `findings.json` (site root) | The Diagnostics findings, machine-readable (ADR-0047 §1, `findings_export.mjs`): written by `assembleSite` from the same `diagnose()` result as the page, only with the pipeline views. Schema below |
+| `findings.json` (site root) | The Diagnostics findings, machine-readable (ADR-0047 §1, `findings_export.mjs`): written by `assembleSite` from the same `diagnose()` result as the page, only with the pipeline views. The Diagnostics page links to it under the status banner (`exportNote` in `console_views.mjs`): the number of findings and runs it holds and its `generated_at`. Schema below |
 
 
 ### `findings.json` (`schema_version: 1`)
