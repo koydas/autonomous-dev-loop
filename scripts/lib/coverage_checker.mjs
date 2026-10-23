@@ -32,7 +32,11 @@ export function isAutomationScopeFile(filePath) {
   );
 }
 
-export function buildAutomationGateContext(rawDiffText) {
+/**
+ * `gatedModules`: the modules of config/coverage-gates.json (null when unknown). The changed ones are named in the context
+ * (`gated_files_changed`), so the review prompt carries the rule, not the list of every gated module.
+ */
+export function buildAutomationGateContext(rawDiffText, gatedModules = null) {
   const changedFiles = extractChangedFiles(rawDiffText);
   const automationScope = changedFiles.some(isAutomationScopeFile);
   if (!automationScope) return '';
@@ -47,5 +51,8 @@ export function buildAutomationGateContext(rawDiffText) {
   const pctMatch = rawDiffText.match(/\b(\d{1,3})\s*%\s*(?:minimum\s+)?(?:unit[-\s]?test\s+)?coverage\b|coverage[:\s]+(\d{1,3})\s*%/i);
   const minimumCoveragePctStated = pctMatch ? (pctMatch[1] || pctMatch[2]) : null;
 
-  return `\n\nAutomation gates context:\n- automation_scope: true\n- changed_files: ${changedFiles.join(', ') || '(none)'}\n- unit_test_updates_present: ${hasUnitTestChanges}\n- docs_updates_present: ${hasDocsUpdates}\n- coverage_signal_present: ${hasCoverageSignal}\n- minimum_coverage_pct_stated: ${minimumCoveragePctStated ?? 'not stated'}\n\nUse this context while deciding whether to request changes.`;
+  const gated = gatedModules ? changedFiles.filter((f) => gatedModules.includes(f)) : null;
+  const gatedLine = gated ? `\n- gated_files_changed: ${gated.join(', ') || 'none'}` : '';
+
+  return `\n\nAutomation gates context:\n- automation_scope: true\n- changed_files: ${changedFiles.join(', ') || '(none)'}\n- unit_test_updates_present: ${hasUnitTestChanges}\n- docs_updates_present: ${hasDocsUpdates}\n- coverage_signal_present: ${hasCoverageSignal}\n- minimum_coverage_pct_stated: ${minimumCoveragePctStated ?? 'not stated'}${gatedLine}\n\nUse this context while deciding whether to request changes.`;
 }

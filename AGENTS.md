@@ -68,7 +68,7 @@ Each CI gate has a local command. Run the ones your diff triggers before pushing
 | Event docs (`test.yml`) | a new `event: '…'` under `scripts/` | `node scripts/check_event_docs.mjs` |
 | Changelog (`changelog-check.yml`) | `scripts/*.mjs` entrypoint, `docs/adr/NNNN-*.md` | `git fetch origin main && node scripts/check_changelog.mjs` |
 | LangGraph prototype (`test.yml` → `prototype-langgraph`) | `prototypes/langgraph-loop/` | `cd prototypes/langgraph-loop && python -m unittest -v tests.test_loop` (Python ≥ 3.11, `pip install -r requirements.txt`) |
-| c8 ≥ 80% (`test.yml`) | a module listed in `config/coverage-gates.json` | `node scripts/coverage_gates.mjs --only scripts/lib/<m>.mjs` (all gates: `node scripts/coverage_gates.mjs`); a new gated module is added to that file, then `node scripts/coverage_gates.mjs --sync` |
+| c8 ≥ 80% (`test.yml`) | a module listed in `config/coverage-gates.json` | `node scripts/coverage_gates.mjs --only scripts/lib/<m>.mjs` (all gates: `node scripts/coverage_gates.mjs`); a new gated module is added to that file (the review reads it: no other list to update) |
 | Review hygiene (PR review) | behavior change in a workflow or `scripts/` | docs (`docs/code-generation.md` / `docs/runbook.md`) + tests in the same PR |
 
 ### Eval Gates (ADR-0031)

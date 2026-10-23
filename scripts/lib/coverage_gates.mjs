@@ -1,10 +1,9 @@
 // The c8 coverage gates (AGENTS.md → Test Coverage Policy): one list, config/coverage-gates.json, read by the
-// CI step (scripts/coverage_gates.mjs), by the tests that pin it and by the review prompt's gate (c) rule,
-// which is rewritten from it (`syncGatePrompt`). Pure: no I/O, no process.
+// CI step (scripts/coverage_gates.mjs), by the tests that pin it and by the review (the changed files that are gated
+// are named in its context, review_prompt.mjs). Pure: no I/O, no process.
 import path from 'node:path';
 
 export const GATES_CONFIG_PATH = 'config/coverage-gates.json';
-const PROMPT_LIST = /(`config\/coverage-gates\.json`: )(.*?)(\. A changed file on this list)/s;
 
 /**
  * Parses the config: `{ threshold, gates }` where a gate is a module path (`scripts/<name>.mjs`, measured through
@@ -38,15 +37,6 @@ export function parseGates(text) {
 /** The arguments of `npx` that run one gate: c8 over the module, measured through its test file. */
 export function c8Args({ module, test }, threshold) {
   return ['--yes', 'c8', '--include', module, '--check-coverage', ...['lines', 'branches', 'functions', 'statements'].flatMap((k) => [`--${k}`, String(threshold)]), 'node', '--test', `scripts/tests/${test}`];
-}
-
-/** The gated files as the review prompt lists them: `a`, `b`, `c`. */
-export const gatedFilesProse = (gates) => gates.map((g) => `\`${g.module}\``).join(', ');
-
-/** The prompt text with its list of gated files rewritten from `gates`; throws when the sentence is not found. */
-export function syncGatePrompt(text, gates) {
-  if (!PROMPT_LIST.test(text)) throw new Error('the gate (c) rule of the review prompt does not carry the list of gated files after "`config/coverage-gates.json`: "');
-  return text.replace(PROMPT_LIST, (_, head, __, tail) => `${head}${gatedFilesProse(gates)}${tail}`);
 }
 
 /**

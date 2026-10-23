@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseGates, c8Args, gatedFilesProse, syncGatePrompt, runGates, GATES_CONFIG_PATH } from '../lib/coverage_gates.mjs';
+import { parseGates, c8Args, runGates, GATES_CONFIG_PATH } from '../lib/coverage_gates.mjs';
 import { parseArgs } from '../coverage_gates.mjs';
 
 const cfg = (gates, threshold = 80) => JSON.stringify({ threshold, gates });
@@ -49,20 +49,6 @@ test('c8Args: c8 over the module with all four dimensions at the threshold, meas
   assert.equal(c8Args({ module: 'scripts/x.mjs', test: 'y.test.mjs' }, 90).filter((a) => a === '90').length, 4);
 });
 
-const PROMPT = 'before\n* For gate (c), x listed in `config/coverage-gates.json`: `scripts/lib/old.mjs`. A changed file on this list already satisfies gate (c).\nafter\n';
-
-test('gatedFilesProse and syncGatePrompt: the list in the prompt is rewritten from the gates, the rest is untouched', () => {
-  const gates = [{ module: 'scripts/lib/a.mjs' }, { module: 'scripts/b.mjs' }];
-  assert.equal(gatedFilesProse(gates), '`scripts/lib/a.mjs`, `scripts/b.mjs`');
-  const synced = syncGatePrompt(PROMPT, gates);
-  assert.equal(synced, 'before\n* For gate (c), x listed in `config/coverage-gates.json`: `scripts/lib/a.mjs`, `scripts/b.mjs`. A changed file on this list already satisfies gate (c).\nafter\n');
-  assert.equal(syncGatePrompt(synced, gates), synced, 'idempotent');
-  assert.throws(() => syncGatePrompt('no list here', gates), /does not carry the list of gated files/);
-  assert.throws(() => syncGatePrompt(PROMPT.replace('. A changed file on this list', '. Other'), gates), /does not carry the list/);
-  // A replacement text with `$&` or `$1` is written literally.
-  assert.ok(syncGatePrompt(PROMPT, [{ module: 'scripts/lib/$&.mjs' }]).includes('`scripts/lib/$&.mjs`'));
-});
-
 test('runGates: every gate runs and is reported, a failure does not stop the others and names its reproduction', () => {
   const config = { threshold: 80, gates: [{ module: 'scripts/lib/a.mjs', test: 'a.test.mjs' }, { module: 'scripts/lib/b.mjs', test: 'b.test.mjs' }, { module: 'scripts/lib/c.mjs', test: 'c.test.mjs' }] };
   const ran = [];
@@ -88,11 +74,10 @@ test('runGates --only: one gate; an unknown module is an error that points at th
   assert.throws(() => runGates(config, () => 0, { only: 'scripts/lib/nope.mjs' }), /scripts\/lib\/nope\.mjs is not a coverage gate; the gates are in config\/coverage-gates\.json/);
 });
 
-test('CLI arguments: none, --sync, or --only <module>; anything else is refused', () => {
+test('CLI arguments: none, or --only <module>; anything else is refused (--sync is gone: the prompt carries no list)', () => {
   assert.deepEqual(parseArgs([]), {});
-  assert.deepEqual(parseArgs(['--sync']), { sync: true });
   assert.deepEqual(parseArgs(['--only', 'scripts/lib/a.mjs']), { only: 'scripts/lib/a.mjs' });
-  for (const bad of [['--only'], ['--only', '--sync'], ['--only', ''], ['--sync', 'x'], ['--run'], ['scripts/lib/a.mjs'], ['--only', 'a', 'b']]) {
+  for (const bad of [['--only'], ['--only', '--sync'], ['--only', ''], ['--sync'], ['--sync', 'x'], ['--run'], ['scripts/lib/a.mjs'], ['--only', 'a', 'b']]) {
     assert.throws(() => parseArgs(bad), /unknown arguments/, JSON.stringify(bad));
   }
 });
