@@ -223,3 +223,15 @@ test('evaluatePatch: an input without an artifact or a directory is an ERROR too
   const unreadable = await evaluatePatch({ ...base, fixtureDir: undefined, output: patch('src/customers.mjs', FIXED) });
   assert.deepEqual([unreadable.outcome, unreadable.failure], ['ERROR', F.graderError]);
 });
+
+test('applyPatchToCopy removes its temporary directory when it throws', async () => {
+  const tmpCopies = async () => (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('eval-grader-')).sort();
+  const before = await tmpCopies();
+  const linked = await fs.mkdtemp(path.join(root, 'leak-'));
+  await write(linked, 'a.txt', 'x');
+  await fs.symlink('a.txt', path.join(linked, 'l'));
+  await assert.rejects(applyPatchToCopy(linked, []), (e) => e.code === F.symlink);
+  await assert.rejects(applyPatchToCopy(fixtureDir, [{ targetPath: '../escape.txt', content: 'x' }]), (e) => e.code === F.pathEscape);
+  await assert.rejects(applyPatchToCopy(path.join(root, 'does-not-exist'), []));
+  assert.deepEqual(await tmpCopies(), before);
+});

@@ -112,22 +112,25 @@ export function checkPatchPaths(changes, { allowedPaths = [], mustNotChange = []
 /** Copies the fixture to a fresh temporary directory (symlinks refused) and writes the patch there. Returns the work dir. */
 export async function applyPatchToCopy(fixtureDir, changes) {
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-grader-'));
-  const tree = await listFiles(fixtureDir);
-  if (tree.some((f) => f.link !== undefined)) {
+  try {
+    const tree = await listFiles(fixtureDir);
+    if (tree.some((f) => f.link !== undefined)) throw Object.assign(new Error('fixture contains a symlink'), { code: GRADER_FAILURES.symlink });
+    await fs.cp(fixtureDir, work, { recursive: true, verbatimSymlinks: true });
+    for (const { targetPath, content } of changes) {
+      const dest = path.join(work, targetPath);
+      if (path.relative(work, dest).startsWith('..')) throw Object.assign(new Error('path escape'), { code: GRADER_FAILURES.pathEscape });
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      // A symlink planted by an earlier write would redirect this one outside the work dir.
+      const existing = await fs.lstat(dest).catch(() => null);
+      if (existing?.isSymbolicLink()) throw Object.assign(new Error('symlink target'), { code: GRADER_FAILURES.symlink });
+      await fs.writeFile(dest, content);
+    }
+    return work;
+  } catch (err) {
+    // The caller never receives `work` on a throw, so nothing else would remove it.
     await fs.rm(work, { recursive: true, force: true });
-    throw Object.assign(new Error('fixture contains a symlink'), { code: GRADER_FAILURES.symlink });
+    throw err;
   }
-  await fs.cp(fixtureDir, work, { recursive: true, verbatimSymlinks: true });
-  for (const { targetPath, content } of changes) {
-    const dest = path.join(work, targetPath);
-    if (path.relative(work, dest).startsWith('..')) throw Object.assign(new Error('path escape'), { code: GRADER_FAILURES.pathEscape });
-    await fs.mkdir(path.dirname(dest), { recursive: true });
-    // A symlink planted by an earlier write would redirect this one outside the work dir.
-    const existing = await fs.lstat(dest).catch(() => null);
-    if (existing?.isSymbolicLink()) throw Object.assign(new Error('symlink target'), { code: GRADER_FAILURES.symlink });
-    await fs.writeFile(dest, content);
-  }
-  return work;
 }
 
 /** Hidden tests are copied in after the patch: whatever the patch wrote at their paths is overwritten. */
