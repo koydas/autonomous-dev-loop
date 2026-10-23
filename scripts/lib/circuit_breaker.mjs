@@ -44,6 +44,6 @@ export function formatEscalationNote(streak, { threshold = BREAKER_THRESHOLD } =
   return [
     '',
     `> **🚨 ESCALATED** — the last ${streak} automated reviews (at least ${threshold} needed) reported the same failure: the fixes did not change the outcome, so the loop stops spending tokens on it.`,
-    '> Auto-fix is not triggered and `needs-human` is set. A different finding or an APPROVE resets the count; ticking the auto-fix rerun box of the escalation comment overrides it for one run.',
+    '> Auto-fix is not triggered and `needs-human` is set. A different finding or an APPROVE resets the count; a comment by a maintainer containing `- [x] Rerun auto-fix` overrides it for one run.',
   ].join('\n');
 }

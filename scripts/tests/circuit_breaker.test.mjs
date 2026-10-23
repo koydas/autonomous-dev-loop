@@ -46,5 +46,5 @@ test('formatEscalationNote names the streak and how the loop resumes', () => {
   assert.match(note, /ESCALATED/);
   assert.match(note, /the last 4 automated reviews \(at least 3 needed\)/);
   assert.match(note, /`needs-human`/);
-  assert.match(note, /rerun box/);
+  assert.match(note, /`- \[x\] Rerun auto-fix`/);
 });
