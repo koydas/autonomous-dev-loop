@@ -49,7 +49,7 @@ The lever for an `info` withheld card is the provider or its input budget (`revi
 
 | Finding | When it is raised, and how severe |
 |---|---|
-| **Review diffs are cut** (`review-coverage`) | Cut + WITHHELD is the ADR-0038 guardrail (`info`); cut + APPROVE cannot happen since ADR-0038 and is `critical`; any other verdict on a cut diff is a `warning` |
+| **Review diffs are cut** (`review-coverage`) | Cut + WITHHELD is the ADR-0038 guardrail (`info`), and so is a cut of tests / docs only (`unreviewed_code_files: 0`) whatever the verdict; cut code + APPROVE (or an APPROVE whose record has no count) cannot happen since ADR-0038 and is `critical`; any other verdict on cut code is a `warning` |
 | **Same PR head reviewed more than once** (`review-duplicates`) | A second run after a WITHHELD verdict (never deduplicated) or a manual re-run is by design (ADR-0028, `info`). Two runs on one head where the marker skipped neither is the push / pull_request race (`warning`) |
 | **Escalations the design does not explain** (`escalations`, `warning`) | Only for an *open* item escalated for a reason the guardrails do not explain: `no_changes` although a file was shown that is not protected (the repository's `config/protected-paths.yaml` ∪ the hard floor, read at build time); a patch rejected for its content (a write-guard rule other than `protected_path` / `unshown_file` / `withheld_file`); an error of the stage before the escalation; or a reason (or prompt budget) the record does not give. A protected or withheld target, a blocked generation and the attempt limit are queue rows (**Waiting on you**), not findings |
 
