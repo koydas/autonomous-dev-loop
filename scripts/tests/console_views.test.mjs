@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Script, runInNewContext } from 'node:vm';
 import {
   consoleContext, diagnosticsBody, findingCard, journeyPanel, keyEvents, runSteps, trendChart, statusBanner,
-  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel, leverCommand, leversBody,
+  definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel, leverCommand, leversBody, exportNote,
 } from '../lib/console_views.mjs';
 import { consoleOverview, kpiRow, delta, sparkline, statusBadge, durationChart, providerList, issueCards } from '../lib/console_overview.mjs';
 import { attemptOf, workItemJourney } from '../lib/pipeline_journey.mjs';
@@ -324,4 +324,23 @@ test('the Diagnostics page links to the Rules and levers page', () => {
 test('the lever block links to the entry of its rule on the Rules and levers page', () => {
   assert.match(findingCard(leverFinding({ id: 'autofix-ineffective' }), ''), /not what caused the finding \(<a href="levers\.html#rule-autofix-ineffective">this rule's entry<\/a>\)/);
   assert.match(findingCard(leverFinding(), '../'), /<a href="\.\.\/levers\.html#rule-review-coverage">/);
+});
+
+test('the Diagnostics page links to findings.json with what it holds and when it was generated', () => {
+  const ctx = consoleContext(modelOf([makeRecord({ runId: '1', events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 7 } }] })]));
+  const html = diagnosticsBody(ctx, '', { generatedAt: '2026-10-17T00:00:00Z' });
+  assert.match(html, /<a href="\.\.\/findings\.json">findings\.json<\/a> — the \d+ finding\(s\) below, over 1 recorded run\(s\), generated <time datetime="2026-10-17T00:00:00Z">2026-10-17T00:00:00Z<\/time>\./);
+  assert.match(html, /\/ai-dev-tools:loop-insights<\/code> \(<a href="levers\.html">Rules and levers<\/a>\)/);
+});
+
+test('exportNote: no build time reads without a timestamp, an empty window says 0 runs, a hostile time is escaped', () => {
+  const ctx = consoleContext(buildPipelineModel({}));
+  const none = exportNote(ctx.diagnosis, ctx.overview, '');
+  assert.match(none, /over 0 recorded run\(s\)\. It is the input/);
+  assert.ok(!none.includes('<time'));
+  assert.ok(!exportNote(ctx.diagnosis, ctx.overview, '', '').includes('<time'));
+  const hostile = exportNote(ctx.diagnosis, ctx.overview, '', '"><script>x</script>');
+  assert.ok(!hostile.includes('<script>'));
+  assert.match(hostile, /datetime="&quot;&gt;&lt;script&gt;/);
+  assert.match(exportNote(ctx.diagnosis, ctx.overview, '../'), /href="\.\.\/\.\.\/findings\.json"/);
 });

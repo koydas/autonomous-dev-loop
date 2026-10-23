@@ -341,7 +341,18 @@ export function leversBody(root = '') {
 <section class="panel" id="never"><h3>A lever never points at</h3><ul>${FORBIDDEN_REASONS.map((r) => `<li>${e(r)}</li>`).join('')}</ul><p class="muted">ADR-0046 §5: no lever lowers a threshold, removes a dataset case or weakens a gate.</p></section>`;
 }
 
-export function diagnosticsBody(ctx, root = '') {
+/**
+ * The line that ties the page to its machine-readable copy: `findings.json` at the site root, the input of
+ * `/ai-dev-tools:loop-insights` (ADR-0047). It states what the file holds (the findings above, over the same runs)
+ * and when it was generated, so an old file is visible from the page.
+ */
+export function exportNote(diagnosis, overview, root = '', generatedAt = null) {
+  const runs = overview.window.runs;
+  const stamp = typeof generatedAt === 'string' && generatedAt ? `, generated <time datetime="${e(generatedAt)}">${e(generatedAt)}</time>` : '';
+  return `<p class="export-note muted">Machine-readable copy: <a href="${root}../findings.json">findings.json</a> — the ${e(diagnosis.findings.length)} finding(s) below, over ${e(runs)} recorded run(s)${stamp}. It is the input of <code>/ai-dev-tools:loop-insights</code> (<a href="${root}levers.html">Rules and levers</a>).</p>`;
+}
+
+export function diagnosticsBody(ctx, root = '', { generatedAt = null } = {}) {
   const { diagnosis: d, overview: o } = ctx;
   const categories = [...new Set(d.findings.map((f) => f.category))];
   const counts = ['critical', 'warning', 'info'].map((s) => `${d.findings.filter((f) => f.severity === s).length} ${s}`).join(' · ');
@@ -351,6 +362,7 @@ export function diagnosticsBody(ctx, root = '') {
   return `<h1>Diagnostics</h1>
 <p class="sub">Problems detected by fixed rules over ${e(o.window.runs)} recorded run(s) and ${e(o.window.items)} work item(s) — no LLM involved. Each finding separates what was <strong>observed</strong> from a <strong>hypothesis</strong> about it, and lists the runs it was computed from.</p>
 ${statusBanner(d, o, root).replace(/<a class="button-link"[^>]*>[^<]*<\/a>/, '')}
+${exportNote(d, o, root, generatedAt)}
 <section data-filter-scope><div class="chip-row" role="group" aria-label="Severity">${[['', 'All'], ['critical', 'Critical'], ['warning', 'Warning'], ['info', 'Info']].map(([v, l]) => `<button type="button" class="chip" data-chip="severity" data-chip-value="${v}">${l} <span class="n">${v ? d.findings.filter((f) => f.severity === v).length : d.findings.length}</span></button>`).join('')}</div><div class="filterbar">${select('severity', 'Severity', [['critical', 'Critical'], ['warning', 'Warning'], ['info', 'Info']])}${select('category', 'Category', categories.map((c) => [c.toLowerCase().replace(/[^a-z0-9]+/g, '-'), c]))}<span data-filter-count role="status">${e(counts)}</span></div>
 <p data-filter-empty class="muted" hidden>No finding matches these filters.</p>
 ${d.findings.map((f) => findingCard(f, root)).join('') || '<div class="panel"><p>No rule fired on the recorded data. That is not proof of health: see the data gaps below.</p></div>'}</section>

@@ -569,7 +569,7 @@ ${sections || emptyCard('No LLM call or eval run recorded yet.')}`, 1);
  */
 export function buildPipelineSite({ model, health, models, generatedAt = null, console: ctx = consoleContext(model) }) {
   const files = {
-    'pipeline/diagnostics.html': pipelinePage('Diagnostics', `${nav('', model.months)}${diagnosticsBody(ctx, '')}`, 1),
+    'pipeline/diagnostics.html': pipelinePage('Diagnostics', `${nav('', model.months)}${diagnosticsBody(ctx, '', { generatedAt })}`, 1),
     'pipeline/levers.html': pipelinePage('Rules and levers', `${nav('', model.months)}${leversBody('')}`, 1),
     'pipeline/flows.html': pipelinePage('Pipelines', `${nav('', model.months)}${flowDashboard(model)}${FLOW_SCRIPT}`, 1, pipelineFacets(ctx.journeys)),
     // One stylesheet for the console components of every page (pipeline pages and the home page).
