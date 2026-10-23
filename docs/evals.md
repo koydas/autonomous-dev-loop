@@ -221,6 +221,18 @@ A TPM 429 that outlasts the retries, a 5xx or a network error does not trip it. 
 
 Residual risk: a suite day spends up to the whole TPD that production shares (≈ 8.3k tokens back per hour), and cache hits are not guaranteed. A run that hits the TPD anyway is stopped by the circuit breaker at the first 429 and not published; the following week retries. If review × 3 trips it, the remaining levers keep the gates: a separate Groq organization for evals (same model, own TPD) or the Groq Dev tier.
 
+## Executable suites: oracle phase (ADR-0052)
+
+`generation` and `autofix` (EV-02, EV-03) score a patch by running tests the model never saw. The oracle half is `scripts/lib/eval_oracle.mjs`; it is not registered as a suite yet (no `SUITES` entry, no cron, no workflow), so nothing here changes the weekly runs.
+
+- **Input** is the `model-output.json` artifact of the model phase, as data: `{ schema_version: 1, changes: [{ targetPath, content }] }`, at most 20 changes of 200,000 characters. Anything else is `ERROR` / `SCHEMA_INVALID`.
+- **Pins.** `evaluatePatch` recomputes `digestTree` of the fixture and of the oracle directory (paths, contents, symlink targets) and compares them with the case's `fixture_sha256` / `oracle_sha256`: a drift is `ERROR`, never a pass.
+- **Paths** are checked before anything is written. A patch may write only the paths the case lists in `allowedPaths`; `mustNotChange` (e.g. `package.json`, `.github/`), the hidden tests and every test file the fixture already has are `ORACLE_TAMPERING`; `..`, absolute paths and duplicates are `PATH_ESCAPE` / `SCHEMA_INVALID`. A fixture holding a symlink is `SYMLINK`.
+- **Run.** The patch is applied to a temporary copy, the hidden tests are copied in afterwards (so whatever the patch wrote at those paths is overwritten), then `existing_tests` and `hidden_tests` run, each only as `node --test <paths>`, with an allowlisted environment (`PATH`, `HOME`, `TMPDIR`, `CI`, `NODE_ENV`, `LANG`: no secret of the parent can pass) and a timeout. The runner is `runCheck` of `review_evidence.mjs`, whose `sanitizeEnv` is a second filter.
+- **Result** is `{ outcome: PASS | FAIL | ERROR, failure, path, checks }` with `failure` from the closed list `ORACLE_FAILURES`. A timeout, a command outside the allowed shape or a missing artifact is `ERROR`: never a success and never an expected block.
+
+Still to build for EV-02: the model-phase adapter that reuses the generation stage's context, prompt, parser and write guard on a fixture; the dataset and its fixtures; the three-job workflow; scorers and thresholds (published only after the baselines of the report, ADR-0031).
+
 ## Gates only tighten (ADR-0031)
 
 ### Known-gap cases

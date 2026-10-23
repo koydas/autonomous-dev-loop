@@ -7,6 +7,8 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Evals: oracle phase of the executable suites** (EV-02, first slice, ADR-0052). New `scripts/lib/eval_oracle.mjs` (c8 ≥ 80 % gate): validates the model-phase artifact, pins fixture and oracle by SHA-256, refuses path escapes, symlinks, protected and existing test paths, applies the patch to a temporary copy, restores the hidden tests after it and runs `node --test` commands with an allowlisted environment and a timeout. Outcomes are `PASS` / `FAIL` / `ERROR` with a closed failure code; a timeout or a bad command is `ERROR`. Not registered as a suite: no dataset, workflow, cron or threshold changes yet.
+
 - **ADR-0052 (Proposed): executable evals run in three jobs with one-way data flow** (EV-04). Model call (secrets, never applies the patch), oracle (no secrets, `contents: read`, fixture and oracle pinned by SHA-256, trusted default-branch code only) and scoring (data only) are separate jobs, and executable suites run on `schedule` / `workflow_dispatch`, not on `pull_request`, until a disposable runner exists. Nothing is implemented yet: `generation` and `autofix` suites (EV-02, EV-03) build on it. No change to the existing suites, thresholds or workflows.
 
 - **Evals: the `review` suite scores the verdict production publishes** (EV-01).
