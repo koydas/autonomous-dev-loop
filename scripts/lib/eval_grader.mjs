@@ -27,6 +27,7 @@ export const GRADER_FAILURES = Object.freeze({
   hiddenTests: 'HIDDEN_TESTS_FAILED',
   existingTests: 'EXISTING_TESTS_FAILED',
   timeout: 'TIMEOUT',
+  incomplete: 'TESTS_INCOMPLETE',
   graderError: 'GRADER_ERROR',
 });
 
@@ -143,6 +144,27 @@ export async function restoreGraderFiles(workDir, hiddenDir, files) {
   }
 }
 
+const escapeRegExp = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * A zero exit status is not evidence that the tests ran: code the patch executes can `process.exit(0)` while the test
+ * file is being loaded, and Node then counts the file itself as one passing test. Completion is read from the runner's
+ * own TAP output instead: its closing summary must report exactly the expected number of tests, all passing and none
+ * skipped, cancelled or todo, and every expected test name must appear as a passing top-level result. Node prefixes any
+ * line the tested code prints with `# `, so a patch cannot forge either. Fails closed: output that cannot be read, for
+ * example truncated, is not complete.
+ * @returns {{ ok: boolean, reason: string | null }}
+ */
+export function verifyTestRun(output, expected) {
+  const text = String(output ?? '');
+  const last = (key) => [...text.matchAll(new RegExp(`^# ${key} (\\d+)$`, 'gm'))].map((m) => Number(m[1])).at(-1);
+  const n = expected.length;
+  if (last('tests') !== n || last('pass') !== n) return { ok: false, reason: 'summary does not report the expected tests' };
+  if (['fail', 'cancelled', 'skipped', 'todo'].some((k) => last(k) !== 0)) return { ok: false, reason: 'summary reports failed, cancelled, skipped or todo tests' };
+  const missing = expected.filter((name) => !new RegExp(`^\\s*ok \\d+ - ${escapeRegExp(name)}$`, 'm').test(text));
+  return missing.length ? { ok: false, reason: 'expected tests missing from the output' } : { ok: true, reason: null };
+}
+
 /** Digest of the given files of a work dir; a missing file has its own marker, so a deletion changes it too. */
 export async function digestFiles(workDir, files) {
   const h = createHash('sha256');
@@ -158,7 +180,8 @@ export async function digestFiles(workDir, files) {
  * `{ workDir, protectedFiles, cleanup }`): code the patch runs during the existing tests can neither rewrite the hidden
  * tests for the next command nor leave state behind. The protected files (hidden tests, tests the fixture has) are
  * digested around each run: a change, even by a process that exits 0, is GRADER_TAMPERING. `grader.existing_tests` and
- * `grader.hidden_tests` are commands of the allowed shape; one that is not is GRADER_ERROR (configuration), a timeout
+ * `grader.hidden_tests` are `{ command, expected }`: a command of the allowed shape and the names of the tests it must
+ * report (`verifyTestRun`); one that is not is GRADER_ERROR (configuration), a timeout
  * is TIMEOUT: neither is a success.
  * @returns {Promise<{ passed: boolean, checks: { name: string, status: string, exit_code: number | null }[], failure: string | null }>}
  */
@@ -167,17 +190,20 @@ export async function runGraderChecks(prepare, grader, { timeoutMs = DEFAULT_GRA
   const checks = [];
   try {
     for (const [name, failure] of [['existing_tests', GRADER_FAILURES.existingTests], ['hidden_tests', GRADER_FAILURES.hiddenTests]]) {
-      const command = grader?.[name];
-      if (!isAllowedCommand(command)) return { passed: false, checks, failure: GRADER_FAILURES.graderError };
+      const { command, expected } = grader?.[name] ?? {};
+      const wellFormed = Array.isArray(expected) && expected.length > 0 && expected.every((t) => typeof t === 'string' && t !== '');
+      if (!isAllowedCommand(command) || !wellFormed) return { passed: false, checks, failure: GRADER_FAILURES.graderError };
       const { workDir, protectedFiles = [], cleanup } = await prepare();
       try {
         const before = await digestFiles(workDir, protectedFiles);
-        const r = await run({ name, command, timeoutMs }, { cwd: workDir, env: graderEnv(home) });
+        // The reporter is forced: the default depends on whether stdout is a terminal and on the Node version.
+        const r = await run({ name, command: command.replace(/^node --test/, 'node --test --test-reporter=tap'), timeoutMs }, { cwd: workDir, env: graderEnv(home) });
         checks.push({ name, status: r.status, exit_code: r.exit_code });
         if ((await digestFiles(workDir, protectedFiles)) !== before) return { passed: false, checks, failure: GRADER_FAILURES.tampering };
         if (r.status === 'timeout') return { passed: false, checks, failure: GRADER_FAILURES.timeout };
         if (r.status === 'error') return { passed: false, checks, failure: GRADER_FAILURES.graderError };
         if (r.status === 'fail') return { passed: false, checks, failure };
+        if (!verifyTestRun(r.output_tail, expected).ok) return { passed: false, checks, failure: GRADER_FAILURES.incomplete };
       } finally {
         await cleanup?.();
       }

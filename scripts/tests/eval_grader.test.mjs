@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   GRADER_FAILURES as F, MODEL_OUTPUT_SCHEMA_VERSION, MAX_CHANGES, MAX_CONTENT_CHARS,
   digestTree, validateModelOutput, checkPatchPaths, isAllowedCommand, graderEnv, evaluatePatch,
-  applyPatchToCopy, restoreGraderFiles, runGraderChecks, digestFiles, sha256,
+  applyPatchToCopy, restoreGraderFiles, runGraderChecks, digestFiles, verifyTestRun, sha256,
 } from '../lib/eval_grader.mjs';
 
 let root;
@@ -37,7 +37,10 @@ before(async () => {
     fixtureSha256: await digestTree(fixtureDir),
     graderDir,
     graderSha256: await digestTree(graderDir),
-    grader: { existing_tests: 'node --test test/existing.test.mjs', hidden_tests: 'node --test test/hidden.test.mjs' },
+    grader: {
+      existing_tests: { command: 'node --test test/existing.test.mjs', expected: ['finds'] },
+      hidden_tests: { command: 'node --test test/hidden.test.mjs', expected: ['unknown customer is null', 'no secret reaches the grader'] },
+    },
     allowedPaths: ['src/customers.mjs'],
     mustNotChange: ['package.json', '.github/'],
     hiddenFiles: ['test/hidden.test.mjs'],
@@ -49,6 +52,9 @@ after(async () => {
   delete process.env.GITHUB_TOKEN;
   await fs.rm(root, { recursive: true, force: true });
 });
+
+// What `node --test --test-reporter=tap` prints for passing top-level tests.
+const tap = (names, { extra = '' } = {}) => ['TAP version 13', ...names.flatMap((n, i) => [`# Subtest: ${n}`, `ok ${i + 1} - ${n}`, '  ---', '  type: \'test\'', '  ...']), `1..${names.length}`, `# tests ${names.length}`, '# suites 0', `# pass ${names.length}`, '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0', extra].join('\n');
 
 const output = (changes) => ({ schema_version: MODEL_OUTPUT_SCHEMA_VERSION, changes });
 const patch = (targetPath, content) => output([{ targetPath, content }]);
@@ -144,7 +150,7 @@ test('evaluatePatch: a malformed artifact, or a drifted fixture or grader, is ER
 });
 
 test('evaluatePatch: a command outside the allowed shape is a configuration ERROR', async () => {
-  const r = await evaluatePatch({ ...base, grader: { ...base.grader, hidden_tests: 'npm test' }, output: patch('src/customers.mjs', FIXED) });
+  const r = await evaluatePatch({ ...base, grader: { ...base.grader, hidden_tests: { command: 'npm test', expected: ['x'] } }, output: patch('src/customers.mjs', FIXED) });
   assert.deepEqual([r.outcome, r.failure], ['ERROR', F.graderError]);
 });
 
@@ -189,7 +195,7 @@ test('runGraderChecks: spawn errors map to their status through an injected runn
   const calls = [];
   let cleaned = 0;
   const prepare = async () => ({ workDir: root, protectedFiles: [], cleanup: async () => { cleaned += 1; } });
-  const run = async (check, opts) => { calls.push({ name: check.name, env: opts.env }); return { status: check.name === 'existing_tests' ? 'pass' : 'error', exit_code: null }; };
+  const run = async (check, opts) => { calls.push({ name: check.name, env: opts.env }); return check.name === 'existing_tests' ? { status: 'pass', exit_code: 0, output_tail: tap(['finds']) } : { status: 'error', exit_code: null }; };
   const r = await runGraderChecks(prepare, base.grader, { run });
   assert.equal(r.failure, F.graderError);
   assert.equal(calls.length, 2);
@@ -199,7 +205,7 @@ test('runGraderChecks: spawn errors map to their status through an injected runn
 
 test('runGraderChecks: a command outside the allowed shape stops before any copy is made', async () => {
   let prepared = 0;
-  const r = await runGraderChecks(async () => { prepared += 1; return { workDir: root }; }, { existing_tests: 'npm test', hidden_tests: 'x' });
+  const r = await runGraderChecks(async () => { prepared += 1; return { workDir: root }; }, { existing_tests: { command: 'npm test', expected: ['x'] }, hidden_tests: { command: 'x', expected: ['x'] } });
   assert.equal(r.failure, F.graderError);
   assert.equal(prepared, 0);
 });
@@ -286,4 +292,43 @@ test('evaluatePatch: a hidden file the grader directory does not hold is an ERRO
   const r = await evaluatePatch({ ...base, hiddenFiles: ['test/missing.test.mjs'], output: patch('src/customers.mjs', FIXED) });
   assert.deepEqual([r.outcome, r.failure], ['ERROR', F.graderError]);
   assert.deepEqual(await tmpCopies(), before);
+});
+
+test('verifyTestRun: complete runs pass; missing summary, wrong counts, skipped, cancelled, missing names and forged lines do not', () => {
+  const names = ['a', 'b.c (d)'];
+  assert.deepEqual(verifyTestRun(tap(names), names), { ok: true, reason: null });
+  assert.equal(verifyTestRun('', names).ok, false);
+  assert.equal(verifyTestRun(undefined, names).ok, false);
+  assert.equal(verifyTestRun(tap(['a']), names).ok, false);
+  assert.equal(verifyTestRun(tap(names).replace('# pass 2', '# pass 1'), names).ok, false);
+  for (const key of ['fail', 'cancelled', 'skipped', 'todo']) assert.equal(verifyTestRun(tap(names).replace(`# ${key} 0`, `# ${key} 1`), names).ok, false, key);
+  assert.equal(verifyTestRun(tap(['a', 'other']), names).ok, false);
+  // The runner prefixes anything the tested code prints with "# ", so forged results never match a result line.
+  assert.equal(verifyTestRun(['TAP version 13', '# ok 1 - a', '# ok 2 - b.c (d)', '# # tests 2', '# # pass 2', 'ok 1 - test/t.test.mjs', '1..1', '# tests 1', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0'].join('\n'), names).ok, false);
+  // Only the closing summary counts: an earlier line cannot stand in for it.
+  assert.equal(verifyTestRun(`# tests 2\n# pass 2\n${tap(['a'])}`, names).ok, false);
+});
+
+test('evaluatePatch: process.exit(0) while the tests load is TESTS_INCOMPLETE, not a pass', async () => {
+  const premature = 'process.exit(0);\nexport const find = () => null;\n';
+  const r = await evaluatePatch({ ...base, output: patch('src/customers.mjs', premature) });
+  assert.deepEqual([r.outcome, r.failure], ['FAIL', F.incomplete]);
+  assert.equal(r.checks[0].name, 'existing_tests');
+});
+
+test('evaluatePatch: the hidden tests must complete too, even when the existing ones do', async () => {
+  // Exits only once the hidden suite is running (it is the one that reads the flag it was given).
+  const sneaky = SELF_MODIFYING("if (process.argv.some((a) => a.endsWith('hidden.test.mjs'))) process.exit(0);");
+  const r = await evaluatePatch({ ...base, output: patch('src/customers.mjs', sneaky) });
+  assert.deepEqual([r.outcome, r.failure], ['FAIL', F.incomplete], JSON.stringify(r));
+  assert.deepEqual(r.checks.map((c) => c.name), ['existing_tests', 'hidden_tests']);
+});
+
+test('runGraderChecks: expected tests missing or malformed in the grader is a configuration ERROR before any copy', async () => {
+  for (const bad of [undefined, [], [''], [1], 'x']) {
+    let prepared = 0;
+    const r = await runGraderChecks(async () => { prepared += 1; return { workDir: root }; }, { existing_tests: { command: 'node --test t.mjs', expected: bad }, hidden_tests: base.grader.hidden_tests });
+    assert.equal(r.failure, F.graderError, String(bad));
+    assert.equal(prepared, 0);
+  }
 });
