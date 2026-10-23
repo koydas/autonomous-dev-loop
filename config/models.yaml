@@ -76,8 +76,10 @@ autofix_feedback_ratio: 0.25
 # No temperature: Opus 4.7+ / 5.x reject sampling parameters (400).
 #
 # Per-stage models (ADR-0032 amendment): PROVISIONAL until measured. A stage moves to a model only after its
-# eval suite passes the ADR-0031 gates on that model (docs/evals.md#measuring-a-model). Production's primary
-# is Groq (AI_PROVIDER), so today these are the fallback's models. Opus is one line away:
+# eval suite passes the ADR-0031 gates on that model (docs/evals.md#measuring-a-model). This file does not pick the
+# primary: the repository variables AI_PROVIDER / AI_PROVIDER_<STAGE> do. A stage whose primary is Anthropic runs
+# these models in production (review since 2026-10-20, per the published run records); for the others they are
+# the fallback's. Opus is one line away:
 #   anthropic_<stage>: claude-opus-5-5
 anthropic_validation:            claude-haiku-5-5
 anthropic_validation_effort:     low
