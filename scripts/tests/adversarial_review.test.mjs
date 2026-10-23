@@ -108,3 +108,20 @@ test('blockingFindingAxes keeps the closed axis ids tagged on High and Medium fi
   assert.deepEqual(blockingFindingAxes(null), []);
   assert.deepEqual(blockingFindingAxes('### Issues Found\n1. [High] x — Axis: issue_fit\n2. [Medium] y — Axis: issue fit'), ['issue_fit']);
 });
+
+test('blockingFindingAxes ignores the continuation lines of a Low finding, and of any non-finding bullet', async () => {
+  const { blockingFindingAxes } = await import('../lib/adversarial_review.mjs');
+  const review = [
+    '### ⚠️ Issues Found',
+    '- [High] Crash — File: a.mjs Lines: 3 Axis: robustness',
+    '- [Low] Naming — File: b.mjs Lines: 1',
+    '  Root cause: r Fix: f Axis: types',
+    '- Not a finding',
+    '  Axis: issue_fit',
+    '',
+    '### 🚀 Verdict',
+    'REQUEST_CHANGES',
+  ].join('\n');
+  assert.deepEqual(blockingFindingAxes(review), ['robustness']);
+  assert.deepEqual(blockingFindingAxes('### Issues Found\n- [Medium] x — File: a.mjs\n  continued Axis: side_effects'), ['side_effects'], 'a High / Medium continuation still counts');
+});

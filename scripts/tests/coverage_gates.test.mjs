@@ -81,3 +81,12 @@ test('CLI arguments: none, or --only <module>; anything else is refused (--sync 
     assert.throws(() => parseArgs(bad), /unknown arguments/, JSON.stringify(bad));
   }
 });
+
+test('the gate list is the only copy: every gated module exists, and the prompt-sync API of the former list is gone', async () => {
+  const { readFileSync, existsSync } = await import('node:fs');
+  const lib = await import('../lib/coverage_gates.mjs');
+  const real = parseGates(readFileSync(new URL('../../config/coverage-gates.json', import.meta.url), 'utf8'));
+  for (const g of real.gates) assert.ok(existsSync(new URL(`../../${g.module}`, import.meta.url)), g.module);
+  assert.equal(lib.syncGatePrompt, undefined);
+  assert.equal(lib.gatedFilesProse, undefined);
+});

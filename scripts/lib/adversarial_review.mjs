@@ -72,18 +72,19 @@ const AXIS_TAG = /\bAxis:\s*\**\s*([A-Za-z][A-Za-z _-]{2,20})/i;
  * @returns {string[]} unique axis ids, in axis order
  */
 export function blockingFindingAxes(review) {
+  // One entry per finding bullet, with its continuation lines; only High and Medium entries are read.
   const findings = [];
   let inIssues = false;
   for (const line of String(review ?? '').split('\n')) {
     if (ISSUES_HEADING.test(line)) inIssues = true;
     else if (ANY_HEADING.test(line)) inIssues = false;
-    else if (inIssues && FINDING_START.test(line)) findings.push(line);
-    else if (inIssues && findings.length && !/^\s*(?:[-*]|\d+[.)])\s/.test(line)) findings[findings.length - 1] += `\n${line}`;
-    else if (inIssues) findings.push('');
+    else if (inIssues && /^\s*(?:[-*]|\d+[.)])\s/.test(line)) findings.push({ blocking: FINDING_START.test(line), text: line });
+    else if (inIssues && findings.length) findings[findings.length - 1].text += `\n${line}`;
   }
   const found = new Set();
-  for (const finding of findings) {
-    const tag = finding.match(AXIS_TAG)?.[1]?.trim().toLowerCase().replace(/[ -]+/g, '_');
+  for (const { blocking, text } of findings) {
+    if (!blocking) continue;
+    const tag = text.match(AXIS_TAG)?.[1]?.trim().toLowerCase().replace(/[ -]+/g, '_');
     if (tag) found.add(tag === 'side_effect' ? 'side_effects' : tag === 'type' || tag === 'type_integrity' ? 'types' : tag);
   }
   return ADVERSARIAL_AXES.map((a) => a.id).filter((id) => found.has(id));
