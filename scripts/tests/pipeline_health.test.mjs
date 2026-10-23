@@ -53,7 +53,7 @@ test('reviews: WITHHELD rate, every cause, the #220 backstop, cut diffs and cycl
   assert.deepEqual(reviews.verdicts, { APPROVE: 1, REQUEST_CHANGES: 0, WITHHELD: 6, other: 1 });
   assert.equal(reviews.total, 8);
   assert.equal(reviews.withheld_rate, 6 / 8);
-  assert.deepEqual(Object.fromEntries(reviews.causes.map((c) => [c.key, c.count])), { approve_cut: 1, rc_unseen: 1, cut_unknown: 1, evidence_missing: 1, evidence_stale: 1, other: 1 });
+  assert.deepEqual(Object.fromEntries(reviews.causes.map((c) => [c.key, c.count])), { approve_cut: 1, rc_unseen: 1, cut_unknown: 1, protocol: 0, evidence_missing: 1, evidence_stale: 1, other: 1 });
   assert.equal(reviews.rc_to_withheld, 1);
   assert.deepEqual(reviews.diff_cut, { reviews: 4, withheld: 3 });
   assert.deepEqual(reviews.cycles_per_pr, [{ pr: 8, cycles: 2 }, { pr: 7, cycles: 6 }]);
@@ -68,7 +68,7 @@ test('reviews: a present withheld_from: null on a cut diff is an evidence cause,
     makeRecord({ runId: '20', start: T0 + 2, events: [verdict('WITHHELD', { evidence_state: 'available', unreviewed_code_files: 2, withheld_from: null })] }),
   ];
   const causes = Object.fromEntries(computeHealth({ model: model(records) }).reviews.causes.map((c) => [c.key, c.count]));
-  assert.deepEqual(causes, { approve_cut: 0, rc_unseen: 0, cut_unknown: 0, evidence_missing: 1, evidence_stale: 1, other: 1 });
+  assert.deepEqual(causes, { approve_cut: 0, rc_unseen: 0, cut_unknown: 0, protocol: 0, evidence_missing: 1, evidence_stale: 1, other: 1 });
 });
 
 test('auto-fix outcomes by kind and guardrail rule; legacy lines count only without a record', () => {
@@ -246,12 +246,16 @@ test('groq tokens per day leave out the cached prompt tokens of measured calls (
 test('withheldCause: every WITHHELD_CAUSES key from a review.verdict meta', () => {
   assert.equal(withheldCause({ withheld_from: 'APPROVE', unreviewed_code_files: 2 }), 'approve_cut');
   assert.equal(withheldCause({ withheld_from: 'REQUEST_CHANGES' }), 'rc_unseen');
+  // ADR-0049: the adversarial protocol withheld an approval nothing else stopped; it wins over a missing-evidence reading of the same meta.
+  assert.equal(withheldCause({ withheld_for: 'protocol', withheld_from: null, evidence_state: 'available' }), 'protocol');
+  assert.equal(withheldCause({ withheld_for: 'protocol', evidence_state: 'missing' }), 'protocol');
+  assert.equal(withheldCause({ withheld_for: null, evidence_state: 'missing' }), 'evidence_missing');
   assert.equal(withheldCause({ unreviewed_code_files: 3 }), 'cut_unknown', 'record written before withheld_from existed');
   // A present null means no backstop: the cut alone does not make it cut_unknown.
   assert.equal(withheldCause({ withheld_from: null, unreviewed_code_files: 3 }), 'other');
   assert.equal(withheldCause({ unreviewed_code_files: 0, evidence_state: 'missing' }), 'evidence_missing');
   assert.equal(withheldCause({ evidence_state: 'stale' }), 'evidence_stale');
   assert.equal(withheldCause({}), 'other');
-  assert.deepEqual(Object.keys(WITHHELD_CAUSES), ['approve_cut', 'rc_unseen', 'cut_unknown', 'evidence_missing', 'evidence_stale', 'other']);
+  assert.deepEqual(Object.keys(WITHHELD_CAUSES), ['approve_cut', 'rc_unseen', 'cut_unknown', 'protocol', 'evidence_missing', 'evidence_stale', 'other']);
   assert.ok(Object.isFrozen(WITHHELD_CAUSES));
 });

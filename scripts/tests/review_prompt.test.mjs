@@ -480,3 +480,21 @@ test('buildReviewPrompt leaves the automation-gate context out for another repos
   assert.doesNotMatch(off, /Automation gates context:/);
   assert.match(off, /Change classification context:/);
 });
+
+// ── gated_files_changed (gate (c) names the changed gated files instead of listing every gated module) ──────────
+test('loadGatedModules reads config/coverage-gates.json, and is null when it cannot be read', async () => {
+  const { loadGatedModules } = await import('../lib/review_prompt.mjs');
+  const modules = loadGatedModules();
+  assert.ok(modules.includes('scripts/lib/review_prompt.mjs') && modules.includes('scripts/build_eval_site.mjs'));
+  assert.equal(loadGatedModules('/nonexistent-root'), null);
+});
+
+test('the automation gates context names the changed files that are gated, none, or omits the line when the gates are unknown', async () => {
+  const { buildAutomationGateContext } = await import('../lib/coverage_checker.mjs');
+  const diff = (file) => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n+x\n`;
+  const gated = ['scripts/lib/a.mjs'];
+  assert.match(buildAutomationGateContext(diff('scripts/lib/a.mjs') + diff('scripts/lib/b.mjs'), gated), /- gated_files_changed: scripts\/lib\/a\.mjs\n/);
+  assert.match(buildAutomationGateContext(diff('scripts/lib/b.mjs'), gated), /- gated_files_changed: none\n/);
+  assert.doesNotMatch(buildAutomationGateContext(diff('scripts/lib/a.mjs')), /gated_files_changed/);
+  assert.equal(buildAutomationGateContext(diff('src/x.js'), gated), '', 'outside the automation scope: no context at all');
+});

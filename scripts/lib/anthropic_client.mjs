@@ -1,5 +1,5 @@
 import { classifyError } from './error_taxonomy.mjs';
-import { retryWithBackoff } from './retry.mjs';
+import { retryWithBackoff, parseRetryAfterMs, MAX_LLM_RETRY_AFTER_MS } from './retry.mjs';
 
 const ANTHROPIC_API_URL_DEFAULT = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -67,6 +67,9 @@ export async function callAnthropic({
     headers['anthropic-beta'] = SERVER_FALLBACK_BETA;
   }
 
+  const waitBudget = Number(process.env.LLM_MAX_RETRY_WAIT_MS);
+  const maxWaitMs = Number.isFinite(waitBudget) && waitBudget > 0 ? waitBudget : MAX_LLM_RETRY_AFTER_MS;
+
   const rawText = await retryWithBackoff(async () => {
     let response;
     try {
@@ -87,6 +90,15 @@ export async function callAnthropic({
       err.status = response.status;
       err.errorType = classifyError(String(response.status));
       err.retryable = RETRYABLE_STATUS_CODES.has(response.status);
+      // ADR-0050: the server's own wait (429, 529) replaces the short backoff, within the same budget as Groq;
+      // a longer one fails fast so callLLM can fall back instead of idling until the job timeout.
+      if (err.retryable) {
+        const waitMs = parseRetryAfterMs(response.headers?.get?.('retry-after'));
+        if (waitMs !== undefined) {
+          err.waitMs = waitMs;
+          if (waitMs > maxWaitMs) err.retryable = false;
+        }
+      }
       throw err;
     }
     return text;

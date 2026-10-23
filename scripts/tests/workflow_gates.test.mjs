@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseGates, c8Args, syncGatePrompt, GATES_CONFIG_PATH } from '../lib/coverage_gates.mjs';
+import { parseGates, c8Args, GATES_CONFIG_PATH } from '../lib/coverage_gates.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const workflow = readFileSync(resolve(ROOT, '.github/workflows/test.yml'), 'utf8');
@@ -40,14 +40,15 @@ test('the coverage threshold is 80 on lines, branches, functions and statements 
   }
 });
 
-test('pr-review-repo-rules.md lists exactly the files gated by c8 (gate (c) must not drift: node scripts/coverage_gates.mjs --sync)', () => {
+test('pr-review-repo-rules.md carries the gate (c) rule, not a list of the gated files; the context names the changed ones', async () => {
   // ADR-0045: gate (c) is a rule written for this repository, so it lives in the repository rules, not in the neutral core.
   const prompt = readFileSync(resolve(ROOT, 'prompts/pr-review-repo-rules.md'), 'utf8');
   const gateLine = prompt.split('\n').find((line) => line.startsWith('* For gate (c),'));
   assert.ok(gateLine, 'gate (c) rule missing from prompts/pr-review-repo-rules.md');
-  assert.equal(syncGatePrompt(prompt, gatesConfig.gates), prompt, 'the list is out of date: run node scripts/coverage_gates.mjs --sync');
-  const listed = [...gateLine.matchAll(/`(scripts\/[^`]+\.mjs)`/g)].map((m) => m[1]).filter((f) => !f.includes('*') && f !== 'scripts/coverage_gates.mjs');
-  assert.deepEqual(listed, gatesConfig.gates.map((g) => g.module));
+  assert.match(gateLine, /`gated_files_changed`/);
+  assert.deepEqual([...gateLine.matchAll(/`(scripts\/lib\/[^`]+\.mjs)`/g)].map((m) => m[1]).filter((f) => !f.includes('*')), [], 'a module list in the prompt would drift (and costs ~600 tokens of the diff room)');
+  const { loadGatedModules } = await import('../lib/review_prompt.mjs');
+  assert.deepEqual(loadGatedModules(), gatesConfig.gates.map((g) => g.module));
 });
 
 test('the test-protocol skill points at the gate list instead of keeping a copy', () => {

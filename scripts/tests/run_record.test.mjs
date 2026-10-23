@@ -195,6 +195,20 @@ test('the record keeps the run envelope, timing, spans and the allowlisted event
   assert.ok(!('run_id' in record.events[0]), 'per-event run_id is not repeated');
 });
 
+test('the adversarial protocol, circuit breaker and lessons events publish their closed-vocabulary meta and nothing else (ADR-0049, ADR-0050, ADR-0051)', () => {
+  const verdict = ev('review.verdict', { prNumber: 5, verdict: 'WITHHELD', withheld_for: 'protocol', adversarial_points: 1, adversarial_axes: ['robustness'], blocking_axes: ['types'], streak: 2, review_text: 'the model said this' });
+  const escalated = ev('review.escalated', { prNumber: 5, reason: 'circuit_breaker', streak: 3, labels_added: ['needs-human'], url: 'https://github.com/owner/repo/pull/5#issuecomment-1', finding_titles: ['leak'] });
+  const loaded = ev('lessons.loaded', { stage: 'autofix', count: 1, ids: ['rule:module_system'], text: 'a lesson as the model would phrase it' });
+  const unavailable = ev('lessons.unavailable', { stage: 'generation', reason: 'http_error', status: 500, body: 'provider body' });
+  const record = redactTrace(trace({ events: [verdict, escalated, loaded, unavailable] }), { env: ENV });
+  assert.deepEqual(record.events.map((e) => e.meta), [
+    { prNumber: 5, verdict: 'WITHHELD', withheld_for: 'protocol', adversarial_points: 1, adversarial_axes: ['robustness'], blocking_axes: ['types'], streak: 2 },
+    { prNumber: 5, reason: 'circuit_breaker', streak: 3, labels_added: ['needs-human'], url: 'https://github.com/owner/repo/pull/5#issuecomment-1' },
+    { stage: 'autofix', count: 1, ids: ['rule:module_system'] },
+    { stage: 'generation', reason: 'http_error', status: 500 },
+  ]);
+});
+
 test(`events past ${MAX_RECORD_BYTES} bytes are counted in events_overflow, added to the journal's own`, () => {
   const error = 'q'.repeat(MAX_STRING);
   const events = Array.from({ length: 2000 }, () => ev('review.error', { error }));

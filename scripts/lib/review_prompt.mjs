@@ -1,6 +1,10 @@
 import { filterDiff, stripDiffCutMarker } from './file_filters.mjs';
 import { interpolatePrompt, loadPrompt } from './prompts.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildAutomationGateContext } from './coverage_checker.mjs';
+import { GATES_CONFIG_PATH, parseGates } from './coverage_gates.mjs';
+import { PIPELINE_ROOT } from './roots.mjs';
 import { buildChangeClassificationContext, isDocumentationFile, isTestFile } from './change_classifier.mjs';
 import { formatEvidenceContext } from './review_evidence.mjs';
 import { fitReviewPrompt } from './token_budget.mjs';
@@ -173,6 +177,15 @@ export function loadReviewSystemPrompt({ self, guidelines = '' }) {
   return assembleReviewSystemPrompt(loadPrompt('pr-review-system'), self ? loadPrompt('pr-review-repo-rules') : '', { self, guidelines });
 }
 
+/** Module paths of config/coverage-gates.json, or null when it cannot be read (the context then omits `gated_files_changed`). */
+export function loadGatedModules(root = PIPELINE_ROOT) {
+  try {
+    return parseGates(readFileSync(join(root, GATES_CONFIG_PATH), 'utf8')).gates.map((g) => g.module);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Renders the review user prompt: diff + PR title/body + classification, automation-gate,
  * dependency-manifest and tool-evidence contexts, fitted to `maxInputTokens` (ADR-0028).
@@ -192,7 +205,7 @@ export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, p
   const fullDiff = filterDiff(orderedDiff, Infinity);
   const cappedDiff = maxInputTokens == null ? filterDiff(orderedDiff, maxDiffChars ?? UNBUDGETED_MAX_DIFF_CHARS) : fullDiff;
   const fit = (adrCount) => {
-    const reviewContexts = `${automationGates ? buildAutomationGateContext(rawDiff) : ''}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
+    const reviewContexts = `${automationGates ? buildAutomationGateContext(rawDiff, loadGatedModules()) : ''}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
     return fitReviewPrompt({
       systemPrompt,
       diff: cappedDiff,

@@ -22,6 +22,8 @@ import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudge
 import { modelsFromContent, loadReviewGuidelines } from './lib/layered_config.mjs';
 import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote } from './lib/review_evidence.mjs';
+import { analyzeAdversarial, enforceAdversarialProtocol, formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
+import { failureSignature, nextStreak, isBreakerOpen, formatEscalationNote } from './lib/circuit_breaker.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
 const _reviewStartMs = Date.now();
@@ -401,9 +403,18 @@ const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? repoConfigFile(
 const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
 // ADR-0038: an approval of a diff whose code was cut to the budget is withheld; a human reviews the rest.
 // So is a REQUEST_CHANGES whose findings all cite only cut code files (#219), unless a check failed.
-const { verdict, reason: verdictReason } = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview, { checksFailed: evidence.failing.length > 0, shownFiles });
-const withheldForUnreviewedCode = evidenceDecision.verdict === 'APPROVE' && verdict === 'WITHHELD';
-const withheldForUnseenFindings = evidenceDecision.verdict === 'REQUEST_CHANGES' && verdict === 'WITHHELD';
+const codeDecision = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview, { checksFailed: evidence.failing.length > 0, shownFiles });
+// ADR-0049: an approval that did not attack the diff on the four axes (at least 2 risks named) is withheld too.
+const adversarial = analyzeAdversarial(cleanReview);
+const { verdict, reason: verdictReason } = enforceAdversarialProtocol(codeDecision, adversarial);
+const withheldForUnreviewedCode = evidenceDecision.verdict === 'APPROVE' && codeDecision.verdict === 'WITHHELD';
+const withheldForUnseenFindings = evidenceDecision.verdict === 'REQUEST_CHANGES' && codeDecision.verdict === 'WITHHELD';
+const withheldForProtocol = codeDecision.verdict === 'APPROVE' && verdict === 'WITHHELD';
+// ADR-0050: consecutive reviews reporting the same failure. At BREAKER_THRESHOLD the loop is ESCALATED:
+// no re-pulse of changes-requested (so no auto-fix), needs-human instead.
+const previousMarker = parseReviewMarker(existing?.body);
+const { streak, sig } = nextStreak(previousMarker, { verdict, sig: failureSignature({ failing: evidence.failing, review: cleanReview }) });
+const breakerOpen = verdict === 'REQUEST_CHANGES' && isBreakerOpen(streak);
 const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES';
 const isApproved = verdict === 'APPROVE';
 const isWithheld = verdict === 'WITHHELD';
@@ -411,9 +422,11 @@ const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_C
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 // ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget) + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : withheldForUnseenFindings ? formatUnseenFindingsNote(unreviewedCodeFiles) : formatWithheldNote(verdictReason)) : '');
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget)
+  + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : withheldForUnseenFindings ? formatUnseenFindingsNote(unreviewedCodeFiles) : withheldForProtocol ? formatProtocolNote(adversarial) : formatWithheldNote(verdictReason)) : '')
+  + (breakerOpen ? formatEscalationNote(streak) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
-const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict })}` : '';
+const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict, streak, sig })}` : '';
 const body = stripReviewMarkers(evidence.failing.length > 0
   ? `${HEADING}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
   : `${reviewText}\n${evidenceSection}`) + reviewMarker;
@@ -430,7 +443,8 @@ const postRes = await ghFetch(commentUrl, {
 if (!postRes.ok) throw new Error(`Comment upsert failed: ${postRes.status} ${await postRes.text()}`);
 
 log(`PR review comment ${existing ? 'updated' : 'posted'}`, { prNumber });
-obsLog({ stage: 'review', event: 'review.comment_posted', level: 'info', meta: { prNumber, action: existing ? 'updated' : 'created', headSha, url: await htmlUrlOf(postRes) } });
+const reviewCommentUrl = await htmlUrlOf(postRes);
+obsLog({ stage: 'review', event: 'review.comment_posted', level: 'info', meta: { prNumber, action: existing ? 'updated' : 'created', headSha, url: reviewCommentUrl } });
 
 const shortReviewBody = isApproved
   ? 'Automated review passed. See the review comment for details.'
@@ -439,8 +453,12 @@ const shortReviewBody = isApproved
       ? 'Approval withheld: code was cut from the reviewed diff. See the review comment for details.'
       : withheldForUnseenFindings
         ? 'Changes not requested: every finding cites only code cut from the reviewed diff. See the review comment for details.'
-        : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
-    : 'Changes required. See the automated review comment above for details.';
+        : withheldForProtocol
+          ? 'Approval withheld: the adversarial analysis is incomplete. See the review comment for details.'
+          : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
+    : breakerOpen
+      ? `Changes required, loop ESCALATED: the same failure was reported ${streak} times in a row. See the review comment for details.`
+      : 'Changes required. See the automated review comment above for details.';
 
 function isOwnPullRequestApprovalFailure(status, detail) {
   if (status !== 422) return false;
@@ -510,7 +528,10 @@ if (isWithheld) {
   if (!isApproved) {
     const branchName = prMeta?.head?.ref;
     autoFixAlreadyRunning = branchName ? await hasActiveAutoFixRun(branchName) : false;
-    if (autoFixAlreadyRunning) {
+    if (breakerOpen) {
+      // ADR-0050: the label stays (the PR is still red) but is not re-pulsed, so auto-fix is not triggered again.
+      log('Skipping changes-requested re-pulse: circuit breaker open', { prNumber, streak });
+    } else if (autoFixAlreadyRunning) {
       log('Skipping changes-requested re-pulse because auto-fix is already running', {
         prNumber,
         branchName,
@@ -525,11 +546,31 @@ if (isWithheld) {
   await addLabel(apply);
   await removeLabel(remove);
   await removeLabel(reviewLabels.withheld.name);
+  if (breakerOpen) {
+    const needsHuman = loadLabelsConfig('autofix').needs_human;
+    await upsertLabel(needsHuman);
+    await addLabel(needsHuman.name);
+    obsLog({ stage: 'review', event: 'review.escalated', level: 'warn', meta: { prNumber, reason: 'circuit_breaker', streak, labels_added: [needsHuman.name], url: reviewCommentUrl } });
+  }
   if (isApproved) {
     for (const name of AUTOFIX_LABELS_CLEARED_ON_APPROVE) await removeLabel(name);
   }
   log('PR review labels applied', { prNumber, added: apply, removed: remove, ...(isApproved ? { cleared: AUTOFIX_LABELS_CLEARED_ON_APPROVE } : {}) });
   obsLog({ stage: 'review', event: 'review.labels_applied', level: 'info', meta: { prNumber, added: [apply], removed: [remove, reviewLabels.withheld.name, ...(isApproved ? AUTOFIX_LABELS_CLEARED_ON_APPROVE : [])], repulse_skipped: !isApproved && autoFixAlreadyRunning } });
+}
+
+// ADR-0051: the axes of the blocking findings of a REQUEST_CHANGES are what the meta-loop learns from. Closed ids only:
+// the model's wording never leaves this process.
+const blockingAxes = verdict === 'REQUEST_CHANGES' ? blockingFindingAxes(cleanReview) : [];
+if (blockingAxes.length) {
+  await appendMetric({
+    type: 'review_signal',
+    run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}-review-signal` : `local-${Date.now()}`,
+    pr_number: prNumber,
+    verdict,
+    axes: blockingAxes,
+    ts: new Date().toISOString(),
+  });
 }
 
 const checkpointRunId = process.env.CHECKPOINT_RUN_ID ?? `pr-${prNumber}`;
@@ -566,7 +607,9 @@ obsLog({
   level: 'info',
   duration_ms: reviewDurationMs,
   // withheld_from: the verdict the unseen-code backstop turned into WITHHELD (ADR-0038, #219), else null.
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode ? 'APPROVE' : withheldForUnseenFindings ? 'REQUEST_CHANGES' : null },
+  // adversarial_points / adversarial_axes (ADR-0049): the closed axis ids that named a risk, never the model's text.
+  // withheld_for: 'protocol' when the adversarial protocol, not the evidence or the cut, withheld the approval.
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, blocking_axes: blockingAxes, streak },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');

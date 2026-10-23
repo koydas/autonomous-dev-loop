@@ -108,7 +108,7 @@ test('leverFor: an active warning or critical finding of a mapped rule gets the 
   const fix = leverFor({ id: 'autofix-ineffective', status: 'active', severity: 'warning' });
   assert.deepEqual(fix.requires, ['no-eval-gate', 'docs-and-tests'], 'a stage with no suite says so, and never claims evals');
   assert.equal(leverFor({ id: 'llm-fallbacks', status: 'active', severity: 'warning' }).stage, 'provider');
-  assert.equal(leverFor({ id: 'review-withheld', status: 'active', severity: 'warning' }).targets.length, 4);
+  assert.equal(leverFor({ id: 'review-withheld', status: 'active', severity: 'warning' }).targets.length, 5);
 });
 
 test('leverFor is null for what is not actionable: resolved, info, unmapped, no lever, malformed', () => {

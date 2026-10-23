@@ -59,9 +59,16 @@ function makeHandler({
   commentsByPage = null,
   prMetaStatus = 200,
   prHeadSha = 'a'.repeat(40),
+  runsJsonl,
 } = {}) {
   return (req, res) => {
     const { method, url } = req;
+
+    // ADR-0051: the read-only fetch of the lessons signals; absent = no metrics branch.
+    if (method === 'GET' && /\/contents\/metrics\/runs\.jsonl\?ref=metrics$/.test(url)) {
+      res.writeHead(runsJsonl === undefined ? 404 : 200, { 'Content-Type': 'text/plain' });
+      return res.end(runsJsonl ?? '');
+    }
 
     if (url === '/v1/messages') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1117,6 +1124,42 @@ test('auto_fix_pr exits 0 without an LLM call when the latest review approved th
   }
 });
 
+// ADR-0050: the review of this head is the 3rd in a row to report the same failure: no LLM call, no mutation.
+const breakerComment = (streak) => JSON.stringify([{ body: `## 🔍 Automated Code Review\n\nStill broken.\n\n<!-- adl-review sha=${AF_HEAD_SHA} verdict=REQUEST_CHANGES streak=${streak} sig=0123456789 -->`, user: { login: 'github-actions[bot]' } }]);
+
+test('auto_fix_pr exits 0 without an LLM call when the circuit breaker is open for the current head (ADR-0050)', async () => {
+  const server = await startMockServer(makeHandler({ commentsBody: breakerComment(3) }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile);
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 0, 'no LLM call while the breaker is open');
+    assert.ok(!server.requests.some((r) => r.method !== 'GET'), 'no GitHub mutation while the breaker is open');
+    assert.match(result.stderr, /"event":"autofix\.skipped"[^\n]*"reason":"circuit_open"/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('auto_fix_pr still fixes below the circuit breaker threshold, and a trusted human rerun overrides an open breaker', async () => {
+  for (const [streak, event] of [[2, 'plain'], [3, 'rerun']]) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-breaker-'));
+    const server = await startMockServer(makeHandler({ commentsBody: breakerComment(streak), llmResponse: validLLMJson('fixed.txt') }));
+    const eventFile = event === 'rerun' ? await writeIssueCommentEventFile() : await writeEventFile();
+    try {
+      const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+      assert.equal(result.code, 0, `streak ${streak} (${event}): expected exit 0, stderr: ${result.stderr}`);
+      assert.equal(server.requests.filter((r) => r.url === '/v1/messages').length, 1, `streak ${streak} (${event})`);
+      assert.doesNotMatch(result.stderr, /circuit_open/);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+    }
+  }
+});
+
 // Human as gate: an explicit checkbox rerun overrides the bot's approval.
 test('auto_fix_pr runs on an approved head when a trusted human requests a checkbox rerun', async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-manual-approved-'));
@@ -1610,5 +1653,48 @@ test('auto_fix_pr logs an untrusted issue_comment as a skip on stderr, before an
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+// ── Active lessons (ADR-0051) ───────────────────────────────────────────────────────────────────────────────────
+const autofixSkip = (rules) => JSON.stringify({ type: 'autofix_skip', run_id: `r-${Math.random()}`, pr_number: 1, attempt: 1, reason: 'guardrail_rejected', rules, ts: new Date().toISOString() });
+const llmSystem = (server) => JSON.stringify(JSON.parse(server.requests.find((r) => r.url === '/v1/messages').body).system);
+
+test('auto_fix_pr appends the lessons of recurring guardrail rejections to its system prompt', async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-lessons-'));
+  const runsJsonl = [autofixSkip(['test_count_drop']), autofixSkip(['test_count_drop', 'mass_deletion']), autofixSkip(['mass_deletion'])].join('\n');
+  const server = await startMockServer(makeHandler({ runsJsonl, llmResponse: validLLMJson('fixed.txt') }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    for (const lesson of [/Make targeted edits[^"]*\(seen 2 times recently\)/, /A test file keeps every existing test[^"]*\(seen 2 times recently\)/]) assert.match(llmSystem(server), lesson);
+    assert.match(llmSystem(server), /LEARNED CONSTRAINTS/);
+    assert.match(result.stderr, /"event":"lessons\.loaded"[^\n]*"ids":\["rule:mass_deletion","rule:test_count_drop"\]/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
+test('auto_fix_pr adds no lesson when nothing recurs, when the metrics branch is missing, or when ADL_LESSONS=off', async () => {
+  for (const [name, runsJsonl, env] of [
+    ['one rejection', autofixSkip(['test_count_drop']), {}],
+    ['no metrics branch', undefined, {}],
+    ['switched off', [autofixSkip(['test_count_drop']), autofixSkip(['test_count_drop'])].join('\n'), { ADL_LESSONS: 'off' }],
+  ]) {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-nolessons-'));
+    const server = await startMockServer(makeHandler({ runsJsonl, llmResponse: validLLMJson('fixed.txt') }));
+    const eventFile = await writeEventFile();
+    try {
+      const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir, extraEnv: env });
+      assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+      assert.doesNotMatch(llmSystem(server), /LEARNED CONSTRAINTS/, name);
+    } finally {
+      server.close();
+      await fs.unlink(eventFile).catch(() => {});
+      await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+    }
   }
 });

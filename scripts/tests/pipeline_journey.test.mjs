@@ -29,6 +29,7 @@ test('decisions per step: every recorded decision event, its tone and reason', (
   assert.equal(d('review', [ev('review.verdict', { verdict: 'WITHHELD', withheld_from: 'APPROVE' })]).reason, 'approval withheld: ? code file(s) not reviewed');
   assert.equal(d('review', [ev('review.verdict', { verdict: 'WITHHELD', withheld_from: 'REQUEST_CHANGES' })]).reason, 'findings cite only unseen code');
   assert.equal(d('review', [ev('review.verdict', { verdict: 'WITHHELD', evidence_state: 'stale' })]).reason, 'CI evidence stale');
+  assert.equal(d('review', [ev('review.verdict', { verdict: 'WITHHELD', withheld_for: 'protocol', withheld_from: 'APPROVE', unreviewed_code_files: 0 })]).reason, 'adversarial analysis incomplete', 'ADR-0049: the protocol is named, not read as unreviewed code');
   assert.equal(d('review', [ev('review.verdict', { verdict: 'WITHHELD', unreviewed_code_files: 3 })]).reason, '3 code file(s) not reviewed', 'older record: no withheld_from, never an invented original verdict');
   assert.equal(d('review', [ev('review.verdict', { verdict: 'WITHHELD' })]).reason, null);
   assert.deepEqual(d('review', [ev('review.verdict', { verdict: 'MAYBE' })]), { key: 'other', label: 'Verdict not recognised', tone: 'neutral', reason: null, url: null });

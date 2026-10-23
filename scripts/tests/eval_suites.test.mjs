@@ -543,7 +543,9 @@ test('review dataset: incident cases name their source PR and reproduce its shap
       assert.ok(run.output.unreviewed_code_files.includes('.github/workflows/test.yml'), id);
       assert.match(run.request.prompt, /\n… \[diff cut: \d+ more lines not shown, in [^\n]*\.github\/workflows\/test\.yml(?! \(partly)[^\n]*\]\n/, id);
       assert.doesNotMatch(run.request.prompt, /^\+ +- nam?$|Check \w+ coverage/m, id);
-      assert.match(run.request.prompt, /^\+ +- name: Upload run trace$/m, `${id}: the reset-auto-fix hunks before the cut are shown`);
+      // The hunks of reset-auto-fix.yml before the cut are shown. Where the cut falls depends on the prompt size: with the
+      // adversarial protocol (ADR-0049, +~280 tokens) it ends inside that file, before its `Upload run trace` step.
+      assert.match(run.request.prompt, /diff --git a\/\.github\/workflows\/reset-auto-fix\.yml[^\n]*\n[\s\S]*?\n@@ [^\n]*\n[\s\S]*\n… \[diff cut: /, `${id}: the reset-auto-fix hunks before the cut are shown`);
     }
   });
 });

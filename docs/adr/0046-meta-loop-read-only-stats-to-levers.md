@@ -1,7 +1,7 @@
 # ADR-0046: Meta-loop: a read-only function from run statistics to suggested levers
 
 - **Date:** 2026-10-22
-- **Status:** Accepted (2026-10-22) — point 8 superseded by [ADR-0048](./0048-meta-loop-accepted-and-implemented.md)
+- **Status:** Accepted (2026-10-22) — point 8 superseded by [ADR-0048](./0048-meta-loop-accepted-and-implemented.md); the reach of point 3 for the generation and auto-fix prompts narrowed by [ADR-0051](./0051-active-lessons-from-the-meta-loop.md)
 
 ## Context
 

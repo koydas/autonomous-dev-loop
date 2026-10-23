@@ -20,6 +20,7 @@ import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha,
 import { randomUUID } from 'node:crypto';
 import { isSelfTarget } from './lib/roots.mjs';
 import { appendOutputs } from './lib/github_output.mjs';
+import { loadLessons } from './lib/lessons_loader.mjs';
 
 let tracer;
 
@@ -86,7 +87,7 @@ const githubToken = requireEnv('GITHUB_TOKEN');
 const repository = requireEnv('GITHUB_REPOSITORY');
 const eventPath = requireEnv('GITHUB_EVENT_PATH');
 const { provider: llmProvider, apiKey: llmApiKey, model, apiUrl, temperature: llmTemperature, maxTokens: llmMaxTokens, maxInputTokens: cfgMaxInputTokens, diffRatio: cfgDiffRatio, feedbackRatio: cfgFeedbackRatio, reasoningEffort } = loadLLMConfig('autofix');
-const systemPrompt = loadPrompt('auto-fix-system');
+const baseSystemPrompt = loadPrompt('auto-fix-system');
 const userPromptTemplate = loadPrompt('auto-fix-user');
 
 let event;
@@ -333,6 +334,10 @@ if (effectiveDiffRatio + effectiveFeedbackRatio >= 1) {
   throw new Error(`Token budget config error: autofix_diff_ratio (${effectiveDiffRatio}) + autofix_feedback_ratio (${effectiveFeedbackRatio}) must sum to less than 1.0; adjust config/models.yaml`);
 }
 
+// ADR-0051: constraints the recent runs of this repository broke again and again, appended to the system prompt
+// (empty when none recurs, the metrics branch cannot be read, or ADL_LESSONS=off). Counted in the budget below.
+const { context: lessonsContext } = await loadLessons({ stage: 'autofix', repository, token: githubToken, apiBase: githubApiBase });
+const systemPrompt = baseSystemPrompt + lessonsContext;
 const systemTokens = estimateTokens(systemPrompt);
 const userWrapperTokens = estimateTokens(userPromptTemplate.replace(/\{\{[^}]+\}\}/g, ''));
 const contextWindow = MODEL_CONTEXT_WINDOW[model] ?? (llmProvider === 'groq' ? 32768 : 200000);
