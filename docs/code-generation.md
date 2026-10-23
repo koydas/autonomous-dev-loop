@@ -96,7 +96,7 @@ When generation cannot implement an issue it opens **no PR**. Before this, it wr
 
 | `source` | Check | When |
 |---|---|---|
-| `denylist` | deterministic, from the issue text before the LLM call | every path the issue needs is protected (ADR-0021) or withheld from the prompt (ADR-0029). Needed paths: the paths the issue names, URLs removed; a bare file name only when it exists at the repository root and is not the base name of a path also named; the root `CHANGELOG.md` is a companion and never counts. An issue that names no path, or any writable one, is not blocked here |
+| `denylist` | deterministic, from the issue text before the LLM call | every path the issue needs is protected (ADR-0021) or withheld from the prompt (ADR-0029). Needed paths: the paths the issue names, URLs removed; a candidate with a `/` counts only when it exists in the repository or ends in a file extension (`.csproj` as much as `.mjs`; prose such as `retry/fallback` or `401/403` is not a path), with a leading dot restored (`.github/…`); a bare file name only when it exists at the repository root and is not the base name of a path also named; the root `CHANGELOG.md` is a companion and never counts. An issue that names no path, or any writable one, is not blocked here |
 | `model` | structured signal in the generation output | `"blocked": true` (the JSON boolean), with `blocked_reason` and `planned_fix`, `changes: []`. Text in `summary` is never read as a signal; any other `blocked` value is a malformed response and fails the run |
 | `notes_only` | deterministic, on the model output | the issue is labelled `bug` or `feature` and every changed file is a **new** `.md` file outside `docs/` |
 
