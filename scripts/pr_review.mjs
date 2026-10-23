@@ -6,7 +6,7 @@ import path from 'node:path';
 import { requireEnv, loadLLMConfig, loadLabelsConfig, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
 import { loadPrompt } from './lib/prompts.mjs';
-import { buildReviewPrompt, loadReviewSystemPrompt, formatUnreviewedCodeNote, formatUnseenFindingsNote, parseReviewVerdict, withholdOnUnreviewedCode } from './lib/review_prompt.mjs';
+import { buildReviewPrompt, loadReviewSystemPrompt, formatUnreviewedCodeNote, formatUnseenFindingsNote, parseReviewVerdict } from './lib/review_prompt.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { prWorkItemHint } from './lib/trace_context.mjs';
@@ -21,8 +21,9 @@ import { findRelatedAdrs } from './lib/related_adrs.mjs';
 import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudgetSection } from './lib/prompt_budget.mjs';
 import { modelsFromContent, loadReviewGuidelines } from './lib/layered_config.mjs';
 import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
-import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, decideVerdict, formatWithheldNote } from './lib/review_evidence.mjs';
-import { analyzeAdversarial, enforceAdversarialProtocol, formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
+import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, formatWithheldNote } from './lib/review_evidence.mjs';
+import { formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
+import { resolveReviewDecision } from './lib/review_decision.mjs';
 import { failureSignature, nextStreak, isBreakerOpen, formatEscalationNote } from './lib/circuit_breaker.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -400,16 +401,15 @@ const llmApproved = llmVerdict === 'APPROVED';
 // ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.
 // Same resolution as run_review_evidence.mjs: without a config the repo has not opted in to evidence.
 const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? repoConfigFile('review-evidence.yaml');
-const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired: fs.existsSync(evidenceConfigPath) });
 // ADR-0038: an approval of a diff whose code was cut to the budget is withheld; a human reviews the rest.
 // So is a REQUEST_CHANGES whose findings all cite only cut code files (#219), unless a check failed.
-const codeDecision = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview, { checksFailed: evidence.failing.length > 0, shownFiles });
 // ADR-0049: an approval that did not attack the diff on the four axes (at least 2 risks named) is withheld too.
-const adversarial = analyzeAdversarial(cleanReview);
-const { verdict, reason: verdictReason } = enforceAdversarialProtocol(codeDecision, adversarial);
-const withheldForUnreviewedCode = evidenceDecision.verdict === 'APPROVE' && codeDecision.verdict === 'WITHHELD';
-const withheldForUnseenFindings = evidenceDecision.verdict === 'REQUEST_CHANGES' && codeDecision.verdict === 'WITHHELD';
-const withheldForProtocol = codeDecision.verdict === 'APPROVE' && verdict === 'WITHHELD';
+// One resolution shared with the `review` eval suite (EV-01).
+const decision = resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired: fs.existsSync(evidenceConfigPath), unreviewedCodeFiles, shownFiles });
+const { verdict, reason: verdictReason, adversarial } = decision;
+const withheldForUnreviewedCode = decision.withheldFor === 'unreviewed_code';
+const withheldForUnseenFindings = decision.withheldFor === 'unseen_findings';
+const withheldForProtocol = decision.withheldFor === 'protocol';
 // ADR-0050: consecutive reviews reporting the same failure. At BREAKER_THRESHOLD the loop is ESCALATED:
 // no re-pulse of changes-requested (so no auto-fix), needs-human instead.
 const previousMarker = parseReviewMarker(existing?.body);

@@ -19,7 +19,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `chunk(items, size)` with tests for a short last group, an exact multiple, an empty input and an invalid size.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `chunk(items, size)` with tests for a short last group, an exact multiple, an empty input and an invalid size.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -37,7 +37,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n**🏷️ Change Classification**\nType: feature | Tests expected: yes\n\n**✅ Summary**\nAppends the assignee login (or \"unassigned\") to each digest line; tests cover both.\n\n**⚠️ Issues Found**\nNone.\n\n**🚀 Verdict**\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n**🏷️ Change Classification**\nType: feature | Tests expected: yes\n\n**✅ Summary**\nAppends the assignee login (or \"unassigned\") to each digest line; tests cover both.\n\n**🔬 Adversarial Analysis**\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n**⚠️ Issues Found**\nNone.\n\n**🚀 Verdict**\nAPPROVED"
         }
       ]
     },
@@ -55,7 +55,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes\n\n### ✅ Summary\nCreates the issue branch with `execFileSync` (no shell) and tests that the title is passed as an argument.\n\n### ⚠️ Issues Found\nNone.\n\n**🚀 Verdict:** APPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes\n\n### ✅ Summary\nCreates the issue branch with `execFileSync` (no shell) and tests that the title is passed as an argument.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n**🚀 Verdict:** APPROVED"
         }
       ]
     },
@@ -100,7 +100,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes\n\n### ✅ Summary\nSends the message to every recipient and returns the count.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes\n\n### ✅ Summary\nSends the message to every recipient and returns the count.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -145,7 +145,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: documentation | Tests expected: no — documentation only\n\n### ✅ Summary\nAdds a Troubleshooting section to the README.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: documentation | Tests expected: no — documentation only\n\n### ✅ Summary\nAdds a Troubleshooting section to the README.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -172,7 +172,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: mixed | Tests expected: yes\n\n### ✅ Summary\nAdds `capComment`, its tests, a c8 ≥ 80% gate in test.yml and a note in docs/code-generation.md.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: mixed | Tests expected: yes\n\n### ✅ Summary\nAdds `capComment`, its tests, a c8 ≥ 80% gate in test.yml and a note in docs/code-generation.md.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -181,7 +181,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: bugfix | Tests expected: yes\n\n### ✅ Summary\nTrims leading and trailing dashes in slugify; tests and lint pass on the head commit.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: bugfix | Tests expected: yes\n\n### ✅ Summary\nTrims leading and trailing dashes in slugify; tests and lint pass on the head commit.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -199,7 +199,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: bugfix | Tests expected: yes\n\n### ✅ Summary\nTrims leading and trailing dashes in slugify. The tests check timed out: results are unverified.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: bugfix | Tests expected: yes\n\n### ✅ Summary\nTrims leading and trailing dashes in slugify. The tests check timed out: results are unverified.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -226,7 +226,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: mixed | Tests expected: yes — a prompt changes; a headroom test is added.\n\n### ✅ Summary\nMerges the JSON-format rules of `auto-fix-system.md` into one bullet, adds `autofix_headroom.test.mjs`, updates the prompt size in `docs/code-generation.md`.\n\n### ⚠️ Issues Found\n- [Low] Verify stale reference — File: prompts/auto-fix-system.md Lines: 5-8 Root cause: the removed wording is shared with `docs/runbook.md:85`; the rule still exists in the merged bullet. Fix: check the runbook line still reads correctly.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: mixed | Tests expected: yes — a prompt changes; a headroom test is added.\n\n### ✅ Summary\nMerges the JSON-format rules of `auto-fix-system.md` into one bullet, adds `autofix_headroom.test.mjs`, updates the prompt size in `docs/code-generation.md`.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\n- [Low] Verify stale reference — File: prompts/auto-fix-system.md Lines: 5-8 Root cause: the removed wording is shared with `docs/runbook.md:85`; the rule still exists in the merged bullet. Fix: check the runbook line still reads correctly.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -235,7 +235,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: bugfix | Tests expected: yes — runtime read path changes.\n\n### ✅ Summary\n`readManifest` now rejects a non-regular `manifest.json`; one test covers a symlinked file.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: bugfix | Tests expected: yes — runtime read path changes.\n\n### ✅ Summary\n`readManifest` now rejects a non-regular `manifest.json`; one test covers a symlinked file.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -244,7 +244,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: ci_cd | Tests expected: yes — workflow behavior changes.\n\n### ✅ Summary\nOne cron per maintenance job in `nightly.yml`, `max-parallel: 1`, a dispatch input; new guards in `workflow_gates.test.mjs`.\nNot verified (diff truncated): the remaining guards and `docs/maintenance.md`.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: ci_cd | Tests expected: yes — workflow behavior changes.\n\n### ✅ Summary\nOne cron per maintenance job in `nightly.yml`, `max-parallel: 1`, a dispatch input; new guards in `workflow_gates.test.mjs`.\nNot verified (diff truncated): the remaining guards and `docs/maintenance.md`.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -253,7 +253,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new runtime module.\n\n### ✅ Summary\nAdds the status-class table and routes `fetch_with_retry` through `isRetryable`.\nNot verified (diff truncated): the end of `status_class.mjs` and the tests.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new runtime module.\n\n### ✅ Summary\nAdds the status-class table and routes `fetch_with_retry` through `isRetryable`.\nNot verified (diff truncated): the end of `status_class.mjs` and the tests.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -280,7 +280,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable module\n\n### ✅ Summary\nAdds `listExports(root)`, which lists the `.csv` files of each month directory and skips symlinks, with two unit tests.\n\n### ⚠️ Issues Found\n- [Low] Untested claim: a symlinked month directory is skipped — File: src/export/list_exports.mjs Lines: 8 Root cause: the `month.isDirectory()` filter implements the claim, but the tests only cover a symlinked `.csv` file. Fix: add a test that symlinks a month directory outside `root` and expects `[]`.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable module\n\n### ✅ Summary\nAdds `listExports(root)`, which lists the `.csv` files of each month directory and skips symlinks, with two unit tests.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\n- [Low] Untested claim: a symlinked month directory is skipped — File: src/export/list_exports.mjs Lines: 8 Root cause: the `month.isDirectory()` filter implements the claim, but the tests only cover a symlinked `.csv` file. Fix: add a test that symlinks a month directory outside `root` and expects `[]`.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -289,7 +289,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable module\n\n### ✅ Summary\nAdds `listExports(root)` with tests for the sorted listing, a symlinked `.csv` file and a symlinked month directory.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable module\n\n### ✅ Summary\nAdds `listExports(root)` with tests for the sorted listing, a symlinked `.csv` file and a symlinked month directory.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -298,7 +298,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `initials(displayName)` with tests for spacing and blank names. The PR has no description.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `initials(displayName)` with tests for spacing and blank names. The PR has no description.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -307,7 +307,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: documentation | Tests expected: no — documentation only\n\n### ✅ Summary\nDocuments the 503 retries behind `UploadUnavailableError` in the uploader troubleshooting section.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: documentation | Tests expected: no — documentation only\n\n### ✅ Summary\nDocuments the 503 retries behind `UploadUnavailableError` in the uploader troubleshooting section.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     },
@@ -316,7 +316,7 @@
       "repeat": 0,
       "calls": [
         {
-          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `backoffMs(attempt, baseMs)`, capped at `MAX_BACKOFF_MS`, and a table-driven test.\nNot verified (diff truncated): the `RangeError` test of test/backoff.test.mjs is past the cut.\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `backoffMs(attempt, baseMs)`, capped at `MAX_BACKOFF_MS`, and a table-driven test.\nNot verified (diff truncated): the `RangeError` test of test/backoff.test.mjs is past the cut.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
     }

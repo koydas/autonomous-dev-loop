@@ -1,0 +1,26 @@
+// The final review decision, shared by pr_review.mjs and the `review` eval suite so that the verdict a suite scores
+// is the one production publishes (EV-01). Pure, deterministic, no LLM and no I/O. The circuit breaker
+// (ADR-0050) depends on the verdict history and stays a separate stage in pr_review.mjs.
+
+import { withholdOnUnreviewedCode } from './review_prompt.mjs';
+import { decideVerdict } from './review_evidence.mjs';
+import { analyzeAdversarial, enforceAdversarialProtocol } from './adversarial_review.mjs';
+
+/**
+ * Resolves the verdict from the model's parsed review, in the order production applies the stages:
+ * evidence (ADR-0024/0026), then code cut from the diff (ADR-0038), then the adversarial protocol (ADR-0049).
+ * `stages` keeps each intermediate decision so callers can tell which stage withheld.
+ * @returns {{ verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'WITHHELD', reason: string | null, withheldFor: 'evidence' | 'unreviewed_code' | 'unseen_findings' | 'protocol' | null, adversarial: ReturnType<typeof analyzeAdversarial>, stages: { evidence: object, code: object } }}
+ */
+export function resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired, unreviewedCodeFiles = [], shownFiles = [] }) {
+  const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired });
+  const codeDecision = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview, { checksFailed: evidence.failing.length > 0, shownFiles });
+  const adversarial = analyzeAdversarial(cleanReview);
+  const { verdict, reason } = enforceAdversarialProtocol(codeDecision, adversarial);
+  const withheldFor = verdict !== 'WITHHELD' ? null
+    : evidenceDecision.verdict === 'APPROVE' && codeDecision.verdict === 'WITHHELD' ? 'unreviewed_code'
+    : evidenceDecision.verdict === 'REQUEST_CHANGES' && codeDecision.verdict === 'WITHHELD' ? 'unseen_findings'
+    : codeDecision.verdict === 'APPROVE' ? 'protocol'
+    : 'evidence';
+  return { verdict, reason, withheldFor, adversarial, stages: { evidence: evidenceDecision, code: codeDecision } };
+}

@@ -14,6 +14,8 @@ on:
       - 'scripts/lib/issue_validator.mjs'
       - 'scripts/lib/review_prompt.mjs'
       - 'scripts/lib/review_evidence.mjs'
+      - 'scripts/lib/review_decision.mjs'
+      - 'scripts/lib/adversarial_review.mjs'
       - 'scripts/lib/output_writer.mjs'
       - 'scripts/lib/eval_*.mjs'
       # Everything else the suites load: workflow_gates.test.mjs walks the import graph of
