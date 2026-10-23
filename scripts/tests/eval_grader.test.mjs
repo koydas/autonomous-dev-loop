@@ -279,3 +279,11 @@ test('applyPatchToCopy removes its temporary directory when it throws', async ()
   await assert.rejects(applyPatchToCopy(path.join(root, 'does-not-exist'), []));
   assert.deepEqual(await tmpCopies(), before);
 });
+
+test('evaluatePatch: a hidden file the grader directory does not hold is an ERROR and leaves no copy behind', async () => {
+  const tmpCopies = async () => (await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('eval-grader-')).sort();
+  const before = await tmpCopies();
+  const r = await evaluatePatch({ ...base, hiddenFiles: ['test/missing.test.mjs'], output: patch('src/customers.mjs', FIXED) });
+  assert.deepEqual([r.outcome, r.failure], ['ERROR', F.graderError]);
+  assert.deepEqual(await tmpCopies(), before);
+});
