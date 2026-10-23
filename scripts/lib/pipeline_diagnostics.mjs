@@ -202,17 +202,18 @@ function reviewFindings(runs) {
   if (rated && truncated.length && (truncated.length / verdicts.length >= RULES.truncatedShare || (coverageRate.n >= RULES.minVerdicts && coverageRate.share >= RULES.truncatedShare))) {
     const unseen = truncated.map(({ e }) => e.meta.unreviewed_code_files).filter((n) => typeof n === 'number');
     const budgets = [...new Set(truncated.map(({ e }) => e.meta.max_input_tokens).filter((n) => typeof n === 'number'))];
-    // A cut diff and its verdict (the run's last): WITHHELD is the ADR-0038 guardrail; APPROVE on unseen code is
-    // impossible since ADR-0038 (critical); anything else (REQUEST_CHANGES on a cut diff) is an anomaly.
+    // A cut diff and its verdict (the run's last): WITHHELD is the ADR-0038 guardrail; a cut of tests / docs only
+    // (unreviewed_code_files 0) does not block any verdict (ADR-0038); APPROVE with code cut, or no count to prove
+    // otherwise, is impossible since ADR-0038 (critical); anything else (REQUEST_CHANGES on cut code) is an anomaly.
     const lastVerdict = new Map(verdicts.map((v) => [v.run, v.e.meta.verdict]));
     const verdictOf = (run) => lastVerdict.get(run);
-    const cutClass = ({ run }) => (verdictOf(run) === 'WITHHELD' ? 'guardrail' : verdictOf(run) === 'APPROVE' ? 'approve' : 'anomaly');
+    const cutClass = ({ run, e }) => (verdictOf(run) === 'WITHHELD' ? 'guardrail' : e.meta.unreviewed_code_files === 0 ? 'nonCode' : verdictOf(run) === 'APPROVE' ? 'approve' : 'anomaly');
     const idsOf = (k) => runIds(truncated.filter((t) => cutClass(t) === k));
-    const guardrail = idsOf('guardrail'), approved = idsOf('approve'), other = idsOf('anomaly');
+    const guardrail = idsOf('guardrail'), nonCode = idsOf('nonCode'), approved = idsOf('approve'), other = idsOf('anomaly');
     out.push(finding({
       id: 'review-coverage', severity: 'warning', category: 'Review', title: 'Review diffs are cut', titleByDesign: 'Review diffs are cut by design (ADR-0038)',
       fact: `${truncated.length} of ${verdicts.length} reviews saw a truncated diff; median ${percentile(unseen, 50) ?? '?'} code file(s) not reviewed${budgets.length ? `, input budget ${budgets.join(' / ')} tokens` : ''}. `
-        + `Guardrail (WITHHELD, ADR-0038): ${guardrail.length}; anomaly: ${approved.length + other.length} (APPROVE on a cut diff, impossible since ADR-0038: ${approved.length}; other verdict: ${other.length}).`,
+        + `Guardrail (WITHHELD, ADR-0038): ${guardrail.length}; tests / docs only cut (ADR-0038): ${nonCode.length}; anomaly: ${approved.length + other.length} (APPROVE on a cut diff, impossible since ADR-0038: ${approved.length}; other verdict: ${other.length}).`,
       hypothesis: approved.length ? 'An APPROVE on a diff the review did not fully see contradicts the ADR-0038 backstop: either it did not apply or the record is wrong.'
         : other.length ? 'Approvals on these PRs cannot be trusted to cover the whole change; raising the budget or batching the review would reduce WITHHELD verdicts (quota permitting).'
           : 'The guardrail worked as designed: approval is withheld on code the review did not see (ADR-0038). The lever is the provider or its input budget (review_max_input_tokens, ADR-0025).',

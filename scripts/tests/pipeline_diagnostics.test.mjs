@@ -390,8 +390,8 @@ test('auto-fix anomaly: no_changes with every file shown, or a rule outside the 
 });
 
 // Lifecycle: active / resolved over the last RULES.activeWindow eligible runs of a rule.
-const cutRun = (i, v = 'WITHHELD', cut = true) => run({ t: T + i * 60000, sha: String(i % 10).repeat(39) + String.fromCharCode(97 + (i % 26)), events: [
-  ...(cut ? [{ event: 'review.prompt_truncated', meta: { diff_truncated: true, unreviewed_code_files: 3, prNumber: 9 } }] : []),
+const cutRun = (i, v = 'WITHHELD', cut = true, codeCut = 3) => run({ t: T + i * 60000, sha: String(i % 10).repeat(39) + String.fromCharCode(97 + (i % 26)), events: [
+  ...(cut ? [{ event: 'review.prompt_truncated', meta: { diff_truncated: true, unreviewed_code_files: codeCut, prNumber: 9 } }] : []),
   verdict(v, v === 'WITHHELD' ? { withheld_from: 'APPROVE', unreviewed_code_files: 3 } : {}),
 ] });
 const cutThenClean = (cutN, cleanN) => [...Array.from({ length: cutN }, (_, i) => cutRun(i)), ...Array.from({ length: cleanN }, (_, i) => cutRun(cutN + i, 'APPROVE', false))];
@@ -445,13 +445,25 @@ test('review-coverage: APPROVE on a cut diff is critical; REQUEST_CHANGES is an 
   const approve = find(diagnose({ model: model([cutRun(0), cutRun(1), cutRun(2, 'APPROVE')]) }), 'review-coverage');
   assert.equal(approve.severity, 'critical');
   assert.equal(approve.status, 'active');
-  assert.match(approve.fact, /Guardrail \(WITHHELD, ADR-0038\): 2; anomaly: 1 \(APPROVE on a cut diff, impossible since ADR-0038: 1/);
+  assert.match(approve.fact, /Guardrail \(WITHHELD, ADR-0038\): 2; tests \/ docs only cut \(ADR-0038\): 0; anomaly: 1 \(APPROVE on a cut diff, impossible since ADR-0038: 1/);
   const rc = find(diagnose({ model: model([cutRun(0), cutRun(1), cutRun(2, 'REQUEST_CHANGES')]) }), 'review-coverage');
   assert.equal(rc.severity, 'warning');
   assert.equal(rc.title, 'Review diffs are cut');
   const old = find(diagnose({ model: model([cutRun(0, 'APPROVE'), ...Array.from({ length: 30 }, (_, i) => cutRun(1 + i)), ...Array.from({ length: 10 }, (_, i) => cutRun(31 + i, 'APPROVE', false))]) }), 'review-coverage');
   assert.equal(old.status, 'resolved', 'an old impossible APPROVE does not stay critical');
   assert.equal(old.severity, 'info');
+});
+
+test('review-coverage: a cut of tests / docs only is by design for any verdict; APPROVE with no code-cut count stays critical', () => {
+  // ADR-0038 withholds an approval only when code was cut (unreviewed_code_files > 0).
+  const nonCode = find(diagnose({ model: model([cutRun(0), cutRun(1, 'APPROVE', true, 0), cutRun(2, 'REQUEST_CHANGES', true, 0)]) }), 'review-coverage');
+  assert.equal(nonCode.severity, 'info');
+  assert.equal(nonCode.title, 'Review diffs are cut by design (ADR-0038)');
+  assert.match(nonCode.fact, /Guardrail \(WITHHELD, ADR-0038\): 1; tests \/ docs only cut \(ADR-0038\): 2; anomaly: 0 \(APPROVE on a cut diff, impossible since ADR-0038: 0; other verdict: 0\)/);
+  const unknown = find(diagnose({ model: model([cutRun(0), cutRun(1), cutRun(2, 'APPROVE', true, null)]) }), 'review-coverage');
+  assert.equal(unknown.severity, 'critical', 'a record that cannot prove no code was cut is not cleared');
+  const codeRc = find(diagnose({ model: model([cutRun(0), cutRun(1), cutRun(2, 'REQUEST_CHANGES', true, 2)]) }), 'review-coverage');
+  assert.equal(codeRc.severity, 'warning');
 });
 
 test('review-duplicates: after WITHHELD or a manual re-run is by design; two runs claiming one head is the anomaly', () => {
