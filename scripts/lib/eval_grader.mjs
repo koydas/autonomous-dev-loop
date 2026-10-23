@@ -55,13 +55,22 @@ async function listFiles(root, rel = '') {
   return out;
 }
 
-/** Deterministic digest of a directory: file paths, contents and symlink targets, independent of mtime and listing order. */
+const frame = (buf) => {
+  const len = Buffer.alloc(8);
+  len.writeBigUInt64BE(BigInt(buf.length));
+  return Buffer.concat([len, buf]);
+};
+
+/**
+ * Deterministic digest of a directory, independent of mtime and listing order. Every entry is a type byte (F file,
+ * L symlink) then its path and its payload, each preceded by its length: no choice of contents can make two different
+ * trees feed the hash the same bytes (a NUL separator would let a file hold the next entry's header).
+ */
 export async function digestTree(root) {
   const h = createHash('sha256');
   for (const f of await listFiles(root)) {
-    h.update(`${f.path}\0`);
-    h.update(f.link !== undefined ? `link:${f.link}` : await fs.readFile(path.join(root, f.path)));
-    h.update('\0');
+    const payload = f.link !== undefined ? Buffer.from(f.link) : await fs.readFile(path.join(root, f.path));
+    h.update(Buffer.concat([Buffer.from(f.link !== undefined ? 'L' : 'F'), frame(Buffer.from(f.path)), frame(payload)]));
   }
   return h.digest('hex');
 }
@@ -162,15 +171,16 @@ export async function runGraderChecks(workDir, grader, { timeoutMs = DEFAULT_GRA
  */
 export async function evaluatePatch(input, { timeoutMs, run } = {}) {
   const result = (outcome, failure, extra = {}) => ({ outcome, failure, path: null, checks: [], ...extra });
-  const parsed = validateModelOutput(input.output);
-  if (!parsed.ok) return result('ERROR', parsed.reason);
-  if ((await digestTree(input.fixtureDir)) !== input.fixtureSha256) return result('ERROR', GRADER_FAILURES.fixtureDigest);
-  if ((await digestTree(input.graderDir)) !== input.graderSha256) return result('ERROR', GRADER_FAILURES.graderDigest);
-  const existingTestFiles = (await listFiles(input.fixtureDir)).map((f) => f.path).filter(isTestFile);
-  const paths = checkPatchPaths(parsed.changes, { allowedPaths: input.allowedPaths, mustNotChange: input.mustNotChange, graderFiles: input.hiddenFiles, existingTestFiles });
-  if (!paths.ok) return result('FAIL', paths.reason === GRADER_FAILURES.protectedPath ? GRADER_FAILURES.tampering : paths.reason, { path: paths.path });
   let work;
   try {
+    const parsed = validateModelOutput(input?.output);
+    if (!parsed.ok) return result('ERROR', parsed.reason);
+    // A missing or unreadable fixture / grader directory throws here: it is a classified ERROR, never an abort.
+    if ((await digestTree(input.fixtureDir)) !== input.fixtureSha256) return result('ERROR', GRADER_FAILURES.fixtureDigest);
+    if ((await digestTree(input.graderDir)) !== input.graderSha256) return result('ERROR', GRADER_FAILURES.graderDigest);
+    const existingTestFiles = (await listFiles(input.fixtureDir)).map((f) => f.path).filter(isTestFile);
+    const paths = checkPatchPaths(parsed.changes, { allowedPaths: input.allowedPaths, mustNotChange: input.mustNotChange, graderFiles: input.hiddenFiles, existingTestFiles });
+    if (!paths.ok) return result('FAIL', paths.reason === GRADER_FAILURES.protectedPath ? GRADER_FAILURES.tampering : paths.reason, { path: paths.path });
     work = await applyPatchToCopy(input.fixtureDir, parsed.changes);
     await restoreGraderFiles(work, input.graderDir, input.hiddenFiles);
     const checked = await runGraderChecks(work, input.grader, { timeoutMs, run });

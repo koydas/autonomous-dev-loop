@@ -193,3 +193,33 @@ test('runGraderChecks: spawn errors and failing runs map to their status through
   assert.equal(calls.length, 2);
   assert.ok(!JSON.stringify(calls[0].env).includes('secret'));
 });
+
+test('digestTree: framing is unambiguous, a file holding the next entry cannot collide with two files', async () => {
+  const one = await fs.mkdtemp(path.join(root, 'c1-'));
+  const two = await fs.mkdtemp(path.join(root, 'c2-'));
+  await write(one, 'a.txt', 'x\0b.txt\0y');
+  await write(two, 'a.txt', 'x');
+  await write(two, 'b.txt', 'y');
+  assert.notEqual(await digestTree(one), await digestTree(two));
+  // A symlink and a file with the same name and payload are different entries.
+  const file = await fs.mkdtemp(path.join(root, 'c3-'));
+  const link = await fs.mkdtemp(path.join(root, 'c4-'));
+  await write(file, 'l', 'target');
+  await fs.symlink('target', path.join(link, 'l'));
+  assert.notEqual(await digestTree(file), await digestTree(link));
+});
+
+test('evaluatePatch: a missing fixture or grader directory is a classified ERROR, not a throw', async () => {
+  const missing = path.join(root, 'does-not-exist');
+  for (const patchInput of [{ fixtureDir: missing }, { graderDir: missing }]) {
+    const r = await evaluatePatch({ ...base, ...patchInput, output: patch('src/customers.mjs', FIXED) });
+    assert.deepEqual([r.outcome, r.failure], ['ERROR', F.graderError]);
+  }
+});
+
+test('evaluatePatch: an input without an artifact or a directory is an ERROR too', async () => {
+  assert.equal((await evaluatePatch(undefined)).outcome, 'ERROR');
+  assert.equal((await evaluatePatch({ ...base, output: undefined })).failure, F.schema);
+  const unreadable = await evaluatePatch({ ...base, fixtureDir: undefined, output: patch('src/customers.mjs', FIXED) });
+  assert.deepEqual([unreadable.outcome, unreadable.failure], ['ERROR', F.graderError]);
+});
