@@ -14,9 +14,9 @@ Label an issue → an LLM writes the PR → a second LLM reviews it against real
 | | |
 |---|---|
 | **Dogfooded** | The loop wrote [13 merged PRs of its own](https://github.com/koydas/autonomous-dev-loop/pulls?q=is%3Apr+is%3Amerged+head%3Aai%2Fissue-) (11 features, 2 bug fixes — error taxonomy, bounded retry, checkpoint resume, provider fallback), each merged after human review. Then it was locked out of its own code: `scripts/`, `prompts/` and `config/` are now on the write denylist ([ADR-0021](docs/adr/0021-protected-write-path-denylist.md)). |
-| **Tested** | 800+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
+| **Tested** | 2,300+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
 | **Measured** | [Offline evals](#evals) run each LLM stage against a labelled dataset: verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency, tokens — gated by thresholds, latest results on the [eval dashboard](https://koydas.github.io/autonomous-dev-loop/) ([ADR-0027](docs/adr/0027-offline-eval-harness.md)) |
-| **Decided in writing** | [27 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
+| **Decided in writing** | [48 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
 
 ## Bounded autonomy, not "fully autonomous"
 
@@ -124,7 +124,7 @@ Tests mock the LLM to prove the wiring; evals call the real model on a fixed, la
 | Suite | Stage | Dataset | Gate (exit 1 below) |
 |---|---|---|---|
 | `validation` | Issue validation | [35 issues](evals/datasets/validation.jsonl) — 15 `core` (valid + each blocker B1–B4) and edge cases: partial AC, scope and B4 minimal pairs, short/French, warnings only, prompt injection | verdict accuracy ≥ 0.8 · `invalid` and `valid` recall ≥ 0.8 · consistency ≥ 0.9 (with `--repeats > 1`) · error rate ≤ 0.05 |
-| `review` | PR review (prompt builder, verdict parser and evidence decision of `pr_review.mjs`) | [23 PR diffs](evals/datasets/review.jsonl) — real bugs (off-by-one, unhandled null, shell injection via `execSync`, deleted tests, undeclared import, …), buggy/clean minimal pairs, docs-only and test-only diffs, prompt injection, tool evidence (pass/fail/timeout), truncated diff | final verdict accuracy ≥ 0.75 · `request_changes` recall ≥ 0.8 · `approve` recall ≥ 0.6 · consistency ≥ 0.8 (with `--repeats > 1`) · error rate ≤ 0.05 |
+| `review` | PR review (prompt builder, verdict parser and evidence decision of `pr_review.mjs`) | [35 PR diffs](evals/datasets/review.jsonl) — real bugs (off-by-one, unhandled null, shell injection via `execSync`, deleted tests, undeclared import, …), buggy/clean minimal pairs, docs-only and test-only diffs, prompt injection, tool evidence (pass/fail/timeout), truncated diff, reproductions of real review incidents | final verdict accuracy ≥ 0.75 · `request_changes` recall ≥ 0.8 · `approve` recall ≥ 0.6 · consistency ≥ 0.8 (with `--repeats > 1`) · error rate ≤ 0.05 |
 
 ```bash
 npm run eval -- --suite validation --repeats 3     # live, needs GROQ_API_KEY or ANTHROPIC_API_KEY
