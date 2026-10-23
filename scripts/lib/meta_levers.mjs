@@ -19,7 +19,8 @@ const REVIEW_BUDGET = [
 export const LEVERS = Object.freeze({
   'review-withheld': entry('review', 'Reviews are withheld on code the prompt budget or the CI evidence leaves unseen', [
     ...REVIEW_BUDGET, target('variable', 'AI_PROVIDER_REVIEW', 'review'), target('config', 'config/review-evidence.yaml#checks', 'review'),
-  ], ['0026', '0038']),
+    target('prompt', 'prompts/pr-review-system.md', 'review'),
+  ], ['0026', '0038', '0049']),
   'review-coverage': entry('review', 'Reviews are cut or withheld on a prompt budget that does not fit the diffs', [
     ...REVIEW_BUDGET, target('variable', 'AI_PROVIDER_REVIEW', 'review'),
   ], ['0028', '0038']),

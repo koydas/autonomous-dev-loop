@@ -9,6 +9,7 @@ import os from 'node:os';
 import http from 'node:http';
 import { parseNestedYaml, parseFlatYaml } from '../lib/yaml.mjs';
 import { buildAutomationGateContext } from '../lib/coverage_checker.mjs';
+import { failureSignature } from '../lib/circuit_breaker.mjs';
 
 const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT_DIR = path.join(SCRIPTS_DIR, '..');
@@ -17,6 +18,9 @@ const HEADING = '## 🔍 Automated Code Review';
 const PR_NUMBER = 42;
 const COMMENT_ID = 999;
 const SAMPLE_DIFF = '--- a/foo.js\n+++ b/foo.js\n@@ -1 +1 @@\n+added line\n';
+// ADR-0049: an APPROVED review must name at least 2 risks. The mock model answers with this analysis in front of
+// its content unless a test sets `analysis: false` to exercise the protocol itself.
+const ANALYSIS = '### 🔬 Adversarial Analysis\n- **Robustness** — foo.js:1 an empty value is not handled\n- **Side effects** — foo.js:1 callers of the helper are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n';
 
 function startMockServer(handler) {
   const requests = [];
@@ -42,7 +46,8 @@ function anthropicJson(content) {
 
 function makeHandler({
   diffStatus = 200,
-  groqContent = 'Review text here.',
+  groqContent: rawGroqContent = 'Review text here.',
+  analysis = true,
   commentsStatus = 200,
   commentsBody = '[]',
   upsertStatus = 201,
@@ -63,6 +68,7 @@ function makeHandler({
   prTitle = 'Test PR',
   prBody = 'Test PR body',
 } = {}) {
+  const groqContent = analysis ? `${ANALYSIS}${rawGroqContent}` : rawGroqContent;
   return (req, res) => {
     const { method, url } = req;
 
@@ -2026,5 +2032,126 @@ test('pr_review journals a review submit GitHub refused on its own PR, and a pro
     server.close();
     await fs.unlink(eventFile).catch(() => {});
     await fs.rm(cwd, { recursive: true, force: true });
+  }
+});
+
+// ── Adversarial protocol (ADR-0049) ────────────────────────────────────────────────────────────────────────────
+const reviewPost = (requests) => requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+const commentBody = (requests) => JSON.parse(requests.find((r) => (r.method === 'POST' || r.method === 'PATCH') && /\/issues\/(\d+\/)?comments/.test(r.url)).body).body;
+const labelsAdded = (requests) => requests.filter((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url)).flatMap((r) => JSON.parse(r.body).labels);
+const labelsRemoved = (requests) => requests.filter((r) => r.method === 'DELETE' && /\/issues\/\d+\/labels\//.test(r.url)).map((r) => decodeURIComponent(r.url.split('/labels/')[1]));
+
+test('pr_review withholds an APPROVED review that has no adversarial analysis (ADR-0049)', async () => {
+  const { result, requests } = await runDedup({ handlerOptions: { analysis: false, groqContent: 'Looks good.\n\nVerdict: APPROVED' } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(JSON.parse(reviewPost(requests).body).event, 'COMMENT');
+  assert.match(JSON.parse(reviewPost(requests).body).body, /^Approval withheld: the adversarial analysis is incomplete/);
+  assert.match(commentBody(requests), /Approval withheld\*\* — the review approved without the adversarial analysis[\s\S]*the section is missing/);
+  assert.match(commentBody(requests), new RegExp(`<!-- adl-review sha=${HEAD_SHA} verdict=WITHHELD -->$`));
+  assert.deepEqual(labelsAdded(requests).filter((l) => /^(review-|changes-)/.test(l)), ['review-withheld']);
+  assert.match(result.stderr, /"withheld_for":"protocol"/);
+  assert.match(result.stderr, /"adversarial_points":0/);
+  // The approval is withheld, not turned into a defect: auto-fix must not be asked to fix an analysis.
+  assert.ok(!labelsAdded(requests).includes('changes-requested'));
+});
+
+test('pr_review withholds an APPROVED review that names a single risk, and approves one that names two', async () => {
+  const one = '### 🔬 Adversarial Analysis\n- **Robustness** — foo.js:1 an empty value is not handled\n- **Side effects** — none, checked the callers\n\nVerdict: APPROVED';
+  const withheld = await runDedup({ handlerOptions: { analysis: false, groqContent: one } });
+  assert.equal(JSON.parse(reviewPost(withheld.requests).body).event, 'COMMENT');
+  assert.match(commentBody(withheld.requests), /Robustness: risk named; Side effects: no risk named/);
+  assert.match(withheld.result.stderr, /"adversarial_points":1,"adversarial_axes":\["robustness"\]/);
+  const approved = await runDedup({ handlerOptions: { groqContent: 'Looks good.\n\nVerdict: APPROVED' } });
+  assert.equal(JSON.parse(reviewPost(approved.requests).body).event, 'APPROVE');
+  assert.match(approved.result.stderr, /"adversarial_points":2,"adversarial_axes":\["robustness","side_effects"\]/);
+});
+
+test('pr_review does not require the analysis to request changes', async () => {
+  const { result, requests } = await runDedup({ handlerOptions: { analysis: false, groqContent: '- [High] boom — File: foo.js Lines: 1\n\nVerdict: REQUEST_CHANGES' } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(JSON.parse(reviewPost(requests).body).event, 'REQUEST_CHANGES');
+  assert.ok(labelsAdded(requests).includes('changes-requested'));
+});
+
+// ── Circuit breaker (ADR-0050) ─────────────────────────────────────────────────────────────────────────────────
+const FINDING = '### ⚠️ Issues Found\n- [High] The guard is wrong — File: foo.js Lines: 1 Root cause: x Fix: y\n\nVerdict: REQUEST_CHANGES';
+const FINDING_SIG = failureSignature({ review: FINDING });
+const previousReview = (verdict, streak, sig = FINDING_SIG) => [{ id: COMMENT_ID, body: `${HEADING}\n\nold\n\n<!-- adl-review sha=${'b'.repeat(40)} verdict=${verdict}${streak ? ` streak=${streak} sig=${sig}` : ''} -->`, user: BOT }];
+
+test('pr_review counts consecutive reviews that report the same failure in the marker', async () => {
+  const { result, requests } = await runDedup({ handlerOptions: { groqContent: FINDING, commentsBody: JSON.stringify(previousReview('REQUEST_CHANGES', 1)) } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.match(commentBody(requests), new RegExp(`verdict=REQUEST_CHANGES streak=2 sig=${FINDING_SIG} -->$`));
+  assert.doesNotMatch(commentBody(requests), /ESCALATED/);
+  // Below the threshold the loop goes on: changes-requested is re-pulsed to start auto-fix.
+  assert.ok(labelsRemoved(requests).includes('changes-requested'));
+  assert.ok(!labelsAdded(requests).includes('needs-human'));
+  assert.doesNotMatch(result.stderr, /review\.escalated/);
+});
+
+test('pr_review ESCALATES at the third identical failure: needs-human, no re-pulse, no auto-fix (ADR-0050)', async () => {
+  const { result, requests } = await runDedup({ handlerOptions: { groqContent: FINDING, commentsBody: JSON.stringify(previousReview('REQUEST_CHANGES', 2)) } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.match(commentBody(requests), /🚨 ESCALATED\*\* — the last 3 automated reviews/);
+  assert.match(commentBody(requests), new RegExp(`streak=3 sig=${FINDING_SIG} -->$`));
+  assert.equal(JSON.parse(reviewPost(requests).body).event, 'REQUEST_CHANGES');
+  assert.match(JSON.parse(reviewPost(requests).body).body, /^Changes required, loop ESCALATED: the same failure was reported 3 times in a row/);
+  assert.ok(labelsAdded(requests).includes('needs-human'));
+  assert.ok(labelsAdded(requests).includes('changes-requested'), 'the PR stays red');
+  assert.ok(!labelsRemoved(requests).includes('changes-requested'), 'not re-pulsed: a removal then an add would start auto-fix');
+  assert.match(result.stderr, /"event":"review\.escalated"[^\n]*"reason":"circuit_breaker"[^\n]*"streak":3/);
+});
+
+test('pr_review restarts the count when the failure changes, and after anything but a REQUEST_CHANGES', async () => {
+  const other = await runDedup({ handlerOptions: { groqContent: FINDING, commentsBody: JSON.stringify(previousReview('REQUEST_CHANGES', 2, 'abcdef0123')) } });
+  assert.match(commentBody(other.requests), new RegExp(`streak=1 sig=${FINDING_SIG} -->$`));
+  assert.ok(!labelsAdded(other.requests).includes('needs-human'));
+  const afterWithheld = await runDedup({ handlerOptions: { groqContent: FINDING, commentsBody: JSON.stringify(previousReview('WITHHELD', 0)) } });
+  assert.match(commentBody(afterWithheld.requests), new RegExp(`streak=1 sig=${FINDING_SIG} -->$`));
+  // An APPROVE carries no streak at all.
+  const approved = await runDedup({ handlerOptions: { groqContent: 'Fine.\n\nVerdict: APPROVED', commentsBody: JSON.stringify(previousReview('REQUEST_CHANGES', 2)) } });
+  assert.match(commentBody(approved.requests), new RegExp(`verdict=APPROVE -->$`));
+});
+
+test('pr_review reads a marker written before the circuit breaker as a streak of zero', async () => {
+  const legacy = [{ id: COMMENT_ID, body: `${HEADING}\n\nold\n\n<!-- adl-review sha=${'b'.repeat(40)} verdict=REQUEST_CHANGES -->`, user: BOT }];
+  const { result, requests } = await runDedup({ handlerOptions: { groqContent: FINDING, commentsBody: JSON.stringify(legacy) } });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.match(commentBody(requests), new RegExp(`streak=1 sig=${FINDING_SIG} -->$`));
+});
+
+// ── Review signals for the meta-loop (ADR-0051) ────────────────────────────────────────────────────────────────
+async function runWithMetrics(handlerOptions) {
+  const metricsFile = path.join(os.tmpdir(), `pr-review-metrics-${Date.now()}-${Math.random()}.jsonl`);
+  await fs.writeFile(metricsFile, '');
+  try {
+    const run = await runDedup({ handlerOptions, extraEnv: { METRICS_FILE: metricsFile, GITHUB_RUN_ID: '777', GITHUB_RUN_ATTEMPT: '2' } });
+    const lines = (await fs.readFile(metricsFile, 'utf8')).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    return { ...run, lines };
+  } finally {
+    await fs.unlink(metricsFile).catch(() => {});
+  }
+}
+
+test('pr_review records the axes of its blocking findings as a review_signal metric, closed ids only', async () => {
+  const content = '### ⚠️ Issues Found\n- [High] A model-written title <script>x</script> — File: foo.js Lines: 1 Root cause: r Fix: f Axis: side effects\n- [Medium] t — File: foo.js Axis: bogus\n- [Low] t — File: foo.js Axis: types\n\nVerdict: REQUEST_CHANGES';
+  const { result, lines } = await runWithMetrics({ groqContent: content });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  const signals = lines.filter((l) => l.type === 'review_signal');
+  assert.equal(signals.length, 1);
+  assert.deepEqual(Object.keys(signals[0]).sort(), ['axes', 'pr_number', 'run_id', 'ts', 'type', 'verdict']);
+  assert.deepEqual([signals[0].axes, signals[0].verdict, signals[0].run_id, signals[0].pr_number], [['side_effects'], 'REQUEST_CHANGES', '777-2-review-signal', PR_NUMBER]);
+  assert.match(result.stderr, /"blocking_axes":\["side_effects"\]/);
+});
+
+test('pr_review records no review_signal for an approval, a withheld approval or findings without an axis tag', async () => {
+  for (const [name, options] of [
+    ['approval', { groqContent: 'Fine.\n\nVerdict: APPROVED' }],
+    ['withheld', { analysis: false, groqContent: 'Fine.\n\nVerdict: APPROVED' }],
+    ['untagged', { groqContent: '### ⚠️ Issues Found\n- [High] t — File: foo.js Lines: 1\n\nVerdict: REQUEST_CHANGES' }],
+  ]) {
+    const { result, lines } = await runWithMetrics(options);
+    assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(lines.filter((l) => l.type === 'review_signal').length, 0, name);
   }
 });

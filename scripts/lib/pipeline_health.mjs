@@ -64,6 +64,7 @@ export const WITHHELD_CAUSES = Object.freeze({
   approve_cut: 'Approval withheld: code cut from the reviewed diff (ADR-0038)',
   rc_unseen: 'REQUEST_CHANGES withheld: every finding cites only unseen code (#220)',
   cut_unknown: 'Code cut from the diff, pre-backstop verdict not recorded (record before withheld_from)',
+  protocol: 'Approval withheld: adversarial analysis incomplete (ADR-0049)',
   evidence_missing: 'CI evidence missing (ADR-0026)',
   evidence_stale: 'CI evidence stale (ADR-0026)',
   other: 'Evidence unverified / other',
@@ -71,6 +72,7 @@ export const WITHHELD_CAUSES = Object.freeze({
 
 /** The WITHHELD_CAUSES key of one `review.verdict` meta whose verdict is WITHHELD. */
 export function withheldCause(meta) {
+  if (meta.withheld_for === 'protocol') return 'protocol';
   if (meta.withheld_from === 'APPROVE') return 'approve_cut';
   if (meta.withheld_from === 'REQUEST_CHANGES') return 'rc_unseen';
   // Only a record written before the key existed is ambiguous; a present null means no backstop was involved.

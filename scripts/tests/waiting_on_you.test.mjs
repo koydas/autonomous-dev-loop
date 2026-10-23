@@ -214,6 +214,11 @@ test('explainEscalation: protected files come from the denylist given, the attem
   const errored = { events: [{ event: 'autofix.error', stage: 'autofix', level: 'error', meta: {} }, { event: 'autofix.escalated', stage: 'autofix', ts: 1, level: 'warn', meta: { reason: 'no_changes' } }] };
   assert.deepEqual([explainEscalation(esc, errored).kind, explainEscalation(esc, errored).by_design], ['error', false]);
   assert.equal(explainEscalation({ event: 'autofix.max_attempts_reached', stage: 'autofix', ts: 1 }, { events: [] }).kind, 'attempt_limit');
+  // ADR-0050: the circuit breaker is the loop stopping itself on purpose, not an escalation the design leaves unexplained.
+  const breaker = (meta) => explainEscalation({ event: 'review.escalated', stage: 'review', ts: 1 }, { events: [{ event: 'review.escalated', stage: 'review', ts: 1, level: 'warn', meta }] });
+  assert.deepEqual([breaker({ reason: 'circuit_breaker', streak: 3 }).kind, breaker({ reason: 'circuit_breaker', streak: 3 }).by_design], ['circuit_breaker', true]);
+  assert.match(breaker({ reason: 'circuit_breaker', streak: 3 }).reason, /repeated on 3 consecutive reviews/);
+  assert.match(breaker({ reason: 'circuit_breaker' }).reason, /repeated on several consecutive reviews/);
   assert.equal(explainEscalation({ event: 'review.labels_applied', stage: 'review', ts: 1 }, null).kind, 'unknown');
   const gen = (meta) => explainEscalation({ event: 'code_gen.escalated', stage: 'code_gen', ts: 1 }, { events: [{ event: 'code_gen.escalated', stage: 'code_gen', ts: 1, meta }] });
   assert.equal(gen({ reason: 'blocked', source: 'notes_only' }).kind, 'blocked_notes_only');

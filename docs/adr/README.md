@@ -52,3 +52,6 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0046: Meta-loop: a read-only function from run statistics to suggested levers](./0046-meta-loop-read-only-stats-to-levers.md)
 - [ADR-0047: Published findings export and the finding → lever table](./0047-findings-export-and-lever-table.md)
 - [ADR-0048: Meta-loop accepted and implemented; what the review of step 5 decides](./0048-meta-loop-accepted-and-implemented.md)
+- [ADR-0049: Adversarial review protocol: four axes, and no approval without two named risks](./0049-adversarial-review-protocol.md)
+- [ADR-0050: Circuit breaker on the review → auto-fix loop, and Retry-After on the Anthropic client](./0050-circuit-breaker-review-loop.md)
+- [ADR-0051: Active lessons: recurring adverse signals reach the next run's prompt, from a fixed catalog](./0051-active-lessons-from-the-meta-loop.md)

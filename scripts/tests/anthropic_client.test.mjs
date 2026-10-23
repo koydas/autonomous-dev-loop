@@ -389,3 +389,59 @@ test('anthropicUsage rejects malformed counts instead of coercing them', async (
     { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: -5 }, { input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: '3' },
   ]) assert.equal(anthropicUsage({ usage }), null, JSON.stringify(usage));
 });
+
+// ── Retry-After (ADR-0050) ──────────────────────────────────────────────────────────────────────────────────────
+const withHeaders = (body, status, headers) => ({ ...makeResponse(body, status), headers: new Headers(headers) });
+
+test('callAnthropic waits out the Retry-After of a 429 instead of the short backoff', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => (++calls === 1
+    ? withHeaders('{"type":"error","error":{"type":"rate_limit_error"}}', 429, { 'retry-after': '7' })
+    : makeResponse({ content: [{ type: 'text', text: 'after-the-wait' }] }));
+  assert.equal(await callAnthropic(BASE_ARGS), 'after-the-wait');
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [7000]);
+}));
+
+test('callAnthropic honors Retry-After on a 529 (overloaded) too', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => (++calls === 1
+    ? withHeaders('{"type":"error","error":{"type":"overloaded_error"}}', 529, { 'retry-after': '2' })
+    : makeResponse({ content: [{ type: 'text', text: 'ok' }] }));
+  assert.equal(await callAnthropic(BASE_ARGS), 'ok');
+  assert.deepEqual(waits, [2000]);
+}));
+
+test('callAnthropic fails fast, without waiting, when Retry-After exceeds the wait budget (callLLM then falls back)', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return withHeaders('{"type":"error","error":{"type":"rate_limit_error"}}', 429, { 'retry-after': '300' }); };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.status === 429 && err.retryable === false && err.waitMs === 300000);
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+}));
+
+test('callAnthropic reads the wait budget from LLM_MAX_RETRY_WAIT_MS', withRecordedWaits(async (waits) => {
+  process.env.LLM_MAX_RETRY_WAIT_MS = '1000';
+  try {
+    globalThis.fetch = async () => withHeaders('{"type":"error"}', 429, { 'retry-after': '5' });
+    await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.retryable === false && err.waitMs === 5000);
+    assert.deepEqual(waits, []);
+  } finally {
+    delete process.env.LLM_MAX_RETRY_WAIT_MS;
+  }
+}));
+
+test('callAnthropic keeps the backoff when Retry-After is absent or unparseable, and never waits on a non-retryable status', withRecordedWaits(async (waits) => {
+  let calls = 0;
+  globalThis.fetch = async () => (++calls === 1
+    ? withHeaders('{"type":"error"}', 429, { 'retry-after': 'soon' })
+    : makeResponse({ content: [{ type: 'text', text: 'ok' }] }));
+  assert.equal(await callAnthropic(BASE_ARGS), 'ok');
+  assert.equal(waits.length, 1);
+  assert.notEqual(waits[0], NaN);
+  assert.ok(waits[0] <= 8000, 'a backoff, not a server wait');
+  calls = 0;
+  globalThis.fetch = async () => { calls++; return withHeaders('{"type":"error"}', 401, { 'retry-after': '5' }); };
+  await assert.rejects(() => callAnthropic(BASE_ARGS), (err) => err.retryable === false && err.waitMs === undefined);
+  assert.equal(calls, 1);
+}));

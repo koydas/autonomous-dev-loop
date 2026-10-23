@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { leverFor } from '../lib/meta_levers.mjs';
 import { diagnose, RULES, SEVERITY_ORDER } from '../lib/pipeline_diagnostics.mjs';
 import { journeys } from '../lib/pipeline_journey.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
@@ -298,13 +299,26 @@ test('withheld anomaly: REQUEST_CHANGES withheld on unseen code over withheldSha
   const w = find(diagnose({ model: model(runs) }), 'review-withheld');
   assert.equal(w.severity, 'warning');
   assert.equal(w.title, 'Reviews withhold their verdict');
-  assert.match(w.fact, /anomaly: 2 \(REQUEST_CHANGES on unseen code: 2; unknown cause: 0; fallback answered a prompt cut to the primary's budget: 0\)/);
+  assert.match(w.fact, /anomaly: 2 \(REQUEST_CHANGES on unseen code: 2; adversarial protocol not met, ADR-0049: 0; unknown cause: 0; fallback answered a prompt cut to the primary's budget: 0\)/);
   assert.equal(w.hypothesis, null);
   // The threshold applies to the anomaly share: 1 anomaly in 5 verdicts (20 %) stays info, whatever the total.
   const below = [...withheldRuns([{ withheld_from: 'REQUEST_CHANGES' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }]), run({ sha: 'e'.repeat(40), events: [verdict('APPROVE')] })];
   const b = find(diagnose({ model: model(below) }), 'review-withheld');
   assert.equal(b.severity, 'info');
   assert.match(b.fact, /^4 of 5 verdicts are WITHHELD.*anomaly: 1 /);
+});
+
+test('withheld for the adversarial protocol (ADR-0049) is the model not following the review format: an anomaly with a prompt lever, not a guardrail', () => {
+  const runs = [0, 1, 2].map((i) => run({ sha: String(i).repeat(40), events: [verdict('WITHHELD', { withheld_for: 'protocol', withheld_from: null, unreviewed_code_files: 0, evidence_state: 'available' })] }));
+  const w = find(diagnose({ model: model(runs) }), 'review-withheld');
+  assert.equal(w.severity, 'warning');
+  assert.match(w.fact, /anomaly: 3 \(REQUEST_CHANGES on unseen code: 0; adversarial protocol not met, ADR-0049: 3; unknown cause: 0;/);
+  assert.deepEqual(leverFor(w).targets.map((t) => t.ref).filter((r) => r.startsWith('prompts/')), ['prompts/pr-review-system.md']);
+  // Mixed with a cut-code guardrail, only the protocol withholds count as anomalies.
+  const mixed = [...runs.slice(0, 1), ...withheldRuns([{ withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }, { withheld_from: 'APPROVE' }]), run({ sha: 'e'.repeat(40), events: [verdict('APPROVE')] })];
+  const m = find(diagnose({ model: model(mixed) }), 'review-withheld');
+  assert.equal(m.severity, 'info');
+  assert.match(m.fact, /anomaly: 1 \(.*protocol not met, ADR-0049: 1;/);
 });
 
 test('withheld with an unknown cause (no cut, no evidence state, withheld_from null) is an anomaly', () => {

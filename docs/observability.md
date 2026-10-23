@@ -96,7 +96,8 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.start`     | info   | —             | `prNumber`, `model`                                      |
 | `review.llm_request` | info | —             | `model`, `input_tokens_est`, `prNumber`                  |
 | `review.llm_response`| info | —             | `output_tokens_est`, `prNumber`                          |
-| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override`, `unreviewed_code_files` (count of code files cut from the reviewed diff; > 0 turns an approval into `WITHHELD`, ADR-0038), `withheld_from` (`APPROVE` \| `REQUEST_CHANGES` \| null: the verdict the unseen-code backstop turned into `WITHHELD`, ADR-0038 / #219) |
+| `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override`, `unreviewed_code_files` (count of code files cut from the reviewed diff; > 0 turns an approval into `WITHHELD`, ADR-0038), `withheld_from` (`APPROVE` \| `REQUEST_CHANGES` \| null: the verdict the unseen-code backstop turned into `WITHHELD`, ADR-0038 / #219), `withheld_for` (`protocol` \| null: the adversarial protocol withheld an approval, ADR-0049), `adversarial_points` (axes that named a risk), `adversarial_axes` (their ids), `blocking_axes` (axis ids tagged on the High / Medium findings), `streak` (consecutive reviews with the same failure signature, ADR-0050) |
+| `review.escalated` | warn   | —             | `prNumber`, `reason` (`circuit_breaker`), `streak`, `labels_added` (`needs-human`), `url` (the review comment) — the same failure was reported by `BREAKER_THRESHOLD` (3) consecutive reviews: no re-pulse of `changes-requested`, so no auto-fix (ADR-0050) |
 | `review.skipped`   | info   | ✓             | `reason` (`already_reviewed` \| `superseded`), `prNumber`, `headSha` — no LLM call (ADR-0028) |
 | `review.evidence_assessed` | info | —           | `prNumber`, `state` (`available` \| `missing` \| `stale`), `reason`, `failing`, `unverified` (check names) — the CI evidence read (ADR-0024, ADR-0026) |
 | `review.prompt_truncated` | warn | —            | `prNumber`, `diff_truncated`, `body_truncated`, `unreviewed_code_files`, `adrs_shown`, `adrs_found`, `max_input_tokens` — the token budget cut the prompt (ADR-0028, ADR-0036, ADR-0038) |
@@ -136,7 +137,7 @@ The `evidence` and `review` jobs share one `GITHUB_RUN_ID`, so the evidence trac
 | `autofix.attempt_labeled`      | info   | —             | `prNumber`, `attempt`, `label`            |
 | `autofix.escalated`            | warn   | —             | `prNumber`, `attempt`, `reason` (`no_changes` \| `guardrail_rejected`), `labels_added`, `url` (escalation comment) |
 | `autofix.max_attempts_reached` | warn   | —             | `attempt`, `prNumber`, `url` (exhausted comment) |
-| `autofix.skipped`              | info / warn | ✓        | `reason` (`untrusted_comment`, info: before the tracer, stderr only \| `self_modification`, warn: the PR changes `auto_fix_pr.mjs`, comment posted (`url`) \| `approved`, info: no LLM call \| `no_changes`, warn: attempt consumed, `needs-human` applied, summary commented, `autofix_skip` metric \| `guardrail_rejected`, warn: same, with the rejection reason commented — write denylist, shrink guard, ADR-0029 write guard or ADR-0019 static rules; `rules` lists them), `attempt`, `prNumber`, `headSha` (approved only) — exit 0, nothing pushed (ADR-0028) |
+| `autofix.skipped`              | info / warn | ✓        | `reason` (`untrusted_comment`, info: before the tracer, stderr only \| `self_modification`, warn: the PR changes `auto_fix_pr.mjs`, comment posted (`url`) \| `approved`, info: no LLM call \| `circuit_open`, info: the review of this head is the 3rd in a row to report the same failure, no LLM call, a trusted human rerun overrides it (ADR-0050) \| `no_changes`, warn: attempt consumed, `needs-human` applied, summary commented, `autofix_skip` metric \| `guardrail_rejected`, warn: same, with the rejection reason commented — write denylist, shrink guard, ADR-0029 write guard or ADR-0019 static rules; `rules` lists them), `attempt`, `prNumber`, `headSha` (approved only) — exit 0, nothing pushed (ADR-0028) |
 | `autofix.error`                | error  | ✓             | `error`, `attempt`, `prNumber`            |
 
 ### `autofix_reset`
@@ -225,6 +226,15 @@ Emitted by `llm_client.mjs` and `config.mjs` (ADR-0032). `stage` is the calling 
 | `llm_fallback_disabled`    | warn          | —             | `from`, `error_type`, `status`, `error` (stderr and trace only) — same fields as `llm_fallback`; the primary failed and the caller passed `fallback: false` (live evals) |
 | `llm_provider_error`       | warn          | —             | `provider`, `error_type`, `status` — the primary failed with a structured provider error code (Groq `error.code`, e.g. `json_validate_failed` on HTTP 400: the model's output failed `response_format` JSON validation); logged once, before `llm_fallback` / `llm_fallback_disabled` / the no-key skip. Code and HTTP status only, never the response body |
 | `provider_config_fallback` | warn          | —             | `message`, `variable`, `ai_provider`, `provider` — `variable` (`AI_PROVIDER` or `AI_PROVIDER_<STAGE>`) is unknown or names a provider without a key; logged once per process |
+
+### `lessons`
+
+Emitted by `lessons_loader.mjs` in the generation (`code_gen`) and auto-fix (`autofix`) stages (ADR-0051). Ids are keys of the lesson catalog (`rule:<guardrail rule>`, `axis:<review axis>`), never text from a record.
+
+| Event                | Level | `duration_ms` | Key `meta` fields |
+|----------------------|-------|---------------|-------------------|
+| `lessons.loaded`     | info  | —             | `stage` (`generation` \| `autofix`), `count`, `ids` — recurring signals found on the `metrics` branch and offered to the prompt (generation drops the block when it would exceed the stage's input budget) |
+| `lessons.unavailable`| warn  | —             | `stage`, `reason` (`not_configured` \| `http_error` \| `timeout` \| `network_error`), `status` (HTTP, `http_error` only) — the signals could not be read; the run goes on without lessons. A missing `metrics` branch (404) is not a fault and logs nothing |
 
 ### `retry`
 

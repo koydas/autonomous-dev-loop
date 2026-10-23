@@ -463,10 +463,14 @@ for (const name of ['generation-system', 'auto-fix-system']) {
 // Generation entrypoint, real prompts and config, LLM and GitHub mocked (ADR-0019)
 // ---------------------------------------------------------------------------
 
+// The one GitHub call a generation run makes without escalating: the read-only fetch of the lessons signals (ADR-0051).
+const LESSONS_READ = /\/contents\/metrics\/runs\.jsonl\?ref=metrics$/;
+
 // Runs scripts/generate_issue_change.mjs in a scratch repo against one mock server that answers
 // the Anthropic call with `changes` and records the GitHub calls.
 // llmFailures: the first N LLM requests answer 503 (transient), the next one succeeds.
-async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', issueBody = 'Add a helper.', issueLabels, aiOutput, githubStatus = 201, llmFailures = 0 } = {}) {
+// runsJsonl: text served as metrics/runs.jsonl on the metrics branch (the read-only lessons fetch, ADR-0051); absent = 404.
+async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', issueBody = 'Add a helper.', issueLabels, aiOutput, githubStatus = 201, llmFailures = 0, runsJsonl, env = {} } = {}) {
   const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'smoke-gen-'));
   for (const [rel, content] of Object.entries(files)) {
     await fs.mkdir(path.dirname(path.join(repoDir, rel)), { recursive: true });
@@ -481,6 +485,11 @@ async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', i
       if (req.url === '/v1/messages' && requests.filter((r) => r.url === '/v1/messages').length <= llmFailures) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
         res.end('{"type":"error","error":{"type":"api_error","message":"upstream unavailable"}}');
+        return;
+      }
+      if (req.method === 'GET' && /\/contents\/metrics\/runs\.jsonl\?ref=metrics$/.test(req.url)) {
+        res.writeHead(runsJsonl === undefined ? 404 : 200, { 'Content-Type': 'text/plain' });
+        res.end(runsJsonl ?? '');
         return;
       }
       res.writeHead(req.url === '/v1/messages' ? 200 : githubStatus, { 'Content-Type': 'application/json' });
@@ -512,6 +521,7 @@ async function runGeneration(changes, { files = {}, issueTitle = 'Add helper', i
           ISSUE_TITLE: issueTitle,
           ISSUE_BODY: issueBody,
           ...(issueLabels === undefined ? {} : { ISSUE_LABELS: issueLabels }),
+          ...env,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -577,7 +587,7 @@ test('generation entrypoint: a failed escalation still ends the stage with a ter
   }
 });
 
-test('generation entrypoint: a patch that passes every guardrail is written and no GitHub call is made', async () => {
+test('generation entrypoint: a patch that passes every guardrail is written and the only GitHub call is the read of the lessons', async () => {
   const run = await runGeneration(
     [{ target_path: 'src/helper.mjs', file_content: "import fs from 'node:fs';\nimport { x } from './x.mjs';\nexport function read(p) { return fs.readFileSync(p) + x; }\n" }],
     { files: { 'src/x.mjs': 'export const x = 1;\n' } },
@@ -587,7 +597,7 @@ test('generation entrypoint: a patch that passes every guardrail is written and 
     assert.match(await run.readRepo('src/helper.mjs'), /readFileSync/);
     assert.equal(parseGithubOutput(run.output).generated_paths, 'src/helper.mjs');
     assert.doesNotMatch(run.output, /rejected=true/);
-    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
+    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages' && !LESSONS_READ.test(r.url)), []);
   } finally {
     await fs.rm(run.repoDir, { recursive: true, force: true });
   }
@@ -706,7 +716,7 @@ test('generation entrypoint: not blocked — a Markdown note without a bug/featu
     assert.equal(await run.readRepo('guides/setup.md'), '# Setup\n');
     assert.equal(parseGithubOutput(run.output).generated_paths, 'guides/setup.md');
     assert.doesNotMatch(run.output, /blocked=true/);
-    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
+    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages' && !LESSONS_READ.test(r.url)), []);
   } finally {
     await fs.rm(run.repoDir, { recursive: true, force: true });
   }
@@ -717,7 +727,7 @@ test('generation entrypoint: a non-boolean blocked value fails the run as malfor
   try {
     assert.equal(run.result.code, 1);
     assert.match(run.result.stderr, /"event":"code_gen\.error".*blocked must be a boolean/);
-    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages'), []);
+    assert.deepEqual(run.requests.filter((r) => r.url !== '/v1/messages' && !LESSONS_READ.test(r.url)), []);
   } finally {
     await fs.rm(run.repoDir, { recursive: true, force: true });
   }
@@ -802,6 +812,54 @@ test('public record of a real generation trace carries no prompt, issue body, mo
     assert.ok(!json.includes('sk-ant-test-planted-key-0001'));
     assert.deepEqual(record.events.find((e) => e.event === 'pr_prepare.complete').meta, { paths: ['src/helper.mjs'] });
     assert.deepEqual(record.envelope.llm_calls.map((c) => c.provider), ['anthropic']);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+// ── Active lessons (ADR-0051) ───────────────────────────────────────────────────────────────────────────────────
+const skipLine = (rules, ts = new Date().toISOString()) => JSON.stringify({ type: 'codegen_skip', run_id: `r-${Math.random()}`, issue_number: 1, reason: 'guardrail_rejected', rules, ts });
+const systemOf = (run) => JSON.stringify(JSON.parse(run.requests.find((r) => r.url === '/v1/messages').body).system);
+
+test('generation entrypoint: a guardrail that rejected recent patches twice is added to the system prompt as a learned constraint', async () => {
+  const runsJsonl = [skipLine(['module_system']), skipLine(['module_system', 'unresolved_import']), skipLine(['exported_signature'])].join('\n');
+  const run = await runGeneration([{ target_path: 'src/helper.mjs', file_content: 'export const helper = () => 1;\n' }], { runsJsonl });
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.match(systemOf(run), /LEARNED CONSTRAINTS/);
+    assert.match(systemOf(run), /\.mjs\` is ESM[^"]*\(seen 2 times recently\)/);
+    assert.doesNotMatch(systemOf(run), /exported function unless the task names/, 'a single occurrence is not a lesson');
+    assert.match(run.result.stderr, /"event":"lessons\.loaded"[^\n]*"ids":\["rule:module_system"\]/);
+  } finally {
+    await fs.rm(run.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generation entrypoint: no recurring signal, no metrics branch, an unreadable file or ADL_LESSONS=off add nothing and never fail the run', async () => {
+  const cases = [
+    ['one occurrence', { runsJsonl: skipLine(['module_system']) }],
+    ['no metrics branch', {}],
+    ['garbage', { runsJsonl: 'not json\n{"type":"codegen_skip","reason":"guardrail_rejected","rules":["<script>alert(1)</script>","module_system"]}\n{"type":"codegen_skip","reason":"guardrail_rejected","rules":["<script>alert(1)</script>"]}' }],
+    ['switched off', { runsJsonl: [skipLine(['module_system']), skipLine(['module_system'])].join('\n'), env: { ADL_LESSONS: 'off' } }],
+  ];
+  for (const [name, options] of cases) {
+    const run = await runGeneration([{ target_path: 'src/helper.mjs', file_content: 'export const helper = () => 1;\n' }], options);
+    try {
+      assert.equal(run.result.code, 0, `${name}: expected exit 0, stderr: ${run.result.stderr}`);
+      assert.doesNotMatch(systemOf(run), /LEARNED CONSTRAINTS|alert\(1\)/, name);
+      assert.doesNotMatch(run.result.stderr, /lessons\.loaded/, name);
+    } finally {
+      await fs.rm(run.repoDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('generation entrypoint: a failing lessons read is one warn event and the run goes on', async () => {
+  const run = await runGeneration([{ target_path: 'src/helper.mjs', file_content: 'export const helper = () => 1;\n' }], { runsJsonl: 'x', env: { GITHUB_API_URL: 'http://127.0.0.1:1' } });
+  try {
+    assert.equal(run.result.code, 0, `expected exit 0, stderr: ${run.result.stderr}`);
+    assert.match(run.result.stderr, /"event":"lessons\.unavailable"[^\n]*"reason":"network_error"/);
+    assert.doesNotMatch(systemOf(run), /LEARNED CONSTRAINTS/);
   } finally {
     await fs.rm(run.repoDir, { recursive: true, force: true });
   }

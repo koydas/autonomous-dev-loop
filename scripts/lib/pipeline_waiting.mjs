@@ -36,6 +36,9 @@ export function explainEscalation(esc, run, protectedPaths = PROTECTED_FLOOR) {
   if (events.some((e) => e.level === 'error' && e.stage === esc.stage && !/\.escalated$/.test(e.event))) {
     return { kind: 'error', by_design: false, reason: `The ${esc.stage ?? 'stage'} recorded an error (LLM call or parsing) before escalating`, files: [] };
   }
+  if (esc.event === 'review.escalated') {
+    return { kind: 'circuit_breaker', by_design: true, reason: `The same review failure repeated on ${Number.isInteger(meta.streak) ? meta.streak : 'several'} consecutive reviews: the circuit breaker stopped the loop (ADR-0050)`, files: [] };
+  }
   if (esc.event === 'autofix.max_attempts_reached') {
     return { kind: 'attempt_limit', by_design: true, reason: 'Auto-fix used its attempts without converging: a person has to decide', files: [] };
   }

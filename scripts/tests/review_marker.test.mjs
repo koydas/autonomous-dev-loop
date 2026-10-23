@@ -188,3 +188,33 @@ test('findReviewComment falls back to the newest trusted heading-only comment on
   assert.equal(findReviewComment([], H), null);
   assert.equal(findReviewComment(null, H), null);
 });
+
+// ── Circuit breaker fields (ADR-0050) ───────────────────────────────────────────────────────────────────────────
+const SIG = '0123456789';
+
+test('formatReviewMarker writes streak and sig only together, and parseReviewMarker round-trips them', () => {
+  const marker = formatReviewMarker({ sha: A, verdict: 'REQUEST_CHANGES', streak: 3, sig: SIG });
+  assert.equal(marker, `<!-- adl-review sha=${A} verdict=REQUEST_CHANGES streak=3 sig=${SIG} -->`);
+  assert.deepEqual(parseReviewMarker(`body\n\n${marker}`), { sha: A, verdict: 'REQUEST_CHANGES', streak: 3, sig: SIG });
+  const bare = (args) => formatReviewMarker({ sha: A, verdict: 'REQUEST_CHANGES', ...args });
+  assert.equal(bare({ streak: 0, sig: SIG }), `<!-- adl-review sha=${A} verdict=REQUEST_CHANGES -->`, 'no streak');
+  assert.equal(bare({ streak: 2, sig: null }), `<!-- adl-review sha=${A} verdict=REQUEST_CHANGES -->`, 'a streak needs a signature');
+  assert.equal(bare({ streak: 2, sig: 'not-hex' }), `<!-- adl-review sha=${A} verdict=REQUEST_CHANGES -->`, 'a signature must be 10 hex chars');
+  assert.match(bare({ streak: 5000, sig: SIG }), /streak=999 /, 'bounded to 3 digits');
+});
+
+test('parseReviewMarker keeps reading markers without the breaker fields, and rejects a half-written one', () => {
+  assert.deepEqual(parseReviewMarker(`<!-- adl-review sha=${A} verdict=APPROVE -->`), { sha: A, verdict: 'APPROVE' });
+  assert.equal(parseReviewMarker(`<!-- adl-review sha=${A} verdict=REQUEST_CHANGES streak=2 -->`), null);
+  assert.equal(parseReviewMarker(`<!-- adl-review sha=${A} verdict=REQUEST_CHANGES streak=2 sig=zz -->`), null);
+});
+
+test('decideAutofixRun stops on an open circuit breaker for the current head, unless a human reruns', () => {
+  const open = { sha: A, verdict: 'REQUEST_CHANGES', streak: 3, sig: SIG };
+  assert.deepEqual(decideAutofixRun({ headSha: A, previous: open }), { run: false, reason: 'circuit_open' });
+  assert.deepEqual(decideAutofixRun({ headSha: A, previous: open, manualRerun: true }), { run: true, reason: 'manual_rerun' });
+  assert.deepEqual(decideAutofixRun({ headSha: A, previous: { ...open, streak: 2 } }), { run: true, reason: null }, 'below the threshold');
+  assert.deepEqual(decideAutofixRun({ headSha: 'b'.repeat(40), previous: open }), { run: true, reason: null }, 'the marker judged another head');
+  assert.deepEqual(decideAutofixRun({ headSha: null, previous: open }), { run: true, reason: null }, 'unknown head');
+  assert.deepEqual(decideAutofixRun({ headSha: A, previous: { sha: A, verdict: 'WITHHELD', streak: 3, sig: SIG } }), { run: true, reason: null }, 'only a REQUEST_CHANGES opens it');
+});

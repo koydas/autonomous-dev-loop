@@ -2,12 +2,15 @@
 // hidden marker naming the head SHA it judged and the resulting verdict; the next pr-review
 // run reads it to skip a duplicate review, and auto_fix_pr.mjs reads it to skip an approved head.
 
+import { isBreakerOpen } from './circuit_breaker.mjs';
+
 export const REVIEW_VERDICTS = ['APPROVE', 'REQUEST_CHANGES', 'WITHHELD'];
 
 const SHA_RE = /^[0-9a-f]{7,64}$/;
 // Anchored: only the marker pr_review.mjs appends last counts. A marker quoted earlier in the
 // body (LLM echo of a diff, injection via PR content) never wins.
-const MARKER_RE = /<!-- adl-review sha=([0-9a-f]{7,64}) verdict=(APPROVE|REQUEST_CHANGES|WITHHELD) -->\s*$/;
+// `streak` and `sig` (circuit breaker, ADR-0050) are optional: a marker written before them still parses.
+const MARKER_RE = /<!-- adl-review sha=([0-9a-f]{7,64}) verdict=(APPROVE|REQUEST_CHANGES|WITHHELD)(?: streak=(\d{1,3}) sig=([0-9a-f]{10}))? -->\s*$/;
 const ANY_MARKER_RE = /<!--\s*adl-review[\s\S]*?-->/gi;
 // Authors whose review comment is trusted: the Actions bot (GITHUB_TOKEN) or a repo member
 // (AI_PR_TOKEN is a member's PAT). Anyone else can comment on a public PR.
@@ -19,10 +22,12 @@ export function isCommitSha(sha) {
   return typeof sha === 'string' && SHA_RE.test(sha) && !NULL_SHA_RE.test(sha);
 }
 
-export function formatReviewMarker({ sha, verdict } = {}) {
+export function formatReviewMarker({ sha, verdict, streak = 0, sig = null } = {}) {
   if (!isCommitSha(sha)) throw new Error(`Invalid review marker sha: ${sha}`);
   if (!REVIEW_VERDICTS.includes(verdict)) throw new Error(`Invalid review marker verdict: ${verdict}`);
-  return `<!-- adl-review sha=${sha} verdict=${verdict} -->`;
+  // The streak is written only with a signature to compare against; without one it is not a streak.
+  const streakPart = streak > 0 && /^[0-9a-f]{10}$/.test(String(sig)) ? ` streak=${Math.min(streak, 999)} sig=${sig}` : '';
+  return `<!-- adl-review sha=${sha} verdict=${verdict}${streakPart} -->`;
 }
 
 // Removes marker-like comments from untrusted text (LLM output, evidence tails) before the
@@ -58,12 +63,13 @@ export function findReviewComment(comments, heading) {
   return findLatestReviewComment(comments, heading);
 }
 
-// Returns { sha, verdict } from a review comment body, or null when it carries no marker
-// (comments written before ADR-0028, or by a human).
+// Returns { sha, verdict } (plus { streak, sig } when the marker carries the circuit breaker's count) from a
+// review comment body, or null when it carries no marker (comments written before ADR-0028, or by a human).
 export function parseReviewMarker(body) {
   if (typeof body !== 'string') return null;
   const m = body.match(MARKER_RE);
-  return m ? { sha: m[1], verdict: m[2] } : null;
+  if (!m) return null;
+  return m[3] ? { sha: m[1], verdict: m[2], streak: Number(m[3]), sig: m[4] } : { sha: m[1], verdict: m[2] };
 }
 
 // The commit the run was triggered for: pull_request.head.sha, or `after` for a push.
@@ -89,11 +95,15 @@ export function decideReviewRun({ eventSha = null, headSha = null, previous = nu
 
 // Whether auto-fix should run: a `changes-requested` label can outlive the review that set
 // it (the next review approved the corrective push), so an APPROVE on the current head wins —
-// unless a human explicitly asked for a rerun (human as gate).
+// unless a human explicitly asked for a rerun (human as gate). An open circuit breaker (ADR-0050: the review of
+// this head is the Nth in a row to report the same failure) stops it the same way, before any LLM call.
 export function decideAutofixRun({ headSha = null, previous = null, manualRerun = false } = {}) {
   if (manualRerun) return { run: true, reason: 'manual_rerun' };
   if (headSha && previous?.sha === headSha && previous.verdict === 'APPROVE') {
     return { run: false, reason: 'approved' };
+  }
+  if (headSha && previous?.sha === headSha && previous.verdict === 'REQUEST_CHANGES' && isBreakerOpen(previous.streak)) {
+    return { run: false, reason: 'circuit_open' };
   }
   return { run: true, reason: null };
 }

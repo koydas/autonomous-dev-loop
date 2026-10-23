@@ -42,6 +42,7 @@ const reasonText = (v) => (typeof v === 'string' && v ? v.replace(/_/g, ' ') : n
 
 // WITHHELD cause, as pipeline_health.mjs classifies it (kept short for a step label).
 function withheldReason(meta) {
+  if (meta.withheld_for === 'protocol') return 'adversarial analysis incomplete';
   if (meta.withheld_from === 'APPROVE') return `approval withheld: ${meta.unreviewed_code_files ?? '?'} code file(s) not reviewed`;
   if (meta.withheld_from === 'REQUEST_CHANGES') return 'findings cite only unseen code';
   if (meta.evidence_state === 'missing' || meta.evidence_state === 'stale') return `CI evidence ${meta.evidence_state}`;

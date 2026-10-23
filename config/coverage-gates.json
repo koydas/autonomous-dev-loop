@@ -44,6 +44,10 @@
     "scripts/lib/findings_export.mjs",
     "scripts/lib/meta_levers.mjs",
     "scripts/lib/coverage_gates.mjs",
+    "scripts/lib/adversarial_review.mjs",
+    "scripts/lib/circuit_breaker.mjs",
+    "scripts/lib/lessons.mjs",
+    {"module": "scripts/lib/lessons_loader.mjs", "test": "lessons.test.mjs"},
     {"module": "scripts/build_eval_site.mjs", "note": "Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build)."}
   ]
 }

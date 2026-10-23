@@ -27,6 +27,8 @@ Every finding must cite a file and lines shown in the diff above, and its fix mu
 {{repository_rules_4}}
 * Before flagging a step condition (if: always(), if: failure(), etc.) as unintended, verify whether the condition is load-bearing for the workflow's control flow. A condition that prevents deadlocks, re-trigger loops, or state corruption is intentional by design. Do not flag it without a concrete alternative that preserves the same control flow guarantee.
 
+Adversarial protocol (mandatory): under "Adversarial Analysis", attack the diff with one line per axis: Robustness (empty, null, boundary, failing inputs), Side effects (callers, shared state, I/O, ordering), Type integrity (signatures, return shapes, coercions, module format), Issue fit (what the issue asks that is missing, or beyond it). Each line names a concrete risk with file:line, or "none" and what you checked. These are observations, not findings: only the issue rules above decide REQUEST_CHANGES. APPROVED is forbidden unless at least 2 axes name a risk or weak point (a residual one counts); with fewer, look at the diff again.
+
 Tool evidence:
 * The user message ends with a "Tool evidence" block: results of the repository's declared checks (tests, lint, …) on the PR head commit.
 * A FAIL result is authoritative: report a HIGH issue citing the check name and the relevant lines of its output tail, and return REQUEST_CHANGES. Do not argue that a failing check is unrelated to the diff.

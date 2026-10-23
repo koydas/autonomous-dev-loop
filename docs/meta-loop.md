@@ -28,10 +28,39 @@ The meta-loop turns the loop's own statistics into **suggested changes to the lo
 | Not done | Why |
 |---|---|
 | Open an issue, PR, comment, label or Discussion | It would re-enter the loop: `validate-issue.yml` fires on every issue opened or edited, a PR triggers the review. ADR-0046 |
-| Edit a prompt, a setting or a script | Those paths are on the write denylist (ADR-0021, ADR-0044); the decision stays with a person (ADR-0001) |
+| Edit a prompt, a setting or a script | Those paths are on the write denylist (ADR-0021, ADR-0044); the decision stays with a person (ADR-0001). The [active lessons](#active-lessons) below do not edit anything: they add a fixed sentence to one run's prompt |
 | Propose a weaker gate | No threshold change, dataset removal, filtered run, floor change or attempt-cap increase (ADR-0031, ADR-0044, ADR-0034) |
 | Keep a proposal registry | The feedback is the finding turning `resolved` (ADR-0043) |
 | Call an LLM in the build | A generated diagnosis could pass a hypothesis off as a fact (ADR-0043) |
+
+## Active lessons
+
+ADR-0051 closes the loop for the agent as well as for the operator, for the two stages that write code (generation and auto-fix). It does not change what the meta-loop above does; it is a second reader of the same kind of signal.
+
+```
+ pipeline stages write, as they already do:                       a run of generation / auto-fix:
+   codegen_skip / autofix_skip  (rules of a guardrail rejection)    loadLessons()  ── one read-only GET ──►  metrics/runs.jsonl
+   review_signal                (axis ids of blocking findings)       │                                        (metrics branch)
+        │                                                              ▼
+        ▼                                                          extractLessons(): a signal seen ≥ 2 times among the
+   metrics/runs.jsonl  ─────────────────────────────────────────►  last 30, none older than 30 days  → ≤ 3 lessons
+                                                                       │
+                                                                       ▼
+                                                                  fixed sentences of LESSONS (lessons.mjs) appended to
+                                                                  the system prompt, ≤ 700 chars; journaled by id
+```
+
+| Property | How |
+|---|---|
+| No model text in a prompt | Only the *keys* of the catalog cross: signals are guardrail rule ids and review axis ids written by code; an id outside `LESSONS` is dropped on read |
+| Never loosens a rule | A lesson restates a guardrail the prompt already has (ADR-0009) or a review axis; the write guard still rejects the patch either way |
+| Bounded | At most 3 lessons, 700 characters, whole lessons only; generation drops the block rather than exceed `generation_max_input_tokens` |
+| Expires | Outside the newest 30 signals or older than 30 days, a lesson is gone; there is no state to clear |
+| Cannot fail a run | No `metrics` branch is no lessons; any other failure is one `lessons.unavailable` warn event |
+| Switch | `ADL_LESSONS=off` as a repository variable (`vars.ADL_LESSONS`) |
+| Observable | `lessons.loaded` lists the ids; `docs/observability.md` |
+
+The review stage gets no lessons: it would bias the stage whose job is to be independent of the history of the PR. What this is not: a measured improvement. Generation and auto-fix have no eval suite, so whether a lesson lowers its rule's rejection rate is read from Diagnostics (`codegen-blocked`, `autofix-ineffective`) over the following weeks; a lesson that does not move its rate is removed from the catalog by a person.
 
 ## Reading a suggested lever
 

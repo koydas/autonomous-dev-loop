@@ -20,7 +20,7 @@ export const STATUS_CODE = Object.freeze({ unset: 0, ok: 1, error: 2 });
 export const SIDE_EFFECT_EVENTS = Object.freeze(new Set([
   'issue_validation.comment_posted', 'issue_validation.labels_applied',
   'code_gen.escalated',
-  'review.comment_posted', 'review.review_submitted', 'review.labels_applied',
+  'review.comment_posted', 'review.review_submitted', 'review.labels_applied', 'review.escalated',
   'autofix.reset', 'autofix.attempt_labeled', 'autofix.escalated', 'autofix.push', 'autofix.max_attempts_reached',
   'autofix_reset.labels_removed', 'autofix_reset.retriggered',
   'workflow.pr_operation', 'workflow.push',

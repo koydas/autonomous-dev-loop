@@ -140,7 +140,8 @@ function executionFailures(runs) {
 // last non-failed review call) and the input budget its prompt was cut to. Anomalies: a fallback answering a
 // prompt cut to the primary's budget (a number: only a budgeted provider sets it), REQUEST_CHANGES withheld on
 // unseen code, an unknown cause. A code cut or missing CI evidence is a guardrail doing its job (ADR-0038, ADR-0026).
-const ANOMALY_CAUSES = new Set(['rc_unseen', 'other']);
+// `protocol` (ADR-0049) is the model not following the review format, not the environment: an anomaly.
+const ANOMALY_CAUSES = new Set(['rc_unseen', 'other', 'protocol']);
 function withheldClass({ run, e }) {
   const calls = run.llm.filter((c) => !c.failed);
   const reviewCalls = calls.filter((c) => c.pipeline_stage === 'review');
@@ -184,7 +185,7 @@ function reviewFindings(runs) {
       anomaly: runIds(withheld.filter((_, i) => classes[i].anomaly)),
       fact: `${withheld.length} of ${verdicts.length} verdicts are WITHHELD (${pct(withheld.length / verdicts.length)}); ${cut} of them had code files not reviewed, ${fromApprove} would have been APPROVE (withheld_from). `
         + `They cover ${heads} PR head(s) on ${prs} PR(s). Guardrail: ${withheld.length - anomalies} (code cut, ADR-0038: ${guardrailCut}; CI evidence, ADR-0026: ${guardrailEvidence}); `
-        + `anomaly: ${anomalies} (REQUEST_CHANGES on unseen code: ${count('rc_unseen')}; unknown cause: ${count('other')}; fallback answered a prompt cut to the primary's budget: ${count('fallback_capped')}). `
+        + `anomaly: ${anomalies} (REQUEST_CHANGES on unseen code: ${count('rc_unseen')}; adversarial protocol not met, ADR-0049: ${count('protocol')}; unknown cause: ${count('other')}; fallback answered a prompt cut to the primary's budget: ${count('fallback_capped')}). `
         + `Answered by: ${answered}${budgets.length ? `; input budget ${budgets.join(' / ')} tokens` : ''}.`,
       hypothesis: warning
         ? (count('fallback_capped') * 2 >= anomalies ? 'The fallback provider answered a prompt already cut to the primary\'s input budget: it saw no more code than the primary would have, so the cut, not the model, withheld the verdict.' : null)

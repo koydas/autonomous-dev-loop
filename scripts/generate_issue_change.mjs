@@ -15,6 +15,7 @@ import { decideGenerationBlocked, escalateBlocked, findDeterministicBlock, parse
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { appendOutputs } from './lib/github_output.mjs';
+import { loadLessons } from './lib/lessons_loader.mjs';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -155,6 +156,11 @@ async function main() {
     throw err;
   }
 
+  // ADR-0051: constraints the recent runs of this repository broke again and again (empty when none recurs, the metrics
+  // branch cannot be read, or ADL_LESSONS=off). Left out when it would push the prompt over the input budget of the stage.
+  const { context: lessonsContext } = await loadLessons({ stage: 'generation', repository: process.env.GITHUB_REPOSITORY, token: process.env.GITHUB_TOKEN, apiBase: process.env.GITHUB_API_URL || undefined });
+  const generationBudget = loadLLMConfig('generation').maxInputTokens;
+  if (lessonsContext && (generationBudget == null || estimateTokens(systemPrompt + lessonsContext + prompt) <= generationBudget)) systemPrompt += lessonsContext;
   const inputTokensEst = estimateTokens(systemPrompt + prompt);
   obsLog({ stage: 'code_gen', event: 'code_gen.llm_request', level: 'info', meta: { model: config.model, input_tokens_est: inputTokensEst } });
   log('Calling LLM with deterministic prompt template');
