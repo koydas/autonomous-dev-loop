@@ -144,6 +144,14 @@ export async function restoreGraderFiles(workDir, hiddenDir, files) {
   }
 }
 
+/** The escaping of Node's TAP reporter, in its order: control characters, then backslashes (so `\n` is reported `\\n`), then `#`. */
+export function tapEscape(name) {
+  return String(name)
+    .replaceAll('\b', '\\b').replaceAll('\f', '\\f').replaceAll('\t', '\\t').replaceAll('\n', '\\n').replaceAll('\r', '\\r').replaceAll('\v', '\\v')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('#', '\\#');
+}
+
 const escapeRegExp = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
@@ -161,7 +169,7 @@ export function verifyTestRun(output, expected) {
   const n = expected.length;
   if (last('tests') !== n || last('pass') !== n) return { ok: false, reason: 'summary does not report the expected tests' };
   if (['fail', 'cancelled', 'skipped', 'todo'].some((k) => last(k) !== 0)) return { ok: false, reason: 'summary reports failed, cancelled, skipped or todo tests' };
-  const missing = expected.filter((name) => !new RegExp(`^\\s*ok \\d+ - ${escapeRegExp(name)}$`, 'm').test(text));
+  const missing = expected.filter((name) => !new RegExp(`^\\s*ok \\d+ - ${escapeRegExp(tapEscape(name))}$`, 'm').test(text));
   return missing.length ? { ok: false, reason: 'expected tests missing from the output' } : { ok: true, reason: null };
 }
 

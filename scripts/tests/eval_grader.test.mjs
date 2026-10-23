@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
   GRADER_FAILURES as F, MODEL_OUTPUT_SCHEMA_VERSION, MAX_CHANGES, MAX_CONTENT_CHARS,
   digestTree, validateModelOutput, checkPatchPaths, isAllowedCommand, graderEnv, evaluatePatch,
-  applyPatchToCopy, restoreGraderFiles, runGraderChecks, digestFiles, verifyTestRun, sha256,
+  applyPatchToCopy, restoreGraderFiles, runGraderChecks, digestFiles, verifyTestRun, tapEscape, sha256,
 } from '../lib/eval_grader.mjs';
 
 let root;
@@ -331,4 +332,16 @@ test('runGraderChecks: expected tests missing or malformed in the grader is a co
     assert.equal(r.failure, F.graderError, String(bad));
     assert.equal(prepared, 0);
   }
+});
+
+test('verifyTestRun matches the names Node actually reports: #, backslashes, control characters, quotes, unicode', async () => {
+  const names = ['handles issue #123', 'back\\slash', 'multi\nline', 'tab\tand "quotes" and \'single\'', 'unicode é ✓', '# leading hash', 'plain'];
+  const dir = await fs.mkdtemp(path.join(root, 'tapnames-'));
+  await write(dir, 'package.json', '{"type":"module"}');
+  await write(dir, 'test/t.test.mjs', `import { test } from 'node:test';\n${names.map((n) => `test(${JSON.stringify(n)}, () => {});`).join('\n')}\n`);
+  const out = execFileSync('node', ['--test', '--test-reporter=tap', 'test/t.test.mjs'], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH } });
+  assert.deepEqual(verifyTestRun(out, names), { ok: true, reason: null });
+  // The escaping is what makes it match: the raw name is not what the reporter prints.
+  assert.ok(!out.includes(`ok 1 - ${names[0]}`));
+  assert.equal(tapEscape('a#b\\c\nd'), 'a\\#b\\\\c\\\\nd');
 });
