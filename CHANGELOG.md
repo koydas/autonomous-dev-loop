@@ -7,6 +7,8 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **ADR-0052 (Proposed): executable evals run in three jobs with one-way data flow** (EV-04). Model call (secrets, never applies the patch), oracle (no secrets, `contents: read`, fixture and oracle pinned by SHA-256, trusted default-branch code only) and scoring (data only) are separate jobs, and executable suites run on `schedule` / `workflow_dispatch`, not on `pull_request`, until a disposable runner exists. Nothing is implemented yet: `generation` and `autofix` suites (EV-02, EV-03) build on it. No change to the existing suites, thresholds or workflows.
+
 - **Evals: the `review` suite scores the verdict production publishes** (EV-01).
   - `pr_review.mjs` applied the adversarial protocol (ADR-0049) after `decideVerdict` and `withholdOnUnreviewedCode`; the suite stopped before it, so an approval without the analysis scored `APPROVE` in the eval and was published `WITHHELD`. The three stages now live in one pure function, `resolveReviewDecision` (`scripts/lib/review_decision.mjs`, c8 ≥ 80 % gate), called by both; the circuit breaker (ADR-0050) stays a separate stage of `pr_review.mjs`.
   - Suite output gains `withheld_for` (`evidence`, `unreviewed_code`, `unseen_findings`, `protocol`), `adversarial_protocol_met` and `adversarial_points`. `review_decision.test.mjs` covers each stage and fails if either caller calls `decideVerdict`, `withholdOnUnreviewedCode` or `enforceAdversarialProtocol` directly.
