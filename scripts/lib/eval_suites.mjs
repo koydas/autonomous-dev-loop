@@ -21,9 +21,11 @@ import path from 'node:path';
 import { validateIssue, VALIDATION_SYSTEM_PROMPT } from './issue_validator.mjs';
 import { loadPrompt } from './prompts.mjs';
 import { detectProvider, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './config.mjs';
-import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict, withholdOnUnreviewedCode } from './review_prompt.mjs';
+import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from './review_prompt.mjs';
+import { resolveReviewDecision } from './review_decision.mjs';
+import { MIN_CRITICAL_POINTS } from './adversarial_review.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
-import { parseEvidence, assessEvidence, findTouchedEvidencePaths, decideVerdict } from './review_evidence.mjs';
+import { parseEvidence, assessEvidence, findTouchedEvidencePaths } from './review_evidence.mjs';
 import { formatStaleRefsContext } from './stale_refs.mjs';
 import { formatPromptBudgetContext } from './prompt_budget.mjs';
 
@@ -96,7 +98,7 @@ export const validationSuite = {
 };
 
 // ---------------------------------------------------------------------------
-// review — pr_review.mjs prompt builder, verdict parser and decideVerdict (ADR-0024/0026/0028)
+// review — pr_review.mjs prompt builder, verdict parser and resolveReviewDecision (ADR-0024/0026/0028/0038/0049)
 // ---------------------------------------------------------------------------
 
 // A top-level section heading (#178): a "#"–"###" heading ("### ✅ Summary"), or a bold-only line whose
@@ -255,13 +257,16 @@ export const reviewSuite = {
     // Production fails closed on a missing verdict line; the eval counts it as an errored run instead,
     // so a format regression shows in error_rate rather than inflating request_changes recall.
     if (!llmVerdict) throw new Error('No verdict line in the review (expected APPROVED or REQUEST_CHANGES)');
-    const { verdict, reason } = withholdOnUnreviewedCode(
-      decideVerdict(llmVerdict === 'APPROVED', evidence, { evidenceRequired: input.evidence !== undefined }),
-      unreviewedCodeFiles,
+    // The same resolution as pr_review.mjs (evidence, cut code, adversarial protocol): the scored verdict is the published one.
+    const { verdict, reason, withheldFor, adversarial } = resolveReviewDecision({
+      llmApproved: llmVerdict === 'APPROVED',
       cleanReview,
-      { checksFailed: evidence.failing.length > 0, shownFiles },
-    );
-    return { verdict, llm_verdict: llmVerdict, reason, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview };
+      evidence,
+      evidenceRequired: input.evidence !== undefined,
+      unreviewedCodeFiles,
+      shownFiles,
+    });
+    return { verdict, llm_verdict: llmVerdict, reason, withheld_for: withheldFor, adversarial_protocol_met: adversarial.criticalPoints >= MIN_CRITICAL_POINTS, adversarial_points: adversarial.criticalPoints, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview };
   },
 
   scorers: {

@@ -402,9 +402,11 @@ const REVIEW_FIXTURE = path.join(REPO_ROOT, 'scripts', 'tests', 'fixtures', 'rev
 const REVIEW_VERDICTS = ['APPROVE', 'REQUEST_CHANGES', 'WITHHELD'];
 const loadReviewCases = () => loadDataset(path.join(REPO_ROOT, reviewSuite.dataset));
 
-const reviewText = ({ verdict, issues = [], summary = 'Changes X.' }) => [
+// The adversarial analysis production requires before an approval (ADR-0049): two axes name a risk. `analysis: false` omits it.
+const ADVERSARIAL = ['### 🔬 Adversarial Analysis', '- **Robustness** — x.js:1 an empty value is not handled', '- **Side effects** — x.js:1 callers are not in the diff', '- **Type integrity** — none, checked the return shape', '- **Issue fit** — none, the diff matches the issue', ''];
+const reviewText = ({ verdict, issues = [], summary = 'Changes X.', analysis = true }) => [
   '## 🔍 Automated Code Review', '', '### 🏷️ Change Classification', 'Type: feature | Tests expected: yes — code changes', '',
-  '### ✅ Summary', summary, '', '### ⚠️ Issues Found', issues.length ? issues.map((i) => `- ${i}`).join('\n') : 'None.', '',
+  '### ✅ Summary', summary, '', ...(analysis ? ADVERSARIAL : []), '### ⚠️ Issues Found', issues.length ? issues.map((i) => `- ${i}`).join('\n') : 'None.', '',
   '### 🚀 Verdict', verdict,
 ].join('\n');
 
