@@ -55,4 +55,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0049: Adversarial review protocol: four axes, and no approval without two named risks](./0049-adversarial-review-protocol.md)
 - [ADR-0050: Circuit breaker on the review → auto-fix loop, and Retry-After on the Anthropic client](./0050-circuit-breaker-review-loop.md)
 - [ADR-0051: Active lessons: recurring adverse signals reach the next run's prompt, from a fixed catalog](./0051-active-lessons-from-the-meta-loop.md)
-- [ADR-0052: Executable evals: model call, oracle and scoring run in three jobs with one-way data flow](./0052-isolated-oracle-for-executable-evals.md)
+- [ADR-0052: Executable evals: model call, grader and scoring run in three jobs with one-way data flow](./0052-isolated-grader-for-executable-evals.md)
