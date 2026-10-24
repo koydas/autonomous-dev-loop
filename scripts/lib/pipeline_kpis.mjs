@@ -2,7 +2,7 @@
 // journeys, with its definition (source, method, period, population, limits) shipped next to the value so
 // the page can show how it was obtained. Pure. No default value stands in for missing data: an indicator
 // without a population is null and the page says so.
-import { sumCosts } from './llm_cost.mjs';
+import { sumCosts, pipelineStage } from './llm_cost.mjs';
 import { percentile } from './pipeline_health.mjs';
 import { attemptOf, isLifecycleRun, STATES } from './pipeline_journey.mjs';
 
@@ -163,13 +163,29 @@ export function providerBreakdown(runs) {
 }
 
 /**
+ * LLM cost per pipeline stage, most expensive first (then most calls): a call goes to its recorded stage,
+ * else to the run's only stage, else to `unattributed` — the attribution of the Health cost table.
+ */
+export function stageCosts(runs) {
+  const by = new Map();
+  for (const run of runs) {
+    for (const c of run.llm ?? []) {
+      const stage = c.pipeline_stage ?? pipelineStage(c.stage) ?? (run.stages?.length === 1 && run.stages[0].stage ? run.stages[0].stage : 'unattributed');
+      by.set(stage, [...(by.get(stage) ?? []), c]);
+    }
+  }
+  return [...by.entries()].map(([stage, calls]) => ({ stage, ...sumCosts(calls) }))
+    .sort((a, b) => b.usd - a.usd || b.calls - a.calls || a.stage.localeCompare(b.stage));
+}
+
+/**
  * The overview of one window: `days` days ending on the latest recorded run's UTC day, the same length
  * before it as the comparison (`previous`, whose `runs` is 0 when nothing was recorded then — no delta is
- * shown), a per-day series, the providers and the work items active in the window.
+ * shown), a per-day series, the providers, the cost per stage and the work items active in the window.
  */
 export function computeWindow({ model, journeys = [], days = 7 } = {}) {
   const runs = (model?.runs ?? []).filter((r) => r.started_at != null && !isLifecycleRun(r));
-  if (!runs.length) return { days, empty: true, current: null, previous: null, series: [], providers: [], items: [] };
+  if (!runs.length) return { days, empty: true, current: null, previous: null, series: [], providers: [], stages: [], items: [] };
   const end = Date.parse(`${day(Math.max(...runs.map((r) => r.started_at)))}T00:00:00Z`) + DAY_MS;
   const from = end - days * DAY_MS;
   const current = slice(runs, from, end);
@@ -184,6 +200,7 @@ export function computeWindow({ model, journeys = [], days = 7 } = {}) {
     current: strip(current), previous: strip(previous),
     series,
     providers: providerBreakdown(current.selected),
+    stages: stageCosts(current.selected),
     items: journeys.filter((j) => j.last_activity != null && j.last_activity >= from),
   };
 }

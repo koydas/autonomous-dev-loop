@@ -248,27 +248,33 @@ const ICONS = {
   investigation: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',
   metrics: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   more: '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+  evals: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/>',
+  switch: '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
 };
 export const navIcon = (name) => `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 
-// Primary sections: Overview, Diagnostics, Pipelines, Investigation, Metrics (ADR-0043).
+// Primary sections: Overview, Diagnostics, Pipelines, Investigation, Metrics, Evals (ADR-0043).
 const sections = (root) => [
   ['overview', 'Overview', `${root}index.html`],
   ['diagnostics', 'Diagnostics', `${root}pipeline/diagnostics.html`],
   ['pipelines', 'Pipelines', `${root}pipeline/flows.html`],
   ['investigation', 'Investigation', `${root}pipeline/index.html`],
   ['metrics', 'Metrics', `${root}pipeline/health.html`],
+  ['evals', 'Evals', `${root}evals.html`],
 ];
+
+// The companion dashboard (ai-dev-tools tool health), one tap away in the tab bar (ADR-0043 amendment 2026-10-24).
+export const TOOLBOX_DASHBOARD_URL = 'https://koydas.github.io/ai-dev-tools/';
 
 // The badge is filled at build time (assembleSite: data-diag-badge) with the count of findings.
 const navLinks = (root, pipeline) => sections(root).filter(([k]) => pipeline || k === 'overview')
   .map(([k, label, href]) => `<a href="${href}">${navIcon(k)}${label}${k === 'diagnostics' ? '<span class="nav-badge" data-diag-badge></span>' : ''}</a>`).join('');
 
-// Applied before the first paint: a stored light choice, dark otherwise.
-const THEME_BOOT = `<script>try { if (localStorage.getItem('adl-theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch {}</script>`;
+// Applied before the first paint: a stored choice, else the system's (prefers-color-scheme), dark without either.
+const THEME_BOOT = `<script>try { const t = localStorage.getItem('adl-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : ''); if (t === 'light') document.documentElement.dataset.theme = 'light'; } catch {}</script>`;
 
 export function dashboardHeader(root, pipeline) {
-  return `${THEME_BOOT}<a class="skip-link" href="#main-content">Skip to content</a><header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Autonomous Dev Loop</a><nav class="primary-nav" aria-label="Main navigation">${sections(root).filter(([k]) => pipeline || k === 'overview').map(([k, label, href]) => `<a href="${href}">${navIcon(k)}${label}</a>`).join('')}</nav><div class="header-tools"><span class="updated-dot" data-generated="" data-prefix="Updated "></span><button type="button" class="theme-toggle" data-theme-toggle>☀ Light</button><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">Repository →</a></div></div></header>`;
+  return `${THEME_BOOT}<a class="skip-link" href="#main-content">Skip to content</a><header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Autonomous Dev Loop</a><nav class="primary-nav" aria-label="Main navigation">${sections(root).filter(([k]) => pipeline || k === 'overview').map(([k, label, href]) => `<a href="${href}">${navIcon(k)}${label}</a>`).join('')}</nav><div class="header-tools"><span class="updated-dot" data-generated="" data-prefix="Updated "></span><button type="button" class="theme-toggle" data-theme-toggle>☀ Light</button><a class="source-link" href="${TOOLBOX_DASHBOARD_URL}">ai-dev-tools ⇄</a><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">Repository →</a></div></div></header>`;
 }
 
 /** Left column: section links, then page-specific filters (Overview, Pipelines). */
@@ -276,12 +282,12 @@ export function sidebar(root, pipeline, filters = '') {
   return `<aside class="sidebar" aria-label="Sections and filters"><p class="side-title">Sections</p><nav class="side-nav" aria-label="Sections">${navLinks(root, pipeline)}</nav>${filters ? `<div class="side-filters">${filters}</div>` : ''}</aside>`;
 }
 
-/** Bottom tab bar on phones: four sections and a More menu. */
+/** Bottom tab bar on phones: three sections, a More menu and the switch to the ai-dev-tools dashboard. */
 export function mobileNav(root, pipeline) {
   if (!pipeline) return '';
-  const [overview, diagnostics, pipelines, investigation, metrics] = sections(root);
+  const [overview, diagnostics, pipelines, investigation, metrics, evals] = sections(root);
   const tab = ([k, label, href]) => `<a href="${href}">${navIcon(k)}${label}</a>`;
-  return `<nav class="mobile-nav" aria-label="Sections">${tab(overview)}${tab(diagnostics)}${tab(pipelines)}${tab(investigation)}<details><summary>${navIcon('more')}More</summary><div><a href="${metrics[2]}">Metrics</a><a href="${root}pipeline/models.html">Models</a><a href="${root}pipeline/traces/index.html">Trace table</a><a href="${root}index.html#evaluations">Evaluations</a></div></details></nav>`;
+  return `<nav class="mobile-nav" aria-label="Sections">${tab(overview)}${tab(diagnostics)}${tab(pipelines)}<details><summary>${navIcon('more')}More</summary><div><a href="${investigation[2]}">Investigation</a><a href="${metrics[2]}">Metrics</a><a href="${evals[2]}">Evals</a><a href="${root}pipeline/models.html">Models</a><a href="${root}pipeline/traces/index.html">Trace table</a><a href="${root}pipeline/levers.html">Rules and levers</a></div></details><a class="app-switch" href="${TOOLBOX_DASHBOARD_URL}" title="ai-dev-tools dashboard">${navIcon('switch')}Tools</a></nav>`;
 }
 
 export function evalOverview(suites) {

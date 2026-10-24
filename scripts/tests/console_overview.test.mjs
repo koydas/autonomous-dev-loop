@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Script, runInNewContext } from 'node:vm';
 import { consoleContext, statusBanner } from '../lib/console_views.mjs';
-import { consoleOverview, kpiRow, delta, sparkline, statusBadge, durationChart, providerList, issueCards } from '../lib/console_overview.mjs';
+import { consoleOverview, overviewTrends, kpiRow, delta, sparkline, durationChart, providerList, activeProblems, shortAmount } from '../lib/console_overview.mjs';
 import { DEFINITIONS } from '../lib/pipeline_kpis.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
 import { makeRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
@@ -17,51 +17,65 @@ const withheld = (runId, t, pr = 50, from = 'APPROVE') => makeRecord({ runId, st
   { event: 'review.verdict', meta: { verdict: 'WITHHELD', withheld_from: from, unreviewed_code_files: 5, prNumber: pr } },
 ] });
 
-test('overview: status badge, windowed indicators with drill-down links, charts, problems, recent pipelines, definitions', () => {
+test('overview: one screen — status, flows, cost, quality, waiting — each row and chip a drill-down; trends on Metrics', () => {
   const ctx = consoleContext(modelOf([withheld('800', T), withheld('801', T + 60000, 51), withheld('802', T + 120000, 52, 'REQUEST_CHANGES')]));
   const html = consoleOverview(ctx, 'pipeline/');
   assert.match(html, /<h1>System overview<\/h1>/);
-  assert.match(html, /<a class="status-badge tone-warn" href="pipeline\/diagnostics\.html">.*Running with issues/);
-  // One block per window; the first shows, the others wait for the range select.
-  assert.match(html, /<div data-window="7">/);
-  assert.match(html, /<div data-window="14" hidden>/);
-  assert.match(html, /<div data-window="30" hidden>/);
-  assert.match(html, /<select data-range><option value="7">Last 7 days<\/option>/);
-  // Each indicator links to what explains it.
-  assert.match(html, /<a class="kpi2 tone-neutral" href="pipeline\/index\.html#executions" data-kpi="executions">/);
-  assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld" data-kpi="approve_rate"/);
-  assert.match(html, /href="pipeline\/health\.html#performance" data-kpi="run_duration"/);
-  assert.match(html, /href="pipeline\/health\.html#cost" data-kpi="llm_cost"/);
-  assert.match(html, /<strong class="kpi-value">0 %<\/strong>/);
-  assert.match(html, /0 of 3 verdicts · 3 withheld/);
-  assert.match(html, /no prior 7 d data/, 'no previous window: no invented change');
-  assert.match(html, /Pipeline results.*Duration trend.*LLM providers \(cost\)/s);
-  assert.match(html, /Waiting on a person<\/span><strong>3 \/ 3/);
-  assert.match(html, /Issues requiring attention/);
-  assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld"><span class="issue-head">/);
-  assert.match(html, /<h2>Recent pipelines<\/h2>/);
-  assert.equal((html.match(/<article class="flow-card/g) ?? []).length, 3);
-  assert.match(html, /href="pipeline\/runs\/800-1\.html"/, 'row details link to run pages under pipeline/');
-  assert.match(html, /href="pipeline\/traces\/[0-9a-f]{32}\.html">Full chronological flow/);
-  for (const id of Object.keys(DEFINITIONS)) assert.ok(html.includes(`id="def-${id}"`), id);
-  for (const src of scripts(html)) new Script(src);
+  // The status names the most severe active problem and opens its card.
+  assert.match(html, /<a class="g-status status-banner tone-warn" href="pipeline\/diagnostics\.html#review-withheld">.*Running with issues.*\d+ problem\(s\) · /s);
+  // Rows in a fixed order, each opening its page.
+  const order = ['g-flows', 'g-cost', 'g-quality', 'g-waiting'].map((id) => html.indexOf(`id="${id}"`));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.ok(order.every((i) => i > 0));
+  assert.match(html, /id="g-flows"><a class="g-head" href="pipeline\/flows\.html\?period=7">.*3 runs/s);
+  // Chips filter the drill-down page; the approval chip goes to the withheld finding that explains it.
+  // Chips count work items by latest state, as the Pipelines filter they open does (3 withheld PRs → 3 need a person).
+  assert.match(html, /href="pipeline\/flows\.html\?state=attention&amp;period=7"[^>]*>.*3 need a person/);
+  assert.doesNotMatch(html, /adverse<\/span>|state=failed/, 'no run-class count behind an item filter');
+  assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld"[^>]*>.*approve 0 %/);
+  assert.match(html, /id="g-cost"><a class="g-head" href="pipeline\/health\.html#cost">.*list price/s);
+  assert.match(html, /id="g-quality"><a class="g-head" href="evals\.html">.*No eval run published/s, 'quality links resolve from the site root');
+  assert.match(html, /id="g-waiting"><a class="g-head" href="pipeline\/flows\.html#waiting">/);
+  assert.match(html, /<a href="pipeline\/health\.html#trends">Trends, 14 \/ 30 days and definitions →<\/a>/);
+  // What the home no longer carries: windows, charts, problem cards, recent pipelines, definitions.
+  assert.doesNotMatch(html, /data-window=|data-kpi=|Issues requiring attention|Recent pipelines|id="def-/);
+  // The trends block (Metrics): one block per window, indicators linked to what explains them, definitions.
+  const trends = overviewTrends(ctx, 'pipeline/');
+  assert.match(trends, /<div data-window="7">/);
+  assert.match(trends, /<div data-window="14" hidden>/);
+  assert.match(trends, /<div data-window="30" hidden>/);
+  assert.match(trends, /<select data-range><option value="7">Last 7 days<\/option>/);
+  assert.match(trends, /<a class="kpi2 tone-neutral" href="pipeline\/index\.html#executions" data-kpi="executions">/);
+  assert.match(trends, /href="pipeline\/diagnostics\.html#review-withheld" data-kpi="approve_rate"/);
+  assert.match(trends, /href="pipeline\/health\.html#performance" data-kpi="run_duration"/);
+  assert.match(trends, /href="pipeline\/health\.html#cost" data-kpi="llm_cost"/);
+  assert.match(trends, /<strong class="kpi-value">0 %<\/strong>/);
+  assert.match(trends, /0 of 3 verdicts · 3 withheld/);
+  assert.match(trends, /no prior 7 d data/, 'no previous window: no invented change');
+  assert.match(trends, /Pipeline results.*Duration trend.*LLM providers \(cost\)/s);
+  assert.match(trends, /Waiting on a person<\/span><strong>3 \/ 3/);
+  for (const id of Object.keys(DEFINITIONS)) assert.ok(trends.includes(`id="def-${id}"`), id);
+  for (const src of scripts(trends)) new Script(src);
 });
 
 test('overview on an empty model: no data is said, nothing looks healthy', () => {
-  const html = consoleOverview(consoleContext(buildPipelineModel({})), '');
-  assert.match(html, /<a class="status-badge tone-unknown"[^>]*>.*No data.*no pipeline run recorded yet/s);
-  assert.match(html, /No pipeline run recorded yet: no indicator to compute/);
-  assert.doesNotMatch(html.replace(/<script>[\s\S]*?<\/script>/g, ''), /tone-good/);
-  assert.match(html, /No rule fired on the recorded data/);
-  assert.match(html, /No recorded flows yet/);
-  assert.match(html, /Waiting on a person<\/span><strong>0 \/ 0/);
+  const ctx = consoleContext(buildPipelineModel({}));
+  const html = consoleOverview(ctx, '');
+  assert.match(html, /<a class="g-status status-banner tone-unknown"[^>]*>.*No data.*no pipeline run recorded yet/s);
+  assert.match(html, /id="g-flows">.*No pipeline run recorded yet/s);
+  assert.match(html, /id="g-waiting">.*<strong class="g-value">0<\/strong>/s);
+  assert.doesNotMatch(html, /tone-good/);
+  const trends = overviewTrends(ctx, '');
+  assert.match(trends, /No pipeline run recorded yet: no indicator to compute/);
+  assert.doesNotMatch(trends.replace(/<script>[\s\S]*?<\/script>/g, ''), /tone-good/);
+  assert.match(trends, /Waiting on a person<\/span><strong>0 \/ 0/);
 });
 
 test('indicators: change against the previous window, sparklines, providers; ok and critical statuses', () => {
   const ctx = consoleContext(modelOf([makeRecord({ runId: '810', start: T, events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 7 } }] })]));
   assert.equal(ctx.diagnosis.status, 'ok');
   assert.match(statusBanner(ctx.diagnosis, ctx.overview, ''), /No problem detected by the rules.*no finding is not proof of health/s);
-  assert.match(statusBadge(ctx.diagnosis, ''), /No problem detected.*not proof of health/s);
+  assert.match(consoleOverview(ctx, ''), /class="g-status status-banner tone-good" href="diagnostics\.html">.*No problem detected.*not proof of health/s);
   const kpis = kpiRow(ctx.windows[7], '', false);
   assert.match(kpis, /class="kpi2 tone-good" href="health\.html#reviews" data-kpi="approve_rate"/);
   // Changes: direction, tone and the window; a rate compares in points; a zero base is no base.
@@ -94,8 +108,8 @@ test('indicators: change against the previous window, sparklines, providers; ok 
   // Critical status counts critical findings; issue cards say how many runs and since when.
   const failed = consoleContext(modelOf([makeRecord({ runId: '830', start: T, outcome: 'failed' })]));
   assert.match(statusBanner(failed.diagnosis, failed.overview, ''), /Attention needed: 1 critical problem/);
-  assert.match(statusBadge(failed.diagnosis, ''), /tone-bad.*Attention needed.*1 critical problem/s);
-  assert.match(issueCards(failed.diagnosis, ''), /Affects 1 run\(s\)<\/span><span>Since: <span data-ts="\d+">/);
+  assert.match(consoleOverview(failed, ''), /class="g-status status-banner tone-bad"[^>]*>.*Attention needed.*1 problem\(s\) · /s);
+  assert.match(consoleOverview(failed, ''), /id="g-flows">.*class="g-chip tone-bad" href="flows\.html\?state=attention&amp;period=7"[^>]*>.*1 need a person/s);
 });
 
 
@@ -140,15 +154,63 @@ test('duration chart: a day without a timed run is a gap in both lines (PR #242 
   assert.equal((lone.match(/class="dot-p95"/g) ?? []).length, 2);
 });
 
-test('issues requiring attention: only active warning / critical findings; resolved and by-design ones stay on Diagnostics', () => {
+test('problems named on the home: only active warning / critical findings; resolved and by-design ones stay on Diagnostics', () => {
   const f = (id, severity, status) => ({ id, severity, status, title: `T-${id}`, impact: 'i', runs: ['1-1'], evidence: [], category: 'Review' });
   const d = { status: 'warning', gaps: [], findings: [f('a', 'critical', 'active'), f('b', 'warning', 'active'), f('c', 'info', 'resolved'), f('d', 'info', 'active')] };
-  const html = issueCards(d, '');
-  assert.match(html, /T-a/);
-  assert.match(html, /T-b/);
-  assert.doesNotMatch(html, /T-c|T-d/);
-  assert.match(html, /2 active/);
-  const none = issueCards({ ...d, findings: [f('c', 'info', 'resolved')] }, '');
-  assert.match(none, /No active warning or critical finding; 1 resolved or informational/);
-  assert.doesNotMatch(none, /issue-card/);
+  assert.deepEqual(activeProblems(d).map((x) => x.id), ['a', 'b']);
+  const ctx = consoleContext(buildPipelineModel({}));
+  const html = consoleOverview({ ...ctx, diagnosis: d }, '');
+  assert.match(html, /href="diagnostics\.html#a">.*2 problem\(s\) · T-a/s);
+  assert.doesNotMatch(html, /T-b|T-c|T-d/, 'the most severe one only: the rest is on Diagnostics');
+  const none = consoleOverview({ ...ctx, diagnosis: { ...d, status: 'ok', findings: [f('c', 'info', 'resolved')] } }, '');
+  assert.match(none, /href="diagnostics\.html">.*No problem detected.*by the rules — not proof of health/s);
+});
+
+test('cost and quality rows: short amounts, per-stage and per-suite chips, a change only on a populated base', () => {
+  const sum = (o) => ({ usd: 0, calls: 0, measured: 0, estimated: 0, free: 0, unpriced: 0, ...o });
+  assert.equal(shortAmount(sum({})), '—');
+  assert.equal(shortAmount(sum({ calls: 2, free: 2 })), 'free tier');
+  assert.equal(shortAmount(sum({ calls: 2, unpriced: 2 })), 'unpriced');
+  assert.equal(shortAmount(sum({ calls: 1, measured: 1, usd: 3.966 })), '$3.97');
+  assert.equal(shortAmount(sum({ calls: 1, measured: 1, usd: 0.004 })), '< $0.01');
+  assert.equal(shortAmount(sum({ calls: 2, measured: 1, unpriced: 1, usd: 0.5 })), '≥ $0.50');
+  // A window with priced calls on two stages; the previous window is too small for a change.
+  const opus = { provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1000, tokens_out: 1000 };
+  const ctx = consoleContext(modelOf([
+    makeRecord({ runId: '870', start: T, events: [{ event: 'review.verdict', meta: { verdict: 'APPROVE', prNumber: 7 } }] }),
+  ]));
+  const w = ctx.windows[7];
+  const priced = { ...w, current: { ...w.current, cost: sum({ calls: 3, measured: 3, usd: 1.5 }) }, previous: { ...w.previous, runs: 2, cost: sum({ calls: 1, measured: 1, usd: 0.01 }) }, stages: [{ stage: 'review', ...sum({ calls: 2, measured: 2, usd: 1.2 }) }, { stage: 'autofix', ...sum({ calls: 1, measured: 1, usd: 0.3 }) }] };
+  const small = consoleOverview({ ...ctx, windows: { ...ctx.windows, 7: priced } }, '');
+  assert.match(small, /id="g-cost">.*<strong class="g-value">\$1\.50<\/strong>/s, 'no +14900 % on a 2-run base');
+  assert.match(small, /href="health\.html#cost"[^>]*>.*review \$1\.20.*autofix \$0\.30/s);
+  const big = consoleOverview({ ...ctx, windows: { ...ctx.windows, 7: { ...priced, previous: { ...priced.previous, runs: 10, cost: sum({ calls: 9, measured: 9, usd: 3 }) } } } }, '');
+  assert.match(big, /<strong class="g-value">\$1\.50 <span class="kpi-delta tone-good">↓ -50 %<\/span><\/strong>/);
+  // Quality: one chip per suite — headline score, gate, trend on the same dataset — opening its panel on evals.html.
+  const r = (id, ts, score, passed, dataset = 'd1', failures = []) => ({ run_id: id, ts, model: 'm', dataset_sha256: dataset, scores: { verdict_match: score }, passed, failures, n_cases: 4, repeats: 1 });
+  const suites = [['review', { runs: [r('r2', '2026-10-20T00:00:00Z', 0.87, true), r('r1', '2026-10-18T00:00:00Z', 0.8, true)] }], ['validation', { runs: [r('v2', '2026-10-21T00:00:00Z', 0.6, false, 'd2', ['verdict_match']), r('v1', '2026-10-19T00:00:00Z', 0.9, true, 'd1')] }]];
+  const q = consoleOverview(ctx, 'pipeline/', { suites });
+  assert.match(q, /id="g-quality"><a class="g-head" href="evals\.html">.*1 \/ 2 gates.*last run 2026-10-21/s);
+  assert.match(q, /class="g-chip tone-good" href="evals\.html#suite-review"[^>]*>.*review 87 % ↑/s);
+  assert.match(q, /class="g-chip tone-bad" href="evals\.html#suite-validation" title="verdict_match · gate failed: verdict_match · 2026-10-21">.*validation 60 %<\/span>/s, 'a changed dataset shows no trend');
+});
+
+test('flow chips: each count is the number of rows its Pipelines filter shows (PR #286 review)', async () => {
+  const { flowDashboard } = await import('../lib/flow_dashboard.mjs');
+  const { periodItems } = await import('../lib/console_overview.mjs');
+  const verdict = (runId, t, pr, v) => makeRecord({ runId, start: t, prNumber: pr, events: [{ event: 'review.verdict', meta: { verdict: v, prNumber: pr } }] });
+  // A REQUEST_CHANGES run is adverse, but its item is changes_requested — not attention; an old item is outside the period.
+  const model = modelOf([verdict('880', T, 60, 'REQUEST_CHANGES'), verdict('881', T + 1000, 61, 'APPROVE'), verdict('882', T + 2000, 62, 'WITHHELD'), verdict('883', T - 20 * 86400000, 63, 'WITHHELD')]);
+  const ctx = consoleContext(model);
+  const html = consoleOverview(ctx, '');
+  const page = flowDashboard(model);
+  const ref = Number(/data-ref="(\d+)"/.exec(page)[1]);
+  const rows = [...page.matchAll(/data-state="([^"]*)"[^>]*data-last="(\d*)"/g)].map((m) => ({ tokens: m[1].split(' '), last: Number(m[2]) || 0 }));
+  for (const state of ['attention', 'changes_requested', 'approved']) {
+    const listed = rows.filter((r) => r.tokens.includes(state) && ref - r.last <= 7 * 86400000).length;
+    assert.match(html, new RegExp(`href="flows\\.html\\?state=${state}&amp;period=7"[^>]*>.*?<span>${listed} `, 's'), `${state}: chip = ${listed} rows`);
+  }
+  assert.equal(periodItems(ctx, 7).length, 3, 'the 20-day-old item is outside the period');
+  assert.match(html, /1 changes requested/);
+  assert.equal(periodItems({}, 7).length, 0);
 });

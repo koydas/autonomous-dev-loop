@@ -137,6 +137,10 @@ const PUBLIC_ENV = new Set([
   'GITHUB_WORKFLOW', 'GITHUB_WORKFLOW_REF', 'GITHUB_ACTOR', 'GITHUB_TRIGGERING_ACTOR', 'GITHUB_EVENT_NAME',
   'GITHUB_REF', 'GITHUB_REF_NAME', 'GITHUB_HEAD_REF', 'GITHUB_BASE_REF', 'GITHUB_SHA', 'GITHUB_WORKFLOW_SHA', 'GITHUB_RUN_ID',
   'GITHUB_RUN_NUMBER', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB', 'AI_PROVIDER',
+  // The `pipeline_repository` input of the reusable workflows (ADR-0045): a repository name, public like
+  // GITHUB_REPOSITORY. Scrubbed, it turned the record's repository into [redacted], so the trace key and
+  // id of a consumer-side run no longer matched the item's other runs (item-closed, …).
+  'ADL_PIPELINE_REPOSITORY', 'PIPELINE_REPOSITORY',
 ]);
 const PUBLIC_ENV_SUFFIX = /_(MODEL|EFFORT|PROVIDER)$/;
 // Workflow outputs handed to commit_run_record.mjs (PR URL/number, push outcome, commit message).

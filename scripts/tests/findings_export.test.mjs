@@ -193,3 +193,21 @@ test('an eval-only site (no pipeline half) publishes no findings.json: an absent
   const { files } = assembleSite({ previous: { scorecard: emptyScorecard(), details: {} }, resultsList: [], generatedAt: GEN });
   assert.equal(files['findings.json'], undefined);
 });
+
+test('status.json: diagnostic status, raised to warn by a failing eval gate, a headline without finding text', async () => {
+  const { buildStatus, statusJson, STATUS_SCHEMA_VERSION } = await import('../lib/findings_export.mjs');
+  const f = (severity, status = 'active') => ({ id: 'x', severity, status, title: '<secret title>' });
+  const sc = (...passed) => ({ suites: Object.fromEntries(passed.map((p, i) => [`s${i}`, { runs: [{ passed: p }] }])) });
+  assert.deepEqual(buildStatus({ diagnosis: { status: 'warning', findings: [f('warning'), f('info'), f('critical', 'resolved')] }, scorecard: sc(true), generatedAt: 'G' }),
+    { schema_version: STATUS_SCHEMA_VERSION, app: 'autonomous-dev-loop', generated_at: 'G', status: 'warn', headline: '1 problem(s)' });
+  assert.equal(buildStatus({ diagnosis: { status: 'critical', findings: [f('critical')] }, scorecard: sc(false) }).headline, '1 problem(s) · 1 eval gate(s) failing');
+  assert.equal(buildStatus({ diagnosis: { status: 'critical', findings: [f('critical')] } }).status, 'bad');
+  const ok = buildStatus({ diagnosis: { status: 'ok', findings: [] }, scorecard: sc(true, false) });
+  assert.deepEqual([ok.status, ok.headline], ['warn', 'no problem detected · 1 eval gate(s) failing']);
+  assert.deepEqual([buildStatus({ diagnosis: { status: 'ok', findings: [] }, scorecard: { suites: { e: { runs: [] } } } }).status], ['ok'], 'a suite without runs is no failing gate');
+  const none = buildStatus({});
+  assert.deepEqual([none.status, none.headline, none.generated_at], ['no_data', 'no pipeline run recorded', null]);
+  assert.equal(buildStatus({ diagnosis: { status: 'odd' } }).status, 'no_data');
+  assert.doesNotMatch(statusJson({ diagnosis: { status: 'warning', findings: [f('warning')] } }), /secret/);
+  assert.match(statusJson({}), /\n$/);
+});
