@@ -6,7 +6,7 @@
 import { escapeHtml, page, modelAnchor, BASE_STYLE } from './eval_site.mjs';
 import { feedEntries, eventSummary } from './pipeline_model.mjs';
 import { flowDashboard, pipelineFacets, keyInformation, FLOW_STYLE, FLOW_SCRIPT } from './flow_dashboard.mjs';
-import { OVERVIEW_STYLE } from './console_overview.mjs';
+import { OVERVIEW_STYLE, overviewTrends, waitingPanel } from './console_overview.mjs';
 import { TOKEN_SERIES } from './pipeline_health.mjs';
 import { pipelineOverview, executionBrowser, workItemBrowser, flowSteps, DASHBOARD_STYLE } from './dashboard_ui.mjs';
 import { consoleContext, diagnosticsBody, leversBody, journeyPanel, keyEvents, runSteps, itemTitle, itemUrl, pill, CONSOLE_STYLE, TABS_SCRIPT } from './console_views.mjs';
@@ -447,7 +447,7 @@ export function criticalPathChart(items) {
   return `<div class="legend"><span><span class="key" style="background:var(--s1)"></span>running</span><span><span class="key" style="background:var(--axis)"></span>waiting between runs</span></div><div class="chart"><svg viewBox="0 0 ${W} ${H}" style="max-width:${W}px" role="img" aria-label="Share of each work item's lead time spent running versus waiting; values in the table">${rows}</svg></div>`;
 }
 
-export function renderHealth(health, model) {
+export function renderHealth(health, model, { trends = '' } = {}) {
   const { funnel, reviews, autofix, llm, latency, critical_path: cp, tokens, costs } = health;
   const funnelRows = funnel.stages.map((s) => ({ label: s.stage, value: s.count, note: 'not recorded — no workflow journals a merge' }));
   const causes = reviews.causes.filter((c) => c.count > 0);
@@ -460,6 +460,7 @@ export function renderHealth(health, model) {
   const tokenTable = tokens.days.filter((d) => d.total > 0 || d.crons.length).map((d) => [e(d.day), ...tokens.workflows.map((w) => e(compact(d.workflows[w] ?? 0))), e(compact(d.total)), e(pct(d.total / tokens.limit)), e(d.crons.join(', ') || '—')]);
   const cpSorted = [...cp].sort((a, b) => b.lead_time_ms - a.lead_time_ms).slice(0, 25);
   const body = `<h1>Pipeline health · detailed metrics</h1>
+${trends}
 ${nav('', model.months)}
 <p class="sub">${e(health.window.runs)} run record(s), ${e(health.window.traces)} work-item trace(s)${health.window.months.length ? `, ${e(health.window.months.at(-1))} → ${e(health.window.months[0])}` : ''}. Token counts are provider-measured where the record has them (ADR-0041 amendment), chars/4 estimates for older records.</p>
 
@@ -571,12 +572,12 @@ export function buildPipelineSite({ model, health, models, generatedAt = null, c
   const files = {
     'pipeline/diagnostics.html': pipelinePage('Diagnostics', `${nav('', model.months)}${diagnosticsBody(ctx, '', { generatedAt })}`, 1),
     'pipeline/levers.html': pipelinePage('Rules and levers', `${nav('', model.months)}${leversBody('')}`, 1),
-    'pipeline/flows.html': pipelinePage('Pipelines', `${nav('', model.months)}${flowDashboard(model)}${FLOW_SCRIPT}`, 1, pipelineFacets(ctx.journeys)),
+    'pipeline/flows.html': pipelinePage('Pipelines', `${nav('', model.months)}${waitingPanel(ctx.waiting ?? [], '')}${flowDashboard(model)}${FLOW_SCRIPT}`, 1, pipelineFacets(ctx.journeys)),
     // One stylesheet for the console components of every page (pipeline pages and the home page).
     'pipeline/console.css': BASE_STYLE + DASHBOARD_STYLE + CONSOLE_STYLE + FLOW_STYLE + OVERVIEW_STYLE,
     'pipeline/index.html': renderFeedIndex(model, { generatedAt }),
     'pipeline/traces/index.html': renderTraceIndex(model),
-    'pipeline/health.html': renderHealth(health, model),
+    'pipeline/health.html': renderHealth(health, model, { trends: overviewTrends(ctx, '') }),
     'pipeline/models.html': renderModels(models, model),
   };
   for (const month of model.months) files[`pipeline/feed/${month}.html`] = renderFeedMonth(model, month);

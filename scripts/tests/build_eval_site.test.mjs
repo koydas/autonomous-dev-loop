@@ -437,7 +437,8 @@ const pipelineRecords = () => [
   makeRecord({ runId: '701', start: PIPE_T0 + 60000, workflow: 'Auto-Fix PR', stage: 'autofix', events: [{ event: 'autofix.push', meta: { prNumber: 7 } }] }),
 ];
 // findings.json belongs to the pipeline half (ADR-0047): it follows the metrics branch like pipeline/.
-const evalFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => !p.startsWith('pipeline/') && p !== 'findings.json'));
+// findings.json and status.json are the pipeline half's (status.json also reads the eval gates, like the home page).
+const evalFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => !p.startsWith('pipeline/') && p !== 'findings.json' && p !== 'status.json'));
 const pipelineFiles = (files) => Object.fromEntries(Object.entries(files).filter(([p]) => p.startsWith('pipeline/')));
 // The live site as a fetch stub: what fetchPreviousSite reads back.
 const siteFetch = (files) => async (url) => {
@@ -500,7 +501,9 @@ test('an eval-only build (new eval results, same metrics branch) preserves the p
   }
   assert.match(after['pipeline/models.html'], /runs\/700-1\.html/);
   assert.match(after['pipeline/models.html'], /\.\.\/runs\/e2\.html/);
-  assert.match(second.files['index.html'], /<a href="pipeline\/index\.html">Pipeline<\/a>/);
+  // The evaluations are their own page (ADR-0043 amendment 2026-10-24), reached from every page's nav.
+  assert.match(second.files['evals.html'], /href="runs\/e2\.html"/);
+  assert.match(second.files['index.html'], /<a href="evals\.html">/);
   assert.equal(await fs.readFile(path.join(tmp, 'b', 'pipeline', 'runs', '701-1.html'), 'utf8'), before['pipeline/runs/701-1.html']);
 });
 
@@ -520,9 +523,14 @@ test('a pipeline-only build (no eval result, history read back from the live sit
   assert.notEqual(afterHome, beforeHome, 'the homepage reflects the new pipeline execution');
   assert.deepEqual(second.scorecard, first.scorecard, 'all evaluation history remains intact');
   assert.ok(second.files['pipeline/runs/702-1.html'], 'the pipeline half took the new run');
-  // ADR-0043: the home page leads with the pipeline's health, before the evaluations, with its styles.
-  assert.ok(afterHome.indexOf('class="status-banner') < afterHome.indexOf('id="evaluations"'));
-  assert.match(afterHome, /data-kpi="executions"/);
+  // ADR-0043 amendment 2026-10-24: the home is the one-screen overview (status, flows, cost, quality, waiting);
+  // the evaluations are evals.html, the windowed indicators head the Metrics page.
+  assert.ok(afterHome.indexOf('class="g-status status-banner') < afterHome.indexOf('id="g-quality"'));
+  assert.doesNotMatch(afterHome, /id="evaluations"/);
+  assert.match(second.files['evals.html'], /id="evaluations"/);
+  assert.match(afterHome, /id="g-quality"[\s\S]*href="evals\.html#suite-validation"/, 'the quality row reads the scorecard read back from the live site');
+  assert.match(second.files['pipeline/health.html'], /data-kpi="executions"/);
+  assert.match(second.files['status.json'], /"app": "autonomous-dev-loop"/);
   assert.match(afterHome, /<link rel="stylesheet" href="pipeline\/console\.css">/);
   assert.match(afterHome, /<span class="nav-badge" data-diag-badge>\d*<\/span>/);
   assert.match(afterHome, /data-generated="" data-ts="/);

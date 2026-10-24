@@ -108,9 +108,10 @@ test('windows: the latest N days against the N before, per-day series, providers
   assert.equal(w.series.at(-2).approve_rate, null);
   assert.deepEqual(w.providers.map((p) => [p.provider, p.calls, p.usd_share, p.call_share]), [['anthropic', 1, 1, 0.5], ['groq', 1, 0, 0.5]]);
   assert.equal(w.items.length, 1);
+  assert.deepEqual(w.stages.map((s) => [s.stage, s.calls, s.free]), [['review', 2, 1]], 'cost per stage of the window');
   assert.ok(!('selected' in w.current), 'no run list in the published window');
   assert.deepEqual(Object.keys(computeWindows({ model, journeys })).map(Number), WINDOWS);
-  assert.deepEqual(computeWindow({ model: { runs: [run('x', { t: null })] } }), { days: 7, empty: true, current: null, previous: null, series: [], providers: [], items: [] });
+  assert.deepEqual(computeWindow({ model: { runs: [run('x', { t: null })] } }), { days: 7, empty: true, current: null, previous: null, series: [], providers: [], stages: [], items: [] });
   assert.equal(computeWindow().empty, true);
   // Providers: no call → empty; unknown provider kept; no priced call → shares null.
   assert.deepEqual(providerBreakdown([]), []);
@@ -154,4 +155,17 @@ test('provider cost shares are not shown when any call is unpriced (PR #242 revi
 test('a run whose step decided with an error (failed push) is failed, not moved forward (PR #242 review)', () => {
   assert.equal(runClass(run('p', { stage: 'autofix', events: [{ event: 'autofix.push' }, { event: 'workflow.push', meta: { outcome: 'failure' } }] })), 'failed');
   assert.equal(runClass(run('r', { stage: 'pr_prepare', outcome: 'skipped', events: [{ event: 'pr_prepare.skipped', meta: { reason: 'guardrail_rejected' } }] })), 'adverse');
+});
+
+test('stageCosts: recorded stage, then adl.stage, then the run\'s only stage, else unattributed; most expensive first', async () => {
+  const { stageCosts } = await import('../lib/pipeline_kpis.mjs');
+  const opus = { provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1000, tokens_out: 1000 };
+  const rows = stageCosts([
+    run('1', { stage: 'review', llm: [{ ...opus, pipeline_stage: 'autofix' }, { ...opus, stage: 'validation' }, { provider: 'groq', model: 'm', tokens_in: 1, tokens_out: 1 }] }),
+    { ...run('2', { stage: null, llm: [{ provider: 'groq', model: 'm', tokens_in: 1, tokens_out: 1 }] }) },
+    { ...run('3', { stage: 'review' }), llm: undefined },
+  ]);
+  assert.deepEqual(rows.map((r) => [r.stage, r.calls]), [['autofix', 1], ['issue_validation', 1], ['review', 1], ['unattributed', 1]]);
+  assert.ok(rows[0].usd > 0 && rows[2].usd === 0);
+  assert.deepEqual(stageCosts([]), []);
 });

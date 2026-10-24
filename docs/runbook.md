@@ -4,15 +4,13 @@
 
 The site follows **Overview → Diagnostics → Pipelines → Investigation** (ADR-0043); **Metrics** keeps the detailed tables.
 
-Layout (design mockup in the README): top tabs, a left sidebar with the sections and — on Overview and Pipelines — filters by status, stage reached and LLM provider (they filter the pipeline lists, not the indicators), a bottom tab bar on phones. Dark theme by default; **Light** in the header switches and is remembered per browser. "Updated …" is the build time.
+Layout (design mockup in the README): top tabs, a left sidebar with the sections and — on Overview and Pipelines — filters by status, stage reached and LLM provider (they filter the pipeline lists, not the indicators), a bottom tab bar on phones. The system's theme by default (dark without a preference); **Light** / **Dark** in the header switches and is remembered per browser. The phone tab bar ends with **Tools**, the ai-dev-tools dashboard. "Updated …" is the build time.
 
-- **Overview** (home page):
-  - a status badge computed by the diagnostic rules (critical / issues / "no problem detected", which is never proof of health) and a **Range** select (last 7 / 14 / 30 days, ending on the latest recorded run, kept in the URL as `?range=`);
-  - four indicators — pipeline executions by class, review approval rate, average run duration, LLM cost — each with its change against the same number of days before ("no prior data" when nothing was recorded then, never an invented change), a sparkline and a link to what explains it;
-  - charts of pipeline results per day, average / p95 duration and LLM providers by cost and calls; a strip with work items waiting on a person (failed, escalated, withheld, rejected), steps recovered automatically, lead time and time lost on rate limits;
-  - **Waiting on you** (open work items whose last recorded state is an escalation to a human, oldest first: item, step, the reason in plain words with the protected or withheld files named, a link to the escalation comment, and since when; no severity — an escalation is the human gate working, ADR-0001; the queue is the todo list, `pipeline_waiting.mjs`);
-  - **Issues requiring attention** (top findings, runs affected, since when) and **Recent pipelines** (the ten newest rows, see Pipelines);
-  - **Metric definitions** (bottom) gives each indicator's source, method, period, population and known limits. The eval sections follow.
+- **Overview** (home page, one phone screen — ADR-0043 amendment 2026-10-24):
+  - a status line from the diagnostic rules (critical / issues / "no problem detected", which is never proof of health) naming the most severe active problem and opening its Diagnostics card;
+  - four rows over the last 7 days, each opening its page, each chip a filtered view: **Flows** (runs by class, approval rate → Pipelines filtered by state), **Cost** (list price, per stage → Metrics → cost), **Quality** (eval gates passing, one chip per suite with its headline score and trend → that suite on Evals), **Waiting on you** (count and the three oldest items → Pipelines → Waiting on you);
+  - a change appears only when the previous 7 days hold at least 10 runs (or verdicts); amounts have 2 decimals here, 4 on the detail pages;
+  - the 7 / 14 / 30-day indicators, charts and metric definitions are at the top of **Metrics** ("Trends, 14 / 30 days and definitions →").
 - **Diagnostics** — severity chips (All / Critical / Warning / Info with counts) and a category filter over problems found by fixed rules (`RULES` in `scripts/lib/pipeline_diagnostics.mjs`, no LLM): each card gives what was **observed**, its impact and frequency, an optional **hypothesis** marked "interpretation, not verified", the evidence (runs, events, GitHub links) and an **Investigate** link. An active `warning` / `critical` finding of a mapped rule also shows a **Suggested lever** (where to look, never a diagnosis); every rule and its lever, or the reason it has none, is on **Rules and levers** (`pipeline/levers.html`). How to read the severities, the lifecycle and the rules that need care: [Diagnostics in detail](#diagnostics-in-detail).
 - **Pipelines**:
   - status chips with counts, then one row per recorded work item: title (the PR title is fetched live), last recorded state, stage icons, duration (lead time), attempts (runs), cost and last update;
