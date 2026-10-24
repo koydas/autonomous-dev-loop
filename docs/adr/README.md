@@ -56,3 +56,8 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0050: Circuit breaker on the review → auto-fix loop, and Retry-After on the Anthropic client](./0050-circuit-breaker-review-loop.md)
 - [ADR-0051: Active lessons: recurring adverse signals reach the next run's prompt, from a fixed catalog](./0051-active-lessons-from-the-meta-loop.md)
 - [ADR-0052: Executable evals: model call, grader and scoring run in three jobs with one-way data flow](./0052-isolated-grader-for-executable-evals.md)
+- [ADR-0053: Copilot coding agent as an opt-in code-generation provider](./0053-copilot-opt-in-codegen-provider.md) — proposed
+- [ADR-0054: Provider admission: a preventive write guard and full traceability](./0054-provider-admission-invariants.md) — proposed
+- [ADR-0055: Benchmark mode: Copilot runs against an isolated sandbox, never `main`](./0055-copilot-benchmark-mode.md) — proposed
+- [ADR-0056: Dashboard: `writer=copilot` on runs, and an opaque stage is "not traced"](./0056-dashboard-writer-and-not-traced.md) — proposed
+- [ADR-0057: Push rulesets as a platform-level path guard: not viable here, and not sufficient where available](./0057-push-rulesets-as-platform-guard.md) — proposed
