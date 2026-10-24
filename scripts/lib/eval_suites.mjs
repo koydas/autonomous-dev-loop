@@ -24,6 +24,7 @@ import { detectProvider, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './confi
 import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from './review_prompt.mjs';
 import { resolveReviewDecision } from './review_decision.mjs';
 import { MIN_CRITICAL_POINTS } from './adversarial_review.mjs';
+import { analyzeFindings } from './review_findings.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths } from './review_evidence.mjs';
 import { formatStaleRefsContext } from './stale_refs.mjs';
@@ -149,6 +150,21 @@ export function matchesFlag(text, entry) {
   return String(entry).split('|').map((k) => k.trim().toLowerCase()).filter(Boolean).some((k) => haystack.includes(k));
 }
 
+// Finding-level view of a review against the defects its case lists in `expected.findings` (RV-01): null when the
+// case lists none. `expected.acceptable_findings` are blocking findings that are not defects but not false alarms.
+const findingAnalysis = (expected, review) => (Array.isArray(expected?.findings)
+  ? analyzeFindings(issuesSection(review), expected.findings, { acceptable: expected.acceptable_findings ?? [] })
+  : null);
+
+// What the results file keeps of the analysis: enough to read, per run, which defects were found and why the others
+// were not (`needs`), without the review text twice.
+const summarizeFindingAnalysis = (a) => (a == null ? undefined : {
+  detected: a.detected.length,
+  matched: a.matched.map((m) => m.id),
+  missed: a.missed,
+  false_positives: a.falsePositives.length,
+});
+
 let reviewPrompts;
 const loadReviewPrompts = () => (reviewPrompts ??= { system: loadReviewSystemPrompt({ self: true }), user: loadPrompt('pr-review-user') });
 
@@ -266,7 +282,7 @@ export const reviewSuite = {
       unreviewedCodeFiles,
       shownFiles,
     });
-    return { verdict, llm_verdict: llmVerdict, reason, withheld_for: withheldFor, adversarial_protocol_met: adversarial.criticalPoints >= MIN_CRITICAL_POINTS, adversarial_points: adversarial.criticalPoints, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview };
+    return { verdict, llm_verdict: llmVerdict, reason, withheld_for: withheldFor, adversarial_protocol_met: adversarial.criticalPoints >= MIN_CRITICAL_POINTS, adversarial_points: adversarial.criticalPoints, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview, finding_analysis: summarizeFindingAnalysis(findingAnalysis(testCase?.expected, cleanReview)) };
   },
 
   scorers: {
@@ -299,6 +315,13 @@ export const reviewSuite = {
       return entries.filter((entry) => low.some((finding) => matchesFlag(finding, entry))).length / entries.length;
     },
     // No entry of must_not_flag appears in Issues Found, at any severity and any verdict.
+    // Finding level (RV-01), for the cases that list their known defects in expected.findings; null for the others.
+    // Share of the blocking defects the review reports (a High or Medium finding at the right file and lines).
+    finding_recall: (expected, output) => findingAnalysis(expected, output?.review)?.recall ?? null,
+    // Share of the blocking findings that are one of the known defects (or listed as acceptable); null when none was raised.
+    finding_precision: (expected, output) => findingAnalysis(expected, output?.review)?.precision ?? null,
+    // The same recall over the High defects only: the ones a human merge gate must never receive unflagged.
+    critical_recall: (expected, output) => findingAnalysis(expected, output?.review)?.criticalRecall ?? null,
     no_spurious_flag: (expected, output) => {
       const entries = Array.isArray(expected.must_not_flag) ? expected.must_not_flag : [];
       if (entries.length === 0) return null;
