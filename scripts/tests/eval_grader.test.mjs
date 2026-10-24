@@ -167,7 +167,7 @@ test('evaluatePatch: a symlink in the fixture is refused', async () => {
   await write(linked, 'src/customers.mjs', BUGGY);
   await fs.symlink('/etc/passwd', path.join(linked, 'src/link'));
   const r = await evaluatePatch({ ...base, fixtureDir: linked, fixtureSha256: await digestTree(linked), output: patch('src/customers.mjs', FIXED) });
-  assert.equal(r.failure, F.symlink);
+  assert.deepEqual([r.outcome, r.failure], ['ERROR', F.symlink]);
 });
 
 test('applyPatchToCopy leaves the fixture untouched, and a planted symlink target is refused', async () => {
@@ -366,4 +366,21 @@ test('runGraderChecks asks the runner for the full output of every command', asy
   const run = async (check) => { seen.push(check.outputChars); return { status: 'fail', exit_code: 1 }; };
   await runGraderChecks(prepare, base.grader, { run });
   assert.deepEqual(seen, [GRADER_OUTPUT_CHARS]);
+});
+
+test('evaluatePatch: a symlink in the grader tree is refused before anything runs, however its target changes', async () => {
+  const linked = await fs.mkdtemp(path.join(root, 'glinked-'));
+  const outside = path.join(root, 'outside-hidden.mjs');
+  await fs.writeFile(outside, '// whatever the link points at');
+  await fs.mkdir(path.join(linked, 'test'));
+  await fs.symlink(outside, path.join(linked, 'test/hidden.test.mjs'));
+  const r = await evaluatePatch({ ...base, graderDir: linked, graderSha256: await digestTree(linked), output: patch('src/customers.mjs', FIXED) });
+  assert.deepEqual([r.outcome, r.failure, r.checks], ['ERROR', F.symlink, []]);
+});
+
+test('restoreGraderFiles refuses a grader file that is a symlink, for direct callers too', async () => {
+  const src = await fs.mkdtemp(path.join(root, 'rsrc-'));
+  await fs.symlink(path.join(root, 'anything'), path.join(src, 'h.test.mjs'));
+  const work = await fs.mkdtemp(path.join(root, 'rwork-'));
+  await assert.rejects(restoreGraderFiles(work, src, ['h.test.mjs']), (e) => e.code === F.symlink);
 });

@@ -139,10 +139,13 @@ export async function applyPatchToCopy(fixtureDir, changes) {
 /** Hidden tests are copied in after the patch: whatever the patch wrote at their paths is overwritten. */
 export async function restoreGraderFiles(workDir, hiddenDir, files) {
   for (const f of files) {
+    const src = path.join(hiddenDir, f);
+    // copyFile follows links: a link in the grader tree would run content the digest does not pin.
+    if ((await fs.lstat(src)).isSymbolicLink()) throw Object.assign(new Error('grader file is a symlink'), { code: GRADER_FAILURES.symlink });
     const dest = path.join(workDir, f);
     await fs.mkdir(path.dirname(dest), { recursive: true });
     await fs.rm(dest, { force: true });
-    await fs.copyFile(path.join(hiddenDir, f), dest);
+    await fs.copyFile(src, dest);
   }
 }
 
@@ -237,6 +240,10 @@ export async function evaluatePatch(input, { timeoutMs, run } = {}) {
     // A missing or unreadable fixture / grader directory throws here: it is a classified ERROR, never an abort.
     if ((await digestTree(input.fixtureDir)) !== input.fixtureSha256) return result('ERROR', GRADER_FAILURES.fixtureDigest);
     if ((await digestTree(input.graderDir)) !== input.graderSha256) return result('ERROR', GRADER_FAILURES.graderDigest);
+    // A link is pinned by its target's name, not its content, and copying follows it: the digest would not pin what runs.
+    for (const dir of [input.fixtureDir, input.graderDir]) {
+      if ((await listFiles(dir)).some((f) => f.link !== undefined)) return result('ERROR', GRADER_FAILURES.symlink);
+    }
     const existingTestFiles = (await listFiles(input.fixtureDir)).map((f) => f.path).filter(isTestFile);
     const paths = checkPatchPaths(parsed.changes, { allowedPaths: input.allowedPaths, mustNotChange: input.mustNotChange, graderFiles: input.hiddenFiles, existingTestFiles });
     if (!paths.ok) return result('FAIL', paths.reason === GRADER_FAILURES.protectedPath ? GRADER_FAILURES.tampering : paths.reason, { path: paths.path });
