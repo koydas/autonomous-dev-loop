@@ -14,9 +14,9 @@ Label an issue → an LLM writes the PR → a second LLM reviews it against real
 | | |
 |---|---|
 | **Dogfooded** | The loop wrote [13 merged PRs of its own](https://github.com/koydas/autonomous-dev-loop/pulls?q=is%3Apr+is%3Amerged+head%3Aai%2Fissue-) (11 features, 2 bug fixes — error taxonomy, bounded retry, checkpoint resume, provider fallback), each merged after human review. Then it was locked out of its own code: `scripts/`, `prompts/` and `config/` are now on the write denylist ([ADR-0021](docs/adr/0021-protected-write-path-denylist.md)). |
-| **Tested** | 2,300+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
+| **Tested** | 2,400+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
 | **Measured** | [Offline evals](#evals) run each LLM stage against a labelled dataset: verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency, tokens — gated by thresholds, latest results on the [eval dashboard](https://koydas.github.io/autonomous-dev-loop/) ([ADR-0027](docs/adr/0027-offline-eval-harness.md)) |
-| **Decided in writing** | [48 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
+| **Decided in writing** | [57 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
 
 ## Bounded autonomy, not "fully autonomous"
 
@@ -111,7 +111,7 @@ All instrumentation goes through `scripts/lib/observability.mjs`. Schema referen
 
 ### Dashboard
 
-**[koydas.github.io/autonomous-dev-loop →](https://koydas.github.io/autonomous-dev-loop/)** — a static console built from the redacted run records on the `metrics` branch, organised as **Overview → Diagnostics → Pipelines → Investigation** ([ADR-0043](docs/adr/0043-diagnostic-observability-console.md)): system status and windowed indicators, deterministic diagnostics (observed fact vs labelled hypothesis, with evidence), every work item with every attempt of every stage, and the run / trace journals. Reading guide: [`docs/runbook.md`](docs/runbook.md#reading-the-dashboard). Proposed next step, statistics → suggested changes to the loop with no write on GitHub: [`docs/meta-loop.md`](docs/meta-loop.md).
+**[koydas.github.io/autonomous-dev-loop →](https://koydas.github.io/autonomous-dev-loop/)** — a static console built from the redacted run records on the `metrics` branch, organised as **Overview → Diagnostics → Pipelines → Investigation** ([ADR-0043](docs/adr/0043-diagnostic-observability-console.md)): a one-phone-screen overview (status, flows, LLM cost, eval gates, items waiting on a person — each row drilling down; windowed indicators on Metrics, evaluations on their own page), deterministic diagnostics (observed fact vs labelled hypothesis, with evidence), every work item with every attempt of every stage, and the run / trace journals. Reading guide: [`docs/runbook.md`](docs/runbook.md#reading-the-dashboard). Proposed next step, statistics → suggested changes to the loop with no write on GitHub: [`docs/meta-loop.md`](docs/meta-loop.md).
 
 ![Dashboard design mockup: overview, diagnostics, pipelines and pipeline detail, desktop and mobile](docs/images/dashboard-mockup.png)
 
