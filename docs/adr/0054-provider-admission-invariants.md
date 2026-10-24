@@ -30,6 +30,10 @@ The following do **not** satisfy it, by themselves or together: a required statu
 
 Every side effect of the stage is an event in the run journal and the stage has a span with its outcome and `duration_ms`, as [AGENTS.md](../../AGENTS.md) "Observability Rules" require of every pipeline stage; the trace identity is the work item's ([ADR-0041](./0041-end-to-end-work-item-tracing.md)); the public record is redacted by the allow-list ([ADR-0040](./0040-run-journal-and-public-run-record.md)). A stage whose interior is not observable by this repository (a call that returns a result with no account of what was read, called or retried) is **opaque**, and an opaque stage is not acceptable on the path. Boundary events around an opaque stage do not make it traced; they make its opacity visible, which is what the dashboard shows ([ADR-0056](./0056-dashboard-writer-and-not-traced.md)).
 
+**In plain terms.** After any run we must be able to answer, from the record alone: what was called, with what, what was decided, what it cost. For our own stages that is true: each LLM call is a span (vendor, model, tokens, duration), each decision an event (verdict, rejection, block). For a Copilot session we know the edges only: assigned at T0, PR opened at T1, three pushes, finished at T2. We do not know which files it read, which model answered, how many tokens or internal retries it used. That is a black box. The invariant says a black box cannot sit *between the labelled issue and a mergeable PR*, because when its output is wrong we could neither explain it nor measure it. It does not say the output is bad.
+
+*Example.* Our generation produces a stub `README.md`: the write guard rejects it, an event says which rule fired, the run record says which model produced it. Copilot produces the same stub: the guard may catch it later, but nothing says what the agent was given or why.
+
 ### Admission
 
 A provider is **admitted** to a path only when both invariants hold *for that path*, shown by a test in this repository, not by a vendor statement. Otherwise it is **confined to an isolated benchmark sandbox** ([ADR-0055](./0055-copilot-benchmark-mode.md)): a repository or branch from which nothing can reach `main`, with credentials that cannot touch production.
@@ -43,7 +47,7 @@ A change of state needs an ADR that amends this table and cites the test that sh
 
 ### Not decided here
 
-A **promotion gateway** (shape C of [`copilot-integration.md`](../copilot-integration.md#design-for-opt-in-use)): the agent's output lands on a staging ref outside the path, and a trusted job applies the guard to the diff and writes the PR branch itself. It would satisfy invariant 1 for the branch that reaches `main`. Whether it satisfies invariant 2 depends on whether the agent's session counts as a stage on the path or as a source of patches, as a human contributor is. This ADR does not take that reading. It is a decision for the maintainer and, if taken, a new ADR that also specifies how file content is read from a branch the pipeline does not control.
+A **promotion gateway** (shape C of [`copilot-integration.md`](../copilot-integration.md#design-for-opt-in-use)): the agent's output lands on a staging ref outside the path, and a trusted job applies the guard to the diff and writes the PR branch itself. It would satisfy invariant 1 for the branch that reaches `main`. Whether it satisfies invariant 2 depends on one question: is the Copilot session a *stage of our pipeline* (then its black box is on the path and the gateway fails), or an *author of a proposal* like a colleague whose thinking we also do not trace, where only what our pipeline does with the proposal must be traced (then the gateway passes)? This ADR does not take that reading. It is a decision for the maintainer and, if taken, a new ADR that also specifies how file content is read from a branch the pipeline does not control.
 
 ## Alternatives Considered
 
