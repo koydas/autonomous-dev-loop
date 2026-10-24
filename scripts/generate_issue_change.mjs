@@ -1,23 +1,18 @@
 #!/usr/bin/env node
 
-import { buildDeterministicPrompt, loadConfigFromEnv, loadLLMConfig, loadLabelsConfig, validateStartup } from './lib/config.mjs';
+import { loadConfigFromEnv, loadLLMConfig, loadLabelsConfig, validateStartup } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
-import { loadPrompt } from './lib/prompts.mjs';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, GuardrailError } from './lib/output_writer.mjs';
+import { writeGeneratedFiles, GuardrailError } from './lib/output_writer.mjs';
 import { log, error as logError } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
-import { buildFileContext } from './lib/file_injector.mjs';
-import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
-import { normalizeRepoPath } from './lib/autofix_guard.mjs';
-import { findGuardrailViolations, guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
+import { guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
+import { buildGenerationContext, decideGeneration, findGeneratedViolations, parseGenerationResponse } from './lib/generation_core.mjs';
 import { writeCheckpoint } from './lib/checkpoint.mjs';
-import { decideGenerationBlocked, escalateBlocked, findDeterministicBlock, parseIssueLabels } from './lib/generation_blocked.mjs';
+import { escalateBlocked, parseIssueLabels } from './lib/generation_blocked.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { appendOutputs } from './lib/github_output.mjs';
 import { loadLessons } from './lib/lessons_loader.mjs';
-import { existsSync } from 'node:fs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 
 let tracer;
@@ -140,15 +135,11 @@ async function main() {
   obsLog({ stage: 'code_gen', event: 'code_gen.start', level: 'info', meta: { issueNumber: config.issueNumber, model: config.model } });
   tracer.startSpan('code_gen', { issueNumber: config.issueNumber, model: config.model });
 
-  let fileContext, dependencies, prompt, systemPrompt, deterministicBlock;
+  let context, fileContext, prompt, systemPrompt;
   try {
-    fileContext = await buildFileContext(config.issueTitle, config.issueBody, process.cwd());
-    deterministicBlock = findDeterministicBlock({ ...config, hiddenPaths: fileContext.hiddenPaths, fileExists: (p) => existsSync(p) });
-    // Snapshot before the LLM call: the verified manifest is never one the patch wrote.
-    dependencies = await readPackageJsonDependencies(process.cwd());
-    prompt = buildDeterministicPrompt({ ...config, fileContents: fileContext.block });
-    systemPrompt = loadPrompt('generation-system');
-    obsLog({ stage: 'code_gen', event: 'code_gen.context_built', level: 'info', meta: { shown_files: [...fileContext.shownPaths], hidden_files: [...fileContext.hiddenPaths], deterministic_block: deterministicBlock != null } });
+    context = await buildGenerationContext({ config });
+    ({ fileContext, prompt, systemPrompt } = context);
+    obsLog({ stage: 'code_gen', event: 'code_gen.context_built', level: 'info', meta: { shown_files: [...fileContext.shownPaths], hidden_files: [...fileContext.hiddenPaths], deterministic_block: context.deterministicBlock != null } });
   } catch (err) {
     obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
     tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: err.message } });
@@ -191,24 +182,20 @@ async function main() {
 
   let aiOutput;
   try {
-    aiOutput = parseJsonResponse(raw);
+    aiOutput = parseGenerationResponse(raw);
   } catch (err) {
-    obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: 'JSON parse failed', detail: err.message } });
-    tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: 'JSON parse failed' } });
+    const meta = err.kind === 'json' ? { error: 'JSON parse failed', detail: err.cause?.message } : { error: err.message };
+    obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta });
+    tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: err.kind === 'json' ? 'JSON parse failed' : 'invalid JSON shape' } });
     await tracer.finalize('failed');
-    throw new Error('AI response was not valid JSON', { cause: err });
-  }
-  if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
-    obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: 'AI response JSON must be an object' } });
-    tracer.endSpan('code_gen', { outcome: 'failed', meta: { error: 'invalid JSON shape' } });
-    await tracer.finalize('failed');
-    throw new Error('AI response JSON must be an object');
+    throw err;
   }
 
   let summary, changes, blocked;
   try {
-    blocked = decideGenerationBlocked({ deterministic: deterministicBlock, aiOutput, labels: parseIssueLabels(process.env.ISSUE_LABELS), fileExists: (p) => existsSync(p) });
-    if (!blocked) ({ summary, changes } = validateAiOutput(aiOutput));
+    const decided = decideGeneration({ aiOutput, context, labels: parseIssueLabels(process.env.ISSUE_LABELS) });
+    blocked = decided.blocked;
+    if (!blocked) ({ summary, changes } = decided);
   } catch (err) {
     if (err instanceof GuardrailError) return rejectPatch(err, { stage: 'code_gen', stageStartMs: startMs, issueNumber: config.issueNumber });
     obsLog({ stage: 'code_gen', event: 'code_gen.error', level: 'error', duration_ms: Date.now() - startMs, meta: { error: err.message } });
@@ -228,24 +215,7 @@ async function main() {
 
   let outputPaths;
   try {
-    const existing = new Map();
-    for (const { targetPath } of changes) {
-      const key = normalizeRepoPath(targetPath);
-      try {
-        existing.set(key, await fs.readFile(key, 'utf8'));
-      } catch (err) {
-        if (err.code !== 'ENOENT') throw err;
-        existing.set(key, null);
-      }
-    }
-    const violations = findGuardrailViolations(changes, {
-      existing,
-      shownPaths: fileContext.shownPaths,
-      hiddenPaths: fileContext.hiddenPaths,
-      dependencies,
-      fileExists: (p) => existsSync(p),
-      mentionText: `${config.issueTitle}\n${config.issueBody}`,
-    });
+    const violations = await findGeneratedViolations({ changes, context, config });
     if (violations.length) throw guardrailErrorFor(violations);
     outputPaths = await writeGeneratedFiles(changes);
   } catch (err) {
