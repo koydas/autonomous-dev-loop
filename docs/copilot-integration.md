@@ -1,6 +1,6 @@
 # GitHub Copilot coding agent: findings and opt-in design
 
-Status: **analysis and proposal** (2026-10-24). Nothing here is implemented. Decisions are in [ADR-0053](adr/0053-copilot-opt-in-codegen-provider.md) to [ADR-0057](adr/0057-push-rulesets-as-platform-guard.md), all `Proposed`.
+Status: **analysis and proposal** (2026-10-24). Nothing here is implemented. Decisions are in [ADR-0053](adr/0053-copilot-opt-in-codegen-provider.md) to [ADR-0057](adr/0057-push-rulesets-as-platform-guard.md), all `Proposed`, and they stay so until the sandbox tests T1 to T7 below have run.
 
 Context: the product named "Copilot coding agent" in older pages is called "Copilot cloud agent" in the current documentation; both names appear in the sources below. It covers the same skeleton as this repository (issue → draft PR → review → human) inside a GitHub-run sandbox. The value of this repository is not the skeleton but the governance and measurement layer ([`autonomy-levels.md`](autonomy-levels.md), [`landscape.md`](landscape.md)). Two invariants decide what can be admitted ([ADR-0054](adr/0054-provider-admission-invariants.md)):
 
@@ -155,7 +155,7 @@ What our traces could ingest, and what stays opaque:
 | Tokens, model actually used, cost per session | Billing (F30); enterprise API (F29) | Aggregate only, enterprise only | Not per call |
 | What the agent read, its prompt composition, its internal retries | Not documented | **Opaque** | No |
 
-So the codegen stage of a Copilot run has **boundaries** (start, outcome, duration, pushes) and an **opaque interior**. That is not "fully traced" in the sense of [ADR-0018](adr/0018-structured-observability.md) / [ADR-0040](adr/0040-run-journal-and-public-run-record.md) (every side effect an event). It is what the dashboard must say plainly ([ADR-0056](adr/0056-dashboard-provider-copilot-not-traced.md)).
+So the codegen stage of a Copilot run has **boundaries** (start, outcome, duration, pushes) and an **opaque interior**. That is not "fully traced" in the sense of [ADR-0018](adr/0018-structured-observability.md) / [ADR-0040](adr/0040-run-journal-and-public-run-record.md) (every side effect an event). It is what the dashboard must say plainly ([ADR-0056](adr/0056-dashboard-writer-and-not-traced.md)).
 
 ### 7. Market landscape
 
@@ -179,7 +179,7 @@ Three shapes were considered ([ADR-0053](adr/0053-copilot-opt-in-codegen-provide
 
 - **Where:** a sandbox repository (name chosen by the maintainer; this analysis uses `adl-copilot-sandbox`), user-owned, no secrets shared with production, LLM keys with a spend cap, its own machine user for the assignment PAT (F5) with fine-grained access to the sandbox only.
 - **Same pipeline:** the sandbox adopts the reusable workflows ([ADR-0045](adr/0045-reusable-pipeline-workflows.md)): same validator, same evidence job, same review, same caps, so the only variable is the provider of the patch.
-- **Trigger:** the label `codegen:copilot` on an issue that already carries `ready-for-dev` (validator passed). The production repository refuses the label (fail closed: provider routing only when `github.repository` is in an allow-list that is empty by default).
+- **Trigger:** the label `codegen:copilot` on an issue that already carries `ready-for-dev` (validator passed); nothing happens before. In the production repository the label means **observe**: a scheduled workflow in the sandbox pulls production's public issues, mirrors the labelled ones and snapshots `main` at the label SHA; production keeps running our generation as the control arm and holds no credential for the sandbox. Assignment of Copilot is allowed only where `github.repository` is in an allow-list that is empty by default (the sandbox).
 - **Assignment:** agent tasks API (F6) or issue assignment (F1), whichever the test plan T1/T2 shows more observable; `base_branch`/`base_ref` set to the sandbox's branch; custom instructions identical to the instruction block of our generation prompt except that nothing in it is a guard.
 - **Iteration:** at most 3 `@copilot` rounds, counted by the existing attempt labels; the circuit breaker applies unchanged; then `needs-human`.
 - **Approval of workflow runs:** skipped in the sandbox (F9), because the blast radius is sandbox-scoped; this keeps lead time comparable.
@@ -198,7 +198,7 @@ Three shapes were considered ([ADR-0053](adr/0053-copilot-opt-in-codegen-provide
 
 ### Open questions
 
-The register above lists O1 to O13. The decisions that need the maintainer, not an experiment, are in the PR description: the invariant-2 reading (shape C), the sandbox repository's name and ownership, the key name for the provider on runs ([ADR-0056](adr/0056-dashboard-provider-copilot-not-traced.md)), and whether a machine-user seat is acceptable.
+The register above lists O1 to O13. Decided in review (2026-10-24): the trigger waits for `ready-for-dev` and production issues can be **observed** in the sandbox; the sandbox is user-owned; the run-level key is `writer` (`writer=copilot`, [ADR-0056](adr/0056-dashboard-writer-and-not-traced.md)); the ADRs stay `Proposed` until T1 to T7 have run. Still open for the maintainer: the invariant-2 reading that would allow shape C, and whether a machine-user seat is acceptable.
 
 ### Sandbox test plan
 

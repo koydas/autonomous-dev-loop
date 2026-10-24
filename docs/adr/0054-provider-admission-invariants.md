@@ -28,7 +28,7 @@ The following do **not** satisfy it, by themselves or together: a required statu
 
 ### Invariant 2: every stage on the path is fully traced
 
-Every side effect of the stage is an event in the run journal and the stage has a span with its outcome and `duration_ms`, as [AGENTS.md](../../AGENTS.md) "Observability Rules" require of every pipeline stage; the trace identity is the work item's ([ADR-0041](./0041-end-to-end-work-item-tracing.md)); the public record is redacted by the allow-list ([ADR-0040](./0040-run-journal-and-public-run-record.md)). A stage whose interior is not observable by this repository (a call that returns a result with no account of what was read, called or retried) is **opaque**, and an opaque stage is not acceptable on the path. Boundary events around an opaque stage do not make it traced; they make its opacity visible, which is what the dashboard shows ([ADR-0056](./0056-dashboard-provider-copilot-not-traced.md)).
+Every side effect of the stage is an event in the run journal and the stage has a span with its outcome and `duration_ms`, as [AGENTS.md](../../AGENTS.md) "Observability Rules" require of every pipeline stage; the trace identity is the work item's ([ADR-0041](./0041-end-to-end-work-item-tracing.md)); the public record is redacted by the allow-list ([ADR-0040](./0040-run-journal-and-public-run-record.md)). A stage whose interior is not observable by this repository (a call that returns a result with no account of what was read, called or retried) is **opaque**, and an opaque stage is not acceptable on the path. Boundary events around an opaque stage do not make it traced; they make its opacity visible, which is what the dashboard shows ([ADR-0056](./0056-dashboard-writer-and-not-traced.md)).
 
 ### Admission
 
@@ -66,4 +66,4 @@ A **promotion gateway** (shape C of [`copilot-integration.md`](../copilot-integr
 
 This ADR *is* the invariants; it was checked against the accepted ones it relies on and contradicts none: [ADR-0019](./0019-static-verification-backstop.md), [ADR-0021](./0021-protected-write-path-denylist.md), [ADR-0023](./0023-trusted-pipeline-execution.md), [ADR-0029](./0029-autofix-deterministic-write-guard.md), [ADR-0040](./0040-run-journal-and-public-run-record.md), [ADR-0044](./0044-protected-paths-floor-and-repo-config.md). It adds a rule about *other* writers; it changes nothing about our own stages.
 
-**Related:** [ADR-0053](./0053-copilot-opt-in-codegen-provider.md), [ADR-0055](./0055-copilot-benchmark-mode.md), [ADR-0056](./0056-dashboard-provider-copilot-not-traced.md), [ADR-0057](./0057-push-rulesets-as-platform-guard.md).
+**Related:** [ADR-0053](./0053-copilot-opt-in-codegen-provider.md), [ADR-0055](./0055-copilot-benchmark-mode.md), [ADR-0056](./0056-dashboard-writer-and-not-traced.md), [ADR-0057](./0057-push-rulesets-as-platform-guard.md).

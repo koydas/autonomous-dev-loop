@@ -38,7 +38,7 @@ Positioning, in one line: **a governance and measurement layer for coding agents
 |---|---|
 | A harness that decides what an agent may write on the way to `main` (preventive guards), whether its output was checked by executed evidence, and what it did (trace) | A coding agent that competes on pass rate |
 | A way to put two providers on the same validated issues with the same review and caps, and publish the outcome numbers | A ranking of vendors |
-| Honest about what it cannot see: an opaque stage is labelled "not traced", never filled in ([ADR-0056](adr/0056-dashboard-provider-copilot-not-traced.md)) | A promise that any provider can be admitted: one that cannot meet the invariants is confined to a sandbox ([ADR-0054](adr/0054-provider-admission-invariants.md), [ADR-0055](adr/0055-copilot-benchmark-mode.md)) |
+| Honest about what it cannot see: an opaque stage is labelled "not traced", never filled in ([ADR-0056](adr/0056-dashboard-writer-and-not-traced.md)) | A promise that any provider can be admitted: one that cannot meet the invariants is confined to a sandbox ([ADR-0054](adr/0054-provider-admission-invariants.md), [ADR-0055](adr/0055-copilot-benchmark-mode.md)) |
 
 What would make the claim false, and should be re-checked: a vendor documents content-level, pre-write guards that a repository can configure; a vendor publishes per-stage evals; a platform feature closes the gap between a path rule and our guard ([ADR-0057](adr/0057-push-rulesets-as-platform-guard.md)). Any of these moves a cell of the table and possibly a provider's admission state.
 

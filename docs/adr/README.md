@@ -59,5 +59,5 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0053: Copilot coding agent as an opt-in code-generation provider](./0053-copilot-opt-in-codegen-provider.md) — proposed
 - [ADR-0054: Provider admission: a preventive write guard and full traceability](./0054-provider-admission-invariants.md) — proposed
 - [ADR-0055: Benchmark mode: Copilot runs against an isolated sandbox, never `main`](./0055-copilot-benchmark-mode.md) — proposed
-- [ADR-0056: Dashboard: `provider=copilot` on runs, and an opaque stage is "not traced"](./0056-dashboard-provider-copilot-not-traced.md) — proposed
+- [ADR-0056: Dashboard: `writer=copilot` on runs, and an opaque stage is "not traced"](./0056-dashboard-writer-and-not-traced.md) — proposed
 - [ADR-0057: Push rulesets as a platform-level path guard: not viable here, and not sufficient where available](./0057-push-rulesets-as-platform-guard.md) — proposed
