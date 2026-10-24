@@ -90,6 +90,8 @@ export function runCheck(
   const startedAt = now();
   return new Promise((resolve) => {
     let output = '';
+    // Evidence keeps a short tail; a caller that needs more (check.outputChars, e.g. the eval grader reading test names) asks for it.
+    const tailChars = check.outputChars ?? OUTPUT_TAIL_CHARS;
     let timedOut = false;
     let settled = false;
     let timer;
@@ -97,7 +99,7 @@ export function runCheck(
     // Rolling buffer: only the tail is reported, so a chatty suite must not grow memory unbounded.
     const append = (d) => {
       output += d;
-      if (output.length > 2 * OUTPUT_TAIL_CHARS) output = output.slice(-2 * OUTPUT_TAIL_CHARS);
+      if (output.length > 2 * tailChars) output = output.slice(-2 * tailChars);
     };
     const finish = (status, exitCode) => {
       if (settled) return;
@@ -112,7 +114,7 @@ export function runCheck(
         status,
         exit_code: exitCode,
         duration_ms: now() - startedAt,
-        output_tail: tailOutput(output),
+        output_tail: tailOutput(output, tailChars),
       });
     };
 
