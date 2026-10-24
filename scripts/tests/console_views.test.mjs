@@ -5,7 +5,7 @@ import {
   consoleContext, diagnosticsBody, findingCard, journeyPanel, keyEvents, runSteps, trendChart, statusBanner,
   definitionsPanel, duration, itemTitle, itemUrl, pill, FILTER_SCRIPT, PR_STATES_SCRIPT, TABS_SCRIPT, CONSOLE_STYLE, requirementLabel, leverCommand, leversBody, exportNote,
 } from '../lib/console_views.mjs';
-import { consoleOverview, kpiRow, delta, sparkline, statusBadge, durationChart, providerList, issueCards } from '../lib/console_overview.mjs';
+import { consoleOverview, overviewTrends, waitingPanel } from '../lib/console_overview.mjs';
 import { attemptOf, workItemJourney } from '../lib/pipeline_journey.mjs';
 import { DEFINITIONS } from '../lib/pipeline_kpis.mjs';
 import { LEVERS, NO_LEVER, FORBIDDEN_REASONS } from '../lib/meta_levers.mjs';
@@ -46,12 +46,12 @@ test('a hostile string in any recorded field is escaped on the overview, diagnos
   ] }), withheld('841', T + 1000), withheld('842', T + 2000, 51)];
   const m = modelOf(records);
   const ctx = consoleContext(m);
-  const pages = [consoleOverview(ctx, ''), diagnosticsBody(ctx, ''), ...ctx.journeys.map((j) => journeyPanel(j)), keyEvents(m.runs.at(-1), eventSummary)];
+  const pages = [consoleOverview(ctx, ''), overviewTrends(ctx, ''), waitingPanel(ctx.waiting, ''), diagnosticsBody(ctx, ''), ...ctx.journeys.map((j) => journeyPanel(j)), keyEvents(m.runs.at(-1), eventSummary)];
   for (const html of pages) {
     noRaw(html);
     assert.doesNotMatch(html, /href="(&lt;|<|javascript:)/);
   }
-  assert.ok(pages[1].includes('&lt;script&gt;alert(1)'), 'the hostile text is shown escaped, not dropped');
+  assert.ok(pages[3].includes('&lt;script&gt;alert(1)'), 'the hostile text is shown escaped, not dropped');
 });
 
 test('diagnostics: finding card separates observed facts from a labelled hypothesis; filters and gaps', () => {

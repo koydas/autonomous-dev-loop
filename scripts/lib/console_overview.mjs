@@ -1,27 +1,19 @@
-// System overview, the dashboard home (ADR-0043): status, four windowed indicators with their change and a
-// sparkline, results / duration / provider charts, the problems that need attention and the recent
-// pipelines. Windows (7 / 14 / 30 days, pipeline_kpis.mjs) are all rendered; a select shows one. Pure.
-import { escapeHtml as e } from './eval_site.mjs';
+// System overview, the dashboard home (ADR-0043 amendment 2026-10-24): one phone screen — status, then
+// flows, cost and quality over the last 7 days, then who waits on a person. Every row opens its page and
+// every chip a filtered view. The windowed indicators and charts (7 / 14 / 30 days, pipeline_kpis.mjs) are
+// overviewTrends(), on the Metrics page. Pure.
+import { escapeHtml as e, headlineScore } from './eval_site.mjs';
 import { costAmount, costBasis, formatUsd } from './llm_cost.mjs';
 import { DEFINITIONS, WINDOWS, RUN_CLASSES } from './pipeline_kpis.mjs';
-import { toneMark, pill, trendChart, definitionsPanel, duration, itemTitle } from './console_views.mjs';
-import { pipelineList, FLOW_SCRIPT } from './flow_dashboard.mjs';
+import { toneMark, trendChart, definitionsPanel, duration, itemTitle } from './console_views.mjs';
 
 const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)} %`);
-const SEVERITY_TONE = { critical: 'bad', warning: 'warn', info: 'neutral' };
 const STATUS = {
   critical: ['bad', 'Attention needed', (n) => `${n} critical problem(s)`],
   warning: ['warn', 'Running with issues', (n) => `${n} problem(s) to look at`],
   ok: ['good', 'No problem detected', () => 'by the rules — not proof of health'],
   no_data: ['unknown', 'No data', () => 'no pipeline run recorded yet'],
 };
-
-/** The status badge of the page head: the diagnostic status, never a claim the rules cannot make. */
-export function statusBadge(d, root) {
-  const [tone, title, sub] = STATUS[d.status];
-  const n = d.status === 'critical' ? d.findings.filter((f) => f.severity === 'critical').length : d.findings.filter((f) => f.severity !== 'info').length;
-  return `<a class="status-badge tone-${tone}" href="${root}diagnostics.html">${toneMark(tone)}<span><strong>${e(title)}</strong><small>${e(sub(n))}</small></span></a>`;
-}
 
 /**
  * Change of a value against the previous window: `{ text, tone }`. `better` is the direction that is good
@@ -146,15 +138,9 @@ function windowBlock(w, root, hasWithheld, hidden) {
   return `<div data-window="${w.days}"${hidden ? ' hidden' : ''}>${body}</div>`;
 }
 
-/** Problems that need attention: the top findings as cards. */
-export function issueCards(d, root, limit = 3) {
-  // Only what is happening now: a resolved or by-design (info) finding stays on the Diagnostics page.
-  const active = d.findings.filter((f) => f.status !== 'resolved' && f.severity !== 'info');
-  const cards = active.slice(0, limit).map((f) => {
-    const since = f.evidence.map((x) => x.ts).filter((t) => typeof t === 'number');
-    return `<a class="issue-card tone-${SEVERITY_TONE[f.severity]}" href="${root}diagnostics.html#${e(f.id)}"><span class="issue-head">${toneMark(SEVERITY_TONE[f.severity])}<strong>${e(f.title)}</strong>${pill(SEVERITY_TONE[f.severity], f.severity)}</span><span class="issue-text">${e(f.impact)}</span><span class="issue-meta"><span>Affects ${e(f.runs.length)} run(s)</span>${since.length ? `<span>Since: <span data-ts="${Math.min(...since)}">${e(new Date(Math.min(...since)).toISOString().slice(0, 10))}</span></span>` : ''}</span></a>`;
-  }).join('');
-  return `<section class="panel attention-panel tone-${active.length ? SEVERITY_TONE[active[0].severity] : 'unknown'}"><h3><span>Issues requiring attention <small class="muted">${e(active.length)} active</small></span><a href="${root}diagnostics.html">View all →</a></h3>${cards ? `<div class="issue-grid">${cards}</div>` : `<p class="muted">${d.findings.length ? `No active warning or critical finding; ${e(d.findings.length)} resolved or informational on the Diagnostics page` : 'No rule fired on the recorded data'} (${e(d.gaps.length)} data gap(s): not proof of health).</p>`}</section>`;
+/** Active warning / critical findings, most severe first: what the home names; resolved and info stay on Diagnostics. */
+export function activeProblems(d) {
+  return d.findings.filter((f) => f.status !== 'resolved' && f.severity !== 'info');
 }
 
 /**
@@ -165,7 +151,7 @@ export function issueCards(d, root, limit = 3) {
 export function waitingPanel(rows, root) {
   const time = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
   const list = rows.map((w) => `<li class="waiting-row"><div class="waiting-head"><a href="${root}traces/${encodeURIComponent(w.trace_id)}.html"><strong>${e(itemTitle(w.item))}</strong></a>${w.prs.filter((n) => n !== w.item?.number).map((n) => ` <span class="muted">PR #${e(n)}</span>`).join('')}<span class="pill tone-neutral">${e(w.step)}</span></div><p class="waiting-reason">${e(w.reason)}</p><p class="waiting-meta">${w.url ? `<a href="${e(w.url)}">Escalation comment</a>` : '<span class="muted">No comment link recorded</span>'} · ${w.since != null ? `waiting since <span data-ts="${w.since}">${e(time(w.since))} UTC</span>` : '<span class="muted">date not recorded</span>'}</p></li>`).join('');
-  return `<section class="panel waiting-panel" id="waiting"><h3><span>Waiting on you <small class="muted">${e(rows.length)} open item(s) escalated to a human</small></span><a href="${root}flows.html?state=escalated">Pipelines →</a></h3>${list ? `<ul class="waiting-list">${list}</ul>` : '<p class="muted">Nothing waits on you: no open work item has an escalation as its last recorded state. Items closed before closings were journaled are not inferred (Diagnostics → data gaps).</p>'}</section>`;
+  return `<section class="panel waiting-panel" id="waiting"><h3><span>Waiting on you <small class="muted">${e(rows.length)} open item(s) escalated to a human</small></span><a href="${root}flows.html?state=escalated">Filter →</a></h3>${list ? `<ul class="waiting-list">${list}</ul>` : '<p class="muted">Nothing waits on you: no open work item has an escalation as its last recorded state. Items closed before closings were journaled are not inferred (Diagnostics → data gaps).</p>'}</section>`;
 }
 
 function secondary(o, root) {
@@ -178,22 +164,142 @@ function secondary(o, root) {
   return `<div class="mini-stats">${items.map(([l, v, h, n]) => `<a href="${e(h)}" title="${e(n)}"><span>${e(l)}</span><strong>${e(v)}</strong></a>`).join('')}</div>`;
 }
 
-/** The overview: `ctx` from consoleContext(), `root` the path to pipeline/ ('pipeline/' on the home page). */
-export function consoleOverview(ctx, root = '') {
+/**
+ * The windowed indicators, charts and definitions, head of the Metrics page (the home's former body): `root`
+ * the path to pipeline/ ('' on a pipeline page).
+ */
+export function overviewTrends(ctx, root = '') {
   const { diagnosis: d, overview: o, windows } = ctx;
   const hasWithheld = d.findings.some((f) => f.id === 'review-withheld');
   const range = `<label class="range-select">Range <select data-range>${WINDOWS.map((n) => `<option value="${n}">Last ${n} days</option>`).join('')}</select></label>`;
-  const recent = [...ctx.traces].sort((a, b) => (b.last_completed_at ?? 0) - (a.last_completed_at ?? 0));
-  const toolbar = `<div class="section-intro"><div><h2>Recent pipelines</h2><p>Latest work items and their status. Open a row for its stages, attempts and key information.</p></div><div class="toolbar-inline"><input type="search" data-filter-key="q" placeholder="Search by issue, PR, workflow…" aria-label="Search recent pipelines"><select data-filter-key="state" aria-label="Status"><option value="">All status</option><option value="attention">Needs a person</option><option value="withheld">Approval withheld</option><option value="escalated">Escalated</option><option value="approved">Approved</option><option value="failed">Failed</option><option value="merged">Merged (live)</option></select><a class="button-link" href="${root}flows.html">View all →</a></div></div>`;
-  return `<section class="console" aria-label="System overview">
-<div class="page-head"><div><h1>System overview</h1><p class="sub">What the recorded runs say about the pipeline. Windows end on the latest recorded run (${e(o.window.to ? new Date(o.window.to).toISOString().slice(0, 16).replace('T', ' ') : '—')} UTC).</p></div><div class="head-tools">${range}${statusBadge(d, root)}</div></div>
+  return `<section class="console" id="trends" aria-label="Trends">
+<div class="section-intro"><div><h2>Trends</h2><p>Windows end on the latest recorded run (${e(o.window.to ? new Date(o.window.to).toISOString().slice(0, 16).replace('T', ' ') : '—')} UTC).</p></div><div class="head-tools">${range}</div></div>
 ${WINDOWS.map((n, i) => windowBlock(windows[n], root, hasWithheld, i > 0)).join('')}
 ${secondary(o, root)}
-${waitingPanel(ctx.waiting ?? [], root)}
-${issueCards(d, root)}
-${pipelineList(recent, { root, limit: 10, toolbar })}
 ${definitionsPanel()}
-</section>${FLOW_SCRIPT}${RANGE_SCRIPT}`;
+</section>${RANGE_SCRIPT}`;
+}
+
+// The glance: a change is shown only against a populated previous window (MIN_BASE runs or verdicts): a
+// percentage on a handful of runs is noise (e.g. +3283 % after a quiet week).
+const GLANCE_DAYS = 7;
+const MIN_BASE = 10;
+const usd2 = (usd) => (usd > 0 && usd < 0.01 ? '< $0.01' : `$${usd.toFixed(2)}`);
+// A sum as a short amount: free tier, unpriced, a lower bound (≥) with unpriced calls, else 2 decimals.
+export function shortAmount(sum) {
+  if (!sum.calls) return '—';
+  if (sum.free === sum.calls) return 'free tier';
+  if (!sum.measured && !sum.estimated) return 'unpriced';
+  return `${sum.unpriced ? '≥ ' : ''}${usd2(sum.usd)}`;
+}
+const chip = (href, tone, text, title = '') => `<a class="g-chip tone-${tone}" href="${e(href)}"${title ? ` title="${e(title)}"` : ''}>${toneMark(tone)}<span>${text}</span></a>`;
+const row = (id, href, label, value, sub, chips) => `<section class="g-row" id="g-${id}"><a class="g-head" href="${e(href)}"><span class="g-label">${e(label)}</span><strong class="g-value">${value}</strong>${sub ? `<span class="g-sub">${sub}</span>` : ''}<span class="chevron" aria-hidden="true">›</span></a>${chips ? `<div class="g-chips">${chips}</div>` : ''}</section>`;
+const change = (c) => (c.arrow ? ` <span class="kpi-delta tone-${c.tone}">${e(c.arrow)} ${e(c.text.replace(/ vs prior .*$/, ''))}</span>` : '');
+
+// The work items a `flows.html?period=N` link shows: the same reference (latest recorded run end) and the same
+// rule (last activity within N days of it) as the Pipelines period filter, so a chip's count is its list's length.
+export function periodItems(ctx, days) {
+  const ref = Math.max(0, ...(ctx.traces ?? []).flatMap((t) => (t.runs ?? []).map((r) => r.completed_at ?? r.started_at ?? 0)));
+  return (ctx.journeys ?? []).filter((j) => ref - (Number(j.last_activity) || 0) <= days * 86400000);
+}
+
+// Chips count work items by their latest recorded state, with the predicate of the Pipelines filter they open
+// (data-state tokens: the state, plus `attention`). The bar above them splits the runs by class and links nowhere:
+// a run class is not an item state (a REQUEST_CHANGES run is adverse; its item is changes_requested, not attention).
+const ITEM_CHIPS = [
+  ['attention', (j) => j.attention, 'need a person', 'Last recorded state: failed, escalated, approval withheld or rejected'],
+  ['changes_requested', (j) => j.state === 'changes_requested', 'changes requested', 'Last recorded state: review requested changes'],
+  ['approved', (j) => j.state === 'approved', 'approved', 'Last recorded state: approved by review'],
+  ['merged', (j) => j.state === 'merged', 'merged', 'Merge journaled (item.closed); Pipelines also re-checks GitHub live'],
+];
+
+function flowsRow(w, ctx, root, hasWithheld) {
+  if (w.empty) return row('flows', `${root}flows.html`, `Flows · ${GLANCE_DAYS} d`, '—', 'No pipeline run recorded yet', '');
+  const c = w.current, p = w.previous;
+  const rate = c.verdicts ? `approve ${e(pct(c.approve_rate))}${p.verdicts >= MIN_BASE ? change(delta(c.approve_rate, p.approve_rate, { better: 'up', points: true })) : ''}` : 'no review verdict';
+  const items = periodItems(ctx, GLANCE_DAYS);
+  const flows = (state) => `${root}flows.html?state=${state}&period=${GLANCE_DAYS}`;
+  const failed = items.some((j) => j.state === 'failed');
+  // Approval first: on a phone the chips scroll sideways and the first ones are the ones seen.
+  const chips = [
+    chip(hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, c.approve_rate == null ? 'unknown' : c.approve_rate < 0.5 ? 'warn' : 'good', rate, 'APPROVE ÷ recorded review verdicts'),
+    ...ITEM_CHIPS.map(([state, match, label, title]) => {
+      const n = items.filter(match).length;
+      if (!n && state !== 'attention') return '';
+      const tone = state === 'attention' ? (n ? (failed ? 'bad' : 'warn') : 'good') : state === 'changes_requested' ? 'warn' : 'good';
+      return chip(flows(state), tone, `${e(n)} ${label}`, title);
+    }),
+  ].join('');
+  return row('flows', `${root}flows.html?period=${GLANCE_DAYS}`, `Flows · ${GLANCE_DAYS} d`, `${e(c.runs)} run${c.runs === 1 ? '' : 's'}`, segments(c), chips);
+}
+
+function costRow(w, root) {
+  if (w.empty || !w.current.cost.calls) return row('cost', `${root}health.html#cost`, `Cost · ${GLANCE_DAYS} d`, '—', 'No LLM call in the window', '');
+  const c = w.current.cost, p = w.previous.cost;
+  const moved = comparableCost(c) && comparableCost(p) && w.previous.runs >= MIN_BASE ? change(delta(c.usd, p.usd, { better: 'down', zeroBase: true })) : '';
+  const perItem = w.items.length ? ` · ${e(shortAmount({ ...c, usd: c.usd / w.items.length }))} / item` : '';
+  const chips = w.stages.map((s) => chip(`${root}health.html#cost`, 'neutral', `${e(s.stage)} ${e(shortAmount(s))}`, `${s.calls} call(s), list price`)).join('');
+  return row('cost', `${root}health.html#cost`, `Cost · ${GLANCE_DAYS} d`, `${e(shortAmount(c))}${moved}`, `list price${perItem}`, chips);
+}
+
+// The trend of a suite: its headline score against the previous run on the same dataset, else none.
+function suiteTrend(runs) {
+  const [last, prev] = runs;
+  if (!prev || last.dataset_sha256 !== prev.dataset_sha256) return '';
+  const a = headlineScore(last)?.value, b = headlineScore(prev)?.value;
+  if (typeof a !== 'number' || typeof b !== 'number' || a === b) return '';
+  return a > b ? ' ↑' : ' ↓';
+}
+
+function qualityRow(suites, root) {
+  const evals = `${root}evals.html`;
+  if (!suites.length) return row('quality', evals, 'Quality · evals', '—', 'No eval run published', '');
+  const passing = suites.filter(([, s]) => s.runs[0].passed).length;
+  const chips = suites.map(([name, s]) => {
+    const run = s.runs[0];
+    const h = headlineScore(run);
+    const score = typeof h?.value === 'number' ? `${Math.round(h.value * 100)} %` : '—';
+    return chip(`${evals}#suite-${encodeURIComponent(name)}`, run.passed ? 'good' : 'bad', `${e(String(name).replace(/_/g, ' '))} ${e(score)}${suiteTrend(s.runs)}`, `${h?.name ?? 'no score'} · gate ${run.passed ? 'passed' : `failed: ${(run.failures ?? []).join(', ')}`} · ${String(run.ts ?? '').slice(0, 10)}`);
+  }).join('');
+  const latest = suites.map(([, s]) => s.runs[0].ts).filter(Boolean).sort().at(-1);
+  return row('quality', evals, 'Quality · evals', `${e(passing)} / ${e(suites.length)} gates`, latest ? `last run ${e(String(latest).slice(0, 10))}` : '', chips);
+}
+
+// No severity on the waiting row either: waiting here is the gate working (waitingPanel).
+function waitingRow(rows, root) {
+  if (!rows.length) return row('waiting', `${root}flows.html#waiting`, 'Waiting on you', '0', 'nothing escalated to a person', '');
+  const chips = rows.slice(0, 3).map((w) => chip(`${root}traces/${encodeURIComponent(w.trace_id)}.html`, 'neutral', `${e(itemTitle(w.item))} · ${e(w.step)}`, w.reason)).join('');
+  const more = rows.length > 3 ? `<a class="g-chip g-more" href="${root}flows.html#waiting">+${e(rows.length - 3)}</a>` : '';
+  return row('waiting', `${root}flows.html#waiting`, 'Waiting on you', e(rows.length), 'escalated to a person, oldest first', chips + more);
+}
+
+/** The status line: the diagnostic status and the most severe active problem, linked to Diagnostics. */
+function statusLine(d, root) {
+  const [tone, title] = STATUS[d.status];
+  const top = activeProblems(d)[0];
+  const n = activeProblems(d).length;
+  const detail = top ? `${n} problem(s) · ${e(top.title)}` : e(STATUS[d.status][2](0));
+  return `<a class="g-status status-banner tone-${tone}" href="${root}diagnostics.html${top ? `#${e(top.id)}` : ''}">${toneMark(tone)}<span><strong>${e(title)}</strong><small>${detail}</small></span><span class="chevron" aria-hidden="true">›</span></a>`;
+}
+
+/**
+ * The home: `ctx` from consoleContext(), `root` the path to pipeline/ ('pipeline/' on the home page),
+ * `suites` the scorecard suites with runs (`[name, { runs }]`, latest first).
+ */
+export function consoleOverview(ctx, root = '', { suites = [] } = {}) {
+  const { diagnosis: d, windows } = ctx;
+  const w = windows[GLANCE_DAYS];
+  const hasWithheld = d.findings.some((f) => f.id === 'review-withheld');
+  const evalRoot = root.replace(/pipeline\/$/, '');
+  return `<section class="console glance" aria-label="System overview">
+<h1>System overview</h1>
+${statusLine(d, root)}
+${flowsRow(w, ctx, root, hasWithheld)}
+${costRow(w, root)}
+${qualityRow(suites, evalRoot)}
+${waitingRow(ctx.waiting ?? [], root)}
+<p class="g-foot"><a href="${root}health.html#trends">Trends, 14 / 30 days and definitions →</a></p>
+</section>`;
 }
 
 // The range select shows one precomputed window; the choice is kept in the URL (?range=14).
@@ -209,6 +315,28 @@ const RANGE_SCRIPT = `<script>
 </script>`;
 
 export const OVERVIEW_STYLE = `
+.glance { max-width:720px; }
+/* One phone screen (375 × ~630 CSS px, iPhone 13 mini): the h1 is for screen readers, every row is one head line,
+   one detail line and one line of chips that scrolls sideways instead of wrapping. */
+.glance h1 { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.g-status.status-banner { margin:0 0 8px; padding:8px 10px; gap:8px; border-left-width:5px; color:var(--ink); text-decoration:none; flex-wrap:nowrap; }
+.g-status .tone-mark { width:24px; height:24px; font-size:13px; flex:none; }
+.g-status > span:not(.chevron):not(.tone-mark) { flex:1; min-width:0; display:grid; }
+.g-status strong { color:var(--tone); font-size:14px; } .g-status small { color:var(--ink-2); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.g-row { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); margin:0 0 8px; padding:8px 10px; }
+.g-head { display:grid; grid-template-columns:auto 1fr auto; grid-template-areas:'label value chev' 'sub sub sub'; align-items:baseline; column-gap:8px; color:var(--ink); text-decoration:none; }
+.g-label { grid-area:label; font-size:11px; font-weight:650; color:var(--muted); text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
+.g-value { grid-area:value; justify-self:end; font-size:18px; font-weight:750; font-variant-numeric:tabular-nums; line-height:1.2; white-space:nowrap; }
+.g-value .kpi-delta { font-size:11px; vertical-align:middle; }
+.g-sub { grid-area:sub; font-size:11.5px; color:var(--muted); min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } .g-sub .segbar { margin-top:5px; height:6px; }
+.g-head .chevron { grid-area:chev; color:var(--muted); font-size:18px; }
+.g-chips { display:flex; flex-wrap:nowrap; gap:6px; margin:6px -10px 0; padding:0 10px; overflow-x:auto; scrollbar-width:none; }
+.g-chips::-webkit-scrollbar { display:none; }
+.g-chip { flex:none; display:inline-flex; align-items:center; gap:5px; min-height:30px; padding:2px 9px; border:1px solid color-mix(in srgb, var(--tone) 40%, var(--border)); border-radius:999px; background:color-mix(in srgb, var(--tone) 8%, var(--surface)); color:var(--ink); font-size:12.5px; text-decoration:none; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.g-chip .tone-mark { width:16px; height:16px; font-size:10px; }
+.g-chip.g-more { --tone:var(--muted); }
+.g-foot { margin:2px 0 0; font-size:12px; }
+@media(max-width:600px) { main:has(> .glance) { padding-top:10px; } }
 .head-tools { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .range-select { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
 .status-badge { display:flex; align-items:center; gap:10px; padding:9px 14px; border:1px solid var(--tone); border-radius:10px; background:color-mix(in srgb, var(--tone) 12%, var(--surface)); color:var(--ink); text-decoration:none; }

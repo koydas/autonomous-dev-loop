@@ -236,6 +236,12 @@ test('secretValues: public run metadata and *_MODEL / *_EFFORT / *_PROVIDER are 
   assert.deepEqual(values.sort(), [PLANTED_ENV_VALUE, PLANTED_SECRET].sort());
 });
 
+test('the pipeline_repository input of a reusable workflow is public: repository and trace key stay intact', () => {
+  const env = { ...ENV, GITHUB_REPOSITORY: 'owner/pipeline-repo', ADL_PIPELINE_REPOSITORY: 'owner/pipeline-repo', PIPELINE_REPOSITORY: 'owner/pipeline-repo' };
+  assert.ok(!secretValues(env).includes('owner/pipeline-repo'));
+  assert.equal(scrubString('owner/pipeline-repo#pr-12', secretValues(env)), 'owner/pipeline-repo#pr-12');
+});
+
 test('a head SHA equal to GITHUB_WORKFLOW_SHA (push-triggered run) is public, not redacted', () => {
   const env = { ...ENV, GITHUB_WORKFLOW_SHA: SHA };
   assert.ok(!secretValues(env).includes(SHA));

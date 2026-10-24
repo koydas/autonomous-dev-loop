@@ -148,8 +148,8 @@ ${pipeline ? `<link rel="stylesheet" href="${root}pipeline/console.css">
 ${dashboardHeader(root, pipeline)}
 <div class="app-body${pipeline ? '' : ' no-side'}">${pipeline ? sidebar(root, pipeline, filters) : ''}
 <main id="main-content">
-<p class="muted legacy-nav"><a href="${root}index.html">Eval dashboard</a>${pipeline ? ` · <a href="${root}pipeline/index.html">Pipeline</a>` : ''} · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
-${body}
+${pipeline ? '' : `<p class="muted legacy-nav"><a href="${root}index.html">Eval dashboard</a> · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
+`}${body}
 <footer class="page-footer">Dev loop monitor · Explore a summary, then open its details. All published data stays available through the original tables and JSON files.</footer>
 </main>
 </div>
@@ -257,7 +257,7 @@ function suiteSection(name, runs, thresholds = {}, pipelineRoot = null) {
   const scoreNames = [...new Set(runs.flatMap((r) => Object.keys(r.scores ?? {})))];
   const history = runs.map((r) => `<tr><td>${escapeHtml(day(r.ts))}</td><td><a href="${runFile(r.run_id)}.html">${escapeHtml(r.run_id)}</a></td><td>${modelHtml(r.model, pipelineRoot)}</td><td><code>${escapeHtml((r.dataset_sha256 ?? '').slice(0, 8) || '—')}</code></td>${scoreNames.map((s) => `<td class="num">${escapeHtml(fmt(r.scores?.[s]))}</td>`).join('')}<td class="num">${escapeHtml(fmt(r.error_rate))}</td><td class="num">${escapeHtml(fmt(r.consistency))}</td><td>${r.passed ? '<span class="ok">✓</span>' : '<span class="ko">✕</span>'}</td></tr>`).join('');
 
-  return `<details class="detail-panel suite-details"><summary>${escapeHtml(labelSuite(name))} · Metrics, thresholds, trend & history</summary><section>
+  return `<details class="detail-panel suite-details" id="suite-${escapeHtml(name)}"><summary>${escapeHtml(labelSuite(name))} · Metrics, thresholds, trend & history</summary><section>
 <h2><code>${escapeHtml(name)}</code> ${gateHtml(run.passed, run.failures)}</h2>
 <p class="sub">Last run <strong>${escapeHtml(day(run.ts))}</strong> · <a href="${runFile(run.run_id)}.html">run ${escapeHtml(run.run_id)}</a> · model ${modelHtml(run.model, pipelineRoot)} · ${escapeHtml(run.n_cases)} cases × ${escapeHtml(run.repeats)} repeats${last && !prev ? ' · <em>dataset changed since the previous run: no Δ shown</em>' : ''}</p>
 <div class="tiles">${tiles}</div>
@@ -276,15 +276,28 @@ export function renderIndex(scorecard, { thresholds = {}, generatedAt, pipeline 
   const body = suites.length
     ? suites.map(([name, s]) => suiteSection(name, s.runs, thresholds[name], pipeline ? '' : null)).join('\n')
     : '<div class="card">No live eval run recorded yet. Run <strong>Actions → Evals</strong> on the default branch with <code>publish</code> ticked.</div>';
-  // With pipeline views the system overview (console_overview.mjs) heads the page in place of this intro.
-  return page('Eval dashboard', `${pipeline ? '<!-- pipeline-overview -->' : `<span class="eyebrow">Autonomous development / overview</span><h1>How is the dev loop doing?</h1>
+  // With pipeline views this is evals.html (the home is the system overview, console_overview.mjs).
+  return page('Eval dashboard', `${pipeline ? `<h1>Evaluations</h1>
+<p class="sub">Model quality of the pipeline stages: latest gate per suite, then each suite's thresholds, trend and history. <a href="scorecard.json">scorecard.json</a></p>` : `<span class="eyebrow">Autonomous development / overview</span><h1>How is the dev loop doing?</h1>
 <p class="sub">See what worked, what needs attention, and follow an issue through its executions.</p>`}
 ${evalOverview(suites)}
 <section id="evaluations"><div class="section-intro"><div><span class="eyebrow">Model quality</span><h2>Evaluations</h2><p>Latest result per suite. A passing gate means its required thresholds were met.</p></div></div>
 <div class="widget-grid">${suites.map(([name, s]) => suiteWidget(name, s.runs[0])).join('')}</div>
 <details class="detail-panel"><summary>About these results & retention</summary>
 <p class="sub">Offline evals of the LLM pipeline stages against labelled datasets (<a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/evals.md">docs</a>, <a href="https://github.com/koydas/autonomous-dev-loop/blob/main/docs/adr/0027-offline-eval-harness.md">ADR-0027</a>). Last ${MAX_RUNS} live runs per suite; runs that failed on error_rate (provider outage) are left out.${generatedAt ? ` Updated ${escapeHtml(generatedAt)}.` : ''}${pipeline ? ' Pipeline runs, traces and health: <a href="pipeline/index.html">pipeline views</a>.' : ''}</p>
-</details>${body}</section>`, { pipeline });
+</details>${body}</section>${SUITE_HASH_SCRIPT}`, { pipeline });
+}
+
+// evals.html#suite-<name> (the home's quality chips) opens that suite's panel.
+const SUITE_HASH_SCRIPT = `<script>
+(() => { const open = () => { const d = location.hash.startsWith('#suite-') && document.getElementById(decodeURIComponent(location.hash.slice(1))); if (d && d.tagName === 'DETAILS') { d.open = true; d.scrollIntoView(); } }; addEventListener('hashchange', open); open(); })();
+</script>`;
+
+// The home with pipeline views: the system overview is filled in by build_eval_site.mjs; the evaluations moved
+// to evals.html, so an old index.html#evaluations link is forwarded there.
+export function renderHome() {
+  return page('Dev loop overview', `<!-- pipeline-overview -->
+<script>if (location.hash === '#evaluations') location.replace('evals.html#evaluations');</script>`, { pipeline: true });
 }
 
 function confusionTable(confusion = {}) {
@@ -339,7 +352,10 @@ ${confusionTable(summary.confusion)}
 export function buildSite({ scorecard, details = {}, thresholds = {}, generatedAt = null, pipeline = false }) {
   const files = {
     '.nojekyll': '',
-    'index.html': renderIndex(scorecard, { thresholds, generatedAt, pipeline }),
+    // With pipeline views the home is the system overview and the evaluations are their own page.
+    ...(pipeline
+      ? { 'index.html': renderHome(), 'evals.html': renderIndex(scorecard, { thresholds, generatedAt, pipeline }) }
+      : { 'index.html': renderIndex(scorecard, { thresholds, generatedAt, pipeline }) }),
     'scorecard.json': JSON.stringify(scorecard, null, 2) + '\n',
     'scorecard.md': formatScorecard(scorecard),
   };

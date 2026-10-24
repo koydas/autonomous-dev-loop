@@ -194,7 +194,10 @@ test('health, models and run pages link to each other; the eval run pages are cr
   assert.match(models, /<a href="runs\/500-1\.html">500-1<\/a>/);
   assert.match(models, /<a href="\.\.\/runs\/38000-review\.html">review 38000-review<\/a> <span class="ko">✕<\/span>/);
   assert.match(files['pipeline/runs/500-1.html'], /href="\.\.\/models\.html#model-openai-gpt-oss-120b"/);
-  assert.match(files['pipeline/runs/500-1.html'], /<a href="\.\.\/\.\.\/index\.html">Eval dashboard<\/a> · <a href="\.\.\/\.\.\/pipeline\/index\.html">Pipeline<\/a>/);
+  assert.match(files['pipeline/runs/500-1.html'], /<a href="\.\.\/\.\.\/evals\.html">/);
+  // Metrics heads with the windowed trends (the former home body); Pipelines with the full waiting list.
+  assert.match(health, /<section class="console" id="trends"[\s\S]*data-kpi="executions"[\s\S]*id="def-executions"/);
+  assert.match(files['pipeline/flows.html'], /<section class="panel waiting-panel" id="waiting">/);
   // Direct renderer calls with the minimal model shape.
   assert.match(renderFeedIndex({ ...model, skippedMonths: ['2025-01'] }), /older months stay on the <code>metrics<\/code> branch: 2025-01/);
   assert.match(renderRunPage(model.runs[0], { ...model, tracesById: new Map() }), /no trace index for this work item/);

@@ -270,13 +270,19 @@ test('renderIndex and buildSite show several suites, each with its own gate, til
 test('buildSite with pipeline links the nav and every model to the pipeline models page', () => {
   const b = results({ runId: 'b' });
   const files = buildSite({ scorecard: scorecardOf(b), details: { b }, pipeline: true });
-  assert.match(files['index.html'], /<a href="index\.html">Eval dashboard<\/a> · <a href="pipeline\/index\.html">Pipeline<\/a>/);
-  assert.match(files['index.html'], /<a href="pipeline\/models\.html#model-groq-openai-gpt-oss-120b"><code>groq:openai\/gpt-oss-120b<\/code><\/a>/);
-  assert.match(files['index.html'], /pipeline views<\/a>/);
+  // The home is the system overview's slot; the evaluations are evals.html, an old #evaluations link forwarded.
+  assert.match(files['index.html'], /<!-- pipeline-overview -->/);
+  assert.match(files['index.html'], /location\.replace\('evals\.html#evaluations'\)/);
+  assert.doesNotMatch(files['index.html'], /legacy-nav/, 'the nav replaces the line of links');
+  assert.match(files['evals.html'], /<h1>Evaluations<\/h1>/);
+  assert.match(files['evals.html'], /<details class="detail-panel suite-details" id="suite-validation">/);
+  assert.match(files['evals.html'], /<a href="pipeline\/models\.html#model-groq-openai-gpt-oss-120b"><code>groq:openai\/gpt-oss-120b<\/code><\/a>/);
+  assert.match(files['evals.html'], /pipeline views<\/a>/);
   assert.match(files['runs/b.html'], /<a href="\.\.\/pipeline\/models\.html#model-groq-openai-gpt-oss-120b">/);
-  assert.match(files['runs/b.html'], /<a href="\.\.\/pipeline\/index\.html">Pipeline<\/a>/);
+  assert.match(files['runs/b.html'], /<a href="\.\.\/evals\.html">/);
   const plain = buildSite({ scorecard: scorecardOf(b), details: { b } });
-  assert.doesNotMatch(plain['index.html'] + plain['runs/b.html'], /pipeline\//);
+  assert.doesNotMatch(plain['index.html'] + plain['runs/b.html'], /pipeline\/|evals\.html/);
+  assert.equal(plain['evals.html'], undefined, 'without pipeline views the evaluations stay the home page');
 });
 
 test('modelAnchor is a slug; page() nests the root per depth and appends a page style', () => {
@@ -284,6 +290,8 @@ test('modelAnchor is a slug; page() nests the root per depth and appends a page 
   assert.equal(modelAnchor('<x>"y'), 'model-x-y');
   assert.equal(modelAnchor(undefined), 'model-unknown');
   const html = page('T', '<p>b</p>', { depth: 2, pipeline: true, style: '.z{}' });
-  assert.match(html, /<a href="\.\.\/\.\.\/index\.html">Eval dashboard<\/a> · <a href="\.\.\/\.\.\/pipeline\/index\.html">Pipeline<\/a>/);
+  assert.match(html, /<a href="\.\.\/\.\.\/pipeline\/index\.html">/);
+  assert.match(html, /<a href="\.\.\/\.\.\/evals\.html">/);
+  assert.match(page('T', '', { depth: 1 }), /<a href="\.\.\/index\.html">Eval dashboard<\/a> · <a href="https:\/\/github\.com\/koydas\/autonomous-dev-loop">/, 'eval-only site: the line of links stays');
   assert.match(html, /\.z\{\}<\/style>/);
 });

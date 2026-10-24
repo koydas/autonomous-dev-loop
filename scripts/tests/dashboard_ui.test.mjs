@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Script } from 'node:vm';
+import { Script, runInNewContext } from 'node:vm';
 import { dashboardHeader, evalOverview, suiteWidget, pipelineOverview, executionBrowser, workItemBrowser, flowSteps, DASHBOARD_STYLE, DASHBOARD_SCRIPT } from '../lib/dashboard_ui.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
 import { makeRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
@@ -162,7 +162,7 @@ test('execution cards and flow history show the LLM cost of a run with calls onl
  assert.doesNotMatch(executionBrowser(none), /LLM \$/);
 });
 
-test('console shell: dark theme by default with a stored light choice, sidebar, phone tab bar, relative times', async () => {
+test('console shell: stored theme, else the system one (dark without either), sidebar, phone tab bar with the tools switch, relative times', async () => {
   const { sidebar, mobileNav, navIcon } = await import('../lib/dashboard_ui.mjs');
   // Dark tokens on :root, light ones only under data-theme="light"; the choice is applied before paint.
   assert.match(DASHBOARD_STYLE, /:root, :root:where\(:not\(\[data-theme="light"\]\)\) \{ color-scheme:dark;/);
@@ -179,8 +179,19 @@ test('console shell: dark theme by default with a stored light choice, sidebar, 
   assert.match(side, /<div class="side-filters"><p>filters<\/p><\/div><\/aside>$/);
   assert.match(sidebar('', false), /<nav class="side-nav" aria-label="Sections"><a href="index\.html">.*Overview<\/a><\/nav><\/aside>$/);
   const tabs = mobileNav('../../', true);
-  for (const label of ['Overview', 'Diagnostics', 'Pipelines', 'Investigation', 'More', 'Metrics', 'Models', 'Trace table', 'Evaluations']) assert.ok(tabs.includes(label), label);
+  for (const label of ['Overview', 'Diagnostics', 'Pipelines', 'Investigation', 'More', 'Metrics', 'Evals', 'Models', 'Trace table', 'Tools']) assert.ok(tabs.includes(label), label);
   assert.match(tabs, /href="\.\.\/\.\.\/pipeline\/models\.html"/);
+  assert.match(tabs, /href="\.\.\/\.\.\/evals\.html">Evals</);
+  // Five slots: three sections, More (Investigation inside), the switch to the ai-dev-tools dashboard last.
+  assert.match(tabs, /^<nav class="mobile-nav"[^>]*><a [^>]*>.*Overview<\/a><a [^>]*>.*Diagnostics<\/a><a [^>]*>.*Pipelines<\/a><details>.*Investigation.*<\/details><a class="app-switch" href="https:\/\/koydas\.github\.io\/ai-dev-tools\/"[^>]*>.*Tools<\/a><\/nav>$/);
+  // Theme: the system's when nothing is stored.
+  assert.match(header, /prefers-color-scheme: light/);
+  const boot = header.match(/<script>([\s\S]*?)<\/script>/)[1];
+  for (const [stored, light, want] of [[null, true, 'light'], [null, false, undefined], ['dark', true, undefined], ['light', false, 'light']]) {
+    const ctx = { localStorage: { getItem: () => stored }, matchMedia: () => ({ matches: light }), document: { documentElement: { dataset: {} } } };
+    runInNewContext(boot, ctx);
+    assert.equal(ctx.document.documentElement.dataset.theme, want, `stored ${stored}, system light ${light}`);
+  }
   assert.equal(mobileNav('', false), '');
   assert.match(navIcon('pipelines'), /^<svg class="nav-icon"[^>]*aria-hidden="true">/);
   assert.doesNotThrow(() => new Script(header.match(/<script>([\s\S]*?)<\/script>/)[1]));

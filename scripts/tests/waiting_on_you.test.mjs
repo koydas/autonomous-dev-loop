@@ -236,17 +236,22 @@ test('explainEscalation: protected files come from the denylist given, the attem
 // Overview
 // ---------------------------------------------------------------------------
 
-test('Overview: the queue replaces the escalation card, escapes record strings and names no severity', () => {
+test('Waiting on you: the full queue on Pipelines, its head on the home; record strings escaped, no severity', () => {
   const { model } = build([...ESCALATIONS(), ...CLOSINGS()]);
-  const html = consoleOverview(consoleContext(model), 'pipeline/');
+  const ctx = consoleContext(model);
+  const home = consoleOverview(ctx, 'pipeline/');
+  const waitingHome = home.slice(home.indexOf('id="g-waiting"'), home.indexOf('class="g-foot"'));
+  assert.match(waitingHome, /<strong class="g-value">1<\/strong>/);
+  assert.match(waitingHome, /href="pipeline\/traces\/[0-9a-f]{32}\.html"[^>]*>.*Issue #200/);
+  assert.doesNotMatch(waitingHome, /tone-(bad|warn)/, 'the home row carries no severity either');
+  const html = waitingPanel(ctx.waiting, '');
   assert.match(html, /<section class="panel waiting-panel" id="waiting"><h3><span>Waiting on you <small class="muted">1 open item\(s\) escalated to a human/);
   assert.match(html, /Issue #200/);
   assert.match(html, /files withheld from its context: src\/big\.mjs/);
   assert.match(html, /href="https:\/\/github\.com\/koydas\/autonomous-dev-loop\/issues\/200#issuecomment-\d+">Escalation comment/);
   assert.match(html, /waiting since <span data-ts="\d+">2026-10-10 08:00 UTC<\/span>/);
   assert.doesNotMatch(html, /Work items escalated to a human|Escalations the design does not explain/);
-  const queue = html.slice(html.indexOf('id="waiting"'), html.indexOf('Issues requiring attention'));
-  assert.doesNotMatch(queue, /tone-(bad|warn)|critical|warning/, 'the queue carries no severity');
+  assert.doesNotMatch(html, /tone-(bad|warn)|critical|warning/, 'the queue carries no severity');
   // Empty, and hostile strings.
   assert.match(waitingPanel([], ''), /Nothing waits on you.*not inferred/);
   const hostile = waitingPanel([{ trace_id: 'a'.repeat(32), item: { kind: 'issue', number: 1 }, prs: [HOSTILE], step: HOSTILE, reason: HOSTILE, url: null, since: null }], '');
