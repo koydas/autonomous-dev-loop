@@ -384,3 +384,19 @@ test('restoreGraderFiles refuses a grader file that is a symlink, for direct cal
   const work = await fs.mkdtemp(path.join(root, 'rwork-'));
   await assert.rejects(restoreGraderFiles(work, src, ['h.test.mjs']), (e) => e.code === F.symlink);
 });
+
+test('evaluatePatch: HOME and TMPDIR are fresh for each command, so a flag left by the existing tests cannot prime the hidden ones', async () => {
+  // Correct only when a flag written under HOME during the existing suite is still there during the hidden one.
+  const primed = [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "const flag = path.join(process.env.HOME, '.flag');",
+    "const hidden = process.argv.some((a) => a.endsWith('hidden.test.mjs'));",
+    'if (!hidden) fs.writeFileSync(flag, "1");',
+    "export const find = (list, id) => (hidden && !fs.existsSync(flag) ? 'wrong' : list.find((c) => c.id === id)?.name ?? null);",
+    '',
+  ].join('\n');
+  const r = await evaluatePatch({ ...base, output: patch('src/customers.mjs', primed) });
+  assert.deepEqual([r.outcome, r.failure], ['FAIL', F.hiddenTests], JSON.stringify(r));
+  assert.deepEqual((await fs.readdir(os.tmpdir())).filter((n) => n.startsWith('eval-grader-')), []);
+});

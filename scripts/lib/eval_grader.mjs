@@ -199,32 +199,30 @@ export async function digestFiles(workDir, files) {
  * @returns {Promise<{ passed: boolean, checks: { name: string, status: string, exit_code: number | null }[], failure: string | null }>}
  */
 export async function runGraderChecks(prepare, grader, { timeoutMs = DEFAULT_GRADER_TIMEOUT_MS, run = runCheck } = {}) {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-grader-home-'));
   const checks = [];
-  try {
-    for (const [name, failure] of [['existing_tests', GRADER_FAILURES.existingTests], ['hidden_tests', GRADER_FAILURES.hiddenTests]]) {
-      const { command, expected } = grader?.[name] ?? {};
-      const wellFormed = Array.isArray(expected) && expected.length > 0 && expected.every((t) => typeof t === 'string' && t !== '');
-      if (!isAllowedCommand(command) || !wellFormed) return { passed: false, checks, failure: GRADER_FAILURES.graderError };
-      const { workDir, protectedFiles = [], cleanup } = await prepare();
-      try {
-        const before = await digestFiles(workDir, protectedFiles);
-        // The reporter is forced: the default depends on whether stdout is a terminal and on the Node version.
-        const r = await run({ name, command: command.replace(/^node --test/, 'node --test --test-reporter=tap'), timeoutMs, outputChars: GRADER_OUTPUT_CHARS }, { cwd: workDir, env: graderEnv(home) });
-        checks.push({ name, status: r.status, exit_code: r.exit_code });
-        if ((await digestFiles(workDir, protectedFiles)) !== before) return { passed: false, checks, failure: GRADER_FAILURES.tampering };
-        if (r.status === 'timeout') return { passed: false, checks, failure: GRADER_FAILURES.timeout };
-        if (r.status === 'error') return { passed: false, checks, failure: GRADER_FAILURES.graderError };
-        if (r.status === 'fail') return { passed: false, checks, failure };
-        if (!verifyTestRun(r.output_tail, expected).ok) return { passed: false, checks, failure: GRADER_FAILURES.incomplete };
-      } finally {
-        await cleanup?.();
-      }
+  for (const [name, failure] of [['existing_tests', GRADER_FAILURES.existingTests], ['hidden_tests', GRADER_FAILURES.hiddenTests]]) {
+    const { command, expected } = grader?.[name] ?? {};
+    const wellFormed = Array.isArray(expected) && expected.length > 0 && expected.every((t) => typeof t === 'string' && t !== '');
+    if (!isAllowedCommand(command) || !wellFormed) return { passed: false, checks, failure: GRADER_FAILURES.graderError };
+    const { workDir, protectedFiles = [], cleanup } = await prepare();
+    // HOME and TMPDIR are per command too: a file the first run leaves there must not prime the second.
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'eval-grader-home-'));
+    try {
+      const before = await digestFiles(workDir, protectedFiles);
+      // The reporter is forced: the default depends on whether stdout is a terminal and on the Node version.
+      const r = await run({ name, command: command.replace(/^node --test/, 'node --test --test-reporter=tap'), timeoutMs, outputChars: GRADER_OUTPUT_CHARS }, { cwd: workDir, env: graderEnv(home) });
+      checks.push({ name, status: r.status, exit_code: r.exit_code });
+      if ((await digestFiles(workDir, protectedFiles)) !== before) return { passed: false, checks, failure: GRADER_FAILURES.tampering };
+      if (r.status === 'timeout') return { passed: false, checks, failure: GRADER_FAILURES.timeout };
+      if (r.status === 'error') return { passed: false, checks, failure: GRADER_FAILURES.graderError };
+      if (r.status === 'fail') return { passed: false, checks, failure };
+      if (!verifyTestRun(r.output_tail, expected).ok) return { passed: false, checks, failure: GRADER_FAILURES.incomplete };
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+      await cleanup?.();
     }
-    return { passed: true, checks, failure: null };
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
   }
+  return { passed: true, checks, failure: null };
 }
 
 /**
