@@ -44,3 +44,23 @@ export function buildFindingsExport({ diagnosis, window = {}, generatedAt = null
 
 /** Serialized form written at the site root. */
 export const findingsExportJson = (args) => `${JSON.stringify(buildFindingsExport(args), null, 2)}\n`;
+
+export const STATUS_SCHEMA_VERSION = 1;
+const STATUS_OF = { critical: 'bad', warning: 'warn', ok: 'ok', no_data: 'no_data' };
+
+/**
+ * `status.json`: the one-line state a companion dashboard shows on its tab-bar switch (ADR-0043 amendment
+ * 2026-10-24). `status` is the diagnostic status (`bad` / `warn` / `ok` / `no_data`), raised from `ok` to
+ * `warn` when a suite's latest eval run failed its gate; `headline` says why in a few words. No finding text.
+ */
+export function buildStatus({ diagnosis, scorecard, generatedAt = null } = {}) {
+  const active = (diagnosis?.findings ?? []).filter((f) => f.status !== 'resolved' && f.severity !== 'info').length;
+  const failing = Object.values(scorecard?.suites ?? {}).filter((s) => s.runs?.length && !s.runs[0].passed).length;
+  let status = STATUS_OF[diagnosis?.status] ?? 'no_data';
+  if (status === 'ok' && failing) status = 'warn';
+  const parts = [active ? `${active} problem(s)` : status === 'no_data' ? 'no pipeline run recorded' : 'no problem detected', ...(failing ? [`${failing} eval gate(s) failing`] : [])];
+  return { schema_version: STATUS_SCHEMA_VERSION, app: 'autonomous-dev-loop', generated_at: generatedAt, status, headline: parts.join(' · ') };
+}
+
+/** `status.json` content, as written at the site root. */
+export const statusJson = (input) => `${JSON.stringify(buildStatus(input), null, 2)}\n`;
