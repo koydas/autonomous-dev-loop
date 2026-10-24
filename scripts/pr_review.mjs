@@ -24,6 +24,7 @@ import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, formatWithheldNote } from './lib/review_evidence.mjs';
 import { formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
 import { resolveReviewDecision } from './lib/review_decision.mjs';
+import { summarizeExternalReview } from './lib/external_review.mjs';
 import { failureSignature, nextStreak, isBreakerOpen, formatEscalationNote } from './lib/circuit_breaker.mjs';
 
 const _reviewStartedAt = new Date().toISOString();
@@ -141,6 +142,32 @@ async function ghFetch(path, options = {}) {
   } catch (err) {
     if (lastTransientRes) return lastTransientRes;
     throw err;
+  }
+}
+
+// External review bot round-trips (Codex) for the PR record: read-only, paginated, never fatal. null = unknown.
+async function ghList(path) {
+  const items = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const res = await ghFetch(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+    if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    const batch = await res.json();
+    items.push(...batch);
+    if (batch.length < 100) return items;
+  }
+  return items;
+}
+
+async function readExternalReview() {
+  try {
+    const [reviews, comments] = await Promise.all([
+      ghList(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`),
+      ghList(`/repos/${owner}/${repo}/pulls/${prNumber}/comments`),
+    ]);
+    return summarizeExternalReview({ reviews, comments });
+  } catch (err) {
+    log('External review read failed', { prNumber, error: err.message });
+    return null;
   }
 }
 
@@ -615,6 +642,7 @@ tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updated
 await tracer.finalize(isApproved ? 'success' : 'partial');
 
 if (isApproved) {
+  const externalReview = await readExternalReview();
   await appendMetric({
     type: 'pr',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}` : `local-${Date.now()}`,
@@ -628,6 +656,8 @@ if (isApproved) {
     ended_at: new Date().toISOString(),
     total_input_tokens_est: updatedPrMetrics.total_input_tokens_est,
     total_output_tokens_est: updatedPrMetrics.total_output_tokens_est,
+    // Codex rounds / threads / P0-P1 seen on the PR so far (a lower bound: the bot answers a head after this run); absent when GitHub could not be read.
+    ...(externalReview ? { external_review: externalReview } : {}),
   });
   log('PR metrics recorded', { prNumber, verdict: 'APPROVE' });
 }
