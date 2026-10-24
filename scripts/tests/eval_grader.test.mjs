@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import {
   GRADER_FAILURES as F, MODEL_OUTPUT_SCHEMA_VERSION, MAX_CHANGES, MAX_CONTENT_CHARS,
   digestTree, validateModelOutput, checkPatchPaths, isAllowedCommand, graderEnv, evaluatePatch,
-  applyPatchToCopy, restoreGraderFiles, runGraderChecks, digestFiles, verifyTestRun, tapEscape, sha256,
+  applyPatchToCopy, restoreGraderFiles, runGraderChecks, digestFiles, verifyTestRun, tapEscape, sha256, GRADER_OUTPUT_CHARS,
 } from '../lib/eval_grader.mjs';
 
 let root;
@@ -344,4 +344,26 @@ test('verifyTestRun matches the names Node actually reports: #, backslashes, con
   // The escaping is what makes it match: the raw name is not what the reporter prints.
   assert.ok(!out.includes(`ok 1 - ${names[0]}`));
   assert.equal(tapEscape('a#b\\c\nd'), 'a\\#b\\\\c\\\\nd');
+});
+
+test('evaluatePatch: a passing suite whose TAP is longer than the evidence tail still completes (names read from the full output)', async () => {
+  const names = Array.from({ length: 40 }, (_, i) => `hidden case number ${i}`);
+  const big = await fs.mkdtemp(path.join(root, 'big-'));
+  await write(big, 'test/hidden.test.mjs', `import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { find } from '../src/customers.mjs';\n${names.map((n) => `test(${JSON.stringify(n)}, () => assert.equal(find([{ id: 1, name: 'a' }], 1), 'a'));`).join('\n')}\n`);
+  const r = await evaluatePatch({
+    ...base,
+    graderDir: big,
+    graderSha256: await digestTree(big),
+    grader: { ...base.grader, hidden_tests: { command: 'node --test test/hidden.test.mjs', expected: names } },
+    output: patch('src/customers.mjs', FIXED),
+  });
+  assert.equal(r.outcome, 'PASS', JSON.stringify(r));
+});
+
+test('runGraderChecks asks the runner for the full output of every command', async () => {
+  const seen = [];
+  const prepare = async () => ({ workDir: root, protectedFiles: [], cleanup: async () => {} });
+  const run = async (check) => { seen.push(check.outputChars); return { status: 'fail', exit_code: 1 }; };
+  await runGraderChecks(prepare, base.grader, { run });
+  assert.deepEqual(seen, [GRADER_OUTPUT_CHARS]);
 });

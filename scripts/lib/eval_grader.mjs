@@ -12,6 +12,8 @@ import { normalizeRepoPath, isTestFile } from './autofix_guard.mjs';
 export const MODEL_OUTPUT_SCHEMA_VERSION = 1;
 export const MAX_CHANGES = 20;
 export const MAX_CONTENT_CHARS = 200_000;
+// Test names are read from the runner's output, so it is kept far beyond the 2,000-character diagnostic tail of the evidence checks.
+export const GRADER_OUTPUT_CHARS = 1_000_000;
 export const DEFAULT_GRADER_TIMEOUT_MS = 60_000;
 
 /** Closed vocabulary of failure codes: the only text of a failed case that leaves this module. */
@@ -205,7 +207,7 @@ export async function runGraderChecks(prepare, grader, { timeoutMs = DEFAULT_GRA
       try {
         const before = await digestFiles(workDir, protectedFiles);
         // The reporter is forced: the default depends on whether stdout is a terminal and on the Node version.
-        const r = await run({ name, command: command.replace(/^node --test/, 'node --test --test-reporter=tap'), timeoutMs }, { cwd: workDir, env: graderEnv(home) });
+        const r = await run({ name, command: command.replace(/^node --test/, 'node --test --test-reporter=tap'), timeoutMs, outputChars: GRADER_OUTPUT_CHARS }, { cwd: workDir, env: graderEnv(home) });
         checks.push({ name, status: r.status, exit_code: r.exit_code });
         if ((await digestFiles(workDir, protectedFiles)) !== before) return { passed: false, checks, failure: GRADER_FAILURES.tampering };
         if (r.status === 'timeout') return { passed: false, checks, failure: GRADER_FAILURES.timeout };
