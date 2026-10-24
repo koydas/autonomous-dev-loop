@@ -196,17 +196,39 @@ const chip = (href, tone, text, title = '') => `<a class="g-chip tone-${tone}" h
 const row = (id, href, label, value, sub, chips) => `<section class="g-row" id="g-${id}"><a class="g-head" href="${e(href)}"><span class="g-label">${e(label)}</span><strong class="g-value">${value}</strong>${sub ? `<span class="g-sub">${sub}</span>` : ''}<span class="chevron" aria-hidden="true">›</span></a>${chips ? `<div class="g-chips">${chips}</div>` : ''}</section>`;
 const change = (c) => (c.arrow ? ` <span class="kpi-delta tone-${c.tone}">${e(c.arrow)} ${e(c.text.replace(/ vs prior .*$/, ''))}</span>` : '');
 
-function flowsRow(w, root, hasWithheld) {
+// The work items a `flows.html?period=N` link shows: the same reference (latest recorded run end) and the same
+// rule (last activity within N days of it) as the Pipelines period filter, so a chip's count is its list's length.
+export function periodItems(ctx, days) {
+  const ref = Math.max(0, ...(ctx.traces ?? []).flatMap((t) => (t.runs ?? []).map((r) => r.completed_at ?? r.started_at ?? 0)));
+  return (ctx.journeys ?? []).filter((j) => ref - (Number(j.last_activity) || 0) <= days * 86400000);
+}
+
+// Chips count work items by their latest recorded state, with the predicate of the Pipelines filter they open
+// (data-state tokens: the state, plus `attention`). The bar above them splits the runs by class and links nowhere:
+// a run class is not an item state (a REQUEST_CHANGES run is adverse; its item is changes_requested, not attention).
+const ITEM_CHIPS = [
+  ['attention', (j) => j.attention, 'need a person', 'Last recorded state: failed, escalated, approval withheld or rejected'],
+  ['changes_requested', (j) => j.state === 'changes_requested', 'changes requested', 'Last recorded state: review requested changes'],
+  ['approved', (j) => j.state === 'approved', 'approved', 'Last recorded state: approved by review'],
+  ['merged', (j) => j.state === 'merged', 'merged', 'Merge journaled (item.closed); Pipelines also re-checks GitHub live'],
+];
+
+function flowsRow(w, ctx, root, hasWithheld) {
   if (w.empty) return row('flows', `${root}flows.html`, `Flows · ${GLANCE_DAYS} d`, '—', 'No pipeline run recorded yet', '');
   const c = w.current, p = w.previous;
   const rate = c.verdicts ? `approve ${e(pct(c.approve_rate))}${p.verdicts >= MIN_BASE ? change(delta(c.approve_rate, p.approve_rate, { better: 'up', points: true })) : ''}` : 'no review verdict';
+  const items = periodItems(ctx, GLANCE_DAYS);
   const flows = (state) => `${root}flows.html?state=${state}&period=${GLANCE_DAYS}`;
+  const failed = items.some((j) => j.state === 'failed');
   // Approval first: on a phone the chips scroll sideways and the first ones are the ones seen.
   const chips = [
     chip(hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, c.approve_rate == null ? 'unknown' : c.approve_rate < 0.5 ? 'warn' : 'good', rate, 'APPROVE ÷ recorded review verdicts'),
-    chip(flows('approved'), 'good', `${e(c.progressed)} forward`, 'Runs that moved their item forward'),
-    chip(flows('attention'), 'warn', `${e(c.adverse)} adverse`, 'Runs with an adverse decision (withheld, changes requested, rejected, blocked)'),
-    chip(flows('failed'), c.failed ? 'bad' : 'neutral', `${e(c.failed)} failed`, 'Failed executions'),
+    ...ITEM_CHIPS.map(([state, match, label, title]) => {
+      const n = items.filter(match).length;
+      if (!n && state !== 'attention') return '';
+      const tone = state === 'attention' ? (n ? (failed ? 'bad' : 'warn') : 'good') : state === 'changes_requested' ? 'warn' : 'good';
+      return chip(flows(state), tone, `${e(n)} ${label}`, title);
+    }),
   ].join('');
   return row('flows', `${root}flows.html?period=${GLANCE_DAYS}`, `Flows · ${GLANCE_DAYS} d`, `${e(c.runs)} run${c.runs === 1 ? '' : 's'}`, segments(c), chips);
 }
@@ -272,7 +294,7 @@ export function consoleOverview(ctx, root = '', { suites = [] } = {}) {
   return `<section class="console glance" aria-label="System overview">
 <h1>System overview</h1>
 ${statusLine(d, root)}
-${flowsRow(w, root, hasWithheld)}
+${flowsRow(w, ctx, root, hasWithheld)}
 ${costRow(w, root)}
 ${qualityRow(suites, evalRoot)}
 ${waitingRow(ctx.waiting ?? [], root)}

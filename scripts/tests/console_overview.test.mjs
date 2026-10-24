@@ -29,8 +29,9 @@ test('overview: one screen — status, flows, cost, quality, waiting — each ro
   assert.ok(order.every((i) => i > 0));
   assert.match(html, /id="g-flows"><a class="g-head" href="pipeline\/flows\.html\?period=7">.*3 runs/s);
   // Chips filter the drill-down page; the approval chip goes to the withheld finding that explains it.
-  assert.match(html, /href="pipeline\/flows\.html\?state=attention&amp;period=7"[^>]*>.*3 adverse/);
-  assert.match(html, /href="pipeline\/flows\.html\?state=failed&amp;period=7"/);
+  // Chips count work items by latest state, as the Pipelines filter they open does (3 withheld PRs → 3 need a person).
+  assert.match(html, /href="pipeline\/flows\.html\?state=attention&amp;period=7"[^>]*>.*3 need a person/);
+  assert.doesNotMatch(html, /adverse<\/span>|state=failed/, 'no run-class count behind an item filter');
   assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld"[^>]*>.*approve 0 %/);
   assert.match(html, /id="g-cost"><a class="g-head" href="pipeline\/health\.html#cost">.*list price/s);
   assert.match(html, /id="g-quality"><a class="g-head" href="evals\.html">.*No eval run published/s, 'quality links resolve from the site root');
@@ -108,7 +109,7 @@ test('indicators: change against the previous window, sparklines, providers; ok 
   const failed = consoleContext(modelOf([makeRecord({ runId: '830', start: T, outcome: 'failed' })]));
   assert.match(statusBanner(failed.diagnosis, failed.overview, ''), /Attention needed: 1 critical problem/);
   assert.match(consoleOverview(failed, ''), /class="g-status status-banner tone-bad"[^>]*>.*Attention needed.*1 problem\(s\) · /s);
-  assert.match(consoleOverview(failed, ''), /id="g-flows">.*class="g-chip tone-bad" href="flows\.html\?state=failed&amp;period=7"[^>]*>.*1 failed/s);
+  assert.match(consoleOverview(failed, ''), /id="g-flows">.*class="g-chip tone-bad" href="flows\.html\?state=attention&amp;period=7"[^>]*>.*1 need a person/s);
 });
 
 
@@ -192,4 +193,24 @@ test('cost and quality rows: short amounts, per-stage and per-suite chips, a cha
   assert.match(q, /id="g-quality"><a class="g-head" href="evals\.html">.*1 \/ 2 gates.*last run 2026-10-21/s);
   assert.match(q, /class="g-chip tone-good" href="evals\.html#suite-review"[^>]*>.*review 87 % ↑/s);
   assert.match(q, /class="g-chip tone-bad" href="evals\.html#suite-validation" title="verdict_match · gate failed: verdict_match · 2026-10-21">.*validation 60 %<\/span>/s, 'a changed dataset shows no trend');
+});
+
+test('flow chips: each count is the number of rows its Pipelines filter shows (PR #286 review)', async () => {
+  const { flowDashboard } = await import('../lib/flow_dashboard.mjs');
+  const { periodItems } = await import('../lib/console_overview.mjs');
+  const verdict = (runId, t, pr, v) => makeRecord({ runId, start: t, prNumber: pr, events: [{ event: 'review.verdict', meta: { verdict: v, prNumber: pr } }] });
+  // A REQUEST_CHANGES run is adverse, but its item is changes_requested — not attention; an old item is outside the period.
+  const model = modelOf([verdict('880', T, 60, 'REQUEST_CHANGES'), verdict('881', T + 1000, 61, 'APPROVE'), verdict('882', T + 2000, 62, 'WITHHELD'), verdict('883', T - 20 * 86400000, 63, 'WITHHELD')]);
+  const ctx = consoleContext(model);
+  const html = consoleOverview(ctx, '');
+  const page = flowDashboard(model);
+  const ref = Number(/data-ref="(\d+)"/.exec(page)[1]);
+  const rows = [...page.matchAll(/data-state="([^"]*)"[^>]*data-last="(\d*)"/g)].map((m) => ({ tokens: m[1].split(' '), last: Number(m[2]) || 0 }));
+  for (const state of ['attention', 'changes_requested', 'approved']) {
+    const listed = rows.filter((r) => r.tokens.includes(state) && ref - r.last <= 7 * 86400000).length;
+    assert.match(html, new RegExp(`href="flows\\.html\\?state=${state}&amp;period=7"[^>]*>.*?<span>${listed} `, 's'), `${state}: chip = ${listed} rows`);
+  }
+  assert.equal(periodItems(ctx, 7).length, 3, 'the 20-day-old item is outside the period');
+  assert.match(html, /1 changes requested/);
+  assert.equal(periodItems({}, 7).length, 0);
 });
