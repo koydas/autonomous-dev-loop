@@ -142,6 +142,16 @@ test('runCheck: non-zero exit resolves to fail with exit code and stderr', async
   assert.match(r.output_tail, /broken/);
 });
 
+test('runCheck: output is cut to the 2,000-character tail unless the check asks for more (outputChars)', async () => {
+  const command = "node -e \"console.log('HEAD-MARK'); console.log('x'.repeat(5000)); console.log('TAIL-MARK')\"";
+  const short = await runCheck({ name: 'chatty', command, timeoutMs: 5000 });
+  assert.match(short.output_tail, /TAIL-MARK/);
+  assert.doesNotMatch(short.output_tail, /HEAD-MARK/);
+  const long = await runCheck({ name: 'chatty', command, timeoutMs: 5000, outputChars: 100_000 });
+  assert.match(long.output_tail, /HEAD-MARK/);
+  assert.match(long.output_tail, /TAIL-MARK/);
+});
+
 test('runCheck: exceeding the timeout resolves to timeout', async () => {
   const r = await runCheck({ name: 'slow', command: 'sleep 5', timeoutMs: 200 });
   assert.equal(r.status, 'timeout');
