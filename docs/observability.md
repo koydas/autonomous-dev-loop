@@ -107,6 +107,8 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.error`     | error  | —             | `error`                                                  |
 | `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0035) |
 | `review.related_adrs_error` | warn | — | `error` — file listing or ADR read failed; the review continues without related ADRs (ADR-0036) |
+| `review.impact_error` | warn | — | `error` — file listing failed; the review continues without the impact analysis (RV-02) |
+| `review.impact_context` | info | — | `prNumber`, `symbols` (changed or removed exports found), `with_refs` (those still referenced outside the diff), `refs` (references listed), `tests` (related tests), `included` (the prompt had room for the block), `scanned` (source files read), `truncated` (the scan hit its cap) — counts only, never the code (RV-02) |
 | `review.prompt_budget_error` | warn | — | `error` — base (`git show`) or head read of a changed prompt failed; the review continues without the prompt budget block (ADR-0037) |
 | `review.file_skipped` | warn | — | `path`, `reason` (`too_large`), `size`, `max_bytes` — a PR-tree file is over `PR_TREE_MAX_BYTES` (1 MiB, `scripts/lib/pr_tree_reader.mjs`): it is never read, and is left out of the stale-reference / related-ADR searches or treated as unreadable by the prompt budget; one event per file, the review continues (F22) |
 | `review.models_config_ignored` | warn | — | `path`, `error` — the PR tree's `config/models.yaml` is not a regular file (symlink, FIFO, …) or cannot be read; the prompt budget uses the trusted defaults and the review continues (ADR-0023, ADR-0037) |
@@ -384,7 +386,7 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 | `llm_provider_error` | no (never had it) | code and status only |
 | `issue_validation.fail`, `code_gen.error`, `review.error`, `autofix.error`, stage span meta (`error`, OTLP `adl.error`) | yes, sanitized | an unexpected exception: may be `callLLM`'s `All providers failed: <provider>: … HTTP error <status>: <body>`, cut at the body |
 | `pr_prepare.error`, `code_gen.skipped`, `pr_prepare.skipped` | yes, sanitized | our own message: write guard, static verifier or a GitHub API call |
-| `review.stale_refs_error`, `review.related_adrs_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
+| `review.stale_refs_error`, `review.related_adrs_error`, `review.impact_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
 | `autofix_reset.error` | yes, sanitized | our own message: a GitHub API call |
 | `trace_write_failed`, `start_span_failed`, `end_span_failed`, `trace_finalize_failed` | yes, sanitized | our own message: a trace-file write |
 | `review_evidence.error`, `eval.error`, `eval_replay.error`, `pr_evals.error`, `pr_evals_report.error` | no (not allowlisted: `meta: {}`) | out of the allowlist since ADR-0040 |

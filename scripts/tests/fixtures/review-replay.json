@@ -355,6 +355,15 @@
           "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feat | Tests expected: yes — new module with tests\n\n### ✅ Summary\nAdds the grader runner: digests, patch application, hidden tests and test commands.\n\n### ⚠️ Issues Found\n- [Medium] The temporary copy is left behind when applying the patch fails — File: src/grader/runner.mjs Lines: 30-36 Root cause: the directory is created before the copy and the writes, and nothing removes it when one of them throws, because the caller never receives its path Fix: remove it in a catch before rethrowing Axis: side_effects\n- [Medium] A symbolic link in the hidden tests is pinned by its target name — File: src/grader/runner.mjs Root cause: the digest records the link target as text while copyFile follows the link, so the content that runs can change without changing the digest Fix: refuse links in both trees Axis: robustness\n- [High] The exec callback may reject — File: src/grader/runner.mjs Lines: 71 Root cause: an exception from the callback is reported as a string only Fix: wrap it Axis: robustness\n\n### 🚀 Verdict\nREQUEST_CHANGES"
         }
       ]
+    },
+    {
+      "case_id": "impact-caller-misses-new-parameter",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feat | Tests expected: yes — tests updated\n\n### ✅ Summary\nApplies currency-aware rounding in applyDiscount.\n\n### ⚠️ Issues Found\n- [High] applyDiscount gains a required currency parameter that its existing caller does not pass — File: src/pricing.mjs Lines: 1-4 Root cause: src/checkout.mjs:14 still calls applyDiscount(cart.subtotal, cart.rate), so currency is undefined there and every checkout rounds to cents even for JPY Fix: default currency to a configured value or update the checkout caller in the same change Axis: correctness\n\n### 🚀 Verdict\nREQUEST_CHANGES"
+        }
+      ]
     }
   ]
 }

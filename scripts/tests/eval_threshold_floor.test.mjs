@@ -129,6 +129,8 @@ const KNOWN_GAP = {
     "incident-low-continuation-axes": "685e8b033c27",
     "incident-docs-contradict-new-behavior": "10e103c22072",
     "incident-grader-first-push": "8206d6405973",
+    // RV-02: the defect is visible only through the Impact analysis block (a caller outside the diff); outside the gate until a live run shows the review uses it.
+    "impact-caller-misses-new-parameter": "27e31dbcc397",
   },
 };
 const KNOWN_GAP_TAG = 'known-gap';

@@ -237,10 +237,10 @@ export const reviewSuite = {
     options: { responseFormat: null },
   },
 
-  // input: { title, body, diff, dependencies?, evidence?, head_sha?, stale_refs?, related_adrs?, prompt_budget? }.
+  // input: { title, body, diff, dependencies?, evidence?, head_sha?, stale_refs?, related_adrs?, impact?, prompt_budget? }.
   // A case without `evidence` is a repository that has not opted in (no config): the evidence is missing and
-  // does not withhold approval. stale_refs / related_adrs / prompt_budget are precomputed, in the shapes
-  // findStaleReferences / findRelatedAdrs / computePromptBudgetImpact return (the PR tree is not in the case),
+  // does not withhold approval. stale_refs / related_adrs / impact / prompt_budget are precomputed, in the shapes
+  // findStaleReferences / findRelatedAdrs / findImpact / computePromptBudgetImpact return (the PR tree is not in the case),
   // and go through the same formatters as in pr_review.mjs. eval_suites.test.mjs pins the field parity.
   // requires_cut (case level, outside the pinned input): see reviewDiffLimits.
   async run(input, { llm, testCase }) {
@@ -263,6 +263,7 @@ export const reviewSuite = {
       dependencyManifestContext: formatDependencyManifestContext(input.dependencies),
       staleRefsContext: formatStaleRefsContext(input.stale_refs),
       relatedAdrs: input.related_adrs ?? [],
+      impact: input.impact ?? null,
       promptBudgetContext: formatPromptBudgetContext(input.prompt_budget),
     });
     // A requires_cut case left whole would score a verdict its expectation does not hold for: no LLM call, errored run.

@@ -175,6 +175,15 @@ Before building the prompt, `pr_review.mjs` runs two deterministic text searches
   - **Budget:** the block is the first thing dropped. Without a token budget (Anthropic) up to 3 ADRs. On Groq (`review_max_input_tokens`) at most 1, and only when the diff and the PR body still fit uncut. Otherwise the block is left out before anything else is shrunk, and the run logs `Related ADRs left out of the review prompt`.
 - A listing or read error in either search logs a warn event (`review.stale_refs_error`, `review.related_adrs_error`) and the review runs without that block.
 
+### Impact analysis (RV-02, ADR-0058)
+
+The reviewer otherwise sees only the diff, so a changed export whose callers were not updated is invisible. `scripts/lib/impact_context.mjs` (deterministic, no LLM) finds the exports whose declaration lines the diff adds, removes or edits (JS/TS, not tests, not new files; a hunk counts only if it edits real code, not a comment or a hunk header's context) and searches the PR tree for the code outside the diff that references them, plus the tests of the changed modules (changed by the diff or not).
+
+- **Read path:** the same listing and reader as the stale-reference search (`git ls-files` + the safe reader of ADR-0023): symlinks and files over 1 MiB are never read. Bounds: 12 symbols, 4 references per symbol (call sites before import lines, files importing the module before files merely mentioning the name), 6 tests, 3000 files, 25 M characters scanned; a name shared by 20+ files is marked too generic and listed partially.
+- **Prompt:** an `## Impact analysis` block, fenced and labelled data (snippets are stripped of control characters and clipped, the fence cannot be closed by a snippet). The rule of `pr-review-system.md` allows one exception to "review the diff only": a finding may cite a caller from this block as evidence, but it still cites the changed export in the diff, and its fix is on the diff side (the auto-fixer edits only what it is shown).
+- **Budget:** 8,000 characters without a token budget, 1,200 on Groq. Dropped after the related ADRs and before the diff or the PR body are shrunk; if it does not fit alone it is left out.
+- **Events:** `review.impact_context` (counts only: `symbols`, `with_refs`, `refs`, `tests`, `included`, `scanned`, `truncated`); a search error logs `review.impact_error` and the review runs without the block. Never changes the verdict.
+
 ### Prompt budget impact (ADR-0037)
 
 When a PR changes a `prompts/*.md` file, `pr_review.mjs` reports what the change costs in input budget (`scripts/lib/prompt_budget.mjs`). On Groq, every token a stage prompt gains is taken from the stage's variable input (the reviewed diff, the issue, the injected files).

@@ -1927,6 +1927,38 @@ test('pr_review skips symlinked docs and ADRs in the stale-reference and related
   }
 });
 
+test('pr_review gives the reviewer the callers of a changed export, from regular files only, and reports counts', async () => {
+  const fixture = await makePrTree({
+    files: {
+      'scripts/lib/widget.mjs': 'export function renderWidget(a) { return a; }\n',
+      'scripts/consumer.mjs': "import { renderWidget } from './lib/widget.mjs';\nrenderWidget(1);\n",
+      'scripts/huge.mjs': `renderWidget(2);\n// ${'z'.repeat(1024 * 1024)}\n`,
+    },
+    outsideFiles: { 'leak.mjs': "import { renderWidget } from './lib/widget.mjs';\nrenderWidget('leaked-outside-caller');\n" },
+    links: { 'scripts/linked.mjs': 'leak.mjs' },
+  });
+  const diffText = 'diff --git a/scripts/lib/widget.mjs b/scripts/lib/widget.mjs\n--- a/scripts/lib/widget.mjs\n+++ b/scripts/lib/widget.mjs\n@@ -1,1 +1,1 @@\n-export function renderWidget(a) { return a; }\n+export function renderWidget(a, b) { return a + b; }\n';
+  const server = await startMockServer(makeHandler({ diffText, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /review\.impact_error/);
+    const prompt = llmPrompt(server);
+    assert.match(prompt, /## Impact analysis[\s\S]*renderWidget[\s\S]*scripts\/consumer\.mjs:\d+/);
+    assert.ok(!prompt.includes('leaked-outside-caller') && !prompt.includes('scripts/linked.mjs'), 'a symlinked caller is not read');
+    assert.ok(!prompt.includes('scripts/huge.mjs'), 'an oversized file is not scanned');
+    const evt = result.stderr.split('\n').filter((l) => l.includes('"event":"review.impact_context"')).map((l) => JSON.parse(l));
+    assert.equal(evt.length, 1);
+    assert.deepEqual([evt[0].meta.symbols, evt[0].meta.with_refs, evt[0].meta.included], [1, 1, true]);
+    assert.ok(!JSON.stringify(evt[0].meta).includes('consumer.mjs'), 'counts only, no paths');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
+  }
+});
+
 // F22 (2026-10-19 audit): no PR-tree file over PR_TREE_MAX_BYTES (1 MiB) is read. An oversized doc is
 // left out of the searches and an oversized config/models.yaml falls back to the defaults, each with a
 // review.file_skipped warn event; the review proceeds.
