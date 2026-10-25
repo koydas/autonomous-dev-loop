@@ -16,6 +16,8 @@
 5. **This repository only.** The rules are AGENTS.md's; a target repository ([ADR-0045](./0045-reusable-pipeline-workflows.md)) is not subject to them.
 6. **Measured like the model.** The `review` suite runs the same check and scores its finding, so `incident-removed-test-case` is no longer `known-gap`: the decision it asserts does not depend on the model ([ADR-0031](./0031-eval-gates-are-a-ratchet.md): left the tag for `PINNED`, thresholds unchanged).
 
+7. **A deadline, in a child process.** The checks parse untrusted PR text with regular expressions in the review's own process, where a try/catch cannot interrupt a backtracking pattern (`static_verifier.mjs` is quadratic on a file full of unclosed `export {`). `guardrail_runner.mjs` runs them in a child with a 60 s kill timeout; an overrun, a crash or a malformed answer skips the check with a warn event, like any other failure of it. A function whose module still re-exports it (`export { … } from`, `export *`, an export list) is not a removed export.
+
 ## Alternatives Considered
 
 - **Tell the model about the rule in the prompt.** Already so (named defect checks); it is the status quo that missed #276.

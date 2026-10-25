@@ -25,7 +25,8 @@ import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, formatWithheldNote } from './lib/review_evidence.mjs';
 import { formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
 import { resolveReviewDecision } from './lib/review_decision.mjs';
-import { collectGuardrailFindings, declaredPackages, findFileRuleViolations, findTestCountDrops, formatGuardrailSection, guardrailSignature } from './lib/guardrail_review.mjs';
+import { formatGuardrailSection, guardrailSignature } from './lib/guardrail_review.mjs';
+import { runGuardrailChecks } from './lib/guardrail_runner.mjs';
 import { summarizeExternalReview } from './lib/external_review.mjs';
 import { failureSignature, nextStreak, isBreakerOpen, formatEscalationNote } from './lib/circuit_breaker.mjs';
 
@@ -384,41 +385,15 @@ const promptBudget = !selfTarget ? [] : computePromptBudgetImpact({
   models: prModels == null ? GROQ_MODEL_DEFAULTS : prModelsOrDefaults(prModels),
 });
 if (promptBudget.length) log('Prompt budget impact', { prNumber, promptBudget });
-// Whether an imported path is a file of the PR tree, by lstat only: no content is read, so the 1 MiB read limit of the
-// content listing does not apply (Node imports a large file). A symlink is not followed and counts as a file, and an
-// lstat error counts as existing: the rule must not block on what it could not check. A directory, a special file or a
-// path outside the tree is not a file (`import './lib'` is ERR_UNSUPPORTED_DIR_IMPORT; the resolver then tries
-// `lib.mjs`, `lib/index.mjs`, …).
-const pathExistsInTree = (p) => {
-  try {
-    const kind = lstatPrTreePath(repoRoot, p);
-    return kind.kind === 'file' || (kind.kind === 'other' && kind.reason === 'symlink');
-  } catch {
-    return true;
-  }
-};
 // RV-03: the AGENTS.md Hard Guardrails checked in code against the diff (test cases, signatures, module format,
-// imports). This repository's rules: a target repository (ADR-0045) does not have them. A failure skips the check.
+// imports). This repository's rules: a target repository (ADR-0045) does not have them. The checks parse PR text with
+// regular expressions, so they run in a child process with a deadline; a failure or a timeout skips the check.
 let guardrails = { findings: [], omitted: 0 };
 if (selfTarget) {
   try {
-    const mentionText = `${prTitle}\n${prBody}`;
-    const readBase = (p) => {
-      if (!mergeBase) throw new Error('PR base SHA unknown');
-      return git(['show', `${mergeBase}:${p}`]);
-    };
-    guardrails = collectGuardrailFindings([
-      findTestCountDrops(rawDiff, { mentionText, readBase, readHead: readHeadOrNull }),
-      findFileRuleViolations(rawDiff, {
-        readBase,
-        readHead: readHeadOrNull,
-        manifestFor: (p) => declaredPackages(p, readHeadOrNull),
-        fileExists: pathExistsInTree,
-        mentionText,
-      }),
-    ]);
+    guardrails = runGuardrailChecks({ rawDiff, mentionText: `${prTitle}\n${prBody}`, repoRoot, mergeBase });
   } catch (err) {
-    obsLog({ stage: 'review', event: 'review.guardrail_error', level: 'warn', meta: { prNumber, error: err.message } });
+    obsLog({ stage: 'review', event: 'review.guardrail_error', level: 'warn', meta: { prNumber, error: err.code === 'ETIMEDOUT' ? 'guardrail checks timed out' : err.message } });
   }
 }
 if (guardrails.findings.length) {

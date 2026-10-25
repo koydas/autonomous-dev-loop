@@ -168,6 +168,32 @@ const ESM_RAW = /^[ \t]*(?:import[\s{*"']|export\s)/gm;
 const identifier = (name) => String(name).replace(/\$/g, '\\$');
 
 /**
+ * Whether the module may still export `name` through a re-export or an export list: `export * from`, `export * as ns`,
+ * or an `export { ... name ... }` block (with or without `from`, on one line or several). Read on the masked code, so
+ * a fixture or a comment is not an export. One pass: the closing brace is searched forward only, and a block that ends
+ * where the previous one ended is not read twice, so hostile text cannot make it quadratic.
+ */
+export const mayStillExport = (source, name) => {
+  const { code } = maskSource(source);
+  const word = new RegExp(`(?<![\\w$])${identifier(name)}(?![\\w$])`);
+  const opener = /\s*(\*|(?:type\s+)?\{)/y;
+  let close = -1;
+  let lastRead = -1;
+  for (const m of code.matchAll(/(?<![\w$.])export(?![\w$])/g)) {
+    opener.lastIndex = m.index + 6;
+    const found = opener.exec(code);
+    if (!found) continue;
+    if (found[1] === '*') return true;
+    const open = opener.lastIndex;
+    if (close < open) close = code.indexOf('}', open) < 0 ? code.length : code.indexOf('}', open);
+    if (close === lastRead) continue;
+    lastRead = close;
+    if (word.test(code.slice(open, close))) return true;
+  }
+  return false;
+};
+
+/**
  * The lexer behind these rules is heuristic, so a reason is kept only when the raw text agrees with it: a regex literal
  * that hides code in one version of the file must not turn into a blocking finding.
  */
@@ -177,7 +203,8 @@ const confirmedOnRawText = (rule, reason, before, after) => {
   }
   if (rule === GUARDRAIL_RULES.EXPORTED_SIGNATURE) {
     const removed = /^removes exported function ([\w$]+)\(/.exec(reason)?.[1];
-    return removed ? !new RegExp(`\\bexport\\b[^\\n;]*(?<![\\w$])${identifier(removed)}(?![\\w$])`).test(after) : true;
+    if (!removed) return true;
+    return !new RegExp(`\\bexport\\b[^\\n;]*(?<![\\w$])${identifier(removed)}(?![\\w$])`).test(after) && !mayStillExport(after, removed);
   }
   if (rule === GUARDRAIL_RULES.UNRESOLVED_IMPORT) {
     const named = /^imports (?:package )?"([^"]+)"/.exec(reason)?.[1];

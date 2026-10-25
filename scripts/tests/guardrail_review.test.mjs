@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  parseDiffChanges, findTestCountDrops, findFileRuleViolations, collectGuardrailFindings, declaredPackages, formatGuardrailSection, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
+  parseDiffChanges, findTestCountDrops, findFileRuleViolations, collectGuardrailFindings, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
 } from '../lib/guardrail_review.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -320,4 +320,33 @@ test('findTestCountDrops with file contents: a destination we do not scan or can
   const two = { 't/a.test.mjs': caseSource('kept case', moved) };
   assert.deepEqual(findTestCountDrops(small, { readBase: (p) => { if (p === 't/b.test.mjs') throw new Error('boom'); return two[p] ?? ''; }, readHead: (p) => (p === 't/a.test.mjs' ? caseSource('kept case') : caseSource(moved)) }), []);
   assert.deepEqual(findTestCountDrops(small, readers(two, { 't/a.test.mjs': caseSource('kept case') })), [], 'head missing');
+});
+
+test('findFileRuleViolations: a function moved out of a module that keeps re-exporting it is not removed', () => {
+  const base = 'export function keep(a) {\n  return a;\n}\nexport const other = 1;\n';
+  const run = (head) => findFileRuleViolations(modified('src/a.mjs'), { readBase: () => base, readHead: () => head, fileExists: () => true, manifestFor: () => new Set() }).map((f) => f.rule);
+  const reexports = {
+    'multiline named': "export {\n  keep,\n  other,\n} from './moved.mjs';\n",
+    'renamed': "export { keep as keep } from './moved.mjs';\nexport const other = 1;\n",
+    'star': "export * from './moved.mjs';\nexport const other = 1;\n",
+    'star as': "export * as moved from './moved.mjs';\nexport const other = 1;\n",
+    'typed list': "export type {\n  keep } from './moved.mjs';\nexport const other = 1;\n",
+    'local multiline list': "function keep(a) { return a; }\nexport {\n  keep,\n};\nexport const other = 1;\n",
+  };
+  for (const [name, head] of Object.entries(reexports)) assert.deepEqual(run(head), [], name);
+  // Re-exporting other names, or text that only looks like a re-export, does not keep the function.
+  assert.deepEqual(run("export { other } from './moved.mjs';\n"), ['exported_signature'], 'another name');
+  assert.deepEqual(run("export const other = 1;\nconst fx = `\nexport * from './moved.mjs';\n`;\n// export * from './y.mjs';\n"), ['exported_signature'], 'a star re-export in a fixture or a comment is not an export');
+  assert.deepEqual(run("export { keeper } from './moved.mjs';\nexport const other = 1;\n"), ['exported_signature'], 'a longer name is not the function');
+  assert.deepEqual(run('export const other = 1;\n'), ['exported_signature'], 'a real removal stays');
+});
+
+test('re-export detection is linear on hostile text: many unclosed export blocks, then one closing brace', () => {
+  const started = performance.now();
+  for (const head of ['export { '.repeat(100000) + '}', 'export '.repeat(100000), 'export {'.repeat(100000), 'export {\n'.repeat(50000) + 'keep }']) {
+    mayStillExport(head, 'keep');
+  }
+  assert.ok(performance.now() - started < 3000, `scanning took ${Math.round(performance.now() - started)} ms`);
+  assert.equal(mayStillExport('export { a }\nexport {\n  keep }', 'keep'), true);
+  assert.equal(mayStillExport('export { a }', 'keep'), false);
 });

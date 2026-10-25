@@ -108,7 +108,7 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.error`     | error  | —             | `error`                                                  |
 | `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0035) |
 | `review.related_adrs_error` | warn | — | `error` — file listing or ADR read failed; the review continues without related ADRs (ADR-0036) |
-| `review.guardrail_error` | warn | — | `error` — the guardrail checks failed; the review continues without them (RV-03) |
+| `review.guardrail_error` | warn | — | `error` — the guardrail checks failed or overran their 60 s deadline (`guardrail checks timed out`); the review continues without them (RV-03) |
 | `review.guardrail_findings` | info | — | `prNumber`, `findings` (count, including those not listed), `rules` (rule ids among `test_count_drop`, `exported_signature`, `module_system`, `unresolved_import`). No path, title or reason (RV-03) |
 | `review.impact_error` | warn | — | `error` — file listing failed; the review continues without the impact analysis (RV-02) |
 | `review.impact_context` | info | — | `prNumber`, `symbols` (changed or removed exports found), `with_refs` (those still referenced outside the diff), `refs` (references listed), `tests` (related tests), `included` (the prompt had room for the block), `scanned` (source files read), `truncated` (the scan hit its cap) — counts only, never the code (RV-02) |
