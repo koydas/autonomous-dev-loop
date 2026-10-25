@@ -128,6 +128,7 @@ export async function runConflictsFix({ request, repository, prNumber, labels, c
   const fetched = fetchBase(['fetch', '--no-tags', fetchedFrom, `+refs/heads/${baseRef}:${BASE_REMOTE_REF}`], { cwd, token, serverUrl });
   if (!fetched.ok) throw new Error('Fetching the base branch failed');
   const baseSha = spawnSync('git', ['rev-parse', BASE_REMOTE_REF], { cwd, env: cleanEnv(), encoding: 'utf8' }).stdout.trim();
+  if (!/^[0-9a-f]{40,64}$/.test(baseSha)) throw new Error(`Cannot resolve the fetched base (${BASE_REMOTE_REF})`);
 
   const cfg = makeCallModel ? makeCallModel() : null;
   const result = await merge({

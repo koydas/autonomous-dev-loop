@@ -396,6 +396,7 @@ A later `models.yaml (…): unknown key` or `ADL_CONFIG_DIR … must be an absol
 
 | Failure | Recovery |
 |---------|----------|
+| The sweep log says `refused (#N: 403)` | `dispatch_conflicts.mjs` could not start the run of a PR: the token lacks `actions: write` (the caller grants it, a fork-owned workflow token cannot). The next sweep dispatches it again |
 | A PR is labelled `merge-conflict` and nothing happens | The run is triggered by a push to the default branch, by the schedule (every 6 h) or by hand: dispatch **Conflicts Fix** with the PR number. `conflicts_detect.classified` with `state: unknown` means GitHub had not computed `mergeable` yet; the next run reads it again |
 | Comment "Merge conflict … cannot push to its head branch" | A fork PR without **Allow edits from maintainers**: tick it, or merge the base by hand. The label clears itself once the PR is mergeable |
 | `needs-human` + "Merge conflicts: a human needs to decide", reason `protected_path` | A conflicted file is on the protected list (ADR-0021) and no resolver may write it (`scripts/`, `config/`, `prompts/`, `.github/`, `docs/` outside the changelog and the ADR files). Merge the base by hand |

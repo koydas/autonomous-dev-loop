@@ -107,6 +107,8 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'conflicts_detect.classified': [...ID, 'state'],
   'conflicts_detect.labeled': [...ID, 'added', 'removed'],
   'conflicts_detect.comment_posted': [...ID, 'url'],
+  'conflicts_detect.dispatched': ID,
+  'conflicts_detect.dispatch_complete': ['dispatched', 'failed'],
   'conflicts_detect.complete': ['checked', 'conflicting', 'fixable'],
   'conflicts_detect.error': ERR,
   'conflicts.start': ID,

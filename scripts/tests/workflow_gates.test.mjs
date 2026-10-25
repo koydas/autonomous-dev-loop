@@ -1081,6 +1081,10 @@ const ACTIONS_WRITE_ALLOWED = {
   // The caller grants it, the reusable job uses it (a called job can only narrow the caller's token).
   'validate-issue.yml': 1,
   'adl-validate-issue.yml': 1,
+  // Dispatch one fix run per conflicting PR: POST /actions/workflows/conflicts-fix.yml/dispatches (ADR-0059, ADR-0007
+  // amendment). The caller grants it, the detect job uses it; the fix job holds none and runs PR data without it.
+  'conflicts-fix.yml': 1,
+  'adl-conflicts-fix.yml': 1,
 };
 
 test('no workflow grants actions: write, except the validate-issue dispatch (audit F15)', () => {

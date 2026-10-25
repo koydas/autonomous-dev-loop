@@ -91,6 +91,11 @@
   },
   "adl-conflicts-fix.yml": {
     "inputs": {
+      "caller_workflow_file": {
+        "type": "string",
+        "required": false,
+        "default": "conflicts-fix.yml"
+      },
       "config_dir": {
         "type": "string",
         "required": false,
@@ -107,6 +112,11 @@
         "default": "koydas/autonomous-dev-loop"
       },
       "pr_number": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "sweep": {
         "type": "string",
         "required": false,
         "default": ""
@@ -129,7 +139,7 @@
       "fix"
     ],
     "ceiling": {
-      "actions": "read",
+      "actions": "write",
       "contents": "write",
       "issues": "write",
       "pull-requests": "write"

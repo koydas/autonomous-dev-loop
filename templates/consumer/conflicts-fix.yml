@@ -12,7 +12,12 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'One PR to fix (bypasses the attempt cap and the circuit breaker); empty = every open PR'
+        description: 'One PR to fix (bypasses the attempt cap and the circuit breaker); empty = sweep every open PR'
+        required: false
+        type: string
+        default: ''
+      sweep:
+        description: 'Set by the sweep when it dispatches a run per PR; leave empty'
         required: false
         type: string
         default: ''
@@ -28,12 +33,13 @@ jobs:
       # Labels and comments on the PRs.
       pull-requests: write
       issues: write
-      # The run lookup that gives the pipeline commit (read only).
-      actions: read
+      # The run lookup that gives the pipeline commit, and the dispatch of one fix run per conflicting PR.
+      actions: write
     uses: koydas/autonomous-dev-loop/.github/workflows/adl-conflicts-fix.yml@<PIPELINE_SHA> # <PIPELINE_VERSION>
     with:
       config_dir: .autonomous-dev-loop
       pr_number: ${{ inputs.pr_number }}
+      sweep: ${{ inputs.sweep }}
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

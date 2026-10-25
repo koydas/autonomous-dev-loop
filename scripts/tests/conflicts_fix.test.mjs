@@ -207,6 +207,16 @@ test('a failed fetch of the base is an error, not an escalation', async () => {
   } finally { w.cleanup(); }
 });
 
+test('a fetch that left no base ref is an error before the engine runs', async () => {
+  const w = workdir();
+  try {
+    spawnSync('git', ['update-ref', '-d', 'refs/adl/base'], { cwd: w.cwd });
+    let called = false;
+    await assert.rejects(run(github(prObject()), w, { merge: async () => { called = true; return {}; } }).go(), /Cannot resolve the fetched base \(refs\/adl\/base\)/);
+    assert.equal(called, false);
+  } finally { w.cleanup(); }
+});
+
 test('the fetch is made from the base repository into refs/adl/base, the push to the head repository of a fork', async () => {
   const w = workdir();
   try {

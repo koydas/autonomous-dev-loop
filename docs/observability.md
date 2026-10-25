@@ -165,6 +165,8 @@ Emitted by `scripts/detect_conflicts.mjs` (`conflicts-fix.yml`, ADR-0059): the `
 | `conflicts_detect.classified` | info | — | `prNumber`, `state` (`conflicting` \| `clean` \| `unknown` \| `closed`) — `unknown`: GitHub had not computed `mergeable` after the bounded re-reads, the PR is left to the next run |
 | `conflicts_detect.labeled` | info | — | `prNumber`, `added`, `removed` — `merge-conflict` and, on a PR that is clean again, the `conflict-fix-attempt-N` labels |
 | `conflicts_detect.comment_posted` | info | — | `prNumber`, `url` — once per head, on a conflicting PR the pipeline cannot push to (a fork without maintainer edits) |
+| `conflicts_detect.dispatched` | info | — | `prNumber` — the sweep started the fix run of this PR (`workflow_dispatch` of the caller, `sweep: true`; one run per PR so each has its own record, ADR-0041) |
+| `conflicts_detect.dispatch_complete` | info / warn | ✓ | `dispatched`, `failed` — warn and exit 1 when GitHub refused a dispatch; the next sweep dispatches it again |
 | `conflicts_detect.complete` | info | ✓ | `checked`, `conflicting`, `fixable` |
 | `conflicts_detect.error` | error | ✓ | `error` |
 

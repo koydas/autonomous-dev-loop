@@ -65,6 +65,16 @@ test('a PR that is clean again loses merge-conflict and its attempt labels; abse
   assert.deepEqual(gh.calls.filter((c) => c[0] === 'DELETE').map((c) => c[1]), ['/issues/1/labels/merge-conflict', '/issues/1/labels/conflict-fix-attempt-1'], 'needs-human is a human\'s to clear');
 });
 
+test('a sweep does not dispatch a PR whose attempts are spent; a run asked for that PR does', async () => {
+  const spent = () => pr(1, { mergeable: false, mergeable_state: 'dirty', labels: [{ name: 'conflict-fix-attempt-1' }, { name: 'conflict-fix-attempt-2' }] });
+  const sweep = await run(github([spent()]));
+  assert.deepEqual([sweep.matrix.length, sweep.skipped], [0, [{ number: 1, reason: 'attempts_exhausted' }]]);
+  const one = await run(github([spent()]), { prNumber: 1 });
+  assert.equal(one.matrix.length, 1, 'a single-PR run is asked for: the fix decides (cap, or the manual bypass)');
+  const partly = await run(github([pr(1, { mergeable: false, mergeable_state: 'dirty', labels: [{ name: 'conflict-fix-attempt-1' }] })]));
+  assert.equal(partly.matrix.length, 1, 'one attempt left');
+});
+
 test('mergeable is re-read until GitHub has computed it; a PR still unknown is left for the next run', async () => {
   const slow = github([pr(1, { mergeable: false, mergeable_state: 'dirty' })], { mergeableAfter: { 1: 2 } });
   assert.equal((await run(slow)).matrix.length, 1, 'known on the third read');

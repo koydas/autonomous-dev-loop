@@ -23,7 +23,7 @@ export const SIDE_EFFECT_EVENTS = Object.freeze(new Set([
   'review.comment_posted', 'review.review_submitted', 'review.labels_applied', 'review.escalated',
   'autofix.reset', 'autofix.attempt_labeled', 'autofix.escalated', 'autofix.push', 'autofix.max_attempts_reached',
   'autofix_reset.labels_removed', 'autofix_reset.retriggered',
-  'conflicts_detect.labeled', 'conflicts_detect.comment_posted', 'conflicts.push', 'conflicts.escalated',
+  'conflicts_detect.labeled', 'conflicts_detect.comment_posted', 'conflicts_detect.dispatched', 'conflicts.push', 'conflicts.escalated',
   'workflow.pr_operation', 'workflow.push',
 ]));
 

@@ -2,8 +2,10 @@ name: ADL Conflicts Fix (reusable)
 
 # Reusable workflow (ADR-0045, ADR-0059): called by conflicts-fix.yml in this repository and by the caller template
 # of a target repository. The triggers (push to the default branch, a schedule, workflow_dispatch) belong to the
-# caller. `detect` reads the mergeability of the open PRs and keeps the `merge-conflict` label; `fix` merges the base
-# into the head of each conflicting PR, one at a time, on the per-PR group shared with pr-review and auto-fix (ADR-0020).
+# caller. A run record belongs to one work item (ADR-0041), so a run handles at most one PR: without `pr_number`
+# `detect` sweeps the open PRs, keeps the `merge-conflict` label and dispatches the caller once per fixable PR; with
+# one, `detect` reads that PR and `fix` merges the base into its head, on the per-PR group shared with pr-review and
+# auto-fix (ADR-0020).
 on:
   workflow_call:
     inputs:
@@ -20,9 +22,17 @@ on:
         type: string
         default: '.autonomous-dev-loop'
       pr_number:
-        description: 'One PR to fix (manual run: bypasses the attempt cap and the circuit breaker); empty = every open PR'
+        description: 'One PR to fix (a run of its own); empty = sweep every open PR and dispatch one run per fixable PR'
         type: string
         default: ''
+      sweep:
+        description: "'true' when a sweep dispatched this run: the attempt cap and the circuit breaker apply. Any other value with a pr_number is a manual run, which bypasses both"
+        type: string
+        default: ''
+      caller_workflow_file:
+        description: 'Caller workflow that the sweep dispatches once per conflicting PR'
+        type: string
+        default: 'conflicts-fix.yml'
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -108,6 +118,8 @@ jobs:
       # Reads PR mergeability; the label and the comment of a PR the pipeline cannot push to (detect_conflicts.mjs).
       pull-requests: write
       issues: write
+      # The dispatch of one fix run per conflicting PR (dispatch_conflicts.mjs).
+      actions: write
     outputs:
       prs: ${{ steps.detect.outputs.prs }}
       count: ${{ steps.detect.outputs.count }}
@@ -147,6 +159,17 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: node "$RUNNER_TEMP/pipeline/scripts/detect_conflicts.mjs"
 
+      # A sweep dispatches one run per fixable PR instead of fixing them here: each run is one work item with its own record.
+      - name: Dispatch one fix run per conflicting PR
+        if: ${{ inputs.pr_number == '' && steps.detect.outputs.count != '' && steps.detect.outputs.count != '0' }}
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PRS: ${{ steps.detect.outputs.prs }}
+          CALLER_WORKFLOW_FILE: ${{ inputs.caller_workflow_file }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/dispatch_conflicts.mjs"
+
       - name: Upload run trace
         if: always()
         uses: actions/upload-artifact@v4
@@ -156,11 +179,12 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
+      # Only a sweep records here: a single-PR run records its fix (same run id, one record per run).
       - name: Commit metrics
-        if: always()
+        if: always() && inputs.pr_number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_RECORD_MESSAGE: "metrics: conflicts-fix detect [skip ci]"
+          RUN_RECORD_MESSAGE: "metrics: conflicts-fix sweep [skip ci]"
         # The checkout is a pull request tree: the trusted copy is the pinned pipeline, and one that does not ship the script
         # yet is a warning, not a red job.
         run: |
@@ -170,7 +194,7 @@ jobs:
 
   fix:
     needs: [resolve, detect]
-    if: ${{ needs.detect.outputs.count != '' && needs.detect.outputs.count != '0' }}
+    if: ${{ inputs.pr_number != '' && needs.detect.outputs.count != '' && needs.detect.outputs.count != '0' }}
     runs-on: ubuntu-latest
     strategy:
       # One PR at a time, and a failure on one never stops the others.
@@ -244,7 +268,8 @@ jobs:
           # The PAT: a push with GITHUB_TOKEN triggers no workflow, so the review would not run on the merge commit.
           GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ matrix.pr.number }}
-          CONFLICTS_MANUAL: ${{ inputs.pr_number != '' }}
+          # A person's dispatch bypasses the cap and the breaker; a sweep's dispatch (sweep: 'true') does not.
+          CONFLICTS_MANUAL: ${{ inputs.pr_number != '' && inputs.sweep != 'true' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}

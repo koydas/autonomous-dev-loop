@@ -73,6 +73,9 @@ export async function detectConflicts({ request, repository, prNumber = null, la
     }
     // The branch name reaches the fix job's checkout and concurrency group: an unusual one is left to a human.
     if (canPushToHead(pr, repository) && !SAFE_REF.test(`${pr.head.ref}${pr.base.ref}`)) { skipped.push({ number, reason: 'unsafe_ref' }); continue; }
+    // A sweep does not dispatch a PR whose attempts are spent: that run could only skip. A single-PR run (manual or
+    // dispatched) is asked for, so it goes through and the fix decides.
+    if (!prNumber && attempts.every((a) => has.has(a.name))) { skipped.push({ number, reason: 'attempts_exhausted' }); continue; }
     if (canPushToHead(pr, repository)) {
       matrix.push({ number, head_ref: pr.head.ref, head_sha: pr.head.sha, head_repo: pr.head.repo.full_name, base_ref: pr.base.ref });
       continue;

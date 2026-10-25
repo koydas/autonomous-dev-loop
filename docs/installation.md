@@ -62,7 +62,7 @@ A called job can only narrow the token of its caller, so each caller job grants 
 | reset-auto-fix | write | write | write | read |
 | pr-review | write | write | write | read |
 | auto-fix-pr | write | write | write | read |
-| conflicts-fix | write (push to the PR branch, metrics branch) | write | write | read |
+| conflicts-fix | write (push to the PR branch, metrics branch) | write | write | write (the sweep dispatches one run per conflicting PR) |
 
 Inside `adl-pr-review.yml` the `evidence` job, which runs your pull request's code, has `contents: read` only and references no secret.
 
