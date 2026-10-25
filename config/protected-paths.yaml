@@ -19,3 +19,8 @@ protected_paths:
   # Governance (ADR-0021 amendment, incident #173): documentation is human-owned.
   - docs/
   - README.md
+  # Agent rules and hooks (ADR-0021 amendment, audit F16): .claude/settings.json hooks run commands on a developer's
+  # machine once the folder is trusted; AGENTS.md / CLAUDE.md / skills steer every later agent session.
+  - .claude/
+  - AGENTS.md
+  - CLAUDE.md

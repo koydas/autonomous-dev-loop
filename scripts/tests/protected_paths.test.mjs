@@ -19,7 +19,7 @@ import { findDeterministicBlock } from '../lib/generation_blocked.mjs';
 
 // ADR-0044: what this repository protects beyond the floor. Dropping one of these from
 // config/protected-paths.yaml (or deleting the file) must fail here, not pass silently.
-const THIS_REPO_ENTRIES = ['scripts/', 'config/', 'prompts/', 'checkpoints/', 'metrics/', 'observability/', 'docs/', 'README.md'];
+const THIS_REPO_ENTRIES = ['scripts/', 'config/', 'prompts/', 'checkpoints/', 'metrics/', 'observability/', 'docs/', 'README.md', '.claude/', 'AGENTS.md', 'CLAUDE.md'];
 
 const entryFor = (list, target) => list.find((entry) => entryMatches(entry, target.toLowerCase())) ?? null;
 
@@ -200,4 +200,15 @@ test('generation_blocked and static_verifier answer from the same list as the wr
     rejection = err;
   }
   assert.deepEqual(guardrailRules(rejection), ['protected_path']);
+});
+
+// ADR-0021 amendment (audit F16): hooks and agent rules run or steer on a developer's machine.
+test('this repository rejects writes to agent rules and hooks, at any depth for the rule files, case-insensitively', () => {
+  for (const target of ['.claude/settings.json', '.claude/hooks/test-gate.mjs', '.claude/skills/x/SKILL.md', 'AGENTS.md', 'services/api/CLAUDE.md', 'claude.MD']) {
+    assert.ok(protectedPathEntry(target), `${target} must be protected`);
+  }
+  // Directory entries are root-level only: a nested .claude/ is not covered, and similar names are not matched.
+  for (const target of ['src/claude.mjs', 'claude-notes.md', 'src/.claude/x.json']) {
+    assert.equal(protectedPathEntry(target), null, `${target} must stay writable`);
+  }
 });

@@ -7,6 +7,10 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Agent rules and hooks are protected from AI writes and reviewed as code** (audit F16, F13; ADR-0021 and ADR-0038 amendments).
+  - `config/protected-paths.yaml`: `.claude/`, `AGENTS.md`, `CLAUDE.md`. Generation and auto-fix reject a patch that targets them; both system prompts list them (two auto-fix rules shortened to keep the ADR-0037 headroom).
+  - `change_classifier.mjs`: new `isAgentRuleFile`; the review orders these files with the code and withholds an approval when a cut diff hides one. Test expectation and every other classification are unchanged.
+
 - **Review: the reviewer sees the code outside the diff that depends on what the diff changes** (RV-02, ADR-0058).
   - New `scripts/lib/impact_context.mjs` (deterministic, no LLM, c8 ≥ 80 % gate, in the `eval-replay.yml` paths): the exports whose declaration the diff really edits, their callers outside the diff and the tests of the changed modules, searched in the PR tree through the existing safe reader (no symlink, no file over 1 MiB), bounded (12 symbols, 4 references each, 6 tests, 3000 files), rendered as a fenced `## Impact analysis` data block (8,000 characters; 1,200 on Groq) that is dropped after the related ADRs and before the diff or the PR body are cut.
   - `pr-review-system.md`: the diff-only rule now has one exception, the Impact analysis block, as evidence for a finding that still cites the changed export in the diff and whose fix stays on the diff side. Not measured by the replay; the `review` suite gains one `known-gap` case (`impact-caller-misses-new-parameter`) for the live run. Thresholds and existing cases are unchanged.

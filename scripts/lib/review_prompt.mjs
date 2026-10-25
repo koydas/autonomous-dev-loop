@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { buildAutomationGateContext } from './coverage_checker.mjs';
 import { GATES_CONFIG_PATH, parseGates } from './coverage_gates.mjs';
 import { PIPELINE_ROOT } from './roots.mjs';
-import { buildChangeClassificationContext, isDocumentationFile, isTestFile } from './change_classifier.mjs';
+import { buildChangeClassificationContext, isAgentRuleFile, isDocumentationFile, isTestFile } from './change_classifier.mjs';
 import { formatEvidenceContext } from './review_evidence.mjs';
 import { fitReviewPrompt } from './token_budget.mjs';
 import { formatRelatedAdrsContext } from './related_adrs.mjs';
@@ -27,10 +27,11 @@ const UNBUDGETED_MAX_DIFF_CHARS = 12000;
 // Prompt builder and verdict parser of the PR review stage, shared by pr_review.mjs and the
 // `review` eval suite (ADR-0027) so the eval measures the production code path, not a copy.
 
-// Review tiers of orderDiffForReview: -1 no file header, 0 code, 1 tests, 2 documentation.
+// Review tiers of orderDiffForReview: -1 no file header, 0 code (agent-rule files included, ADR-0038 amendment), 1 tests, 2 documentation.
 const CODE_TIER = 0;
 const reviewTier = (file) => {
   if (!file) return -1;
+  if (isAgentRuleFile(file)) return CODE_TIER;
   if (isTestFile(file)) return 1;
   if (isDocumentationFile(file)) return 2;
   return CODE_TIER;

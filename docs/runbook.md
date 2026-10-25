@@ -250,7 +250,7 @@ The rows of the table above that need more than a line.
 
 - Prompt template issue (`generation-user.md` placeholders not resolved).
 - The model returned malformed JSON.
-- `output_writer.mjs` rejected paths (absolute, `..` traversal, or a protected path — the hard-coded floor (`.github/`, `.git/`, manifests, lock files, `.npmrc`/`.yarnrc*`, `*.csproj`, `requirements*.txt`, …) plus `config/protected-paths.yaml` (here `scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `docs/`, `README.md`); see ADR-0021, ADR-0044).
+- `output_writer.mjs` rejected paths (absolute, `..` traversal, or a protected path — the hard-coded floor (`.github/`, `.git/`, manifests, lock files, `.npmrc`/`.yarnrc*`, `*.csproj`, `requirements*.txt`, …) plus `config/protected-paths.yaml` (here `scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `docs/`, `README.md`, `.claude/`, `AGENTS.md`, `CLAUDE.md`); see ADR-0021, ADR-0044).
 - A rewrite that would cut an existing file of 20+ lines by more than half (`would shrink from N to M lines`, also raised when more than half of the non-whitespace content goes).
 - Both stages escalate instead of failing (ADR-0019): generation posts `Code Generation: Patch Rejected` on the issue, applies `needs-human` and opens no PR (`code_gen.skipped` / `pr_prepare.skipped`, `codegen_skip` metric); auto-fix: `reason: "guardrail_rejected"`, below.
 - A documentation-only issue always ends here: edit `README.md`/`docs/` by hand.

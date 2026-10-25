@@ -5,6 +5,7 @@ import {
   determineTestExpectation,
   buildChangeClassificationContext,
   isTestFile,
+  isAgentRuleFile,
 } from '../lib/change_classifier.mjs';
 
 // ---------------------------------------------------------------------------
@@ -322,4 +323,9 @@ test('buildChangeClassificationContext: diff_truncated reflects the passed flag'
   const diff = ['diff --git a/src/foo.mjs b/src/foo.mjs', '+++ b/src/foo.mjs'].join('\n');
   const ctx = buildChangeClassificationContext(diff, true);
   assert.match(ctx, /diff_truncated: true/);
+});
+
+test('isAgentRuleFile: AGENTS.md and CLAUDE.md at any depth and everything under root .claude/, nothing else', () => {
+  for (const f of ['AGENTS.md', 'CLAUDE.md', 'svc/claude.md', '.claude/settings.json', '.claude/skills/x/SKILL.md']) assert.equal(isAgentRuleFile(f), true, f);
+  for (const f of ['README.md', 'docs/agent-notes.md', 'src/.claude/x.md', 'MYAGENTS.md', 'scripts/a.mjs']) assert.equal(isAgentRuleFile(f), false, f);
 });
