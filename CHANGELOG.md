@@ -7,6 +7,8 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Review evidence: the checks resolve the PR tree's own config** (ADR-0045 amendment). `sanitizeEnv` drops `ADL_CONFIG_DIR` / `ADL_CONFIG_PATH` from each check's environment, so `npm test` in the evidence job sees the PR's `config/` like `test.yml`, not `main`'s. The check list is still read from the trusted default-branch config. A PR that changed a pinned config file no longer fails its evidence on tests that pass in CI.
+
 - **Review: the reviewer sees the code outside the diff that depends on what the diff changes** (RV-02, ADR-0058).
   - New `scripts/lib/impact_context.mjs` (deterministic, no LLM, c8 ≥ 80 % gate, in the `eval-replay.yml` paths): the exports whose declaration the diff really edits, their callers outside the diff and the tests of the changed modules, searched in the PR tree through the existing safe reader (no symlink, no file over 1 MiB), bounded (12 symbols, 4 references each, 6 tests, 3000 files), rendered as a fenced `## Impact analysis` data block (8,000 characters; 1,200 on Groq) that is dropped after the related ADRs and before the diff or the PR body are cut.
   - `pr-review-system.md`: the diff-only rule now has one exception, the Impact analysis block, as evidence for a finding that still cites the changed export in the diff and whose fix stays on the diff side. Not measured by the replay; the `review` suite gains one `known-gap` case (`impact-caller-misses-new-parameter`) for the live run. Thresholds and existing cases are unchanged.
