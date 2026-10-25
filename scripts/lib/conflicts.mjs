@@ -211,7 +211,11 @@ export const GENERIC_INVENTED_FREE = 3;
  */
 export function checkHunkResolution(resolver, { ours, base = '', theirs }, resolved) {
   const violations = [];
-  if (hasConflictMarkers(resolved)) violations.push('marker_left');
+  // A bare separator (`=======`) or diff3 base marker (`|||||||`) is one only when no side had it: a Markdown setext
+  // heading is made of `=======`, but a model cannot add a marker line that none of the sides contained.
+  const sideLines = new Set([ours, base, theirs].flatMap((t) => String(t).split('\n').map((l) => l.replace(/\r$/, ''))));
+  const strayMarker = String(resolved).split('\n').map((l) => l.replace(/\r$/, '')).some((l) => (MID_RE.test(l) || BASE_RE.test(l)) && !sideLines.has(l));
+  if (hasConflictMarkers(resolved) || strayMarker) violations.push('marker_left');
   const invented = inventedLines(resolved, { ours, base, theirs });
   if (resolver === 'generic') {
     const total = nonBlank(resolved).length;
