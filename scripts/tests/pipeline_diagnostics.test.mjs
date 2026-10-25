@@ -568,3 +568,66 @@ test('review PR #253: withheld and code generation resolve after dilution; the p
   // 2 blocked of 2 starts is below the floor of the prefix rate: not reported once diluted.
   assert.equal(find(diagnose({ model: model([0, 1].map((i) => gen(i, true)).concat(Array.from({ length: 10 }, (_, i) => gen(2 + i, false)))) }), 'codegen-blocked'), undefined);
 });
+
+// ── External review churn (ADR-0043 amendment 2026-10-25) ────────────────────────────────────────────────────────
+const external = (rounds, meta = {}, pr = 9) => ({ event: 'review.external', meta: { prNumber: pr, rounds, threads: rounds * 2, p0p1: 1, ...meta } });
+
+test('external-review-churn: PRs with RULES.externalRounds+ rounds, from the newest highest count, as an info observation without a lever', () => {
+  const runs = [
+    run({ t: T, pr: 9, events: [verdict('APPROVE'), external(2)] }),
+    run({ t: T + 1, pr: 9, sha: 'b'.repeat(40), events: [verdict('APPROVE'), external(RULES.externalRounds)] }),
+    run({ t: T + 2, pr: 10, sha: 'c'.repeat(40), events: [verdict('APPROVE'), external(1, {}, 10)] }),
+  ];
+  const d = diagnose({ model: model(runs) });
+  const f = find(d, 'external-review-churn');
+  assert.equal(f.severity, 'info');
+  assert.equal(f.status, 'active');
+  assert.deepEqual(f.items, [9]);
+  assert.match(f.fact, /1 of 2 PR\(s\).*#9: 3 rounds, 6 threads, 1 P0\/P1.*hold 6 of the 8 external threads/);
+  assert.match(f.fact, /lower bound/);
+  assert.match(f.hypothesis, /not verified/);
+  assert.equal(d.status, 'ok', 'an observation of an external reviewer never raises the status');
+  assert.equal(leverFor(f), null);
+  // A later, lower count (a record from an earlier head) does not lower the PR's rounds.
+  const older = [...runs, run({ t: T + 3, pr: 9, sha: 'd'.repeat(40), events: [verdict('APPROVE'), external(1)] })];
+  assert.match(find(diagnose({ model: model(older) }), 'external-review-churn').fact, /#9: 3 rounds/);
+});
+
+test('external-review-churn: nothing below the threshold, without a PR, or from malformed counts', () => {
+  const none = (events, extra = {}) => ids(diagnose({ model: model([run({ events: [verdict('APPROVE'), ...events], ...extra })]) }));
+  assert.ok(!none([external(RULES.externalRounds - 1)]).includes('external-review-churn'));
+  assert.ok(!none([{ event: 'review.external', meta: { rounds: 5, threads: 5, p0p1: 0 } }], { pr: null }).includes('external-review-churn'), 'no PR number');
+  for (const bad of [{ rounds: '5' }, { threads: -1 }, { p0p1: 1.5 }, { rounds: null }]) {
+    assert.ok(!none([external(5, bad)]).includes('external-review-churn'), JSON.stringify(bad));
+  }
+  assert.ok(!ids(diagnose({ model: model([run({ events: [verdict('APPROVE')] })]) })).includes('external-review-churn'), 'no event: no finding');
+});
+
+test('external-review-churn resolves once the last eligible runs are below the threshold', () => {
+  const runs = [run({ t: T, events: [verdict('APPROVE'), external(4)] })];
+  for (let i = 1; i <= RULES.activeWindow; i += 1) runs.push(run({ t: T + i, pr: 20 + i, sha: String(i % 10).repeat(40), events: [verdict('APPROVE'), external(1, {}, 20 + i)] }));
+  const f = find(diagnose({ model: model(runs) }), 'external-review-churn');
+  assert.equal(f.status, 'resolved');
+  assert.match(f.title, /resolved since/);
+});
+
+test('external-review-churn picks a PR\'s observation by value, not by position: newest wins a tie, in any input order (the model lists runs newest first)', () => {
+  const old = run({ t: T, pr: 9, events: [verdict('APPROVE'), external(3, { threads: 5, p0p1: 1 })] });
+  const fillers = Array.from({ length: RULES.activeWindow }, (_, i) => run({ t: T + 1 + i, pr: 30 + i, sha: String(i % 10).repeat(40), events: [verdict('APPROVE'), external(1, {}, 30 + i)] }));
+  const newest = run({ t: T + 100, pr: 9, sha: 'e'.repeat(40), events: [verdict('APPROVE'), external(3, { threads: 7, p0p1: 2 })] });
+  const asOrdered = (list) => find(diagnose({ model: model(list) }), 'external-review-churn');
+  const newestFirst = asOrdered([newest, ...[...fillers].reverse(), old]);
+  const oldestFirst = asOrdered([old, ...fillers, newest]);
+  for (const f of [newestFirst, oldestFirst]) {
+    assert.equal(f.status, 'active', 'the newest observation meets the threshold: not resolved by an older one');
+    assert.match(f.fact, /#9: 3 rounds, 7 threads, 2 P0\/P1/);
+    assert.deepEqual(f.runs, [newest.run_id]);
+  }
+  assert.equal(newestFirst.fact, oldestFirst.fact);
+  // A higher count still beats a newer lower one, and two PRs are listed by number whatever the order.
+  const lower = run({ t: T + 200, pr: 9, sha: 'f'.repeat(40), events: [verdict('APPROVE'), external(2, { threads: 3 })] });
+  assert.match(asOrdered([lower, newest, old]).fact, /#9: 3 rounds, 7 threads/);
+  const two = [run({ pr: 12, sha: '1'.repeat(40), events: [verdict('APPROVE'), external(4, {}, 12)] }), run({ pr: 11, sha: '2'.repeat(40), events: [verdict('APPROVE'), external(3, {}, 11)] })];
+  assert.match(asOrdered(two).fact, /#11: 3 rounds.*; #12: 4 rounds/);
+  assert.match(asOrdered([...two].reverse()).fact, /#11: 3 rounds.*; #12: 4 rounds/);
+});

@@ -209,6 +209,12 @@ test('the adversarial protocol, circuit breaker and lessons events publish their
   ]);
 });
 
+test('review.external publishes its four counts and nothing else (ADR-0043 amendment)', () => {
+  const external = ev('review.external', { prNumber: 5, rounds: 3, threads: 7, p0p1: 2, body: 'a reviewer comment', login: 'chatgpt-codex-connector[bot]' });
+  const record = redactTrace(trace({ events: [external] }), { env: ENV });
+  assert.deepEqual(record.events.map((e) => e.meta), [{ prNumber: 5, rounds: 3, threads: 7, p0p1: 2 }]);
+});
+
 test(`events past ${MAX_RECORD_BYTES} bytes are counted in events_overflow, added to the journal's own`, () => {
   const error = 'q'.repeat(MAX_STRING);
   const events = Array.from({ length: 2000 }, () => ev('review.error', { error }));

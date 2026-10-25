@@ -117,7 +117,7 @@ test('leverFor is null for what is not actionable: resolved, info, unmapped, no 
   assert.equal(leverFor({ ...base, severity: 'info' }), null, 'a guardrail doing its job is not a proposal');
   assert.equal(leverFor({ ...base, status: undefined }), null);
   assert.equal(leverFor({ ...base, id: 'something-new' }), null);
-  for (const id of ['runs-failed', 'stage-failures-review', 'duration-review', 'review-duplicates', 'review-stuck', 'escalations', 'rate-limit-waits']) {
+  for (const id of ['runs-failed', 'stage-failures-review', 'duration-review', 'review-duplicates', 'review-stuck', 'escalations', 'external-review-churn', 'rate-limit-waits']) {
     assert.equal(leverFor({ ...base, id, severity: 'critical' }), null, id);
   }
   assert.equal(leverFor(null), null);
