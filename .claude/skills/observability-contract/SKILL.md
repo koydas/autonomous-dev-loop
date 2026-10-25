@@ -1,5 +1,6 @@
 ---
-description: Instrumentation contract for pipeline stages — all events route through observability.mjs, required start/complete events, GITHUB_RUN_ID env, and trace artifact upload in new workflows.
+name: observability-contract
+description: "Use when adding or modifying a pipeline stage script in scripts/, or a workflow that runs one: events through observability.mjs, <stage>.start / complete / error with duration_ms, GITHUB_RUN_ID env, trace artifact upload."
 ---
 
 # observability-contract
