@@ -2016,14 +2016,19 @@ test('pr_review approves a diff whose PR description names the test it removes',
   }
 });
 
-test('pr_review resolves an imported file over the read limit and a symlinked one, and still flags an import that does not exist', async () => {
+test('pr_review resolves an imported file over the read limit and a symlinked one, and flags an import that does not exist or is a directory', async () => {
   const fixture = await makePrTree({
-    files: { 'src/a.mjs': 'export const a = 1;\n', 'src/large.mjs': `export const big = 1;\n// ${'z'.repeat(1024 * 1024 + 10)}\n` },
+    files: {
+      'src/a.mjs': 'export const a = 1;\n',
+      'src/large.mjs': `export const big = 1;\n// ${'z'.repeat(1024 * 1024 + 10)}\n`,
+      'src/lib/util.mjs': 'export const u = 1;\n',
+      'src/pkg/index.mjs': 'export const p = 1;\n',
+    },
     outsideFiles: { 'target.mjs': 'export const t = 1;\n' },
     links: { 'src/linked.mjs': 'target.mjs' },
   });
-  await fs.writeFile(path.join(fixture.tree, 'src/a.mjs'), "import { big } from './large.mjs';\nimport { t } from './linked.mjs';\nimport { n } from './nowhere.mjs';\nexport const a = big + t + n;\n");
-  const diffText = 'diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1,1 +1,4 @@\n+import { big } from \'./large.mjs\';\n+import { t } from \'./linked.mjs\';\n+import { n } from \'./nowhere.mjs\';\n export const a = 1;\n';
+  await fs.writeFile(path.join(fixture.tree, 'src/a.mjs'), "import { big } from './large.mjs';\nimport { t } from './linked.mjs';\nimport { n } from './nowhere.mjs';\nimport * as lib from './lib';\nimport { p } from './pkg';\nexport const a = big + t + n + lib + p;\n");
+  const diffText = 'diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1,1 +1,6 @@\n+import { big } from \'./large.mjs\';\n+import { t } from \'./linked.mjs\';\n+import { n } from \'./nowhere.mjs\';\n+import * as lib from \'./lib\';\n+import { p } from \'./pkg\';\n export const a = 1;\n';
   const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
   const eventFile = await writeEventFile();
   try {
@@ -2032,6 +2037,8 @@ test('pr_review resolves an imported file over the read limit and a symlinked on
     const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
     assert.match(comment, /Guardrail unresolved_import[^\n]*Root cause: imports "\.\/nowhere\.mjs"/);
     assert.doesNotMatch(comment, /large\.mjs|linked\.mjs/, 'a large file and a symlink exist, whatever the content reader refuses');
+    assert.match(comment, /Guardrail unresolved_import[^\n]*Root cause: imports "\.\/lib"/, 'a directory is not an importable file');
+    assert.doesNotMatch(comment, /imports "\.\/pkg"/, 'a directory import is resolved by its index file');
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});

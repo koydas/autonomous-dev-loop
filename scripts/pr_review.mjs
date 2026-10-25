@@ -384,13 +384,15 @@ const promptBudget = !selfTarget ? [] : computePromptBudgetImpact({
   models: prModels == null ? GROQ_MODEL_DEFAULTS : prModelsOrDefaults(prModels),
 });
 if (promptBudget.length) log('Prompt budget impact', { prNumber, promptBudget });
-// Whether an imported path exists in the PR tree, by lstat only: no content is read, so the 1 MiB read limit and the
-// symlink refusal of the content listing do not apply (Node imports a large file and follows a link). An lstat error
-// counts as existing: the rule must not block on what it could not check.
+// Whether an imported path is a file of the PR tree, by lstat only: no content is read, so the 1 MiB read limit of the
+// content listing does not apply (Node imports a large file). A symlink is not followed and counts as a file, and an
+// lstat error counts as existing: the rule must not block on what it could not check. A directory, a special file or a
+// path outside the tree is not a file (`import './lib'` is ERR_UNSUPPORTED_DIR_IMPORT; the resolver then tries
+// `lib.mjs`, `lib/index.mjs`, …).
 const pathExistsInTree = (p) => {
   try {
     const kind = lstatPrTreePath(repoRoot, p);
-    return kind.kind === 'file' || (kind.kind === 'other' && kind.reason !== 'outside_tree');
+    return kind.kind === 'file' || (kind.kind === 'other' && kind.reason === 'symlink');
   } catch {
     return true;
   }
