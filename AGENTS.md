@@ -15,6 +15,7 @@ These instructions apply to the entire repository.
 ## Objectives
 
 - Keep changes MVP-focused and small.
+- Split a PR that adds about 1,000 lines or more along a seam (a module and its tests, then the wiring, then the docs), unless it is one mechanical change (a rename, a generated file, a moved block). Measured on 250 PRs: external review threads per PR rise from about 1.5 (100 to 1,000 added lines) to 3.5 (1,000 or more); below 1,000 the number of rounds does not follow the size, so there is no smaller cap.
 - Prefer safe, deterministic behavior over broad automation.
 - Fail fast on external API errors; never open PRs on failed generation.
 
