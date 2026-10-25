@@ -17,7 +17,7 @@ export const MIN_TITLE_CHARS = 8;
 const MAX_TEXT_CHARS = 160;
 
 // A test case opens a statement (the title alternatives are disjoint: a backslash is only ever consumed by `\\.`, so an unclosed title is linear): `re.test(x)` inside an assertion is not one.
-const TEST_CASE_LINE = /^\s*(?:test|it)(?:\.(?:only|skip|todo))?\s*\(\s*(?:(['"`])((?:\\.|(?!\1)[^\\])*)\1)?/;
+const TEST_CASE_LINE = /^\s*(?:(?:await|void)\s+)?(?:test|it)(?:\.[A-Za-z]+)*\s*\(\s*(?:(['"`])((?:\\.|(?!\1)[^\\])*)\1)?/;
 const SEVERITY = { module_system: 'High', unresolved_import: 'High', test_count_drop: 'High', exported_signature: 'Medium' };
 const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f`]/g, ' ').replace(/\s+/g, ' ').trim();
 const clip = (text) => plain(text).slice(0, MAX_TEXT_CHARS);
@@ -49,14 +49,18 @@ export function parseDiffChanges(rawDiff) {
 
 const caseTitles = (lines) => lines.map((l) => TEST_CASE_LINE.exec(l)).filter(Boolean).map((m) => m[2] ?? '(dynamic title)');
 
-// Test cases of a whole source file, read on the masked code: comments are gone and each string is a placeholder, so a
-// `test(` inside a template literal (a fixture) or a block comment is not a case. A title that is not a plain string
-// (template, variable) is "(dynamic title)".
-const CASE_CALL = /(?:^|[;\n{}])[ \t]*(?:test|it)(?:\.(?:only|skip|todo))?[ \t]*\([ \t]*(?:"S(\d+)")?/g;
-const casesOfSource = (source) => {
+// Test cases of a whole source file, two ways. Masked: comments are gone and each string is a placeholder, so a `test(`
+// inside a template literal (a fixture) or a block comment is not a case, but the lexer is heuristic (a regex literal
+// holding a quote or a backtick can hide the code after it). Raw: every statement-start call, fixtures and comments
+// included, but no lexer to fool. A title that is not a plain string (template, variable) is "(dynamic title)".
+const CASE_CALL = /(?:^|[;\n{}])[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)(?:\.[A-Za-z]+)*\s*\(\s*(?:"S(\d+)")?/g;
+const RAW_CASE_CALL = /^[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)(?:\.[A-Za-z]+)*\s*\(\s*(?:(['"`])((?:\\.|(?!\1)[^\\\n])*)\1)?/gm;
+const maskedCases = (source) => {
   const { code, strings } = maskSource(source);
   return [...code.matchAll(CASE_CALL)].map((m) => (m[1] === undefined ? '(dynamic title)' : strings[Number(m[1])]));
 };
+// A template title is dynamic on both readings (the masked code keeps no template text).
+const rawCases = (source) => [...String(source ?? '').matchAll(RAW_CASE_CALL)].map((m) => (m[1] === '`' || m[2] === undefined ? '(dynamic title)' : m[2]));
 // What `a` has that `b` does not, as multisets.
 const without = (a, b) => {
   const left = [...b];
@@ -65,6 +69,22 @@ const without = (a, b) => {
     if (at >= 0) left.splice(at, 1);
     return at < 0;
   });
+};
+
+// What a file lost and gained. A case counts as lost only when both readings agree it is gone: a lexer fooled into hiding
+// code cannot make a kept case look removed, and a fixture can only make a removal go unseen, which is the safe side for
+// a rule that blocks approval. A gain counts when either reading sees it.
+const casesChange = (before, after) => {
+  const [maskedWas, maskedIs, rawWas, rawIs] = [maskedCases(before), maskedCases(after), rawCases(before), rawCases(after)];
+  const lostMasked = without(maskedWas, maskedIs);
+  const lostRaw = without(rawWas, rawIs);
+  const removed = lostMasked.filter((t) => {
+    const at = lostRaw.indexOf(t);
+    if (at >= 0) lostRaw.splice(at, 1);
+    return at >= 0;
+  });
+  const gainedMasked = without(maskedIs, maskedWas);
+  return { removed, added: [...gainedMasked, ...without(without(rawIs, rawWas), gainedMasked)] };
 };
 
 const isWaived = (title, mentionText) => {
@@ -95,8 +115,7 @@ export function findTestCountDrops(rawDiff, { mentionText = '', readBase = null,
       const after = readHead(normalizeRepoPath(f.after));
       const before = f.isNew ? '' : readBase(normalizeRepoPath(f.before));
       if (after == null || before == null) continue;
-      const [was, is] = [casesOfSource(before), casesOfSource(after)];
-      state.push({ file: f, removed: without(was, is), added: without(is, was) });
+      state.push({ file: f, ...casesChange(before, after) });
     } catch {
       // unreadable: no finding rather than a guess
     }
@@ -136,6 +155,30 @@ const withMentionedRemovals = (reasons, before, after, mentionText) => {
   return reasons.filter((r) => !waived.some((n) => r.startsWith(`removes exported function ${n}(`)));
 };
 
+const countRaw = (text, re) => (String(text ?? '').match(re) || []).length;
+const REQUIRE_RAW = /(?<![.\w$])require\s*\(/g;
+const ESM_RAW = /^[ \t]*(?:import[\s{*"']|export\s)/gm;
+const identifier = (name) => String(name).replace(/\$/g, '\\$');
+
+/**
+ * The lexer behind these rules is heuristic, so a reason is kept only when the raw text agrees with it: a regex literal
+ * that hides code in one version of the file must not turn into a blocking finding.
+ */
+const confirmedOnRawText = (rule, reason, before, after) => {
+  if (rule === GUARDRAIL_RULES.MODULE_SYSTEM) {
+    return /require\(\)/.test(reason) ? countRaw(after, REQUIRE_RAW) > countRaw(before, REQUIRE_RAW) : countRaw(after, ESM_RAW) > countRaw(before, ESM_RAW);
+  }
+  if (rule === GUARDRAIL_RULES.EXPORTED_SIGNATURE) {
+    const removed = /^removes exported function ([\w$]+)\(/.exec(reason)?.[1];
+    return removed ? !new RegExp(`\\bexport\\b[^\\n;]*(?<![\\w$])${identifier(removed)}(?![\\w$])`).test(after) : true;
+  }
+  if (rule === GUARDRAIL_RULES.UNRESOLVED_IMPORT) {
+    const named = /^imports (?:package )?"([^"]+)"/.exec(reason)?.[1];
+    return named && before !== null ? !String(before).includes(named) : true;
+  }
+  return true;
+};
+
 const TS_SOURCE = { '.js': ['.ts', '.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'], '.jsx': ['.tsx'] };
 
 /**
@@ -159,7 +202,9 @@ export function findFileRuleViolations(rawDiff, { readBase, readHead, manifestFo
       continue;
     }
     if (after == null) continue;
-    const add = (rule, reason) => findings.push({ rule, path: key, severity: SEVERITY[rule], reason });
+    const add = (rule, reason) => {
+      if (confirmedOnRawText(rule, reason, before, after)) findings.push({ rule, path: key, severity: SEVERITY[rule], reason });
+    };
     const moduleReason = findModuleSystemViolation(key, before, after);
     if (moduleReason) add(GUARDRAIL_RULES.MODULE_SYSTEM, moduleReason);
     if (before !== null) {

@@ -257,3 +257,49 @@ test('findTestCountDrops with file contents: moves across files and waivers use 
   assert.equal(findTestCountDrops(diff, readers(bases, lost)).length, 1);
   assert.deepEqual(findTestCountDrops(diff, { ...readers(bases, lost), mentionText: 'drops the moved case title test' }), []);
 });
+
+test('findTestCountDrops with file contents: a regex literal that fools the lexer cannot make a kept case look removed', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-const re = /x/;', '+const re = /`/;']);
+  const base = "const re = /x/;\ntest('kept test case', () => {});\ntest('another kept case', () => {});\n";
+  const head = "const re = /`/;\ntest('kept test case', () => {});\ntest('another kept case', () => {});\n";
+  assert.deepEqual(findTestCountDrops(diff, readers({ 't/a.test.mjs': base }, { 't/a.test.mjs': head })), []);
+  // A real removal next to the same regex is still found: the raw reading agrees.
+  const found = findTestCountDrops(diff, readers({ 't/a.test.mjs': base }, { 't/a.test.mjs': "const re = /`/;\ntest('kept test case', () => {});\n" }));
+  assert.match(found[0].reason, /^1 test case removed without a replacement \("another kept case"\)/);
+});
+
+test('findTestCountDrops with file contents: awaited, voided, chained and reformatted calls are still the same case', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const base = caseSource('kept test case', 'second kept case', 'third kept case');
+  const head = "await test('kept test case', () => {});\nvoid test('second kept case', () => {});\ntest.concurrent.only(\n  'third kept case',\n  () => {},\n);\n";
+  assert.deepEqual(findTestCountDrops(diff, readers({ 't/a.test.mjs': base }, { 't/a.test.mjs': head })), []);
+  const split = "test\n  ('kept test case', () => {});\n";
+  assert.deepEqual(findTestCountDrops(diff, readers({ 't/a.test.mjs': caseSource('kept test case') }, { 't/a.test.mjs': split })), []);
+  assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ['-await test("gone case title", () => {});']))[0].reason, /gone case title/, 'diff-line mode reads the awaited form too');
+});
+
+test('findFileRuleViolations: a reason is kept only when the raw text agrees with the lexer', () => {
+  const run = (path, base, head, extra = {}) => findFileRuleViolations(modified(path), {
+    readBase: () => base, readHead: () => head, fileExists: () => true, manifestFor: () => new Set(['declared']), ...extra,
+  });
+  // A regex literal holding a backtick hides every `require(` of the base: the head's are not new.
+  const hidden = "const re = /`/;\nconst a = require('fs');\nconst b = require('os');\n";
+  assert.deepEqual(run('src/a.mjs', hidden, "const re = /x/;\nconst a = require('fs');\nconst b = require('os');\n").map((f) => f.rule), [], 'same requires, not added');
+  assert.deepEqual(run('src/a.mjs', 'export {};\n', "const fs = require('fs');\n").map((f) => f.rule), ['module_system'], 'a real addition stays');
+  assert.deepEqual(run('src/b.cjs', 'const x = require("fs");\n', "const re = /`/;\nconst x = require('fs');\n").map((f) => f.rule), []);
+  // An export hidden by the head's regex literal is not a removed export.
+  const base = 'export function keep(a) {\n  return a;\n}\n';
+  const head = "const re = /`/;\nexport function keep(a) {\n  return a;\n}\n";
+  assert.deepEqual(run('src/c.mjs', base, head).map((f) => f.rule), []);
+  assert.deepEqual(run('src/c.mjs', base, 'export const other = 1;\n').map((f) => f.rule), ['exported_signature'], 'a real removal stays');
+  // An import the base already had, hidden by its own regex literal, is not a new unresolved import.
+  assert.deepEqual(run('src/d.mjs', "const re = /`/;\nimport x from './old.mjs';\n", "import x from './old.mjs';\n", { fileExists: () => false }).map((f) => f.rule), []);
+  assert.deepEqual(run('src/d.mjs', 'export {};\n', "import x from './nowhere.mjs';\n", { fileExists: () => false }).map((f) => f.rule), ['unresolved_import'], 'a real unresolved import stays');
+});
+
+test('linear time also on whole-file counting: long runs of call-like tokens and whitespace', () => {
+  const started = performance.now();
+  const hostile = [`${'test '.repeat(5000)}`, `${'test'.padEnd(5000, ' ')}\n`.repeat(50), `it\n`.repeat(5000), `test(${'\\'.repeat(5000)}`, `await ${'test.x'.repeat(2000)}(`];
+  for (const body of hostile) findTestCountDrops(fileDiff('t/a.test.mjs', ['-x']), { readBase: () => `${body}\n${caseSource('kept test case')}`, readHead: () => caseSource('kept test case') });
+  assert.ok(performance.now() - started < 3000, `scanning took ${Math.round(performance.now() - started)} ms`);
+});
