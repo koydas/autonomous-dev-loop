@@ -6,7 +6,7 @@
 import { eventSummary, safeUrl } from './pipeline_model.mjs';
 import { percentile, withheldCause } from './pipeline_health.mjs';
 import { attemptOf, stepDecision, isLifecycleRun } from './pipeline_journey.mjs';
-import { DESIGN_RULES, waitingOnYou } from './pipeline_waiting.mjs';
+import { DESIGN_RULES, CONFLICT_DESIGN_REASONS, waitingOnYou } from './pipeline_waiting.mjs';
 
 // Rule thresholds: below them a pattern is not reported (too few cases to separate it from noise).
 export const RULES = Object.freeze({
@@ -16,6 +16,8 @@ export const RULES = Object.freeze({
   reviewStreak: 3, // consecutive non-APPROVE verdicts on one PR
   autofixMinAttempts: 2, // auto-fix attempts before its push rate is judged
   autofixNoPushShare: 0.5,
+  conflictsMinAttempts: 2, // conflicts-fix attempts before its resolution rate is judged (ADR-0058)
+  conflictsUnresolvedShare: 0.5,
   fallbackMin: 2, // provider fallbacks or errors of one kind
   durationMinRuns: 3, // runs per 7-day period to compare stage durations
   durationRatio: 1.5, // p50 growth reported as a degradation
@@ -323,6 +325,37 @@ function autofixFindings(runs) {
   })];
 }
 
+// Conflicts-fix (ADR-0058): attempts that did not end in a merge commit. An escalation a structural limit explains
+// (protected path, binary, size, registry, token scope) is the guardrail working; a post-check, a guard, a parse, npm
+// or push failure is the stage's own.
+function conflictsFindings(runs) {
+  const attempts = events(runs, 'conflicts.start').filter(({ e }) => Number.isInteger(e.meta.attempt));
+  if (attempts.length < RULES.conflictsMinAttempts) return [];
+  const resolved = new Set(events(runs, 'conflicts.resolved').map(({ run }) => run.run_id));
+  const escalations = events(runs, 'conflicts.escalated');
+  const reasonOf = new Map(escalations.map(({ run, e }) => [run.run_id, e.meta.reason]));
+  const unresolved = attempts.filter(({ run }) => !resolved.has(run.run_id));
+  const rate = rateAtLastOccurrence(attempts, ({ run }) => !resolved.has(run.run_id));
+  if (!unresolved.length || (unresolved.length / attempts.length < RULES.conflictsUnresolvedShare && (rate.n < RULES.conflictsMinAttempts || rate.share < RULES.conflictsUnresolvedShare))) return [];
+  const byReason = {};
+  for (const { run } of unresolved) { const r = reasonOf.get(run.run_id) ?? 'unspecified'; byReason[r] = (byReason[r] ?? 0) + 1; }
+  const designed = unresolved.filter(({ run }) => CONFLICT_DESIGN_REASONS.has(reasonOf.get(run.run_id)));
+  const anomalies = unresolved.length - designed.length;
+  const warning = anomalies / attempts.length >= RULES.conflictsUnresolvedShare;
+  return [finding({
+    id: 'conflicts-unresolved', severity: warning ? 'warning' : 'info', category: 'Conflicts', title: 'Conflicts-fix rarely resolves a conflict', share: RULES.conflictsUnresolvedShare,
+    fact: `${attempts.length - unresolved.length} conflict(s) merged for ${attempts.length} attempt(s); reasons for the others: ${Object.entries(byReason).map(([k, n]) => `${k} ${n}`).join(', ') || 'none recorded'}. Explained by a structural limit: ${designed.length}; the stage's own: ${anomalies}.`,
+    hypothesis: warning
+      ? 'The model resolution fails its post-checks or the write guard more often than the limits explain: the prompt (prompts/conflicts-system.md), the input budget (conflicts_max_input_tokens) or the provider are the places to look.'
+      : 'The limits worked as designed: protected files, binaries, size or the registry rule stopped the attempts. The lever is a person, or the input budget (conflicts_max_input_tokens, ADR-0017).',
+    impact: `${unresolved.length} attempt(s) ended without a merge commit, escalated to a human`, frequency: `${unresolved.length} of ${attempts.length} attempt(s)`,
+    items: [...new Set(attempts.map(prOf).filter(Boolean))], eligible: withEvent(runs, 'conflicts.start'), runs: runIds(attempts),
+    occ: unresolved.map(({ run }) => run.run_id),
+    anomaly: unresolved.filter(({ run }) => !CONFLICT_DESIGN_REASONS.has(reasonOf.get(run.run_id))).map(({ run }) => run.run_id),
+    titleByDesign: 'Conflicts left to a human by design (ADR-0021, ADR-0058)', evidence: evidenceOf(escalations.length ? escalations : attempts),
+  })];
+}
+
 // A generation run blocked by design: the patch was rejected only on protected, unshown or withheld targets
 // (ADR-0021, ADR-0029, same rule set as auto-fix), or the deterministic check found every path the issue needs
 // protected or withheld (`reason: blocked`, `source: denylist`, ADR-0029 amendment). A `source: model` block
@@ -469,7 +502,7 @@ export function diagnose({ model, journeys = [], protectedPaths } = {}) {
   if (!runs.length) return { status: 'no_data', findings: [], gaps: model ? telemetryGaps(model, journeys) : [] };
   const durations = durationFindings(runs);
   const findings = [
-    ...executionFailures(runs), ...interventions(waitingOnYou({ model, journeys, protectedPaths })), ...reviewFindings(runs), ...autofixFindings(runs),
+    ...executionFailures(runs), ...interventions(waitingOnYou({ model, journeys, protectedPaths })), ...reviewFindings(runs), ...autofixFindings(runs), ...conflictsFindings(runs),
     ...generationFindings(runs), ...providerFindings(runs), ...durations.findings,
   ].map(withLifecycle).sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
   const status = findings.some((f) => f.severity === 'critical') ? 'critical' : findings.some((f) => f.severity === 'warning') ? 'warning' : 'ok';

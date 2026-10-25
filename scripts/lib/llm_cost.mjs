@@ -10,6 +10,7 @@ export const LLM_STAGE_TO_PIPELINE_STAGE = Object.freeze({
   generation: 'code_gen',
   review: 'review',
   autofix: 'autofix',
+  conflicts: 'conflicts',
 });
 
 const count = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);

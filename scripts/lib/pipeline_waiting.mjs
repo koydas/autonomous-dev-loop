@@ -11,6 +11,22 @@ import { safeUrl } from './pipeline_model.mjs';
 // Rules of the write guard that stop a patch because of where it points, not because of what it contains
 // (ADR-0021, ADR-0029): a guardrail doing its job.
 export const DESIGN_RULES = new Set(['protected_path', 'unshown_file', 'withheld_file']);
+// Conflicts-fix escalations (ADR-0058) that a structural limit explains: a protected file, a file kind or size the
+// model is not given, a registry the PR chose, a token scope. The rest (a post-check, a guard, a parse, npm, a push)
+// is a failure of the stage itself.
+export const CONFLICT_DESIGN_REASONS = new Set(['protected_path', 'unsupported_conflict', 'binary_file', 'too_large', 'too_many_files', 'lockfile_unsafe', 'workflow_scope']);
+const CONFLICT_REASON_TEXT = {
+  protected_path: 'a conflicted file is on the protected list (ADR-0021)',
+  unsupported_conflict: 'the conflict is a deleted, renamed, symlinked or submodule file',
+  binary_file: 'a conflicted file is binary',
+  too_large: 'a conflicted file or its hunks exceed the model input budget',
+  too_many_files: 'more conflicted files than one run resolves',
+  lockfile_unsafe: 'the PR changes the registry configuration, so the lockfile is not regenerated',
+  workflow_scope: 'the merge brings workflow changes the token cannot push',
+  model_rejected: 'the model resolution failed a post-check', guard_rejected: 'the resolution was rejected by the write guard',
+  parse_failed: 'the model answer or the conflict markers could not be read', syntax_error: 'a resolved file does not parse',
+  lockfile_failed: 'the lockfile could not be regenerated', push_failed: 'the merge commit could not be pushed',
+};
 const RULE_TEXT = { protected_path: 'a target file is protected', unshown_file: 'a target file was not shown to the model', withheld_file: 'a target file was withheld from the model' };
 const MAX_NAMES = 5;
 const MAX_NAME_CHARS = 120;
@@ -38,6 +54,11 @@ export function explainEscalation(esc, run, protectedPaths = PROTECTED_FLOOR) {
   }
   if (esc.event === 'review.escalated') {
     return { kind: 'circuit_breaker', by_design: true, reason: `The same review failure repeated on ${Number.isInteger(meta.streak) ? meta.streak : 'several'} consecutive reviews: the circuit breaker stopped the loop (ADR-0050)`, files: [] };
+  }
+  if (esc.event === 'conflicts.escalated') {
+    const text = CONFLICT_REASON_TEXT[meta.reason];
+    if (!text) return unknown('The escalation of conflicts-fix gives no known reason');
+    return { kind: `conflicts_${meta.reason}`, by_design: CONFLICT_DESIGN_REASONS.has(meta.reason), reason: `Merge conflicts not resolved by the pipeline: ${text}`, files: [] };
   }
   if (esc.event === 'autofix.max_attempts_reached') {
     return { kind: 'attempt_limit', by_design: true, reason: 'Auto-fix used its attempts without converging: a person has to decide', files: [] };

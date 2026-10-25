@@ -548,7 +548,7 @@ only by GitHub's `merged_at`, never by workflow success; a PR closed without it
 shows ⊘ "closed without merge", an open one ○ "PR open".
 
 Cards start collapsed. The summary shows the PR/issue title and one icon per
-step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge):
+step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge; plus Conflicts fix on a card where it ran, ADR-0058):
 ✓ success, ✗ failed, ⊘ skipped, ○ not recorded. A step's icon is the span
 outcome of its final execution, ordered by when each attempt ended: its last
 event of the step, including the workflow event that decides it

@@ -13,6 +13,8 @@ export const STEPS = Object.freeze([
   Object.freeze({ key: 'pr_prepare', name: 'PR preparation', issueOnly: true }),
   Object.freeze({ key: 'review', name: 'Review', issueOnly: false }),
   Object.freeze({ key: 'autofix', name: 'Auto-fix', issueOnly: false }),
+  // ADR-0058: runs when the PR conflicts with its base; between the other steps, whenever the base moves.
+  Object.freeze({ key: 'conflicts', name: 'Conflicts fix', issueOnly: false, optional: true }),
 ]);
 
 // Span outcomes a step can show; anything else (missing, unknown) is not recorded, never success. A record
@@ -106,6 +108,15 @@ export function stepDecision(run, step) {
     if (e.meta.reason === 'approved') return { key: 'approved', label: 'Skipped: head approved', tone: 'neutral', reason: null, url: null };
     const rules = Array.isArray(e.meta.rules) && e.meta.rules.length ? ` (${e.meta.rules.join(', ')})` : '';
     return { key: String(e.meta.reason ?? 'skipped'), label: e.meta.reason === 'no_changes' ? 'No change produced' : e.meta.reason === 'guardrail_rejected' ? 'Rejected by guardrail' : 'Skipped', tone: 'warn', reason: `${reasonText(e.meta.reason) ?? 'reason not recorded'}${rules}`, url: null };
+  }
+  if (step === 'conflicts') {
+    const e = last(run, ['conflicts.resolved', 'conflicts.escalated', 'conflicts.skipped', 'conflicts.error']);
+    if (!e) return null;
+    if (e.event === 'conflicts.resolved') return { key: 'resolved', label: 'Conflicts resolved', tone: 'good', reason: [e.meta.rung ? `rung ${e.meta.rung}` : null, e.meta.hunks ? `${e.meta.hunks} hunk(s) by the model` : null, e.meta.renumbered ? `${e.meta.renumbered} ADR renumbered` : null].filter(Boolean).join(', ') || null, url: safeUrl(e.meta.url) };
+    if (e.event === 'conflicts.error') return { key: 'error', label: 'Error', tone: 'bad', reason: null, url: null };
+    if (e.event === 'conflicts.escalated') return { key: 'escalated', label: 'Escalated to a human', tone: 'warn', reason: reasonText(e.meta.reason), url: safeUrl(e.meta.url) };
+    const adverse = e.meta.reason === 'attempts_exhausted' || e.meta.reason === 'circuit_open';
+    return { key: String(e.meta.reason ?? 'skipped'), label: 'Skipped', tone: adverse ? 'warn' : 'neutral', reason: reasonText(e.meta.reason), url: null };
   }
   return null;
 }
@@ -224,7 +235,10 @@ function itemState(steps, escalated, runs, closing) {
   const decisions = review.attempts.filter((a) => a.decision && a.decision.key !== 'skipped');
   const lastReview = decisions.at(-1);
   const lastEscalation = escalated.at(-1);
-  if (lastEscalation && !(lastReview?.decision.key === 'APPROVE' && (lastReview.ended_at ?? 0) > (lastEscalation.ts ?? 0))) return 'escalated';
+  // A conflicts-fix escalation is settled by a later successful merge of the base (ADR-0058), as one of review is by an APPROVE.
+  const conflicts = steps.find((s) => s.key === 'conflicts');
+  const mergedAfter = lastEscalation?.stage === 'conflicts' && conflicts.final?.decision?.key === 'resolved' && (conflicts.final.ended_at ?? 0) > (lastEscalation.ts ?? 0);
+  if (lastEscalation && !mergedAfter && !(lastReview?.decision.key === 'APPROVE' && (lastReview.ended_at ?? 0) > (lastEscalation.ts ?? 0))) return 'escalated';
   if (lastReview) return { APPROVE: 'approved', WITHHELD: 'withheld', REQUEST_CHANGES: 'changes_requested' }[lastReview.decision.key] ?? 'in_progress';
   return 'in_progress';
 }
@@ -243,6 +257,7 @@ export function workItemJourney(trace) {
     if (!j.attempts.length) {
       if (def.issueOnly && !issueItem) note = 'No linked issue: not part of this flow';
       else if (def.key === 'autofix' && !reviewVerdicts.includes('REQUEST_CHANGES')) note = 'Not triggered: no REQUEST_CHANGES verdict recorded';
+      else if (def.key === 'conflicts') note = 'Not triggered: no merge conflict recorded';
       else note = 'Not recorded';
     }
     return { key: def.key, name: def.name, ...j, note };

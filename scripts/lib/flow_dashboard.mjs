@@ -75,7 +75,8 @@ export function pipelineRow(trace, root = '') {
   const j = workItemJourney(trace);
   const total = sumCosts(runs.flatMap(r => r.llm));
   const tokensOf = [j.state, j.attention ? 'attention' : ''].filter(Boolean).join(' ');
-  const steps = j.steps;
+  // An optional step (conflicts-fix) is drawn only when it ran: most items never conflict, and an icon "not recorded" on every card says nothing.
+  const steps = j.steps.filter((s) => s.attempts.length || !STEPS.find((d) => d.key === s.key)?.optional);
   const title = `${trace.item?.kind === 'issue' ? 'Issue' : trace.item?.kind === 'pr' ? 'PR' : 'Work item'} #${trace.item?.number ?? 'unknown'}`;
   const stages = steps.filter(s => s.attempts.length).map(s => s.key);
   const href = trace.trace_id ? `${root}traces/${trace.trace_id}.html` : null;
