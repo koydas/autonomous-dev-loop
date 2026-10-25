@@ -193,22 +193,36 @@ export const mayStillExport = (source, name) => {
   return false;
 };
 
+// A change of arity, parameters or sync/async is kept only when both parameter lists were read without doubt: the
+// masked text has no `/` left, i.e. no regex literal whose `)` or `,` the parameter parser could have taken for its own
+// (`pattern = /\)/` ends the list early). When it cannot tell, the finding is withheld.
+const parametersReadWithoutDoubt = (reason, before, after) => {
+  const name = /exported ([\w$]+)\(/.exec(reason)?.[1];
+  if (!name) return true;
+  return [before, after].every((source) => {
+    const sig = extractExportedSignatures(source).get(name);
+    return !sig || !String(sig.raw ?? '').includes('/');
+  });
+};
+
 /**
  * The lexer behind these rules is heuristic, so a reason is kept only when the raw text agrees with it: a regex literal
  * that hides code in one version of the file must not turn into a blocking finding.
  */
-const confirmedOnRawText = (rule, reason, before, after) => {
+export const confirmedOnRawText = (rule, reason, before, after) => {
   if (rule === GUARDRAIL_RULES.MODULE_SYSTEM) {
     return /require\(\)/.test(reason) ? countRaw(after, REQUIRE_RAW) > countRaw(before, REQUIRE_RAW) : countRaw(after, ESM_RAW) > countRaw(before, ESM_RAW);
   }
   if (rule === GUARDRAIL_RULES.EXPORTED_SIGNATURE) {
     const removed = /^removes exported function ([\w$]+)\(/.exec(reason)?.[1];
-    if (!removed) return true;
+    if (!removed) return parametersReadWithoutDoubt(reason, before, after);
     return !new RegExp(`\\bexport\\b[^\\n;]*(?<![\\w$])${identifier(removed)}(?![\\w$])`).test(after) && !mayStillExport(after, removed);
   }
   if (rule === GUARDRAIL_RULES.UNRESOLVED_IMPORT) {
     const named = /^imports (?:package )?"([^"]+)"/.exec(reason)?.[1];
-    return named && before !== null ? !String(before).includes(named) : true;
+    if (!named) return true;
+    // The specifier must be written in the head (a lexer slip can invent one) and absent from the base text.
+    return String(after).includes(named) && (before === null || !String(before).includes(named));
   }
   return true;
 };

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  parseDiffChanges, findTestCountDrops, findFileRuleViolations, collectGuardrailFindings, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
+  parseDiffChanges, findTestCountDrops, findFileRuleViolations, collectGuardrailFindings, confirmedOnRawText, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
 } from '../lib/guardrail_review.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -349,4 +349,31 @@ test('re-export detection is linear on hostile text: many unclosed export blocks
   assert.ok(performance.now() - started < 3000, `scanning took ${Math.round(performance.now() - started)} ms`);
   assert.equal(mayStillExport('export { a }\nexport {\n  keep }', 'keep'), true);
   assert.equal(mayStillExport('export { a }', 'keep'), false);
+});
+
+test('findFileRuleViolations: a parameter change is kept only when the parameter lists were read without doubt', () => {
+  const run = (base, head) => findFileRuleViolations(modified('src/a.mjs'), { readBase: () => base, readHead: () => head, fileExists: () => true, manifestFor: () => new Set() }).map((f) => `${f.rule}: ${f.reason}`);
+  // Editing only a regex literal in a default value, whose `)` the parameter parser takes for the end of the list.
+  assert.deepEqual(run('export function f(pattern = /x/, options) {}\n', 'export function f(pattern = /\\)/, options) {}\n'), []);
+  assert.deepEqual(run('export function f(pattern = /\\)/, options) {}\n', 'export function f(pattern = /x/, options) {}\n'), [], 'and the other way round');
+  // The same kinds of change without the ambiguity are reported.
+  assert.match(run('export function f(a, b) {}\n', 'export function f(a) {}\n')[0], /^exported_signature: changes the arity of exported f\(a, b\)/);
+  assert.match(run('export function f(a, b) {}\n', 'export function f(a, c) {}\n')[0], /changes the parameters of exported f/);
+  assert.match(run('export function f(a) {}\n', 'export async function f(a) {}\n')[0], /makes exported f\(a\) async/);
+  // A real arity change next to an unrelated regex outside the parameter list stays.
+  assert.equal(run('const re = /x/;\nexport function f(a, b) {}\n', 'const re = /y/;\nexport function f(a) {}\n').length, 1);
+  // A function with a regex in its parameters is withheld even when the arity really changed: the boundary is uncertain.
+  assert.deepEqual(run('export function f(p = /x/, o) {}\n', 'export function f(p = /x/) {}\n'), []);
+});
+
+test('confirmedOnRawText: an import specifier must be written in the head and absent from the base', () => {
+  const reason = 'imports "./nowhere.mjs", which does not resolve to a file after the patch';
+  const rule = 'unresolved_import';
+  assert.equal(confirmedOnRawText(rule, reason, "import a from './a.mjs';\n", "import b from './nowhere.mjs';\n"), true);
+  assert.equal(confirmedOnRawText(rule, reason, null, "import b from './nowhere.mjs';\n"), true, 'new file');
+  assert.equal(confirmedOnRawText(rule, reason, "import b from './nowhere.mjs';\n", "import b from './nowhere.mjs';\n"), false, 'already in the base');
+  assert.equal(confirmedOnRawText(rule, reason, 'export {};\n', 'export {};\n'), false, 'not written in the head: a lexer slip invented it');
+  assert.equal(confirmedOnRawText(rule, 'imports URL "https://x.y/z.js"', 'export {};\n', "import u from 'https://x.y/z.js';\n"), true);
+  assert.equal(confirmedOnRawText(rule, 'something else', '', ''), true, 'a reason without a specifier is kept');
+  assert.equal(confirmedOnRawText('other_rule', 'x', '', ''), true);
 });
