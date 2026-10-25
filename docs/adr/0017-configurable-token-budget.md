@@ -61,3 +61,8 @@ system (~460) + wrapper (~218) + sections (≤7,182) + max_output (4,096) ≈ 11
 - ⚠️ A lower input budget truncates diff and file contents; very large PRs may receive incomplete fixes. Monitor `token_estimate` log lines to detect consistent truncation.
 - ⚠️ `diff_ratio + feedback_ratio` must sum to less than 1.0; the remainder goes to file contents. Validation is enforced in `loadLLMConfig` at startup.
 - ⚠️ When a new pipeline stage with similar provider constraints is added, the same three YAML keys must be defined for that stage and consumed in the corresponding script.
+
+## Amendment (2026-10-25): the arithmetic moved to `autofix_core.mjs` (EV-03)
+
+The budget computation quoted above no longer sits inline in `auto_fix_pr.mjs`: it is `fitAutofixBudget` in `scripts/lib/autofix_core.mjs`, called by the entrypoint and shared with the future `autofix` eval suite. Same formula, same defaults (`autofix_diff_ratio` 0.15, `autofix_feedback_ratio` 0.25, the ratio sum check stays in the entrypoint), no behavior change. `MODEL_CONTEXT_WINDOW` (ADR-0025) moved with it.
+
