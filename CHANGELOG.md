@@ -7,6 +7,8 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Docs: a PR of about 1,000 added lines or more is split along a seam** (`AGENTS.md`, Objectives). Read from 250 PRs on 2026-10-24: external review threads per PR are 0.76 under 100 added lines, 1.4 to 1.6 from 100 to 1,000 (11 to 14 % of PRs reach three or more rounds, flat across those sizes) and 3.53 from 1,000 (19 PRs). A mechanical change (rename, generated file, moved block) is exempt. No cap below 1,000: the data do not separate sizes under it. Observational (the large PRs are also the feature PRs); the criterion is the threads per PR of the next PRs above 1,000 lines.
+
 - **Diagnostics: `external-review-churn`, PRs that took several external review rounds** (ADR-0043 amendment 2026-10-25).
   - An approving run journals `review.external` (`prNumber`, `rounds`, `threads`, `p0p1`: counts only, added to `EVENT_META_ALLOWLIST`) before the trace is finalized, so the published run record carries what `external_review` put on the `pr` record of `metrics/runs.jsonl`; not emitted when GitHub could not be read. New rule in `pipeline_diagnostics.mjs`: PRs whose newest highest round count reaches `RULES.externalRounds` (3). Always `info` (the status stays `ok`: the reviewer is external and the counts are a lower bound), with a labelled hypothesis, no lever (`NO_LEVER`, ADR-0047) and the usual active / resolved lifecycle.
   - Active lessons take no signal from it (ADR-0051: closed ids written by code only; the external findings are third-party text). `docs/observability.md`, `docs/testing.md`, the ADR-0043 amendment and tests (allowlist, rule, lever table, entrypoint) updated.
