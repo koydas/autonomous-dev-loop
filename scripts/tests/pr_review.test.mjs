@@ -2016,6 +2016,29 @@ test('pr_review approves a diff whose PR description names the test it removes',
   }
 });
 
+test('pr_review resolves an imported file over the read limit and a symlinked one, and still flags an import that does not exist', async () => {
+  const fixture = await makePrTree({
+    files: { 'src/a.mjs': 'export const a = 1;\n', 'src/large.mjs': `export const big = 1;\n// ${'z'.repeat(1024 * 1024 + 10)}\n` },
+    outsideFiles: { 'target.mjs': 'export const t = 1;\n' },
+    links: { 'src/linked.mjs': 'target.mjs' },
+  });
+  await fs.writeFile(path.join(fixture.tree, 'src/a.mjs'), "import { big } from './large.mjs';\nimport { t } from './linked.mjs';\nimport { n } from './nowhere.mjs';\nexport const a = big + t + n;\n");
+  const diffText = 'diff --git a/src/a.mjs b/src/a.mjs\n--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1,1 +1,4 @@\n+import { big } from \'./large.mjs\';\n+import { t } from \'./linked.mjs\';\n+import { n } from \'./nowhere.mjs\';\n export const a = 1;\n';
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    assert.match(comment, /Guardrail unresolved_import[^\n]*Root cause: imports "\.\/nowhere\.mjs"/);
+    assert.doesNotMatch(comment, /large\.mjs|linked\.mjs/, 'a large file and a symlink exist, whatever the content reader refuses');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
+  }
+});
+
 // F22 (2026-10-19 audit): no PR-tree file over PR_TREE_MAX_BYTES (1 MiB) is read. An oversized doc is
 // left out of the searches and an oversized config/models.yaml falls back to the defaults, each with a
 // review.file_skipped warn event; the review proceeds.

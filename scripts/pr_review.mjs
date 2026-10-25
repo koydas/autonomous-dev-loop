@@ -384,12 +384,22 @@ const promptBudget = !selfTarget ? [] : computePromptBudgetImpact({
   models: prModels == null ? GROQ_MODEL_DEFAULTS : prModelsOrDefaults(prModels),
 });
 if (promptBudget.length) log('Prompt budget impact', { prNumber, promptBudget });
+// Whether an imported path exists in the PR tree, by lstat only: no content is read, so the 1 MiB read limit and the
+// symlink refusal of the content listing do not apply (Node imports a large file and follows a link). An lstat error
+// counts as existing: the rule must not block on what it could not check.
+const pathExistsInTree = (p) => {
+  try {
+    const kind = lstatPrTreePath(repoRoot, p);
+    return kind.kind === 'file' || (kind.kind === 'other' && kind.reason !== 'outside_tree');
+  } catch {
+    return true;
+  }
+};
 // RV-03: the AGENTS.md Hard Guardrails checked in code against the diff (test cases, signatures, module format,
 // imports). This repository's rules: a target repository (ADR-0045) does not have them. A failure skips the check.
 let guardrails = { findings: [], omitted: 0 };
 if (selfTarget) {
   try {
-    const treeFiles = new Set(repoFiles.listFiles());
     const mentionText = `${prTitle}\n${prBody}`;
     const readBase = (p) => {
       if (!mergeBase) throw new Error('PR base SHA unknown');
@@ -401,7 +411,7 @@ if (selfTarget) {
         readBase,
         readHead: readHeadOrNull,
         manifestFor: (p) => declaredPackages(p, readHeadOrNull),
-        fileExists: (p) => treeFiles.has(p),
+        fileExists: pathExistsInTree,
         mentionText,
       }),
     ]);

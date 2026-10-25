@@ -303,3 +303,21 @@ test('linear time also on whole-file counting: long runs of call-like tokens and
   for (const body of hostile) findTestCountDrops(fileDiff('t/a.test.mjs', ['-x']), { readBase: () => `${body}\n${caseSource('kept test case')}`, readHead: () => caseSource('kept test case') });
   assert.ok(performance.now() - started < 3000, `scanning took ${Math.round(performance.now() - started)} ms`);
 });
+
+test('findTestCountDrops with file contents: a destination we do not scan or cannot read still receives the moved case', () => {
+  const names = Array.from({ length: MAX_FILES + 1 }, (_, i) => `t/f${String(i).padStart(2, '0')}.test.mjs`);
+  const moved = 'moved case title';
+  const diff = names.map((n, i) => fileDiff(n, [i === 0 ? `-${T(moved)}` : i === MAX_FILES ? `+${T(moved)}` : ' y'])).join('');
+  const bases = Object.fromEntries(names.map((n, i) => [n, caseSource(`kept case ${i}`, ...(i === 0 ? [moved] : []))]));
+  const heads = Object.fromEntries(names.map((n, i) => [n, caseSource(`kept case ${i}`)]));
+  // The 41st file is past the scan cap: its added line pays for the case removed from the first.
+  assert.deepEqual(findTestCountDrops(diff, readers(bases, heads)), []);
+  // A real loss in the first file is still reported when the destination is beyond the cap but pays for something else.
+  const other = diff.replace(`+${T(moved)}\n`, `+${T('some other new case')}\n`);
+  assert.equal(findTestCountDrops(other, readers(bases, heads)).length, 1);
+  // Unreadable destination (throws), and a destination missing at head.
+  const small = fileDiff('t/a.test.mjs', ['-x']) + fileDiff('t/b.test.mjs', [`+${T(moved)}`]);
+  const two = { 't/a.test.mjs': caseSource('kept case', moved) };
+  assert.deepEqual(findTestCountDrops(small, { readBase: (p) => { if (p === 't/b.test.mjs') throw new Error('boom'); return two[p] ?? ''; }, readHead: (p) => (p === 't/a.test.mjs' ? caseSource('kept case') : caseSource(moved)) }), []);
+  assert.deepEqual(findTestCountDrops(small, readers(two, { 't/a.test.mjs': caseSource('kept case') })), [], 'head missing');
+});

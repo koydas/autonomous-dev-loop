@@ -106,20 +106,27 @@ export function findTestCountDrops(rawDiff, { mentionText = '', readBase = null,
   // Every added case pays for at most one removed case: the same title in the same file first (a case kept), then in
   // another file of the diff (a move); what is left of a file's additions replaces what is left of its removals.
   const state = [];
-  for (const f of (readBase && readHead ? files.slice(0, MAX_FILES) : files)) {
-    if (!readBase || !readHead) {
+  const withReaders = Boolean(readBase && readHead);
+  files.forEach((f, i) => {
+    // A file we do not read (over the cap, unreadable, missing) can still be the destination of a moved case: its
+    // added case lines stand in as replacements and it reports nothing, so a move into it is never a loss.
+    const unscanned = { file: f, removed: [], added: caseTitles(f.added) };
+    if (!withReaders) {
       state.push({ file: f, removed: caseTitles(f.removed), added: caseTitles(f.added) });
-      continue;
+      return;
+    }
+    if (i >= MAX_FILES) {
+      state.push(unscanned);
+      return;
     }
     try {
       const after = readHead(normalizeRepoPath(f.after));
       const before = f.isNew ? '' : readBase(normalizeRepoPath(f.before));
-      if (after == null || before == null) continue;
-      state.push({ file: f, ...casesChange(before, after) });
+      state.push(after == null || before == null ? unscanned : { file: f, ...casesChange(before, after) });
     } catch {
-      // unreadable: no finding rather than a guess
+      state.push(unscanned);
     }
-  }
+  });
   const take = (list, title) => {
     const at = list.indexOf(title);
     if (at >= 0) list.splice(at, 1);
