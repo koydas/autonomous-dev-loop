@@ -30,3 +30,4 @@
 - ⚠️ A deliberate removal must be named in the PR description; a PR that forgets gets one REQUEST_CHANGES round.
 - ⚠️ Text-level rules: a test declared by an unusual helper is not counted (symmetrically on both sides of the diff); JavaScript and TypeScript only.
 - ⚠️ A rule change in `static_verifier.mjs` now also changes reviews, not only generation.
+- ⚠️ The check parses untrusted text synchronously in `pr_review.mjs`, where a try/catch cannot interrupt a regex: every pattern it applies to PR lines has disjoint alternatives (linear time), pinned by a test on 5,000-character unclosed titles.

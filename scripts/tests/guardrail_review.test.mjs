@@ -192,3 +192,16 @@ test('findTestCountDrops: an added case pays for one removed case only, across f
   assert.deepEqual(findTestCountDrops(waivedOne, { mentionText: 'drops the named removed case' }), []);
   assert.equal(findTestCountDrops(waivedOne).length, 1, 'without the waiver one removal is not paid for');
 });
+
+test('untrusted lines are scanned in linear time: unclosed titles full of backslashes, quotes and templates', () => {
+  const shapes = ['\\'.repeat(5000), '`' + '\\${'.repeat(2000), "'\"`".repeat(2000), '/' + '[\\/'.repeat(2000), ' '.repeat(5000) + 'x', ','.repeat(5000)];
+  const started = performance.now();
+  for (const body of shapes) {
+    findTestCountDrops(fileDiff('t/a.test.mjs', [`-test('${body}`, `+test("${body}`, `-  it(\`${body}`]));
+    const content = `${body}\nexport function g(a, b) {}\n`;
+    findFileRuleViolations(modified('src/a.mjs'), { readBase: () => content, readHead: () => `${content}${body}`, fileExists: () => true, manifestFor: () => new Set() });
+  }
+  // The exponential title pattern took minutes on 40 backslashes; the whole sweep takes milliseconds.
+  assert.ok(performance.now() - started < 2000, `scanning took ${Math.round(performance.now() - started)} ms`);
+  assert.equal(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('a \\' quote inside the title', () => {});"]))[0].reason.includes('a \\\' quote inside the title'), true, 'an escaped quote still belongs to the title');
+});

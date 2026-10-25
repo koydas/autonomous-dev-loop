@@ -16,8 +16,8 @@ export const MAX_FINDINGS = 12;
 export const MIN_TITLE_CHARS = 8;
 const MAX_TEXT_CHARS = 160;
 
-// A test case opens a statement: `re.test(x)` inside an assertion is not one.
-const TEST_CASE_LINE = /^\s*(?:test|it)(?:\.(?:only|skip|todo))?\s*\(\s*(?:(['"`])((?:\\.|(?!\1).)*)\1)?/;
+// A test case opens a statement (the title alternatives are disjoint: a backslash is only ever consumed by `\\.`, so an unclosed title is linear): `re.test(x)` inside an assertion is not one.
+const TEST_CASE_LINE = /^\s*(?:test|it)(?:\.(?:only|skip|todo))?\s*\(\s*(?:(['"`])((?:\\.|(?!\1)[^\\])*)\1)?/;
 const SEVERITY = { module_system: 'High', unresolved_import: 'High', test_count_drop: 'High', exported_signature: 'Medium' };
 const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f`]/g, ' ').replace(/\s+/g, ' ').trim();
 const clip = (text) => plain(text).slice(0, MAX_TEXT_CHARS);
