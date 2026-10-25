@@ -7,6 +7,7 @@
     "scripts/lib/anthropic_client.mjs",
     "scripts/lib/groq_client.mjs",
     "scripts/lib/review_evidence.mjs",
+    "scripts/lib/external_review.mjs",
     "scripts/lib/output_writer.mjs",
     "scripts/lib/protected_paths.mjs",
     "scripts/lib/roots.mjs",
