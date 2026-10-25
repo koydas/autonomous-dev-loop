@@ -132,7 +132,7 @@ export function renderFeedIndex(model, { generatedAt = null } = {}) {
     ['Runs (window)', compact(model.runs.length)],
     ['Work-item traces', compact(model.traces.length)],
     ['Actions', compact(all.length)],
-    ['LLM cost (window)', costAmount(sumCosts(model.runs.flatMap((r) => r.llm)))],
+    ['Operational LLM cost (window)', costAmount(sumCosts(model.runs.flatMap((r) => r.llm)))],
     ['Latest run', latest ? time(latest.started_at) : '—'],
   ].map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
   const window = model.months.length ? `Records of ${e(model.months.at(-1))} → ${e(model.months[0])}${model.skippedMonths.length ? ` (older months stay on the <code>metrics</code> branch: ${model.skippedMonths.map(e).join(', ')})` : ''}.` : 'No run record on the <code>metrics</code> branch yet.';
@@ -466,6 +466,8 @@ ${nav('', model.months)}
 
 ${costPanel(costs)}
 
+${evalCostPanel(health.eval_costs)}
+
 <details class="detail-panel" id="funnel" open><summary>Delivery funnel · progress through the loop</summary><h2>Funnel</h2>
 <p class="sub">Issue work items that reached each stage (each stage counts items that also reached the previous one). PRs without an issue: ${e(funnel.pr_items.total)}, ${e(funnel.pr_items.approved)} approved.</p>
 ${hbars(funnelRows, { label: 'Funnel: issues validated, PR opened, approved, merged' })}
@@ -515,14 +517,14 @@ const itemRow = (it) => costRow(`<a href="${traceHref('', it.trace_id)}">${e(ite
 
 /** Health panel: LLM cost of the window per stage, workflow, day, and the most expensive runs / work items. */
 export function costPanel(costs) {
-  if (!costs?.total.calls) return `<details class="detail-panel" id="cost" open><summary>LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
+  if (!costs?.total.calls) return `<details class="detail-panel" id="cost" open><summary>Operational LLM cost · per stage, run & work item</summary>${emptyCard('No LLM call recorded in the window.')}</details>`;
   const t = costs.total;
   const items = costs.items_sum ?? sumCosts([]);
   const extra = [['Mean per run', meanAmount(t, costs.runs)], ['Mean per work item', meanAmount(items, costs.items)]];
   const stages = costs.by_stage.filter((g) => g.usd > 0);
-  return `<details class="detail-panel" id="cost" open><summary>LLM cost · per stage, run & work item</summary><h2>LLM cost</h2>
+  return `<details class="detail-panel" id="cost" open><summary>Operational LLM cost · per stage, run & work item</summary><h2>Operational LLM cost</h2>
 <div class="tiles">${costTiles(t, extra)}</div>
-<p class="sub">${costSub(t)} The mean per work item counts work items with a trace index only.</p>
+<p class="sub">${costSub(t)} The mean per work item counts work items with a trace index only. Pipeline runs only: the cost of the eval runs is the next panel, never added here.</p>
 <h3>Per stage</h3>
 ${stages.length ? hbars(stages.map((g) => ({ label: g.key, value: g.usd })), { label: 'LLM cost in USD per pipeline stage', format: formatUsd, minScale: 1e-6 }) : ''}
 ${table([{ label: 'Stage' }, { label: 'Runs', num: true }, ...COST_COLS, { label: 'Per run', num: true }], costs.by_stage.map((g) => [...costRow(`<code>${e(g.key)}</code>`, g, [e(g.runs)]), e(perRun(g))]))}
@@ -537,6 +539,32 @@ ${costs.items ? (costs.top_items.length ? table(ITEM_HEAD, costs.top_items.map(i
 ${costs.unpriced_items.length ? `<h3>Work items with unpriced calls · cost incomplete, not ranked</h3>${table(ITEM_HEAD, costs.unpriced_items.map(itemRow))}` : ''}
 <h3>Per day (UTC)</h3>
 ${table([{ label: 'Day' }, { label: 'Runs', num: true }, ...COST_COLS], costs.by_day.slice().reverse().map((g) => costRow(e(g.key), g, [e(g.runs)])))}</details>`;
+}
+
+// An eval-cost sum as one amount, never an unknown shown as $0 (cf. costAmount).
+function evalAmount(t) {
+  if (!t.runs) return '—';
+  if (t.free === t.runs) return 'free tier';
+  if (!t.priced) return 'unpriced';
+  return `${formatUsd(t.usd)}${t.unpriced ? ` + ${t.unpriced} unpriced` : ''}`;
+}
+const evalRow = (label, t) => [label, e(t.runs), e(compact(t.tokens_in)), e(compact(t.tokens_out)), e(evalAmount(t))];
+const EVAL_COST_HEAD = [{ label: 'Runs', num: true }, { label: 'Input (est.)', num: true }, { label: 'Output (est.)', num: true }, 'Cost'];
+
+/** Health panel: LLM cost of the eval scorecard runs, apart from the operational cost (costPanel). */
+export function evalCostPanel(evalCosts) {
+  const summary = 'Eval LLM cost · per suite & run';
+  const t = evalCosts?.total;
+  if (!t?.runs) return `<details class="detail-panel" id="cost-evals"><summary>${summary}</summary>${emptyCard('No eval run on the scorecard.')}</details>`;
+  const tiles = [['Eval cost', evalAmount(t)], ['Eval runs', compact(t.runs)], ['Priced', compact(t.priced)], ['Free tier', compact(t.free)], ['Unpriced', compact(t.unpriced)], ['Input tokens (est.)', compact(t.tokens_in)], ['Output tokens (est.)', compact(t.tokens_out)]]
+    .map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
+  return `<details class="detail-panel" id="cost-evals"><summary>${summary}</summary><h2>Eval LLM cost</h2>
+<div class="tiles">${tiles}</div>
+<p class="sub">Live eval runs of the scorecard, all history it keeps (not the pipeline window), apart from the operational cost above. Chars/4 harness estimates at list price (<code>PRICES_USD_PER_MTOK</code>): input ignores the prompt cache, output excludes thinking, never a bill. Groq runs are free tier; a run whose model has no price is counted as unpriced, not as $0.</p>
+<h3>Per suite</h3>
+${table([{ label: 'Suite' }, ...EVAL_COST_HEAD], evalCosts.by_suite.map((g) => evalRow(`<code>${e(g.suite)}</code>`, g)))}
+<h3>Most expensive eval runs</h3>
+${evalCosts.top_runs.length ? table(['Suite', 'Run', 'Model', 'Cost'], evalCosts.top_runs.map((r) => [`<code>${e(r.suite)}</code>`, e(r.run_id), e(r.model ?? '—'), e(formatUsd(r.usd))])) : emptyCard('No priced eval run.')}</details>`;
 }
 
 // ---------------------------------------------------------------------------

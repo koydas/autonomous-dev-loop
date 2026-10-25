@@ -245,7 +245,7 @@ test('cost: run page per call, waterfall column, trace per stage and run, feed t
   assert.match(trace, /<code>code_gen<\/code><\/td><td class="num">1<\/td>.*?<td>\$0\.2590 USD<\/td>/);
   assert.match(trace, /<code>review<\/code><\/td><td class="num">2<\/td>.*?\$0\.0000 USD \+ 1 unpriced call\(s\) \(1 Groq free-tier call\(s\) at no cost\)/);
   assert.match(trace, /LLM cost<\/div><div class="value">\$0\.2590/, 'trace tile');
-  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">\$0\.2590/);
+  assert.match(files['pipeline/index.html'], /Operational LLM cost \(window\)<\/div><div class="value">\$0\.2590/);
   assert.match(files['pipeline/index.html'], /LLM \$0\.2590 · 1 call\(s\)/, 'execution card');
   const health = files['pipeline/health.html'];
   assert.match(health, /LLM cost · per stage, run &amp; work item|LLM cost · per stage, run & work item/);
@@ -267,17 +267,31 @@ test('cost: no LLM call → empty cost states', () => {
   const { files } = site([rec]);
   assert.match(files['pipeline/runs/610-1.html'], /No LLM call in this run/);
   assert.match(files['pipeline/health.html'], /No LLM call recorded in the window/);
-  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">—/);
+  assert.match(files['pipeline/index.html'], /Operational LLM cost \(window\)<\/div><div class="value">—/);
 });
 
 test('cost: a window of unpriced calls only reads unpriced on the activity tile, execution cards, health and models', () => {
   const { files } = site([makeRecord({ runId: '620', start: T0, provider: 'anthropic', model: 'claude-unknown' })]);
-  assert.match(files['pipeline/index.html'], /LLM cost \(window\)<\/div><div class="value">unpriced/);
+  assert.match(files['pipeline/index.html'], /Operational LLM cost \(window\)<\/div><div class="value">unpriced/);
   assert.match(files['pipeline/index.html'], /<span>LLM unpriced · 1 call\(s\)<\/span>/);
   assert.match(files['pipeline/runs/620-1.html'], /LLM cost<\/div><div class="value">unpriced/);
   assert.match(files['pipeline/health.html'], /Mean per run<\/div><div class="value">—/);
   assert.match(files['pipeline/models.html'], /LLM cost<\/div><div class="value">unpriced/);
   assert.doesNotMatch(files['pipeline/index.html'], /\$0\.0000/);
+});
+
+test('cost: health separates the operational cost from the eval cost; evals never enter the pipeline total', () => {
+  const run = (run_id, model, cost_est) => ({ run_id, model, ts: '2026-10-14T00:00:00Z', passed: true, cost_est, tokens_est: { in: 1000, out: 100 } });
+  const scorecard = { suites: { review: { runs: [run('e1', 'claude-opus-5-5', { usd: 1.5 }), run('e2', 'openai/gpt-oss-120b', null), run('e3', 'claude-unknown', { usd: null, unpriced: 'claude-unknown' })] } } };
+  const records = [makeRecord({ runId: '640', start: T0, provider: 'anthropic', model: 'claude-opus-5-5', tokensIn: 1000, tokensOut: 1000 })];
+  const health = site(records, { scorecard }).files['pipeline/health.html'];
+  assert.match(health, /Operational LLM cost · per stage, run &amp; work item|Operational LLM cost · per stage, run & work item/);
+  assert.match(health, /id="cost-evals"/);
+  assert.match(health, /Eval cost<\/div><div class="value">\$1\.5000 \+ 1 unpriced/);
+  assert.match(health, /<code>review<\/code><\/td><td class="num">3<\/td>.*?<td>\$1\.5000 \+ 1 unpriced<\/td>/);
+  assert.match(health, /<td>e1<\/td><td>claude-opus-5-5<\/td><td>\$1\.5000<\/td>/);
+  assert.doesNotMatch(health.split('id="cost-evals"')[0], /\$1\.5000/, 'eval cost absent from the operational panel');
+  assert.match(site(records).files['pipeline/health.html'], /No eval run on the scorecard/);
 });
 
 test('models: a model seen only in the eval scorecard has no pipeline cost (—), never free or $0', () => {

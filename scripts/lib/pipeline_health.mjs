@@ -25,9 +25,15 @@ export function percentile(values, p) {
   return v[Math.min(v.length - 1, Math.max(0, Math.ceil((p / 100) * v.length) - 1))];
 }
 
-/** Provider of an eval scorecard run, which records the model only: Anthropic models are `claude-*`. */
+/**
+ * Provider of an eval scorecard run: the `provider:` prefix of a live model id (`liveModelId`), else inferred
+ * from a bare name (older runs): Anthropic models are `claude-*`.
+ */
 export function evalProvider(model) {
-  return /^claude/i.test(String(model ?? '')) ? 'anthropic' : 'groq';
+  const m = String(model ?? '').replace(/^replay:/, '');
+  if (/^anthropic:/i.test(m)) return 'anthropic';
+  if (/^groq:/i.test(m)) return 'groq';
+  return /^claude/i.test(m) ? 'anthropic' : 'groq';
 }
 
 const eventsOf = (run, name) => run.events.filter((e) => e.event === name);
@@ -286,6 +292,43 @@ function costs(runs, traces) {
   };
 }
 
+/**
+ * LLM cost of the eval scorecard, apart from `costs` (the operational, pipeline spend): live eval runs priced by
+ * the harness (chars/4 estimate, list price). A Groq run is free (usd 0), a run whose model or tokens cannot be
+ * priced is `unpriced` — counted apart, never as $0. Total, per suite, and the COST_TOP most expensive runs.
+ */
+function evalCosts(scorecard) {
+  const empty = () => ({ runs: 0, priced: 0, free: 0, unpriced: 0, usd: 0, tokens_in: 0, tokens_out: 0 });
+  const total = empty();
+  const bySuite = new Map();
+  const priced = [];
+  for (const [suite, s] of Object.entries(isObj(scorecard?.suites) ? scorecard.suites : {})) {
+    for (const r of Array.isArray(s?.runs) ? s.runs : []) {
+      if (typeof r?.run_id !== 'string') continue;
+      const usd = Number.isFinite(r.cost_est?.usd) ? r.cost_est.usd : null;
+      // Free only when the harness priced nothing (cost_est null) and the run is Groq; an explicit unpriced result stays unpriced.
+      const status = usd != null ? 'priced' : !r.cost_est?.unpriced && evalProvider(r.model) === 'groq' ? 'free' : 'unpriced';
+      const tin = Number(r.tokens_est?.in) || 0;
+      const tout = Number(r.tokens_est?.out) || 0;
+      const g = bySuite.get(suite) ?? { suite, ...empty() };
+      bySuite.set(suite, g);
+      for (const t of [g, total]) {
+        t.runs += 1;
+        t[status] += 1;
+        t.usd += usd ?? 0;
+        t.tokens_in += tin;
+        t.tokens_out += tout;
+      }
+      if (status === 'priced') priced.push({ suite, run_id: r.run_id, ts: r.ts ?? null, model: r.model ?? null, usd });
+    }
+  }
+  return {
+    total,
+    by_suite: [...bySuite.values()].sort((a, b) => b.usd - a.usd || a.suite.localeCompare(b.suite)),
+    top_runs: priced.sort((a, b) => b.usd - a.usd || a.run_id.localeCompare(b.run_id)).slice(0, COST_TOP),
+  };
+}
+
 /** Every provider:model seen in the pipeline's LLM calls or in the eval scorecard, for the cross-link page. */
 export function modelUsage(runs, scorecard) {
   const models = new Map();
@@ -335,5 +378,6 @@ export function computeHealth({ model, scorecard = null } = {}) {
     critical_path: criticalPath(model?.traces ?? []),
     tokens: groqTokens(runs, scorecard),
     costs: costs(runs, model?.traces ?? []),
+    eval_costs: evalCosts(scorecard),
   };
 }
