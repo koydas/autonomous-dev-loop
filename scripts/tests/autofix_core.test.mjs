@@ -209,3 +209,24 @@ test('findAutofixViolations: a new relative import must resolve to a file on dis
   const inPatch = findAutofixViolations({ changes: [patch('src/a.mjs', "import { c } from './c.mjs';\nexport const a = c;\n"), patch('src/c.mjs', 'export const c = 3;\n')], context, root, mentionText: '' });
   assert.ok(!inPatch.some((v) => v.targetPath === 'src/a.mjs'), 'a.mjs resolves its import through the patch');
 });
+
+// A filesystem error other than "missing" (EIO, EACCES, ELOOP…) is not a tagged read result: the reader throws. A path
+// component over 255 bytes makes lstat fail with ENAMETOOLONG on any user, root included, so the branch is deterministic.
+const UNREADABLE = `src/${'n'.repeat(300)}.mjs`;
+
+test('buildAutofixContext: a file whose read throws a filesystem error is skipped, never shown or marked withheld, and the build goes on', async () => {
+  const seen = [];
+  const ctx = await build({ rawDiff: fileDiff(UNREADABLE) + fileDiff('src/a.mjs'), onWithheld: (e) => seen.push(e) });
+  assert.deepEqual([...ctx.shownPaths], ['src/a.mjs']);
+  assert.equal(ctx.hiddenPaths.size, 0);
+  assert.deepEqual(seen, []);
+  assert.doesNotMatch(ctx.fileContents, /nnnnnnnnnn/);
+});
+
+test('findAutofixViolations: a target whose pre-patch read throws a filesystem error propagates it, so nothing is written on an unknown state', async () => {
+  const context = await ctxOf(fileDiff('src/a.mjs'));
+  assert.throws(
+    () => findAutofixViolations({ changes: [patch(UNREADABLE, 'export const x = 1;\n')], context, root, mentionText: '' }),
+    (err) => err.code === 'ENAMETOOLONG',
+  );
+});
