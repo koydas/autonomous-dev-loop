@@ -72,7 +72,7 @@ function isDependencyFile(filePath) {
 const AGENT_RULE_PATTERNS = [
   /(^|\/)AGENTS\.md$/i,
   /(^|\/)CLAUDE\.md$/i,
-  /^\.claude\//,
+  /^\.claude\//i,
 ];
 
 export function isAgentRuleFile(filePath) {

@@ -326,6 +326,6 @@ test('buildChangeClassificationContext: diff_truncated reflects the passed flag'
 });
 
 test('isAgentRuleFile: AGENTS.md and CLAUDE.md at any depth and everything under root .claude/, nothing else', () => {
-  for (const f of ['AGENTS.md', 'CLAUDE.md', 'svc/claude.md', '.claude/settings.json', '.claude/skills/x/SKILL.md']) assert.equal(isAgentRuleFile(f), true, f);
+  for (const f of ['AGENTS.md', 'CLAUDE.md', 'svc/claude.md', '.claude/settings.json', '.claude/skills/x/SKILL.md', '.CLAUDE/Settings.json']) assert.equal(isAgentRuleFile(f), true, f);
   for (const f of ['README.md', 'docs/agent-notes.md', 'src/.claude/x.md', 'MYAGENTS.md', 'scripts/a.mjs']) assert.equal(isAgentRuleFile(f), false, f);
 });
