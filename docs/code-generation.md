@@ -190,7 +190,7 @@ The AGENTS.md Hard Guardrails that the pipeline enforces in code on generated pa
 
 | Rule | Severity | What is flagged | Waived when |
 |---|---|---|---|
-| `test_count_drop` | High | a test file that ends with fewer test cases (exact from the diff: case lines removed minus added; a case moved to another file or renamed in place is not a loss; each added case pays for at most one removed case across the whole diff; deleted files are out of scope) | the PR title or body names the removed case's title (8+ characters) |
+| `test_count_drop` | High | a test file that ends with fewer test cases (counted on the whole base and head files after masking comments and string/template contents, so a `test(` inside a fixture or a comment is not a case; a file that cannot be read is skipped; a case moved to another file or renamed in place is not a loss; each added case pays for at most one removed case across the whole diff; deleted files are out of scope) | the PR title or body names the removed case's title (8+ characters) |
 | `exported_signature` | Medium | an exported function whose arity, parameters or sync/async changes, or that is removed | the PR title or body names the function (whole word) |
 | `module_system` | High | `require()` added to an `.mjs`, ESM added to a `.cjs`, a CommonJS file converted | — |
 | `unresolved_import` | High | an added import that is not a file of the PR tree, a Node builtin, or a package of the nearest `package.json` (no manifest: bare packages are not judged; a `.js` specifier is satisfied by its `.ts` source) | — |

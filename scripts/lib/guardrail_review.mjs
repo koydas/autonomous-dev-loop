@@ -7,7 +7,7 @@ import path from 'node:path';
 import { parseFindings, pathMatches } from './review_findings.mjs';
 import { isTestFile, normalizeRepoPath } from './autofix_guard.mjs';
 import {
-  RULES, isJsFile, extractExportedSignatures, findModuleSystemViolation, findSignatureViolations, findUnresolvedImports, mentions,
+  RULES, isJsFile, maskSource, extractExportedSignatures, findModuleSystemViolation, findSignatureViolations, findUnresolvedImports, mentions,
 } from './static_verifier.mjs';
 
 export const GUARDRAIL_RULES = Object.freeze({ ...RULES, TEST_COUNT_DROP: 'test_count_drop' });
@@ -49,23 +49,58 @@ export function parseDiffChanges(rawDiff) {
 
 const caseTitles = (lines) => lines.map((l) => TEST_CASE_LINE.exec(l)).filter(Boolean).map((m) => m[2] ?? '(dynamic title)');
 
+// Test cases of a whole source file, read on the masked code: comments are gone and each string is a placeholder, so a
+// `test(` inside a template literal (a fixture) or a block comment is not a case. A title that is not a plain string
+// (template, variable) is "(dynamic title)".
+const CASE_CALL = /(?:^|[;\n{}])[ \t]*(?:test|it)(?:\.(?:only|skip|todo))?[ \t]*\([ \t]*(?:"S(\d+)")?/g;
+const casesOfSource = (source) => {
+  const { code, strings } = maskSource(source);
+  return [...code.matchAll(CASE_CALL)].map((m) => (m[1] === undefined ? '(dynamic title)' : strings[Number(m[1])]));
+};
+// What `a` has that `b` does not, as multisets.
+const without = (a, b) => {
+  const left = [...b];
+  return a.filter((t) => {
+    const at = left.indexOf(t);
+    if (at >= 0) left.splice(at, 1);
+    return at < 0;
+  });
+};
+
 const isWaived = (title, mentionText) => {
   const t = plain(title).toLowerCase();
   return t.length >= MIN_TITLE_CHARS && plain(mentionText).toLowerCase().includes(t);
 };
 
 /**
- * Rule: a test file keeps its test cases. Exact from the diff: the cases a file has after minus before is the
- * difference between the case lines the diff adds and removes. A case moved to another file of the diff, or
- * renamed in place, is not a loss; one whose title the PR text names is intended ("explicitly requested").
- * Deleted files are out of scope (the tests of a removed module go with it).
+ * Rule: a test file keeps its test cases. With `readBase(path)` / `readHead(path)` the cases are read from the whole
+ * files on masked code (a fixture or a comment is not a case); a file that cannot be read is skipped, never guessed.
+ * Without readers (the `review` eval suite has no tree) they come from the case lines the diff adds and removes,
+ * which cannot tell code from a fixture. A case moved to another file of the diff, or renamed in place, is not a
+ * loss; one whose title the PR text names is intended ("explicitly requested"). Deleted files are out of scope (the
+ * tests of a removed module go with it).
  * @returns {{ rule: string, path: string, severity: string, reason: string }[]}
  */
-export function findTestCountDrops(rawDiff, { mentionText = '' } = {}) {
+export function findTestCountDrops(rawDiff, { mentionText = '', readBase = null, readHead = null } = {}) {
   const files = parseDiffChanges(rawDiff).filter((f) => !f.isDeleted && isTestFile(f.after) && isJsFile(f.after));
   // Every added case pays for at most one removed case: the same title in the same file first (a case kept), then in
   // another file of the diff (a move); what is left of a file's additions replaces what is left of its removals.
-  const state = files.map((f) => ({ file: f, removed: caseTitles(f.removed), added: caseTitles(f.added) }));
+  const state = [];
+  for (const f of (readBase && readHead ? files.slice(0, MAX_FILES) : files)) {
+    if (!readBase || !readHead) {
+      state.push({ file: f, removed: caseTitles(f.removed), added: caseTitles(f.added) });
+      continue;
+    }
+    try {
+      const after = readHead(normalizeRepoPath(f.after));
+      const before = f.isNew ? '' : readBase(normalizeRepoPath(f.before));
+      if (after == null || before == null) continue;
+      const [was, is] = [casesOfSource(before), casesOfSource(after)];
+      state.push({ file: f, removed: without(was, is), added: without(is, was) });
+    } catch {
+      // unreadable: no finding rather than a guess
+    }
+  }
   const take = (list, title) => {
     const at = list.indexOf(title);
     if (at >= 0) list.splice(at, 1);

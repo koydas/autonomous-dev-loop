@@ -391,13 +391,14 @@ if (selfTarget) {
   try {
     const treeFiles = new Set(repoFiles.listFiles());
     const mentionText = `${prTitle}\n${prBody}`;
+    const readBase = (p) => {
+      if (!mergeBase) throw new Error('PR base SHA unknown');
+      return git(['show', `${mergeBase}:${p}`]);
+    };
     guardrails = collectGuardrailFindings([
-      findTestCountDrops(rawDiff, { mentionText }),
+      findTestCountDrops(rawDiff, { mentionText, readBase, readHead: readHeadOrNull }),
       findFileRuleViolations(rawDiff, {
-        readBase: (p) => {
-          if (!mergeBase) throw new Error('PR base SHA unknown');
-          return git(['show', `${mergeBase}:${p}`]);
-        },
+        readBase,
         readHead: readHeadOrNull,
         manifestFor: (p) => declaredPackages(p, readHeadOrNull),
         fileExists: (p) => treeFiles.has(p),

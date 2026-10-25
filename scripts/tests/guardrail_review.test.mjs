@@ -198,10 +198,62 @@ test('untrusted lines are scanned in linear time: unclosed titles full of backsl
   const started = performance.now();
   for (const body of shapes) {
     findTestCountDrops(fileDiff('t/a.test.mjs', [`-test('${body}`, `+test("${body}`, `-  it(\`${body}`]));
+    const hostile = `test('a', () => {});\n${body}\n`;
+    findTestCountDrops(fileDiff('t/a.test.mjs', ['-x']), { readBase: () => hostile, readHead: () => `${hostile}${body}` });
     const content = `${body}\nexport function g(a, b) {}\n`;
     findFileRuleViolations(modified('src/a.mjs'), { readBase: () => content, readHead: () => `${content}${body}`, fileExists: () => true, manifestFor: () => new Set() });
   }
   // The exponential title pattern took minutes on 40 backslashes; the whole sweep takes milliseconds.
   assert.ok(performance.now() - started < 2000, `scanning took ${Math.round(performance.now() - started)} ms`);
   assert.equal(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('a \\' quote inside the title', () => {});"]))[0].reason.includes('a \\\' quote inside the title'), true, 'an escaped quote still belongs to the title');
+});
+
+const caseSource = (...titles) => titles.map((t) => `test('${t}', () => {});`).join('\n') + '\n';
+const readers = (bases, heads) => ({ readBase: (p) => bases[p] ?? null, readHead: (p) => heads[p] ?? null });
+
+test('findTestCountDrops with file contents: a test declaration inside a fixture or a comment is not a case', () => {
+  const real = caseSource('real case title');
+  const fixture = (inner) => `${real}const fx = \`\n${inner}\n\`;\n/*\n${inner}\n*/\n`;
+  const inner = "test('example fixture case', () => {});";
+  const diff = fileDiff('t/a.test.mjs', [`-${inner}`]); // the diff line alone looks like a removed case
+  assert.equal(findTestCountDrops(diff).length, 1, 'diff-line mode cannot tell, as documented');
+  const bases = { 't/a.test.mjs': fixture(inner) };
+  const heads = { 't/a.test.mjs': fixture('// fixture trimmed') };
+  assert.deepEqual(findTestCountDrops(diff, readers(bases, heads)), []);
+  // A real removal next to the fixture is still found, once.
+  const found = findTestCountDrops(diff, readers({ 't/a.test.mjs': caseSource('second real case') + fixture(inner) }, { 't/a.test.mjs': fixture(inner) }));
+  assert.match(found[0].reason, /^1 test case removed without a replacement \("second real case"\)/);
+});
+
+test('findTestCountDrops with file contents: nested, skipped, dynamic and template titles; regex .test() is not a case', () => {
+  const base = "describe('suite', () => {\n  test('nested one', () => {});\n  it.skip('skipped one', () => {});\n});\ntest(name, () => {});\ntest(`tpl ${x}`, () => {});\nassert.ok(/x/.test(v));\n";
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const heads = (src) => ({ 't/a.test.mjs': src });
+  assert.deepEqual(findTestCountDrops(diff, readers({ 't/a.test.mjs': base }, heads(base))), []);
+  const found = findTestCountDrops(diff, readers({ 't/a.test.mjs': base }, heads("describe('suite', () => {\n  it.skip('skipped one', () => {});\n});\nassert.ok(/x/.test(v));\n")));
+  assert.match(found[0].reason, /^3 test cases removed without a replacement \("nested one", "\(dynamic title\)", "\(dynamic title\)"\)/);
+});
+
+test('findTestCountDrops with file contents: unreadable files are skipped, new files lose nothing, a rename reads the old path', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  assert.deepEqual(findTestCountDrops(diff, { readBase: () => { throw new Error('no such object'); }, readHead: () => caseSource('x case title') }), [], 'base unreadable');
+  assert.deepEqual(findTestCountDrops(diff, readers({}, { 't/a.test.mjs': caseSource('x case title') })), [], 'base missing');
+  assert.deepEqual(findTestCountDrops(diff, readers({ 't/a.test.mjs': caseSource('x case title') }, {})), [], 'head missing');
+  const isNew = fileDiff('t/a.test.mjs', ['+x'], 'new file mode 100644\n');
+  assert.deepEqual(findTestCountDrops(isNew, { readBase: () => { throw new Error('must not be read'); }, readHead: () => caseSource('a brand new case') }), []);
+  const renamed = 'diff --git a/t/old.test.mjs b/t/new.test.mjs\nrename from t/old.test.mjs\nrename to t/new.test.mjs\n--- a/t/old.test.mjs\n+++ b/t/new.test.mjs\n@@ -1 +1 @@\n-a\n+b\n';
+  const seen = [];
+  const found = findTestCountDrops(renamed, { readBase: (p) => { seen.push(p); return caseSource('kept case title', 'lost case title'); }, readHead: () => caseSource('kept case title') });
+  assert.deepEqual(seen, ['t/old.test.mjs']);
+  assert.deepEqual([found[0].path, found[0].reason.includes('lost case title')], ['t/new.test.mjs', true]);
+});
+
+test('findTestCountDrops with file contents: moves across files and waivers use the same allocation', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']) + fileDiff('t/b.test.mjs', ['+x']);
+  const bases = { 't/a.test.mjs': caseSource('moved case title', 'stays case title'), 't/b.test.mjs': caseSource('other case title') };
+  const heads = { 't/a.test.mjs': caseSource('stays case title'), 't/b.test.mjs': caseSource('other case title', 'moved case title') };
+  assert.deepEqual(findTestCountDrops(diff, readers(bases, heads)), []);
+  const lost = { ...heads, 't/b.test.mjs': caseSource('other case title') };
+  assert.equal(findTestCountDrops(diff, readers(bases, lost)).length, 1);
+  assert.deepEqual(findTestCountDrops(diff, { ...readers(bases, lost), mentionText: 'drops the moved case title test' }), []);
 });
