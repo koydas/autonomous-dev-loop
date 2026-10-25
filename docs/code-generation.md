@@ -504,7 +504,7 @@ Three keys in `config/models.yaml` control the budget for the `autofix` stage:
 |---|---|
 | Groq free tier (`openai/gpt-oss-120b`, 8k TPM) | `2500` (default) |
 | Groq Developer plan | Raise or remove the key (TPM is far above a single request) |
-| Anthropic (`claude-opus-5-5`) | Not applied: Anthropic configs carry no input budget and no per-request TPM limit. The auto-fix input is bounded only by the context window assumed in `MODEL_CONTEXT_WINDOW`: 200 000 tokens for the 5.x ids (fallback; the map lists the 4.x ids). `config/models.yaml` states 1M for them, a figure no code reads |
+| Anthropic (`claude-opus-5-5`) | Not applied: Anthropic configs carry no input budget and no per-request TPM limit. The auto-fix input is bounded only by the context window assumed in `MODEL_CONTEXT_WINDOW` (`scripts/lib/autofix_core.mjs`): 200 000 tokens for the 5.x ids (fallback; the map lists the 4.x ids). `config/models.yaml` states 1M for them, a figure no code reads |
 
 The `token_estimate` log line emitted by `auto_fix_pr.mjs` shows the actual token counts for each section:
 

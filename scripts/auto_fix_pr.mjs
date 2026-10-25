@@ -4,18 +4,15 @@ import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { requireEnv, loadLLMConfig, loadLabelsConfig } from './lib/config.mjs';
 import { callLLM } from './lib/llm_client.mjs';
-import { filterDiff, shouldIncludeFile } from './lib/file_filters.mjs';
-import { loadPrompt, interpolatePrompt } from './lib/prompts.mjs';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, GuardrailError } from './lib/output_writer.mjs';
+import { loadPrompt } from './lib/prompts.mjs';
+import { validateAiOutput, writeGeneratedFiles, GuardrailError } from './lib/output_writer.mjs';
 import { log, error as logError, setLogContext, logStart, logEnd, logSummary } from './lib/logger.mjs';
 import { log as obsLog, createTracer } from './lib/observability.mjs';
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './lib/retry.mjs';
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
-import { normalizeRepoPath } from './lib/autofix_guard.mjs';
-import { findGuardrailViolations, guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
-import { readPackageJsonDependencies } from './lib/dependency_manifest.mjs';
-import { readPrTreeFile } from './lib/pr_tree_reader.mjs';
+import { guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
+import { fitAutofixBudget, listChangedFiles, buildAutofixContext, parseAutofixResponse, findAutofixViolations } from './lib/autofix_core.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 import { isSelfTarget } from './lib/roots.mjs';
@@ -35,27 +32,7 @@ process.on('unhandledRejection', async (reason) => {
 });
 
 const MAX_ATTEMPTS = 3;
-const MAX_FILE_SIZE = 8000;
-const MAX_FILES = 5;
 const ATTEMPT_LABEL_PREFIX = 'auto-fix-attempt-';
-const TOKEN_SAFETY_MARGIN = 200;
-
-const MODEL_CONTEXT_WINDOW = {
-  'qwen/qwen3-32b': 32768, // retired by Groq 2026-07-17 (ADR-0025)
-  'llama-3.1-8b-instant': 32768,
-  'llama-3.3-70b-versatile': 131072, // retired by Groq 2026-08-16 (ADR-0025)
-  'openai/gpt-oss-120b': 131072,
-  'claude-opus-4-7': 200000,
-  'claude-sonnet-4-6': 200000,
-  'claude-haiku-4-5-20251001': 200000,
-};
-
-function truncateToTokenBudget(text, tokenBudget) {
-  if (tokenBudget <= 0) return '';
-  const maxChars = tokenBudget * 4;
-  if (text.length <= maxChars) return text;
-  return text.slice(0, maxChars);
-}
 
 const TRUSTED_COMMENT_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 
@@ -340,28 +317,16 @@ const { context: lessonsContext } = await loadLessons({ stage: 'autofix', reposi
 const systemPrompt = baseSystemPrompt + lessonsContext;
 const systemTokens = estimateTokens(systemPrompt);
 const userWrapperTokens = estimateTokens(userPromptTemplate.replace(/\{\{[^}]+\}\}/g, ''));
-const contextWindow = MODEL_CONTEXT_WINDOW[model] ?? (llmProvider === 'groq' ? 32768 : 200000);
 const maxOutputBudget = llmMaxTokens ?? 4096;
-const contextWindowBudget = Math.max(0, contextWindow - TOKEN_SAFETY_MARGIN - systemTokens - maxOutputBudget);
-const rawInputBudget = cfgMaxInputTokens != null ? Math.min(contextWindowBudget, cfgMaxInputTokens) : contextWindowBudget;
-const inputBudget = Math.max(0, rawInputBudget - userWrapperTokens);
-const diffBudget = Math.floor(inputBudget * effectiveDiffRatio);
-const feedbackBudget = Math.floor(inputBudget * effectiveFeedbackRatio);
-const fileBudget = Math.max(0, inputBudget - diffBudget - feedbackBudget);
-
-const reviewFeedback = truncateToTokenBudget(
-  feedbackParts.join('\n\n---\n\n') || '(No specific review feedback provided)',
-  feedbackBudget,
-);
+const budgets = fitAutofixBudget({ provider: llmProvider, model, systemTokens, userWrapperTokens, maxOutputBudget, maxInputTokens: cfgMaxInputTokens, diffRatio: effectiveDiffRatio, feedbackRatio: effectiveFeedbackRatio });
+const { inputBudget, diffBudget, feedbackBudget, fileBudget } = budgets;
 
 const diffRes = await ghFetch(`/repos/${owner}/${repo}/pulls/${prNumber}`, {
   headers: { Accept: 'application/vnd.github.v3.diff' },
 });
 if (!diffRes.ok) throw new Error(`Diff fetch failed: ${diffRes.status}`);
 const rawDiff = await diffRes.text();
-const diff = truncateToTokenBudget(filterDiff(rawDiff, diffBudget * 4), diffBudget);
-
-const allChangedFiles = [...new Set([...rawDiff.matchAll(/^diff --git a\/(.*?) b\//gm)].map((m) => m[1]))];
+const allChangedFiles = listChangedFiles(rawDiff);
 
 const SELF_PATH = 'scripts/auto_fix_pr.mjs';
 // ADR-0045: SELF_PATH names this pipeline's script; in another repository it is just a path.
@@ -379,55 +344,16 @@ if (isSelfTarget() && allChangedFiles.includes(SELF_PATH)) {
   process.exit(0);
 }
 
-const changedFiles = allChangedFiles.filter(shouldIncludeFile);
-
 const repoRoot = path.resolve(process.cwd());
-// Snapshot before the LLM call, for the import check (ADR-0019).
-const dependencies = await readPackageJsonDependencies(repoRoot);
-// A file is either shown in full or withheld with an explicit marker — never cut silently:
-// the model returns whole files, so a truncated view becomes deleted content (ADR-0029).
-const fileContentParts = [];
-const shownPaths = new Set();
-const hiddenPaths = new Set();
-let fileCharsLeft = fileBudget * 4;
-// The PR branch is data (ADR-0023, F02): read through the shared reader, never following a symlink
-// (-> .git/config, /proc/self/environ, /dev/zero) and never reading more than MAX_FILE_SIZE bytes.
-const withhold = (filePath, marker) => {
-  fileContentParts.push(marker);
-  hiddenPaths.add(normalizeRepoPath(filePath));
-  fileCharsLeft -= marker.length + 2;
-};
-for (const filePath of changedFiles.slice(0, MAX_FILES)) {
-  let read;
-  try {
-    read = readPrTreeFile(repoRoot, filePath, { maxBytes: MAX_FILE_SIZE });
-  } catch {
-    continue; // Unreadable — skip
-  }
-  if (read.kind === 'missing') continue; // File deleted — skip
-  if (read.kind === 'other') {
-    obsLog({ stage: 'autofix', event: 'autofix.file_withheld', level: 'warn', meta: { prNumber, attempt: nextAttempt, path: filePath, reason: read.reason } });
-    withhold(filePath, `### File withheld (not a regular file in the PR tree): ${filePath} — do NOT target this file`);
-    continue;
-  }
-  const part = read.kind === 'file' ? `### Current file: ${filePath}\n\`\`\`\n${read.content}\n\`\`\`` : null;
-  if (part !== null && part.length <= fileCharsLeft) {
-    fileContentParts.push(part);
-    shownPaths.add(normalizeRepoPath(filePath));
-    fileCharsLeft -= part.length + 2;
-  } else {
-    withhold(filePath, `### File withheld (too large for the context budget): ${filePath} — do NOT target this file`);
-  }
-}
-const fileContents =
-  fileContentParts.length > 0
-    ? fileContentParts.join('\n\n')
-    : 'No existing files identified as relevant to this review.';
-
-const userPrompt = interpolatePrompt(userPromptTemplate, {
-  reviewFeedback,
-  diff,
-  fileContents,
+// Snapshot of the dependencies before the LLM call, for the import check (ADR-0019); the files are shown or
+// withheld, never cut silently (ADR-0029). The context is built by the module shared with the autofix eval suite.
+const { reviewFeedback, diff, dependencies, shownPaths, hiddenPaths, fileContents, userPrompt, budgetCuts } = await buildAutofixContext({
+  root: repoRoot,
+  userPromptTemplate,
+  feedbackParts,
+  rawDiff,
+  budgets,
+  onWithheld: ({ path: filePath, reason }) => obsLog({ stage: 'autofix', event: 'autofix.file_withheld', level: 'warn', meta: { prNumber, attempt: nextAttempt, path: filePath, reason } }),
 });
 
 log('token_estimate', {
@@ -441,8 +367,7 @@ log('token_estimate', {
   total: systemTokens + userWrapperTokens + estimateTokens(diff) + estimateTokens(reviewFeedback) + estimateTokens(fileContents) + maxOutputBudget,
 });
 
-// ADR-0040: what the token budget cut from the prompt (truncateToTokenBudget slices at budget × 4 chars).
-const budgetCuts = { hidden_files: [...hiddenPaths], skipped_files: Math.max(0, changedFiles.length - MAX_FILES), diff_truncated: diff.length < rawDiff.length, feedback_truncated: reviewFeedback.length >= feedbackBudget * 4 };
+// ADR-0040: what the token budget cut from the prompt (budgetCuts comes from the shared context builder).
 obsLog({ stage: 'autofix', event: 'autofix.prompt_budget', level: budgetCuts.hidden_files.length || budgetCuts.skipped_files || budgetCuts.diff_truncated || budgetCuts.feedback_truncated ? 'warn' : 'info', meta: { prNumber, attempt: nextAttempt, input_budget: inputBudget, shown_files: [...shownPaths], ...budgetCuts } });
 
 const inputTokensEst = estimateTokens(systemPrompt + userPrompt);
@@ -465,15 +390,15 @@ obsLog({ stage: 'autofix', event: 'autofix.llm_response', level: 'info', meta: {
 
 let aiOutput;
 try {
-  aiOutput = parseJsonResponse(raw);
+  aiOutput = parseAutofixResponse(raw);
 } catch (parseErr) {
-  logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
-  obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', duration_ms: Date.now() - autofixStartMs, meta: { error: 'JSON parse failed', attempt: nextAttempt, prNumber } });
-  tracer.endSpan('autofix', { outcome: 'failed', meta: { error: 'JSON parse failed' } });
-  await tracer.finalize('failed');
-  throw new Error(`AI response was not valid JSON: ${parseErr.message}`, { cause: parseErr });
-}
-if (!aiOutput || typeof aiOutput !== 'object' || Array.isArray(aiOutput)) {
+  if (parseErr.kind === 'json') {
+    logError('AI response was not valid JSON', { preview: raw.slice(0, 500) });
+    obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', duration_ms: Date.now() - autofixStartMs, meta: { error: 'JSON parse failed', attempt: nextAttempt, prNumber } });
+    tracer.endSpan('autofix', { outcome: 'failed', meta: { error: 'JSON parse failed' } });
+    await tracer.finalize('failed');
+    throw new Error(`AI response was not valid JSON: ${parseErr.cause.message}`, { cause: parseErr.cause });
+  }
   obsLog({ stage: 'autofix', event: 'autofix.error', level: 'error', duration_ms: Date.now() - autofixStartMs, meta: { error: 'invalid JSON shape', attempt: nextAttempt, prNumber } });
   tracer.endSpan('autofix', { outcome: 'failed', meta: { error: 'invalid JSON shape' } });
   await tracer.finalize('failed');
@@ -529,29 +454,7 @@ let outputPaths;
 try {
   const validated = validateAiOutput(aiOutput);
   summary = validated.summary;
-  // Pre-patch content through the same reader (F02). A non-regular target (symlink, directory, FIFO,
-  // device) is rejected. A target over MAX_FILE_SIZE bytes was never shown (shown files are at most
-  // that), so its content is not needed: a non-null placeholder lets the write guard reject it as
-  // withheld / unshown, exactly as before, without an unbounded read.
-  const existing = new Map();
-  const nonRegular = [];
-  for (const { targetPath } of validated.changes) {
-    const key = normalizeRepoPath(targetPath);
-    const read = readPrTreeFile(repoRoot, key, { maxBytes: MAX_FILE_SIZE });
-    if (read.kind === 'other') {
-      nonRegular.push({ targetPath, rule: 'non_regular_target', reason: `target is not a regular file in the PR tree (${read.reason})` });
-    }
-    existing.set(key, read.kind === 'file' ? read.content : read.kind === 'too_large' ? '' : null);
-  }
-  const rejectedTargets = new Set(nonRegular.map((v) => normalizeRepoPath(v.targetPath)));
-  const violations = [...nonRegular, ...findGuardrailViolations(validated.changes.filter((c) => !rejectedTargets.has(normalizeRepoPath(c.targetPath))), {
-    existing,
-    shownPaths,
-    hiddenPaths,
-    dependencies,
-    fileExists: (p) => fs.existsSync(path.resolve(repoRoot, p)),
-    mentionText: reviewFeedback,
-  })];
+  const violations = findAutofixViolations({ changes: validated.changes, context: { shownPaths, hiddenPaths, dependencies }, root: repoRoot, mentionText: reviewFeedback });
   if (violations.length) throw guardrailErrorFor(violations);
   outputPaths = await writeGeneratedFiles(validated.changes);
 } catch (rejection) {
