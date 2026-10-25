@@ -123,6 +123,19 @@ test('tailOutput: tolerates null', () => {
   assert.equal(tailOutput(null), '');
 });
 
+test('sanitizeEnv: drops the pipeline config pointers so a check resolves the PR tree\'s own config, keeps similar names', () => {
+  const env = sanitizeEnv({ PATH: '/bin', ADL_CONFIG_DIR: '/tmp/target-config/config', ADL_CONFIG_PATH: 'config', ADL_CONFIG_PATH_X: 'a', ADL_TARGET_ROOT: '/w' });
+  assert.deepEqual(env, { PATH: '/bin', ADL_CONFIG_PATH_X: 'a', ADL_TARGET_ROOT: '/w' });
+});
+
+test('runCheck: a check does not see ADL_CONFIG_DIR / ADL_CONFIG_PATH', async () => {
+  const r = await runCheck(
+    { name: 'cfg', command: 'echo "dir=[$ADL_CONFIG_DIR] path=[$ADL_CONFIG_PATH]"', timeoutMs: 5000 },
+    { env: { PATH: process.env.PATH, ADL_CONFIG_DIR: '/trusted', ADL_CONFIG_PATH: 'config' } },
+  );
+  assert.match(r.output_tail, /dir=\[\] path=\[\]/);
+});
+
 // --- runCheck ---
 
 test('runCheck: exit 0 resolves to pass with captured output', async () => {

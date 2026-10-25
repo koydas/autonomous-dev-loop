@@ -391,7 +391,7 @@ A later `models.yaml (…): unknown key` or `ADL_CONFIG_DIR … must be an absol
 | Review skipped (`already_reviewed`) but a fresh review is needed (e.g. the previous one was `WITHHELD` after an evidence crash) | **Actions → PR Review → the run → Re-run jobs**: a re-run (`GITHUB_RUN_ATTEMPT > 1`) bypasses the per-SHA dedup. A `superseded` run is never re-reviewed; push or re-run the head's own run instead (ADR-0028) |
 | `evidence` job fails with `checks.<name>.command` / `timeout_seconds` error | Fix `config/review-evidence.yaml` (each check needs a `command`; `timeout_seconds` must be a positive integer) and push |
 | A check reports `TIMEOUT` on every run | Raise `checks.<name>.timeout_seconds` or investigate the hang — timeouts never force `REQUEST_CHANGES`, so auto-fix will not address them |
-| Override persists although the check passes locally | Evidence runs with credential-like env vars and `GIT_CONFIG_*` stripped — a check that depends on one of them will fail in CI only; make it independent of those variables |
+| Override persists although the check passes locally | Evidence runs with credential-like env vars, `GIT_CONFIG_*` and `ADL_CONFIG_DIR` / `ADL_CONFIG_PATH` stripped — a check that depends on one of them will fail in CI only; make it independent of those variables |
 
 ### `conflicts-fix`
 

@@ -1,5 +1,6 @@
 ---
-description: Procedure for adding a new ADR — numbered file in docs/adr/, index update in README.md, mandatory CHANGELOG.md entry, and optional doc updates for behavior changes.
+name: new-adr
+description: "Use when adding an Architecture Decision Record: next number in docs/adr/, file template, README.md index row, mandatory CHANGELOG.md entry, and behavior docs to update."
 ---
 
 # new-adr
