@@ -526,6 +526,8 @@ Never an attribute: prompt, completion, file content, issue/PR title or body, en
 
 `adl.stage` names the pipeline stage the cost goes to (`validation` → `issue_validation`, `generation` → `code_gen`, `review`, `autofix`). Shown on the flow card (per flow, step, execution, call), the run page (LLM cost panel, waterfall Cost column), the trace page (per stage and run), Health (total, mean per run / work item, per stage, workflow, day, top 10 runs and work items), Activity and Models.
 
+**Operational cost vs eval cost.** Everything above is the *operational* cost: pipeline runs from the run records on the `metrics` branch. The cost of the eval runs is a separate Health panel (`Eval LLM cost`, `#cost-evals`), computed from the scorecard's `cost_est` (harness chars/4 estimate, list price; input ignores the prompt cache, output excludes thinking) over all the history the scorecard keeps, not the pipeline window. It has a total, a per-suite table and the top 10 priced runs. A Groq run is free tier, a run whose model has no price is `unpriced` and counted apart, never as $0. The two are never added: eval traces stay workflow artifacts and have no run record, so neither panel can double-count the other.
+
 ### Storage
 
 - **Run record** (`metrics/runs/<YYYY-MM>/<run>-<attempt>.json`, schema 2): `trace_id`, `item` and `otlp` — an OTLP/JSON `ExportTraceServiceRequest` body (`resourceSpans → scopeSpans → spans`, attributes as `{ key, value: { stringValue | intValue | … } }`, nanosecond timestamps as strings). It can be POSTed as is to any OTLP/HTTP JSON endpoint (`/v1/traces`); `scripts/tests/otlp_trace.test.mjs` validates the shape against `scripts/tests/fixtures/otlp/minimal-trace.json`.

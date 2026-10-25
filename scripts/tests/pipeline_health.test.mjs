@@ -234,6 +234,28 @@ test('costs: runs and items with an unpriced call are never ranked on their part
   assert.deepEqual(costs.unpriced_items.map((it) => it.item.number), [2]);
 });
 
+test('eval_costs: scorecard runs priced apart from the operational costs; Groq free, unknown model unpriced', () => {
+  const opus = { provider: 'anthropic', model: 'claude-opus-5-5' };
+  const records = [makeRecord({ runId: '80', prNumber: 1, start: T0, ...opus, tokensIn: 1000, tokensOut: 1000 })];
+  const run = (run_id, model, cost_est, tokens_est = { in: 100, out: 10 }) => ({ run_id, model, ts: '2026-10-14T12:00:00Z', cost_est, tokens_est });
+  const scorecard = { suites: {
+    review: { runs: [run('e1', 'claude-opus-5-5', { usd: 0.5 }), run('e2', 'claude-opus-5-5', { usd: 0.25 }), run('e3', 'openai/gpt-oss-120b', null)] },
+    validation: { runs: [run('e4', 'claude-unknown', { usd: null, unpriced: 'claude-unknown' }), run('e5', 'claude-opus-5-5', null), { model: 'claude-opus-5-5' }] },
+    bad: null,
+  } };
+  const withEvals = computeHealth({ model: model(records), scorecard });
+  const without = computeHealth({ model: model(records) });
+  assert.deepEqual(withEvals.costs, without.costs, 'eval runs never enter the operational total');
+  const { total, by_suite: suites, top_runs: top } = withEvals.eval_costs;
+  assert.deepEqual([total.runs, total.priced, total.free, total.unpriced], [5, 2, 1, 2]);
+  assert.equal(total.usd, 0.75);
+  assert.deepEqual([total.tokens_in, total.tokens_out], [500, 50]);
+  assert.deepEqual(suites.map((g) => [g.suite, g.runs, g.usd]), [['review', 3, 0.75], ['validation', 2, 0]]);
+  assert.deepEqual(top.map((r) => r.run_id), ['e1', 'e2']);
+  const empty = without.eval_costs;
+  assert.deepEqual([empty.total.runs, empty.by_suite, empty.top_runs], [0, [], []]);
+});
+
 test('groq tokens per day leave out the cached prompt tokens of measured calls (not counted by the rate limits)', () => {
   const records = [
     makeRecord({ runId: '70', start: T0, tokensIn: 1000, tokensOut: 100, usage: { cacheRead: 600 } }),
