@@ -22,10 +22,19 @@ These instructions apply to the entire repository.
 ## Models
 
 Default Groq models (all stages): `openai/gpt-oss-120b` (ADR-0025). See `config/models.yaml` for per-stage overrides.
-Default Anthropic model (all stages): `claude-opus-5-5`, with per-stage effort and `max_tokens` in the `anthropic_*` keys of `config/models.yaml` (ADR-0032). No temperature is sent to Anthropic: Opus 4.7+ / 5.x reject sampling parameters.
-Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; Anthropic models 200 000 tokens. On the Groq free tier the binding limit is 8 000 TPM per request, not the context window (ADR-0025). `scripts/auto_fix_pr.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
+Anthropic model, effort and `max_tokens` are per stage, in the `anthropic_*` keys of `config/models.yaml` (ADR-0032; provisional until a stage's evals pass on that model). Read the file, not this page, for the current values. No temperature is sent to Anthropic: Opus 4.7+ / 5.x reject sampling parameters.
+Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; Anthropic models 200 000 tokens in `MODEL_CONTEXT_WINDOW`'s fallback (`models.yaml` says 1M context and no input budget for Anthropic: unreconciled). On the Groq free tier the binding limit is 8 000 TPM per request, not the context window (ADR-0025). `scripts/auto_fix_pr.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
 
-**Token budget (auto-fix stage):** `autofix_max_input_tokens` in `config/models.yaml` sets a hard ceiling on the input budget sent to the LLM, independently of the model's context window. The default is `3000` tokens — tuned to keep the total request (system + input + output) under the 8,000 TPM free-tier limit of `openai/gpt-oss-120b` (ADR-0025). Increase or remove this cap when using Groq Dev Tier or Anthropic. See [ADR-0017](docs/adr/0017-configurable-token-budget.md).
+**Token budget (auto-fix stage):** `autofix_max_input_tokens` in `config/models.yaml` sets a hard ceiling on the input budget sent to the LLM, independently of the model's context window. The value is in `config/models.yaml` — tuned to keep the total request (system + input + output) under the 8,000 TPM free-tier limit of `openai/gpt-oss-120b` (ADR-0025). Increase or remove this cap when using Groq Dev Tier or Anthropic. See [ADR-0017](docs/adr/0017-configurable-token-budget.md).
+
+## Repository Map
+
+- `scripts/*.mjs` entrypoints (one per stage, run by the workflows); `scripts/lib/` modules; `scripts/tests/` the only place for tests.
+- `prompts/` stage prompts (their hard guardrails are hand-copied from this file and enforced in `scripts/lib/static_verifier.mjs`: change both together); `config/` models, labels, protected paths, coverage gates; `evals/` datasets and graders.
+- `docs/adr/` numbered ADRs; `.github/workflows/` orchestration (`adl-*.yml` are the reusable workflows consumers depend on); `.claude/` skills and the test-gate hook.
+- The pipeline never reads this file at run time: it governs interactive agents and the external reviewer. Pipeline behavior changes in code and prompts.
+- The pipeline cannot write `scripts/`, `config/`, `prompts/`, `docs/`, `.github/` (ADR-0021, `config/protected-paths.yaml`): those changes are made by hand or by an interactive agent.
+- `npm run lint` needs `bash`; `npm test` runs `scripts/tests/*.test.mjs` flat, no subdirectories.
 
 ## Engineering Rules
 
@@ -80,18 +89,17 @@ A failing eval (`evals.yml`, `pr-evals.yml`, `eval-replay.yml`) is fixed **in th
 
 ### Test Coverage Policy
 
-Minimum required path coverage for automation modules (enforced by code review):
+Minimum required path coverage for automation modules, enforced by code review. The exact required paths per module are in [`docs/testing.md` → Required Test Paths per Module](docs/testing.md#required-test-paths-per-module); this table is the invariant each one must keep covered.
 
-| Module | Minimum coverage | Required test paths |
+| Module | Coverage | Invariant to cover |
 |---|---|---|
-| `pr_review.mjs` — verdict → review event and labels (ADR-0026) | 100% of verdicts | `APPROVE` → `review-approved`; `REQUEST_CHANGES` → `changes-requested` (re-pulse); `WITHHELD` → `COMMENT` + `review-withheld`, neither other label; `review-withheld` cleared by the next `APPROVE` or `REQUEST_CHANGES`; missing evidence without an evidence config → `APPROVE`. `decideVerdict()` itself is in `scripts/lib/review_evidence.mjs`, under the c8 80% gate in `test.yml` |
-| `scripts/lib/review_marker.mjs` — per-SHA dedup (ADR-0028) | 100% of branches | `decideReviewRun`: new head, `already_reviewed`, `WITHHELD` never dedups, manual re-run bypass, `superseded` (also on re-run), unknown head; `decideAutofixRun`: `APPROVE` on head skips, manual rerun overrides it, any other verdict / older head / no marker / unknown head runs; `hasNoProposedChanges`: only an explicit `changes: []`; marker anchored at end of body (echoed marker loses, mid-body only → `null`); `stripReviewMarkers`; `isTrustedReviewComment` / `findLatestReviewComment` (bot or member only, newest wins); marker format/parse failure branches. Entrypoints: `pr_review.mjs` skip → no LLM call + `skipped=true`, forged third-party marker ignored, LLM-echoed marker stripped; `auto_fix_pr.mjs` approved head → exit 0, no LLM call, no mutation; forged approval ignored; newest review across pages wins; `changes: []` → exit 0, attempt label + `needs-human` + comment + `autofix_skip` metric |
-| `scripts/lib/prompts.mjs` — `loadPrompt` | 100% of branches | happy path (file exists, non-empty), file-not-found (explicit `Prompt file not found` error with path), empty-file (explicit `Prompt file is empty` error with path) |
-| `scripts/lib/prompts.mjs` — `interpolatePrompt` | 100% of branches | single placeholder, multiple distinct placeholders, repeated placeholder, unknown placeholder left unchanged, non-placeholder content unchanged |
-| Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields produce explicit path-oriented errors (e.g. `pull_request.number`, `pull_request.head.ref`) |
-| `pr_review.mjs` — verdict parsing | 100% of accepted verdict forms | `### 🚀 Verdict` heading, `Verdict:` inline, bold verdict (`**APPROVED**`), bold heading (`**🚀 Verdict**`), bold heading with colon (`**Verdict:**`), each for APPROVED and REQUEST_CHANGES where it applies; template placeholder or missing verdict → REQUEST_CHANGES |
-| `scripts/lib/adversarial_review.mjs`, `scripts/lib/circuit_breaker.mjs`, `scripts/lib/lessons.mjs`, `scripts/lib/lessons_loader.mjs` — adversarial protocol, circuit breaker, active lessons (ADR-0049, ADR-0050, ADR-0051) | every failure branch (c8 ≥ 80 %, `config/coverage-gates.json`) | protocol: section missing / placeholders / "none" on every axis / 1 of 2 risks → `WITHHELD`, REQUEST_CHANGES and an already WITHHELD verdict untouched; breaker: same signature continues the streak, another signature / APPROVE / WITHHELD restarts it, 3 opens it, `decideAutofixRun` → `circuit_open` unless a manual rerun; lessons: unknown or forged ids dropped, window and age expiry, `ADL_LESSONS=off`, 404 → none, HTTP error / timeout / network error → one `lessons.unavailable` and no lesson |
-| `.claude/hooks/test-gate.mjs` — Claude Code test gate (Stop + `git push`) | 100% of branches | `scripts/`, `prompts/`, `config/`, `evals/`, `.github/workflows/` change (uncommitted, committed on the branch, untracked) runs the suite; other paths skip it; unchanged change set not re-run after a pass or a failure (no Stop loop), new edit re-runs; failing suite exits 2 with output on stderr; `git push` tests `HEAD`: blocked while watched paths are dirty or untracked (committed break + uncommitted fix), blocked on a failed set without re-run, let through on a passed set, dirt outside watched paths ignored; non-push Bash commands skipped, including "git push" inside a commit message or heredoc; unusable `$CLAUDE_PROJECT_DIR` exits 2; outside a git tree the suite always runs (`scripts/tests/claude_settings_hook.test.mjs`) |
+| `pr_review.mjs` — verdict → review event and labels (ADR-0026) | 100% of verdicts | `APPROVE`, `REQUEST_CHANGES`, `WITHHELD` each yield their event and labels; `review-withheld` is cleared by the next `APPROVE` / `REQUEST_CHANGES` |
+| `pr_review.mjs` — verdict parsing | 100% of accepted forms | every documented verdict form; placeholder or missing verdict → `REQUEST_CHANGES` |
+| `scripts/lib/review_marker.mjs` — per-SHA dedup (ADR-0028) | 100% of branches | `decideReviewRun` / `decideAutofixRun` outcomes, marker parse and trust rules, and the `pr_review.mjs` / `auto_fix_pr.mjs` skip paths (no LLM call, no mutation) |
+| `scripts/lib/prompts.mjs` — `loadPrompt`, `interpolatePrompt` | 100% of branches | missing file and empty file raise explicit errors with the path; unknown placeholders stay unchanged |
+| Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields give path-oriented errors (e.g. `pull_request.number`) |
+| `adversarial_review`, `circuit_breaker`, `lessons`, `lessons_loader` in `scripts/lib/` (ADR-0049, ADR-0050, ADR-0051) | every failure branch (c8 ≥ 80 %, `config/coverage-gates.json`) | protocol → `WITHHELD`; breaker opens at 3 equal signatures; lessons fail closed to none |
+| `.claude/hooks/test-gate.mjs` — Claude Code test gate (Stop + `git push`) | 100% of branches | watched paths run the suite, others skip; an unchanged change set is never re-run; `git push` tests `HEAD` and is blocked on dirty watched paths |
 
 Any PR that adds a new exported function to `scripts/lib/` must include tests for every failure branch, not only the happy path. PRs that lack these tests are considered incomplete regardless of whether existing tests pass.
 

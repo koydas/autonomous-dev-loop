@@ -1,5 +1,6 @@
 ---
-description: Test runner conventions — node:test only (no Jest/Mocha), no-shrink rule on test count, mandatory failure-branch coverage for new exports, smoke tests required.
+name: test-protocol
+description: Use when adding, changing or running tests, or after any change to scripts/ or prompts/: node:test only, test layout, no test shrinkage, failure-branch coverage for new scripts/lib exports, unit plus smoke layers.
 ---
 
 # test-protocol
@@ -20,7 +21,7 @@ This is the only test command. There is no Jest, Mocha, Vitest, or other framewo
 
 ### Test file conventions
 
-- Test files live in `scripts/tests/` and must be named `*.test.mjs`.
+- Test files live in `scripts/tests/` and must be named `*.test.mjs`; `scripts/tests/test_layout.test.mjs` fails the suite for a test file `npm test` would not run (subdirectory, other name) or one using the Jest API.
 - Each file imports directly from the module under test using ESM `import`.
 - Use `node:test` and `node:assert/strict` — no external libraries.
 
@@ -40,13 +41,11 @@ When adding a new exported function to `scripts/lib/`, tests for **every failure
 
 Modules with CI-enforced ≥ 80% coverage (lines, branches, functions, statements) are listed once, in `config/coverage-gates.json`, and run by `node scripts/coverage_gates.mjs` (`--only scripts/lib/<m>.mjs` runs one). To gate a new module, add it there (a bare path measured through `scripts/tests/<name>.test.mjs`, or `{ "module": …, "test": … }`), then run `node scripts/coverage_gates.mjs --sync` to refresh the list in the review prompt. `test.yml` has no per-module step to edit.
 
-Specific required paths for `scripts/lib/prompts.mjs`:
-- `loadPrompt`: file exists + non-empty (happy path), file-not-found (`Prompt file not found` error with path), empty file (`Prompt file is empty` error with path)
-- `interpolatePrompt`: single placeholder, multiple distinct, repeated, unknown placeholder left unchanged, non-placeholder content unchanged
+Required test paths per module: `AGENTS.md` → Test Coverage Policy (summary) and `docs/testing.md` → Required Test Paths per Module (exact paths).
 
 ### Hard rule: never remove tests
 
-Never produce a test file with fewer `test()` calls than the original. If modifying a test file, count existing tests first and verify your output has at least the same count.
+A test file never ends with fewer `test()` calls than it started with (`AGENTS.md` → Hard Guardrails). Count before and after.
 
 ### Two test layers
 

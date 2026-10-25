@@ -1,5 +1,6 @@
 ---
-description: CI gate requiring a CHANGELOG.md entry under [Unreleased] whenever a PR touches scripts/*.mjs entrypoints, docs/adr/NNNN-*.md files, the reusable workflows (adl-*.yml), the caller templates or the workflow interface snapshot.
+name: changelog-gate
+description: Use before pushing or opening a PR that touches a scripts/*.mjs entrypoint, a docs/adr/NNNN-*.md file, an adl-*.yml reusable workflow, a templates/consumer/*.yml caller template or docs/workflow-interface.json. Adds the CHANGELOG.md entry under [Unreleased] that changelog-check.yml requires.
 ---
 
 # changelog-gate
@@ -16,7 +17,7 @@ CI workflow `changelog-check.yml` enforces this gate and will fail the PR if the
 
 ## Expected Behavior
 
-1. Confirm whether any changed file matches one of the two trigger patterns above. If neither matches, skip this skill — no changelog update is required.
+1. Confirm whether any changed file matches one of the trigger categories above. If none matches, skip this skill — no changelog update is required.
 
 2. Open `CHANGELOG.md` and locate the `## [Unreleased]` section.
 
