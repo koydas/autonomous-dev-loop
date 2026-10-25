@@ -65,6 +65,14 @@ autofix_max_input_tokens: 2500
 autofix_diff_ratio:     0.15
 autofix_feedback_ratio: 0.25
 
+# Conflicts-fix (ADR-0059): the model resolves the conflict hunks of a PR's files; one call per file.
+# (system ≈ 330 + 2500) × 1.10 + 4096 = 7209 ≤ 8000. A file whose hunks do not fit is escalated, never cut.
+conflicts:              openai/gpt-oss-120b
+conflicts_temperature:  0
+conflicts_reasoning_effort: low
+conflicts_max_tokens:   4096
+conflicts_max_input_tokens: 2500
+
 # ── Anthropic (ADR-0032) ─────────────────────────────────────────────────────
 # anthropic_<stage>: model (ANTHROPIC_MODEL overrides every stage).
 # anthropic_<stage>_effort: output_config.effort — low | medium | high | xhigh | max | off
@@ -107,3 +115,6 @@ review_eval_cut_anthropic_max_input_tokens: 6300
 anthropic_autofix:               claude-sonnet-5-5
 anthropic_autofix_effort:        medium
 anthropic_autofix_max_tokens:    16000
+anthropic_conflicts:             claude-sonnet-5-5
+anthropic_conflicts_effort:      medium
+anthropic_conflicts_max_tokens:  16000

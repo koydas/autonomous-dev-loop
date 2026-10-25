@@ -231,7 +231,7 @@ function groqTokens(runs, scorecard) {
 }
 
 export const COST_TOP = 10;
-const STEP_ORDER = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'autofix'];
+const STEP_ORDER = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'autofix', 'conflicts'];
 
 /**
  * LLM cost of the window (llm_cost.mjs, list price): the total, per pipeline stage (with the runs that

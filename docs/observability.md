@@ -157,6 +157,41 @@ Emitted by `scripts/reset_auto_fix.mjs` (`reset-auto-fix.yml`, ADR-0041): the re
 | `autofix_reset.complete`       | info  | ✓             | `prNumber`, `retrigger` |
 | `autofix_reset.error`          | error | ✓             | `prNumber`, `error` |
 
+### `conflicts_detect`
+
+Emitted by `scripts/detect_conflicts.mjs` (`conflicts-fix.yml`, ADR-0059): the `merge-conflict` label kept in step with each open PR's mergeability. No LLM, no push.
+
+| Event | Level | `duration_ms` | Key `meta` fields |
+|---|---|---|---|
+| `conflicts_detect.start` | info | — | `prNumber` (null: every open PR) |
+| `conflicts_detect.classified` | info | — | `prNumber`, `state` (`conflicting` \| `clean` \| `unknown` \| `closed`) — `unknown`: GitHub had not computed `mergeable` after the bounded re-reads, the PR is left to the next run |
+| `conflicts_detect.labeled` | info | — | `prNumber`, `added`, `removed` — `merge-conflict` and, on a PR that is clean again, the `conflict-fix-attempt-N` labels |
+| `conflicts_detect.comment_posted` | info | — | `prNumber`, `url` — once per head, on a conflicting PR the pipeline cannot push to (a fork without maintainer edits) |
+| `conflicts_detect.dispatched` | info | — | `prNumber` — the sweep started the fix run of this PR (`workflow_dispatch` of the caller, `sweep: true`; one run per PR so each has its own record, ADR-0041) |
+| `conflicts_detect.dispatch_complete` | info / warn | ✓ | `dispatched`, `failed` — warn and exit 1 when GitHub refused a dispatch; the next sweep dispatches it again |
+| `conflicts_detect.complete` | info | ✓ | `checked`, `conflicting`, `fixable` |
+| `conflicts_detect.error` | error | ✓ | `error` |
+
+### `conflicts`
+
+Emitted by `scripts/conflicts_fix.mjs` (ADR-0059): the base merged into the head of one conflicting PR. The run joins the trace of the PR's work item (ADR-0041).
+
+| Event | Level | `duration_ms` | Key `meta` fields |
+|---|---|---|---|
+| `conflicts.start` | info | — | `prNumber`, `attempt` |
+| `conflicts.skipped` | info | — | `prNumber`, `reason` (`clean` \| `unknown` \| `closed` \| `up_to_date` \| `fork_not_writable` \| `unsafe_ref` \| `attempts_exhausted` \| `circuit_open`), `sig` — exit 0, nothing pushed |
+| `conflicts.model_unavailable` | warn | — | `error` — no provider key: the run goes on and escalates at the first file that needs the model |
+| `conflicts.llm_request` | info | — | `model`, `input_tokens_est` |
+| `conflicts.llm_response` | info | — | `output_tokens_est` |
+| `conflicts.adr_renumbered` | info | — | `prNumber`, `from`, `to` — the mechanical renumber of the PR's ADR (the base keeps its number) |
+| `conflicts.push` | info | — | `prNumber`, `attempt`, `head_sha`, `files_count` — the merge commit was pushed |
+| `conflicts.resolved` | info | — | `prNumber`, `attempt`, `rung` (`L0` \| `L1` \| `L2`), `files_count`, `hunks` (resolved by the model), `renumbered`, `url` (comment) |
+| `conflicts.escalated` | warn | — | `prNumber`, `attempt`, `reason` (`protected_path` \| `unsupported_conflict` \| `binary_file` \| `too_large` \| `too_many_files` \| `parse_failed` \| `model_rejected` \| `guard_rejected` \| `syntax_error` \| `lockfile_failed` \| `lockfile_unsafe` \| `push_failed` \| `workflow_scope`), `rules` (post-check or ADR-0029 rule ids), `labels_added`, `url` — merge aborted, nothing pushed, `needs-human` applied |
+| `conflicts.complete` | info | ✓ | `prNumber`, `outcome` (`resolved` \| `escalated` \| `skipped`) |
+| `conflicts.error` | error | ✓ | `prNumber`, `error` |
+
+No event carries a file name, a hunk, a PR title or model text: the comment on the PR names the files, the record does not.
+
 ### `item`
 
 Emitted by `scripts/item_closed.mjs` (`item-closed.yml`, on `issues: closed` and `pull_request: closed`; ADR-0043 amendment 2026-10-21): the end of a work item. The run joins the trace of the item (ADR-0041), opens no stage span, calls no LLM and uses no secret. The dashboard reads `item.closed` to move the item out of "Waiting on you"; a closing before the workflow existed has no event and is never inferred.
@@ -390,7 +425,8 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 | `issue_validation.fail`, `code_gen.error`, `review.error`, `autofix.error`, stage span meta (`error`, OTLP `adl.error`) | yes, sanitized | an unexpected exception: may be `callLLM`'s `All providers failed: <provider>: … HTTP error <status>: <body>`, cut at the body |
 | `pr_prepare.error`, `code_gen.skipped`, `pr_prepare.skipped` | yes, sanitized | our own message: write guard, static verifier or a GitHub API call |
 | `review.stale_refs_error`, `review.related_adrs_error`, `review.impact_error`, `review.guardrail_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
-| `autofix_reset.error` | yes, sanitized | our own message: a GitHub API call |
+| `autofix_reset.error`, `conflicts_detect.error` | yes, sanitized | our own message: a GitHub API call |
+| `conflicts.error`, `conflicts.model_unavailable` | yes, sanitized | an unexpected exception: may be `callLLM`'s provider error (sanitized), a git failure or a GitHub API call |
 | `trace_write_failed`, `start_span_failed`, `end_span_failed`, `trace_finalize_failed` | yes, sanitized | our own message: a trace-file write |
 | `review_evidence.error`, `eval.error`, `eval_replay.error`, `pr_evals.error`, `pr_evals_report.error` | no (not allowlisted: `meta: {}`) | out of the allowlist since ADR-0040 |
 

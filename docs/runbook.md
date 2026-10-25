@@ -377,7 +377,7 @@ A later `models.yaml (…): unknown key` or `ADL_CONFIG_DIR … must be an absol
 |---------|----------|
 | Empty generation output | Improve the issue body (title + clear acceptance criteria), remove and re-apply `ready-for-dev` |
 | PR creation forbidden | Enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** or set `AI_PR_TOKEN` with `pull-requests: write` |
-| Branch `ai/issue-<N>` already exists with conflicts | Delete the stale branch manually via **Code → Branches**, then re-apply `ready-for-dev` |
+| Branch `ai/issue-<N>` already exists with conflicts | Delete the stale branch manually via **Code → Branches**, then re-apply `ready-for-dev` (a PR already open on a branch that conflicts is `conflicts-fix`'s: see below) |
 | Provider outage | Set `AI_PROVIDER=groq` in **Settings → Variables → Actions** (or swap to `anthropic`) and re-run |
 
 ### `pr-review`
@@ -392,6 +392,24 @@ A later `models.yaml (…): unknown key` or `ADL_CONFIG_DIR … must be an absol
 | `evidence` job fails with `checks.<name>.command` / `timeout_seconds` error | Fix `config/review-evidence.yaml` (each check needs a `command`; `timeout_seconds` must be a positive integer) and push |
 | A check reports `TIMEOUT` on every run | Raise `checks.<name>.timeout_seconds` or investigate the hang — timeouts never force `REQUEST_CHANGES`, so auto-fix will not address them |
 | Override persists although the check passes locally | Evidence runs with credential-like env vars and `GIT_CONFIG_*` stripped — a check that depends on one of them will fail in CI only; make it independent of those variables |
+
+### `conflicts-fix`
+
+| Failure | Recovery |
+|---------|----------|
+| The sweep log says `refused (#N: 403)` | `dispatch_conflicts.mjs` could not start the run of a PR: the token lacks `actions: write` (the caller grants it, a fork-owned workflow token cannot). The next sweep dispatches it again |
+| A PR is labelled `merge-conflict` and nothing happens | The run is triggered by a push to the default branch, by the schedule (every 6 h) or by hand: dispatch **Conflicts Fix** with the PR number. `conflicts_detect.classified` with `state: unknown` means GitHub had not computed `mergeable` yet; the next run reads it again |
+| Comment "Merge conflict … cannot push to its head branch" | A fork PR without **Allow edits from maintainers**: tick it, or merge the base by hand. The label clears itself once the PR is mergeable |
+| `needs-human` + "Merge conflicts: a human needs to decide", reason `protected_path` | A conflicted file is on the protected list (ADR-0021) and no resolver may write it (`scripts/`, `config/`, `prompts/`, `.github/`, `docs/` outside the changelog and the ADR files). Merge the base by hand |
+| Reason `model_rejected` / `guard_rejected` / `syntax_error` (`rules` in the comment) | The model's resolution failed a post-check or a write guard: nothing was pushed, the merge was aborted. Resolve by hand, or fix the cause and dispatch **Conflicts Fix** (a manual run bypasses the cap and the breaker) |
+| Reason `too_many_files` / `too_large` / `unsupported_conflict` / `binary_file` | More than 3 conflicted files, hunks past the model's input budget (`conflicts_max_input_tokens`), a deleted/renamed/symlinked file or a binary: by hand |
+| Reason `lockfile_failed` / `lockfile_unsafe` | `npm install --package-lock-only` failed, or the PR changes `.npmrc` (the registry is the PR's to choose, so the pipeline does not install from it). Regenerate the lockfile by hand |
+| Reason `workflow_scope` / `push_failed` | The merge brings changes to `.github/workflows/` and `AI_PR_TOKEN` lacks the `workflow` scope, or the branch protection refused the push |
+| Skipped with `attempts_exhausted` / `circuit_open` | 2 attempts per conflict, or the same conflict twice: resolve by hand, or dispatch **Conflicts Fix** with the PR number to run once more |
+| The merge commit is pushed but the review does not run | The push was made with `GITHUB_TOKEN`: set `AI_PR_TOKEN` (a `GITHUB_TOKEN` push triggers no workflow) |
+| The merge commit looks wrong | The guards bound size and shape, not meaning: the merge commit is the PR's `fix(ai): resolve merge conflicts with …`; revert it and merge by hand, then review the cause in the trace (`conflicts.resolved`: rung, hunks) |
+
+---
 
 ### `evals`
 
@@ -498,6 +516,10 @@ Add or edit a PR comment with `- [x] Relancer Auto Fixer` to automatically reset
 
 Or dispatch **Reset Auto-Fix Counter** (`reset-auto-fix.yml`, calling `adl-reset-auto-fix.yml`; `pr_number`, `retrigger`): `scripts/reset_auto_fix.mjs` removes the `auto-fix-attempt-N` labels and, with `retrigger`, re-applies `changes-requested`. The run uploads its trace and commits its record (and the trace index of the PR's work item) to `metrics` (ADR-0041).
 
+### Resolve a PR's merge conflicts now
+
+Dispatch **Conflicts Fix** (`conflicts-fix.yml`, calling `adl-conflicts-fix.yml`; `pr_number`): the PR is merged with its base through the same ladder, bypassing the attempt cap and the circuit breaker for that run. Without `pr_number` it sweeps every open PR.
+
 ### Manually approve and close the loop
 
 1. Remove `changes-requested` label from the PR.
@@ -530,7 +552,7 @@ only by GitHub's `merged_at`, never by workflow success; a PR closed without it
 shows ⊘ "closed without merge", an open one ○ "PR open".
 
 Cards start collapsed. The summary shows the PR/issue title and one icon per
-step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge):
+step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge; plus Conflicts fix on a card where it ran, ADR-0059):
 ✓ success, ✗ failed, ⊘ skipped, ○ not recorded. A step's icon is the span
 outcome of its final execution, ordered by when each attempt ended: its last
 event of the step, including the workflow event that decides it

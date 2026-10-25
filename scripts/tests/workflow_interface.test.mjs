@@ -71,9 +71,9 @@ test('readInterface refuses a workflow that is not reusable, and reads one witho
   assert.deepEqual(readInterface(noSecrets).secrets, {});
 });
 
-test('the five reusable workflows are read, and the snapshot of the repository is in sync with them (a change needs a snapshot update and a CHANGELOG entry)', () => {
+test('the six reusable workflows are read, and the snapshot of the repository is in sync with them (a change needs a snapshot update and a CHANGELOG entry)', () => {
   const current = readAllInterfaces(WORKFLOWS);
-  assert.deepEqual(Object.keys(current), ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-pr-review.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml']);
+  assert.deepEqual(Object.keys(current), ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-conflicts-fix.yml', 'adl-pr-review.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml']);
   assert.deepEqual(snapshotDrift(snapshot(), current), [], 'run: node scripts/workflow_interface.mjs --write, then add a CHANGELOG entry');
   assert.equal(fs.readFileSync(path.join(REPO, SNAPSHOT_PATH), 'utf8'), formatSnapshot(current), 'the snapshot is the generated text, byte for byte');
 });
@@ -147,7 +147,7 @@ function runCli(args, cwd = REPO) {
 test('the CLI checks the real snapshot, writes a new one, and compares against a base snapshot', () => {
   const ok = runCli([]);
   assert.equal(ok.status, 0, ok.stderr);
-  assert.match(ok.stdout, /Snapshot in sync \(5 reusable workflows\)/);
+  assert.match(ok.stdout, /Snapshot in sync \(6 reusable workflows\)/);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adl-iface-'));
   try {
     const workflows = path.join(dir, 'workflows');

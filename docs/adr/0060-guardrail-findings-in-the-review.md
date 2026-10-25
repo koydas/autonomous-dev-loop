@@ -1,4 +1,4 @@
-# ADR-0059: Hard Guardrails are checked in code on the PR under review
+# ADR-0060: Hard Guardrails are checked in code on the PR under review
 
 - **Date:** 2026-10-25
 - **Status:** Accepted

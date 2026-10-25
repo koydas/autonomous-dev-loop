@@ -21,6 +21,8 @@ export const PROMPT_STAGES = {
   'prompts/pr-review-user.md': [{ stage: 'review', budget: 'input' }],
   'prompts/auto-fix-user.md': [{ stage: 'autofix', budget: 'input' }],
   'prompts/auto-fix-system.md': [{ stage: 'autofix', budget: 'tpm' }],
+  'prompts/conflicts-user.md': [{ stage: 'conflicts', budget: 'input' }],
+  'prompts/conflicts-system.md': [{ stage: 'conflicts', budget: 'tpm' }],
 };
 
 const PROMPT_PATH = /^prompts\/[^/]+\.md$/;

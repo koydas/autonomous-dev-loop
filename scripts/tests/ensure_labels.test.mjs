@@ -15,7 +15,7 @@ const cfg = (labels) => Object.fromEntries(Object.entries(labels).map(([g, s]) =
 test('labelDefinitions lists every label of the real config, colors lower-cased', () => {
   const defs = labelDefinitions(loadLabelsConfigAll({}));
   const names = defs.map((d) => d.name).sort();
-  assert.deepEqual(names, ['auto-fix-attempt-1', 'auto-fix-attempt-2', 'auto-fix-attempt-3', 'changes-requested', 'needs-human', 'needs-refinement', 'ready-for-dev', 'review-approved', 'review-withheld']);
+  assert.deepEqual(names, ['auto-fix-attempt-1', 'auto-fix-attempt-2', 'auto-fix-attempt-3', 'changes-requested', 'conflict-fix-attempt-1', 'conflict-fix-attempt-2', 'merge-conflict', 'needs-human', 'needs-refinement', 'ready-for-dev', 'review-approved', 'review-withheld']);
   for (const d of defs) assert.match(d.color, /^[0-9a-f]{6}$/);
 });
 
@@ -182,12 +182,12 @@ test('ensure_labels creates every label of the config in an empty repository, th
     const env = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'acme/app', GITHUB_API_URL: `http://127.0.0.1:${api.port}` };
     const first = await runCli([], env);
     assert.equal(first.code, 0, first.stderr);
-    assert.match(first.stdout, /^acme\/app: created 9, already present 0 \(created: ready-for-dev, /);
-    assert.equal(api.requests.filter((r) => r.method === 'POST').length, 9);
+    assert.match(first.stdout, /^acme\/app: created 12, already present 0 \(created: ready-for-dev, /);
+    assert.equal(api.requests.filter((r) => r.method === 'POST').length, 12);
     assert.ok(api.requests.every((r) => r.url.startsWith('/repos/acme/app/labels')));
     assert.match(first.stderr, /"event":"labels_install\.start"/);
     assert.match(first.stderr, /"event":"labels_install\.complete".*"duration_ms":\d+/);
-    assert.equal(first.stderr.match(/"event":"labels_install\.label_created"/g).length, 9, 'one event per label written');
+    assert.equal(first.stderr.match(/"event":"labels_install\.label_created"/g).length, 12, 'one event per label written');
   } finally {
     api.server.close();
   }
@@ -199,7 +199,7 @@ test('ensure_labels --dry-run writes nothing; --update says what it brings back'
     const env = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'acme/app', GITHUB_API_URL: `http://127.0.0.1:${api.port}` };
     const dry = await runCli(['--dry-run'], env);
     assert.equal(dry.code, 0, dry.stderr);
-    assert.match(dry.stdout, /would create 8, already present 1/);
+    assert.match(dry.stdout, /would create 11, already present 1/);
     assert.match(dry.stdout, /1 label\(s\) differ from the config in color or description: ready-for-dev — run with --update to bring them back/);
     assert.equal(api.requests.filter((r) => r.method !== 'GET').length, 0);
     const dryUpdate = await runCli(['--dry-run', '--update'], env);

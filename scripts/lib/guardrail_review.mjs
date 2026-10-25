@@ -1,4 +1,4 @@
-// Deterministic review findings from the AGENTS.md Hard Guardrails (RV-03, ADR-0059). The reviewer used to approve
+// Deterministic review findings from the AGENTS.md Hard Guardrails (RV-03, ADR-0060). The reviewer used to approve
 // diffs that break a rule the pipeline enforces in code for generated patches (ADR-0019, ADR-0029): a test case
 // removed (PR #276), a changed signature, a module format switched, an import that does not resolve. Pure and
 // deterministic: no LLM, no execution. The PR tree is untrusted text and is only parsed (static_verifier.mjs).

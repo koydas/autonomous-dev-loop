@@ -10,7 +10,7 @@ import { analyzeAdversarial, enforceAdversarialProtocol } from './adversarial_re
  * Resolves the verdict from the model's parsed review, in the order production applies the stages:
  * evidence (ADR-0024/0026), then code cut from the diff (ADR-0038), then the adversarial protocol (ADR-0049).
  * `stages` keeps each intermediate decision so callers can tell which stage withheld.
- * A guardrail finding (RV-03, ADR-0059) is a deterministic defect: it turns an APPROVE or a WITHHELD into
+ * A guardrail finding (RV-03, ADR-0060) is a deterministic defect: it turns an APPROVE or a WITHHELD into
  * REQUEST_CHANGES, like a failing check (`guardrailOverride`).
  * @returns {{ verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'WITHHELD', reason: string | null, withheldFor: 'evidence' | 'unreviewed_code' | 'unseen_findings' | 'protocol' | null, guardrailOverride: boolean, adversarial: ReturnType<typeof analyzeAdversarial>, stages: { evidence: object, code: object } }}
  */

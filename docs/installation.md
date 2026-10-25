@@ -21,7 +21,7 @@ ADR-0045. A repository installs the pipeline with five caller workflows and its 
 ## Install
 
 1. **Pick a release** and its commit: `git ls-remote https://github.com/koydas/autonomous-dev-loop 'refs/tags/v*'` (an annotated tag lists the tag object, then the commit as `<tag>^{}`: use the commit).
-2. **Copy the callers.** `templates/consumer/{validate-issue,code-generation,reset-auto-fix,pr-review,auto-fix-pr}.yml` into `.github/workflows/`, keeping the file names (the callers look each other up by name: `codegen_workflow_file`, `autofix_workflow_file`). In each, replace `<PIPELINE_SHA>` with the 40-character commit and `<PIPELINE_VERSION>` with the tag (a comment: it lets a bot bump the line). In `pr-review.yml`, replace `!main` with your default branch.
+2. **Copy the callers.** `templates/consumer/{validate-issue,code-generation,reset-auto-fix,pr-review,auto-fix-pr,conflicts-fix}.yml` into `.github/workflows/`, keeping the file names (the callers look each other up by name: `codegen_workflow_file`, `autofix_workflow_file`). In each, replace `<PIPELINE_SHA>` with the 40-character commit and `<PIPELINE_VERSION>` with the tag (a comment: it lets a bot bump the line). In `pr-review.yml`, replace `!main` with your default branch.
 3. **Add the configuration** you need in `.autonomous-dev-loop/` (below). None is mandatory.
 4. **Create the labels**: copy `templates/consumer/setup-labels.yml`, replace the same two placeholders, and run **ADL Setup Labels** from the Actions tab (`update` brings existing labels back to the configuration). It is idempotent; `node scripts/ensure_labels.mjs --dry-run` shows what it would do.
 5. **Check what a run resolves**: from a clone of the pipeline at the pinned commit, in your repository: `ADL_CONFIG_DIR=$PWD/.autonomous-dev-loop ADL_CONFIG_PATH=.autonomous-dev-loop node /path/to/pipeline/scripts/print_resolved_config.mjs`.
@@ -62,12 +62,13 @@ A called job can only narrow the token of its caller, so each caller job grants 
 | reset-auto-fix | write | write | write | read |
 | pr-review | write | write | write | read |
 | auto-fix-pr | write | write | write | read |
+| conflicts-fix | write (push to the PR branch, metrics branch) | write | write | write (the sweep dispatches one run per conflicting PR) |
 
 Inside `adl-pr-review.yml` the `evidence` job, which runs your pull request's code, has `contents: read` only and references no secret.
 
 ## Updating
 
-Change the SHA (and the version comment) in the five callers and the label setup, in one pull request. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment. Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
+Change the SHA (and the version comment) in the six callers and the label setup, in one pull request. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment. Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
 
 ## Security rules that hold for every installation
 
