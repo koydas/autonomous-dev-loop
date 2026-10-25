@@ -627,6 +627,10 @@ const updatedPrMetrics = {
 await writeCheckpoint(checkpointRunId, 'pr_metrics', updatedPrMetrics);
 log('PR metrics checkpoint updated', { prNumber, review_cycles: updatedPrMetrics.review_cycles });
 
+// ADR-0043 amendment: the external review's round-trips, counts only, journaled before the trace is finalized.
+const externalReview = isApproved ? await readExternalReview() : null;
+if (externalReview) obsLog({ stage: 'review', event: 'review.external', level: 'info', meta: { prNumber, ...externalReview } });
+
 const reviewDurationMs = Date.now() - _reviewStartMs;
 obsLog({
   stage: 'review',
@@ -642,7 +646,6 @@ tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updated
 await tracer.finalize(isApproved ? 'success' : 'partial');
 
 if (isApproved) {
-  const externalReview = await readExternalReview();
   await appendMetric({
     type: 'pr',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}` : `local-${Date.now()}`,

@@ -57,6 +57,7 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'lessons.loaded': ['stage', 'count', 'ids'],
   'lessons.unavailable': ['stage', 'reason', 'status'],
   'review.escalated': [...ID, 'reason', 'streak', 'labels_added', 'url'],
+  'review.external': [...ID, 'prNumber', 'rounds', 'threads', 'p0p1'],
   'review.skipped': [...ID, 'reason', 'headSha'],
   'review.error': ERR,
   'review.stale_refs_error': ERR,

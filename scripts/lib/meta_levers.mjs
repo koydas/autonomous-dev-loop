@@ -44,6 +44,7 @@ export const NO_LEVER = Object.freeze({
   'stage-failures-*': 'a repeated stage failure needs a root cause (docs/runbook.md), not a setting',
   'review-stuck': 'depends on the content of the pull request',
   escalations: 'a person is the lever (ADR-0001)',
+  'external-review-churn': 'a practice (AGENTS.md, PR Review Comment Workflow) and the size of the pull request, not a setting; the reviewer is external',
   'rate-limit-waits': 'a symptom of the provider tier; revisit with data',
   'duration-*': 'a symptom of the provider tier; revisit with data',
 });
