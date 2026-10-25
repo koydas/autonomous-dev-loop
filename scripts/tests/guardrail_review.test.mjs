@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { extractExportedSignatures } from '../lib/static_verifier.mjs';
 import {
-  parseDiffChanges, findTestCountDrops, findFileRuleViolations, collectGuardrailFindings, confirmedOnRawText, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
+  AMBIGUOUS_PARAMETER_TEXT, parseDiffChanges, findTestCountDrops, findFileRuleViolations, collectGuardrailFindings, confirmedOnRawText, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
 } from '../lib/guardrail_review.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -364,6 +365,13 @@ test('findFileRuleViolations: a parameter change is kept only when the parameter
   assert.equal(run('const re = /x/;\nexport function f(a, b) {}\n', 'const re = /y/;\nexport function f(a) {}\n').length, 1);
   // A function with a regex in its parameters is withheld even when the arity really changed: the boundary is uncertain.
   assert.deepEqual(run('export function f(p = /x/, o) {}\n', 'export function f(p = /x/) {}\n'), []);
+  // A comparison in a default value looks like the opening of a generic list to the parser: `1 < 0` swallows the rest.
+  assert.deepEqual(run('export function f(enabled = 1 > 0, options) {}\n', 'export function f(enabled = 1 < 0, options) {}\n'), []);
+  assert.deepEqual(run('export function f(a = x >= 1, b) {}\n', 'export function f(a = x <= 1, b) {}\n'), []);
+  assert.deepEqual(run('export function f(a = 1 << 2, b) {}\n', 'export function f(a = 8 >> 1, b) {}\n'), []);
+  // The arrow `=>` and a plain default are not ambiguous: a real change next to them is still reported.
+  assert.match(run('export function f(cb = () => 1, b) {}\n', 'export function f(cb = () => 1) {}\n')[0], /changes the arity of exported f/);
+  assert.match(run('export function f(a = 1, b) {}\n', 'export function f(a = 2) {}\n')[0], /changes the arity of exported f/);
 });
 
 test('confirmedOnRawText: an import specifier must be written in the head and absent from the base', () => {
@@ -376,4 +384,24 @@ test('confirmedOnRawText: an import specifier must be written in the head and ab
   assert.equal(confirmedOnRawText(rule, 'imports URL "https://x.y/z.js"', 'export {};\n', "import u from 'https://x.y/z.js';\n"), true);
   assert.equal(confirmedOnRawText(rule, 'something else', '', ''), true, 'a reason without a specifier is kept');
   assert.equal(confirmedOnRawText('other_rule', 'x', '', ''), true);
+});
+
+test('invariant: a default value either leaves the parameter list readable or is flagged as ambiguous', () => {
+  const defaults = ['1', '-1', '!x', 'x ? 1 : 2', 'x ? y : z', '{ a: 1, b: 2 }', '[1, 2]', '[]', '{}', '() => 1', '(x) => x', 'x => x', 'async () => {}', 'function () {}',
+    'a || b', 'a ?? b', 'a?.b', 'typeof x', 'new Map()', 'new Map([[1, 2]])', 'x ** 2', 'f(1, 2)', 'a.b.c', '`t`', "'s'", '"s"', "','", "')'", '"("', 'void 0',
+    'x === 1', 'x !== 1', 'x == 1', 'x != 1', 'x + 1', 'x - 1', 'x * 2', 'x % 2', 'x & 1', 'x | 1', 'x ^ 1', '~x', '{ a = 1 }', '[a = 1]', 'x in y', 'x instanceof Y', '((1))',
+    'i < 2', 'i > 2', 'i <= 2', 'i >= 2', 'i << 2', 'i >> 2', 'i >>> 2', 'a < b && c > d', 'a<b>(c)', '/x/', '/\\)/', '/\\(/', '/[)]/', '1 / 2', 'x /* c */'];
+  const unreadable = [];
+  for (const value of defaults) {
+    const sig = extractExportedSignatures(`export function f(p = ${value}, q) {}\n`).get('f');
+    if (!sig) continue; // not recognized at all: it can only look removed, and the raw export line then withholds that
+    if (sig.params.join('|') !== 'p|q' && !AMBIGUOUS_PARAMETER_TEXT.test(String(sig.raw ?? ''))) unreadable.push(value);
+  }
+  assert.deepEqual(unreadable, [], 'the parser misreads these and the guard does not see it');
+  assert.ok(defaults.some((v) => !extractExportedSignatures(`export function f(p = ${v}, q) {}\n`).get('f')?.params.join('|').startsWith('p|q')), 'the list holds forms the parser really misreads');
+});
+
+test('findFileRuleViolations: a function the parser stops recognizing is not reported as removed while its export line is there', () => {
+  const run = (base, head) => findFileRuleViolations(modified('src/a.mjs'), { readBase: () => base, readHead: () => head, fileExists: () => true, manifestFor: () => new Set() }).map((f) => f.rule);
+  assert.deepEqual(run('export function f(p = /x/, q) {}\n', 'export function f(p = /\\(/, q) {}\n'), []);
 });

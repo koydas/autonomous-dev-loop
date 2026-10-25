@@ -193,15 +193,17 @@ export const mayStillExport = (source, name) => {
   return false;
 };
 
-// A change of arity, parameters or sync/async is kept only when both parameter lists were read without doubt: the
-// masked text has no `/` left, i.e. no regex literal whose `)` or `,` the parameter parser could have taken for its own
-// (`pattern = /\)/` ends the list early). When it cannot tell, the finding is withheld.
+// A change of arity, parameters or sync/async is kept only when both parameter lists were read without doubt. The
+// parameter parser cannot tell a regex literal from a division (`pattern = /\)/` ends the list early) nor a comparison
+// from a TypeScript generic (`enabled = 1 < 0` opens a list that never closes): a masked list that still holds `/`, `<`
+// or a `>` that is not the arrow `=>` is ambiguous, and the finding is withheld.
+export const AMBIGUOUS_PARAMETER_TEXT = /\/|<|(?<!=)>/;
 const parametersReadWithoutDoubt = (reason, before, after) => {
   const name = /exported ([\w$]+)\(/.exec(reason)?.[1];
   if (!name) return true;
   return [before, after].every((source) => {
     const sig = extractExportedSignatures(source).get(name);
-    return !sig || !String(sig.raw ?? '').includes('/');
+    return !sig || !AMBIGUOUS_PARAMETER_TEXT.test(String(sig.raw ?? ''));
   });
 };
 
