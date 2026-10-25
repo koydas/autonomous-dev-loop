@@ -161,8 +161,34 @@ test('withGuardrailIssues appends the findings as an Issues Found section for th
   assert.match(out, /### ⚠️ Issues Found \(guardrails\)\n- \[High\] Guardrail test_count_drop — File: `t\/a\.test\.mjs` Root cause: 1 test case removed/);
   assert.equal(withGuardrailIssues('same', { findings: [] }), 'same');
   assert.equal(withGuardrailIssues('same', {}), 'same');
-  const cited = '### ⚠️ Issues Found\n- [High] The case is gone — File: t/a.test.mjs Lines: 3\n';
-  assert.equal(withGuardrailIssues(cited, { findings: [finding] }), cited, 'a defect the model already reports is not reported twice');
-  assert.equal(withGuardrailIssues('### ⚠️ Issues Found\n- [High] Gone — File: a.test.mjs\n', { findings: [finding] }).includes('(guardrails)'), false, 'a bare file name cites the file it ends');
-  assert.match(withGuardrailIssues('### ⚠️ Issues Found\n- [High] Other — File: t/b.test.mjs\n', { findings: [finding] }), /\(guardrails\)/);
+  const reported = (text, extra = {}) => withGuardrailIssues(`### ⚠️ Issues Found\n${text}\n`, { findings: [{ ...finding, ...extra }] }).includes('(guardrails)') === false;
+  assert.ok(reported('- [High] A test case is gone — File: t/a.test.mjs Lines: 3'), 'a defect the model already reports is not reported twice');
+  assert.ok(reported('- [Medium] Cases were removed — File: a.test.mjs'), 'a bare file name cites the file it ends');
+  assert.ok(!reported('- [Low] Wording of a test title — File: t/a.test.mjs'), 'a Low note does not hide a blocking defect');
+  assert.ok(!reported('- [High] Off-by-one in the loop bound — File: t/a.test.mjs Lines: 9'), 'an unrelated blocking finding on the same file hides nothing');
+  assert.ok(!reported('- [High] Off-by-one in the loop bound — File: t/a.test.mjs'), 'the word test in the path is not a word about tests');
+  assert.ok(!reported('- [High] A test case is gone — File: t/b.test.mjs'), 'another file');
+  assert.ok(reported('- [High] Signature changed — File: src/p.mjs', { rule: 'exported_signature', path: 'src/p.mjs', severity: 'Medium' }));
+});
+
+test('findTestCountDrops: an added case pays for one removed case only, across files', () => {
+  // A renamed to B in one file, B removed in another: the net loss is A.
+  const chain = fileDiff('t/a.test.mjs', [`-${T('first case title')}`, `+${T('second case title')}`]) + fileDiff('t/b.test.mjs', [`-${T('second case title')}`]);
+  const found = findTestCountDrops(chain);
+  assert.deepEqual(found.map((f) => f.path), ['t/a.test.mjs']);
+  assert.match(found[0].reason, /first case title/);
+  // One new case does not cover two removals, in the same file or in two files.
+  const two = fileDiff('t/a.test.mjs', [`-${T('removed case one')}`, `-${T('removed case two')}`, `+${T('only one new case')}`]);
+  assert.match(findTestCountDrops(two)[0].reason, /^1 test case removed/);
+  const twoFiles = fileDiff('t/a.test.mjs', [`-${T('removed case one')}`]) + fileDiff('t/b.test.mjs', [`-${T('removed case two')}`]) + fileDiff('t/c.test.mjs', [`+${T('only one new case')}`]);
+  assert.equal(findTestCountDrops(twoFiles).length, 2, 'additions of a third file replace nothing in the others');
+  // A case kept in place and moved elsewhere at the same time pays once.
+  const dup = fileDiff('t/a.test.mjs', [`-${T('same title twice')}`, `-${T('same title twice')}`]) + fileDiff('t/b.test.mjs', [`+${T('same title twice')}`]);
+  assert.match(findTestCountDrops(dup)[0].reason, /^1 test case removed/);
+  // Replacements local to each file still work, and a waived removal frees nothing for another one.
+  const local = fileDiff('t/a.test.mjs', [`-${T('old title in a')}`, `+${T('new title in a')}`]) + fileDiff('t/b.test.mjs', [`-${T('old title in b')}`, `+${T('new title in b')}`]);
+  assert.deepEqual(findTestCountDrops(local), []);
+  const waivedOne = fileDiff('t/a.test.mjs', [`-${T('named removed case')}`, `-${T('silent removed case')}`, `+${T('replacement case')}`]);
+  assert.deepEqual(findTestCountDrops(waivedOne, { mentionText: 'drops the named removed case' }), []);
+  assert.equal(findTestCountDrops(waivedOne).length, 1, 'without the waiver one removal is not paid for');
 });

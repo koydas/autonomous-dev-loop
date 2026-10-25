@@ -4,7 +4,7 @@
 // deterministic: no LLM, no execution. The PR tree is untrusted text and is only parsed (static_verifier.mjs).
 
 import path from 'node:path';
-import { findingCitedFiles } from './review_prompt.mjs';
+import { parseFindings, pathMatches } from './review_findings.mjs';
 import { isTestFile, normalizeRepoPath } from './autofix_guard.mjs';
 import {
   RULES, isJsFile, extractExportedSignatures, findModuleSystemViolation, findSignatureViolations, findUnresolvedImports, mentions,
@@ -63,23 +63,26 @@ const isWaived = (title, mentionText) => {
  */
 export function findTestCountDrops(rawDiff, { mentionText = '' } = {}) {
   const files = parseDiffChanges(rawDiff).filter((f) => !f.isDeleted && isTestFile(f.after) && isJsFile(f.after));
-  const added = files.map((f) => caseTitles(f.added));
-  const movedIn = new Map();
-  for (const titles of added) for (const t of titles) movedIn.set(t, (movedIn.get(t) ?? 0) + 1);
+  // Every added case pays for at most one removed case: the same title in the same file first (a case kept), then in
+  // another file of the diff (a move); what is left of a file's additions replaces what is left of its removals.
+  const state = files.map((f) => ({ file: f, removed: caseTitles(f.removed), added: caseTitles(f.added) }));
+  const take = (list, title) => {
+    const at = list.indexOf(title);
+    if (at >= 0) list.splice(at, 1);
+    return at >= 0;
+  };
+  for (const s of state) for (const t of [...s.removed]) if (take(s.added, t)) take(s.removed, t);
+  for (const s of state) {
+    for (const t of [...s.removed]) {
+      const target = state.find((o) => o !== s && o.added.includes(t));
+      if (target) { take(target.added, t); take(s.removed, t); }
+    }
+  }
   const findings = [];
-  files.forEach((f, i) => {
-    const removed = caseTitles(f.removed);
-    if (removed.length === 0) return;
-    // Titles added anywhere in the diff cover the same number of removed ones (a move or an in-place edit of the body).
-    const budget = new Map(movedIn);
-    const lost = removed.filter((t) => {
-      const left = budget.get(t) ?? 0;
-      if (left > 0) { budget.set(t, left - 1); return false; }
-      return true;
-    }).filter((t) => !isWaived(t, mentionText));
-    const gained = added[i].filter((t) => !removed.includes(t)).length;
-    const drop = lost.length - gained;
-    if (drop <= 0) return;
+  for (const { file: f, removed, added } of state) {
+    const lost = removed.filter((t) => !isWaived(t, mentionText));
+    const drop = lost.length - added.length;
+    if (drop <= 0) continue;
     const shown = lost.slice(0, 3).map((t) => `"${clip(t)}"`).join(', ');
     findings.push({
       rule: GUARDRAIL_RULES.TEST_COUNT_DROP,
@@ -87,7 +90,7 @@ export function findTestCountDrops(rawDiff, { mentionText = '' } = {}) {
       severity: SEVERITY.test_count_drop,
       reason: `${drop} test case${drop === 1 ? '' : 's'} removed without a replacement (${shown}${lost.length > 3 ? ', …' : ''})`,
     });
-  });
+  }
   return findings;
 }
 
@@ -180,14 +183,31 @@ const FIX_HINT = {
 
 const bullet = (f) => `- [${f.severity}] Guardrail ${f.rule} — File: \`${plain(f.path)}\` Root cause: ${f.reason}. Fix: ${FIX_HINT[f.rule] ?? 'resolve it in this change.'}`;
 
+// What a model finding says when it reports the defect a rule finds (a finding on the same file about something else is not it).
+const SAME_DEFECT = {
+  test_count_drop: /\b(?:test|tests|case|cases|spec)\b|remov|delet|drop|fewer|lost/i,
+  exported_signature: /signature|arity|param|argument|export|remov|breaking|caller|contract/i,
+  module_system: /require|import|esm|commonjs|module|\.mjs|\.cjs/i,
+  unresolved_import: /import|resolve|depend|package|module|manifest/i,
+};
+
+/** Whether a High or Medium finding of the model, on the file, talks about the defect this guardrail finding reports. */
+const alreadyReported = (modelFindings, f) => modelFindings.some((m) => {
+  if (m.severity !== 'high' && m.severity !== 'medium') return false;
+  if (!m.files.some((file) => pathMatches(file, f.path))) return false;
+  const prose = m.files.reduce((text, file) => text.split(file).join(' '), m.text); // a path named `x.test.mjs` is not a word about tests
+  return (SAME_DEFECT[f.rule] ?? /./).test(prose);
+});
+
 /**
  * The review text the `review` eval suite scores: the model's review plus the guardrail findings as an Issues Found
  * section, the form the finding parser and the scorers read (the comment of pr_review.mjs carries its own section).
- * A file the model's findings already cite is not listed again: the same defect twice would count as a false positive.
+ * A finding the model already reports (a blocking one on the same file about the same kind of defect) is not listed
+ * again: the same defect twice would count as a false positive. An unrelated finding on that file hides nothing.
  */
 export function withGuardrailIssues(review, { findings = [] } = {}) {
-  const cited = new Set(findingCitedFiles(review).flat());
-  const extra = findings.filter((f) => !cited.has(f.path) && ![...cited].some((c) => !c.includes('/') && f.path.endsWith(`/${c}`)));
+  const modelFindings = parseFindings(review);
+  const extra = findings.filter((f) => !alreadyReported(modelFindings, f));
   return extra.length === 0 ? review : `${review}\n\n### ⚠️ Issues Found (guardrails)\n${extra.map(bullet).join('\n')}\n`;
 }
 
