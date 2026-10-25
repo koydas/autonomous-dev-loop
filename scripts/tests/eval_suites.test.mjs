@@ -939,10 +939,10 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   }
   assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 39 cases run, 34 gated: the five known-gap cases are counted only in summary.known_gap.
+  // 40 cases run, 34 gated: the six known-gap cases are counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [39, 0.0294, 0.9118, 0.8667, 0.7895],
+    [40, 0.0294, 0.9118, 0.8667, 0.7895],
   );
   // Finding level (RV-01): the four incident cases that list their defects are known-gap, so the gated metrics
   // above are unchanged and the finding metrics live in summary.known_gap. Recorded answers: a miss (approved), a
@@ -964,11 +964,11 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.equal(byId['bug-off-by-one-chunk'].output.finding_analysis, undefined, 'a case without expected.findings has no analysis');
   assert.equal(byId['bug-off-by-one-chunk'].scores.finding_recall, null);
   const gap = summary.known_gap.scores;
-  assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [5, 0.3333, 0.8333, 0]);
+  assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [6, 0.4667, 0.8889, 0.3333]);
   assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
   assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9333, 0.8667]);
   // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
-  const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push']; // RV-01, known-gap
+  const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push', 'impact-caller-misses-new-parameter']; // RV-01 / RV-02, known-gap
   const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id)));
   assert.deepEqual(
     [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
@@ -978,8 +978,8 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.deepEqual([before.scores.advisory.n, before.scores.no_spurious_flag.n], [0, 0]);
   assert.deepEqual(
     [summary.known_gap.n_cases, summary.known_gap.error_rate, summary.known_gap.scores.verdict_match.mean, summary.known_gap.per_class.request_changes.recall],
-    // The #194 case is missed, as on Groq; of the four RV-01 cases the recorded answers reject two and approve two.
-    [5, 0, 0.4, 0.4],
+    // The #194 case is missed, as on Groq; of the four RV-01 cases the recorded answers reject two and approve two; the RV-02 case is rejected.
+    [6, 0, 0.5, 0.5],
   );
 });
 

@@ -466,7 +466,7 @@ test('another repository gets the review rules that hold anywhere, none of this 
   for (const text of ['gate (a)', 'gate (b)', 'gate (c)', 'c8', 'docs/code-generation.md', 'scripts/lib/', 'Node.js', 'Named defect checks', 'Unauthorized dependency', 'useRef', 'AbortController']) {
     assert.ok(!target.includes(text), `the neutral prompt still mentions ${text}`);
   }
-  for (const text of ['Review only what is present in the provided diff', 'Allowed verdicts are only: APPROVED or REQUEST_CHANGES', 'Before flagging a step condition', 'Tool evidence:', 'Context-aware review:', 'Stale references']) {
+  for (const text of ['Review the code in the provided diff; do not infer or evaluate code outside changed hunks', 'Impact analysis', 'Allowed verdicts are only: APPROVED or REQUEST_CHANGES', 'Before flagging a step condition', 'Tool evidence:', 'Context-aware review:', 'Stale references']) {
     assert.ok(target.includes(text), `the neutral prompt lost: ${text}`);
   }
   assert.match(loadReviewSystemPrompt({ self: false, guidelines: '* Be kind.' }), /Repository review guidelines[\s\S]*\* Be kind\.$/);
@@ -497,4 +497,50 @@ test('the automation gates context names the changed files that are gated, none,
   assert.match(buildAutomationGateContext(diff('scripts/lib/b.mjs'), gated), /- gated_files_changed: none\n/);
   assert.doesNotMatch(buildAutomationGateContext(diff('scripts/lib/a.mjs')), /gated_files_changed/);
   assert.equal(buildAutomationGateContext(diff('src/x.js'), gated), '', 'outside the automation scope: no context at all');
+});
+
+const IMPACT = {
+  symbols: [{ name: 'parseThing', file: 'src/a.js', status: 'changed', refs: [{ path: 'src/b.js', line: 4, text: 'parseThing(x)' }], refFiles: 1, generic: false }],
+  tests: [], scanned: 2, truncated: false,
+};
+
+test('buildReviewPrompt places the impact analysis after the budget context and before the related ADRs and the evidence', () => {
+  const { userPrompt, impactIncluded } = build({ maxInputTokens: null, impact: IMPACT, relatedAdrs: ADRS });
+  assert.equal(impactIncluded, true);
+  const order = ['## Impact analysis', '## Related ADRs', '## Tool evidence'].map((s) => userPrompt.indexOf(s));
+  assert.ok(order.every((i) => i > 0), `missing block: ${order}`);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.match(userPrompt, /src\/b\.js:4/);
+});
+
+test('buildReviewPrompt shows no impact block without impact, with an empty one, or reports it as not included', () => {
+  for (const impact of [null, { symbols: [], tests: [], scanned: 0, truncated: false }]) {
+    const { userPrompt, impactIncluded } = build({ impact });
+    assert.doesNotMatch(userPrompt, /## Impact analysis/);
+    assert.equal(impactIncluded, false);
+  }
+});
+
+test('buildReviewPrompt drops the related ADRs before the impact analysis when the budget is tight', () => {
+  const rawDiff = fileDiff('src/a.js', `+${'y'.repeat(4000)}`);
+  const withImpact = build({ rawDiff, maxInputTokens: null, impact: IMPACT });
+  const exact = estimateTokens(SYSTEM + withImpact.userPrompt);
+  const relatedAdrs = [{ ...ADRS[0], decisionExcerpt: 'z'.repeat(400) }];
+  const { userPrompt, adrCount, impactIncluded, diffTruncated } = build({ rawDiff, maxInputTokens: exact, impact: IMPACT, relatedAdrs });
+  assert.equal(adrCount, 0);
+  assert.equal(impactIncluded, true);
+  assert.match(userPrompt, /## Impact analysis/);
+  assert.doesNotMatch(userPrompt, /## Related ADRs/);
+  assert.equal(diffTruncated, false);
+});
+
+test('buildReviewPrompt drops the impact analysis too, never the diff, when even it does not fit', () => {
+  const rawDiff = fileDiff('src/a.js', `+${'y'.repeat(4000)}`);
+  const base = build({ rawDiff, maxInputTokens: null });
+  const exact = estimateTokens(SYSTEM + base.userPrompt);
+  const { userPrompt, impactIncluded, diffTruncated } = build({ rawDiff, maxInputTokens: exact, impact: IMPACT });
+  assert.equal(impactIncluded, false);
+  assert.doesNotMatch(userPrompt, /## Impact analysis/);
+  assert.match(userPrompt, /y{4000}/);
+  assert.equal(diffTruncated, false);
 });

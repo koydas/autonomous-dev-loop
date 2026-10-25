@@ -339,6 +339,10 @@ Cases reproduced from a production misjudgment (AGENTS.md → Eval Gates), tag `
 
 `incident-note-instead-of-fix` is classified documentation (`tests_expected: false`), so no gate of the prompt caught it: `prompts/pr-review-system.md` gained one generic rule (a PR that changes no code when the issue asks for a code change does not resolve it; example from another domain), +110 tokens, headroom 3471 of 6300 (55%, ADR-0037). Not measured live: the replay gate cannot measure a prompt change; a `run-evals` label run will.
 
+### Impact cases (RV-02)
+
+A case may carry `input.impact`, the precomputed shape `findImpact()` returns (`symbols[{name, file, status, refs[{path, line, text}], refFiles, generic}]`, `tests`, `scanned`, `truncated`), rendered like production. `impact-caller-misses-new-parameter` is `known-gap`: the defect (a caller outside the diff that does not pass the new parameter) is visible only through the Impact analysis block, so it measures whether the reviewer uses it. The replay does not exercise the prompt change; a live run (suite `review`, repeats 3) does. Remove the tag only after a live baseline.
+
 ### Untested-claim cases
 
 `prompts/pr-review-system.md` (#199): a *testable behavioral claim* is a PR-description sentence asserting changed runtime behavior. When the diff implements it, a changed test file is visible and no visible test exercises the claim, the review reports **one Low "Untested claim: <claim>"** per claim, citing the implementing file and lines: never above Low, never by itself a `REQUEST_CHANGES`. No such finding when a visible test exercises it, the body is empty or claims nothing, `tests_expected` is false (documentation / config), or the tests are past the cut (the existing "Not verified (diff truncated)" note instead). The existing obligations are unchanged: `tests_expected` true with `has_test_file_changes` false stays ≥ MEDIUM (`bug-missing-tests`), a visible but unrelated or stub test stays MEDIUM+. +124 tokens (2707 → 2831), review headroom ≈ 3230 of 6300 (ADR-0037 margin 630).

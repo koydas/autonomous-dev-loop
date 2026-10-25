@@ -9,11 +9,16 @@ import { buildChangeClassificationContext, isDocumentationFile, isTestFile } fro
 import { formatEvidenceContext } from './review_evidence.mjs';
 import { fitReviewPrompt } from './token_budget.mjs';
 import { formatRelatedAdrsContext } from './related_adrs.mjs';
+import { formatImpactContext } from './impact_context.mjs';
 
 // ADR-0036: related ADRs shown to the reviewer. Groq gets one at most, and only when it fits
 // with the diff and the PR body uncut: the block is the first thing dropped.
 export const MAX_RELATED_ADRS = 3;
 export const MAX_RELATED_ADRS_ON_BUDGET = 1;
+// Size of the impact analysis block (RV-02): generous when the diff is not token-budgeted (Anthropic), compact on a
+// token budget (Groq), where it is also the first optional block kept when the prompt is tight.
+export const IMPACT_MAX_CHARS = 8000;
+export const IMPACT_MAX_CHARS_ON_BUDGET = 1200;
 
 // Diff cap without an input budget when the caller passes no maxDiffChars: the former fixed cap, kept for callers
 // that do not resolve one (pr_review.mjs and the review suite pass reviewMaxDiffChars).
@@ -194,18 +199,21 @@ export function loadGatedModules(root = PIPELINE_ROOT) {
  * amendment; 12,000 when omitted), with the same boundary cut and marker. `diffTruncated` compares against the uncapped filtered diff, so the reviewer
  * is told when it saw a partial diff. Throws (no LLM call) when the fixed part alone is over budget.
  * Optional `staleRefsContext` (ADR-0035) and `promptBudgetContext` (ADR-0037) are fixed context like the dependency manifest;
- * `relatedAdrs` (ADR-0036) is dropped before the PR body or the diff is shrunk.
+ * `relatedAdrs` (ADR-0036) and `impact` (RV-02, the code outside the diff that depends on what it changes, see
+ * impact_context.mjs) are dropped before the PR body or the diff is shrunk: the related ADRs first, the impact analysis
+ * only when it does not fit even alone.
  * `automationGates` (default true): the automation-gate context written for this repository (ADR-0045: off for a target).
  * `unreviewedCodeFiles` (ADR-0038): code files the cut left out, in full or in part. `shownFiles`: the other files
  * of the filtered diff (shown in full, or tests / docs cut), for withholdOnUnreviewedCode.
- * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number, unreviewedCodeFiles: string[], shownFiles: string[] }}
+ * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number, impactIncluded: boolean, unreviewedCodeFiles: string[], shownFiles: string[] }}
  */
-export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars = null, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [], automationGates = true }) {
+export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars = null, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [], impact = null, automationGates = true }) {
   const orderedDiff = orderDiffForReview(rawDiff);
   const fullDiff = filterDiff(orderedDiff, Infinity);
   const cappedDiff = maxInputTokens == null ? filterDiff(orderedDiff, maxDiffChars ?? UNBUDGETED_MAX_DIFF_CHARS) : fullDiff;
-  const fit = (adrCount) => {
-    const reviewContexts = `${automationGates ? buildAutomationGateContext(rawDiff, loadGatedModules()) : ''}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
+  const impactContext = formatImpactContext(impact, { maxChars: maxInputTokens == null ? IMPACT_MAX_CHARS : IMPACT_MAX_CHARS_ON_BUDGET });
+  const fit = (adrCount, withImpact) => {
+    const reviewContexts = `${automationGates ? buildAutomationGateContext(rawDiff, loadGatedModules()) : ''}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${withImpact ? impactContext : ''}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
     return fitReviewPrompt({
       systemPrompt,
       diff: cappedDiff,
@@ -216,24 +224,32 @@ export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, p
         `${interpolatePrompt(userPromptTemplate, { diff, issueTitle: prTitle, issueBody: body })}${buildChangeClassificationContext(rawDiff, truncated)}${reviewContexts}`,
     });
   };
-  let adrCount = Math.min(relatedAdrs.length, maxInputTokens == null ? MAX_RELATED_ADRS : MAX_RELATED_ADRS_ON_BUDGET);
+  const maxAdrs = Math.min(relatedAdrs.length, maxInputTokens == null ? MAX_RELATED_ADRS : MAX_RELATED_ADRS_ON_BUDGET);
+  // Optional blocks, richest first; the first rung that fits without shrinking the diff or the PR body wins.
+  const rungs = [];
+  if (impactContext) rungs.push([maxAdrs, true]);
+  if (impactContext && maxAdrs > 0) rungs.push([0, true]);
+  if (maxAdrs > 0) rungs.push([maxAdrs, false]);
   let fitted = null;
-  if (adrCount > 0) {
+  let adrCount = 0;
+  let impactIncluded = false;
+  for (const [adrs, withImpact] of rungs) {
     try {
-      fitted = fit(adrCount);
+      const attempt = fit(adrs, withImpact);
+      if (attempt.diff.length < cappedDiff.length || attempt.bodyTruncated) continue;
+      fitted = attempt;
+      adrCount = adrs;
+      impactIncluded = withImpact;
+      break;
     } catch {
-      fitted = null; // over budget with the ADR block: retried without it below
+      // over budget with these blocks: the next rung drops some
     }
-    if (fitted && (fitted.diff.length < cappedDiff.length || fitted.bodyTruncated)) fitted = null;
   }
-  if (!fitted) {
-    adrCount = 0;
-    fitted = fit(0);
-  }
+  if (!fitted) fitted = fit(0, false);
   const { userPrompt, diffTruncated, bodyTruncated } = fitted;
   const unreviewedCodeFiles = findUnreviewedCodeFiles(fullDiff, fitted.diff);
   const shownFiles = [...fullDiff.matchAll(/^diff --git a\/(.+?) b\//gm)].map((m) => m[1]).filter((f) => !unreviewedCodeFiles.includes(f));
-  return { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles, shownFiles };
+  return { userPrompt, diffTruncated, bodyTruncated, adrCount, impactIncluded, unreviewedCodeFiles, shownFiles };
 }
 
 /**

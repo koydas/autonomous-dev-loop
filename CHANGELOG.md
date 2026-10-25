@@ -7,6 +7,11 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Review: the reviewer sees the code outside the diff that depends on what the diff changes** (RV-02, ADR-0058).
+  - New `scripts/lib/impact_context.mjs` (deterministic, no LLM, c8 ≥ 80 % gate, in the `eval-replay.yml` paths): the exports whose declaration the diff really edits, their callers outside the diff and the tests of the changed modules, searched in the PR tree through the existing safe reader (no symlink, no file over 1 MiB), bounded (12 symbols, 4 references each, 6 tests, 3000 files), rendered as a fenced `## Impact analysis` data block (8,000 characters; 1,200 on Groq) that is dropped after the related ADRs and before the diff or the PR body are cut.
+  - `pr-review-system.md`: the diff-only rule now has one exception, the Impact analysis block, as evidence for a finding that still cites the changed export in the diff and whose fix stays on the diff side. Not measured by the replay; the `review` suite gains one `known-gap` case (`impact-caller-misses-new-parameter`) for the live run. Thresholds and existing cases are unchanged.
+  - Events `review.impact_context` (counts only, allowlisted) and `review.impact_error`; never changes the verdict.
+
 - **Docs: a PR of about 1,000 added lines or more is split along a seam** (`AGENTS.md`, Objectives). Read from 250 PRs on 2026-10-24: external review threads per PR are 0.76 under 100 added lines, 1.4 to 1.6 from 100 to 1,000 (11 to 14 % of PRs reach three or more rounds, flat across those sizes) and 3.53 from 1,000 (19 PRs). A mechanical change (rename, generated file, moved block) is exempt. No cap below 1,000: the data do not separate sizes under it. Observational (the large PRs are also the feature PRs); the criterion is the threads per PR of the next PRs above 1,000 lines.
 
 - **Diagnostics: `external-review-churn`, PRs that took several external review rounds** (ADR-0043 amendment 2026-10-25).
