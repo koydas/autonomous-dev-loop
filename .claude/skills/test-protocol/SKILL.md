@@ -1,6 +1,6 @@
 ---
 name: test-protocol
-description: Use when adding, changing or running tests, or after any change to scripts/ or prompts/: node:test only, test layout, no test shrinkage, failure-branch coverage for new scripts/lib exports, unit plus smoke layers.
+description: "Use when adding, changing or running tests, or after any change to scripts/ or prompts/: node:test only, test layout, no test shrinkage, failure-branch coverage for new scripts/lib exports, unit plus smoke layers."
 ---
 
 # test-protocol

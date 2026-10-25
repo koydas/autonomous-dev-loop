@@ -1,6 +1,6 @@
 ---
 name: changelog-gate
-description: Use before pushing or opening a PR that touches a scripts/*.mjs entrypoint, a docs/adr/NNNN-*.md file, an adl-*.yml reusable workflow, a templates/consumer/*.yml caller template or docs/workflow-interface.json. Adds the CHANGELOG.md entry under [Unreleased] that changelog-check.yml requires.
+description: "Use before pushing or opening a PR that touches a scripts/*.mjs entrypoint, a docs/adr/NNNN-*.md file, an adl-*.yml reusable workflow, a templates/consumer/*.yml caller template or docs/workflow-interface.json. Adds the CHANGELOG.md entry under [Unreleased] that changelog-check.yml requires."
 ---
 
 # changelog-gate

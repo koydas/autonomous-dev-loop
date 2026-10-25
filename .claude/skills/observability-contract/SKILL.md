@@ -1,6 +1,6 @@
 ---
 name: observability-contract
-description: Use when adding or modifying a pipeline stage script in scripts/, or a workflow that runs one: events through observability.mjs, <stage>.start / complete / error with duration_ms, GITHUB_RUN_ID env, trace artifact upload.
+description: "Use when adding or modifying a pipeline stage script in scripts/, or a workflow that runs one: events through observability.mjs, <stage>.start / complete / error with duration_ms, GITHUB_RUN_ID env, trace artifact upload."
 ---
 
 # observability-contract

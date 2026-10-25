@@ -1,6 +1,6 @@
 ---
 name: pr-review-workflow
-description: Use when acting on review comments or inline threads of a pull request, human or bot: fix the class, reply per thread, resolve per thread, post @Codex review only if code changed.
+description: "Use when acting on review comments or inline threads of a pull request, human or bot: fix the class, reply per thread, resolve per thread, post @Codex review only if code changed."
 ---
 
 # pr-review-workflow

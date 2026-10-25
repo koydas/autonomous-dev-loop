@@ -1,6 +1,6 @@
 ---
 name: edit-guardrails
-description: Use before editing any existing file in scripts/ or prompts/. Checklist for the five AGENTS.md hard guardrails (no test shrinkage, no ESM/CJS mixing, no exported-signature change, no undeclared dependency, edit scope under 30%).
+description: "Use before editing any existing file in scripts/ or prompts/. Checklist for the five AGENTS.md hard guardrails (no test shrinkage, no ESM/CJS mixing, no exported-signature change, no undeclared dependency, edit scope under 30%)."
 ---
 
 # edit-guardrails

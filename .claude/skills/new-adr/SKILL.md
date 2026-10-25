@@ -1,6 +1,6 @@
 ---
 name: new-adr
-description: Use when adding an Architecture Decision Record: next number in docs/adr/, file template, README.md index row, mandatory CHANGELOG.md entry, and behavior docs to update.
+description: "Use when adding an Architecture Decision Record: next number in docs/adr/, file template, README.md index row, mandatory CHANGELOG.md entry, and behavior docs to update."
 ---
 
 # new-adr
