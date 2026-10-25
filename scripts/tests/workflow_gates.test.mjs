@@ -139,11 +139,11 @@ test('every issue_comment-triggered workflow gates on trusted comment author_ass
 
 // Workflows whose jobs push commits or mutate labels/comments: a run must never be
 // cancelled halfway, so they queue (cancel-in-progress: false) instead.
-const MUTATING_WORKFLOWS = ['adl-auto-fix-pr.yml', 'pr-review.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'adl-reset-auto-fix.yml', 'item-closed.yml', 'evals.yml', 'pr-evals.yml', 'pipeline-site.yml'];
+const MUTATING_WORKFLOWS = ['adl-conflicts-fix.yml', 'adl-auto-fix-pr.yml', 'pr-review.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'adl-reset-auto-fix.yml', 'item-closed.yml', 'evals.yml', 'pr-evals.yml', 'pipeline-site.yml'];
 // ADR-0045: the bodies of validate-issue, code-generation and reset-auto-fix are reusable workflows
 // (adl-*.yml); the files below are their thin callers in this repository. A caller holds the name, the
 // trigger and the permission ceiling, never a concurrency group (a group on both sides would deadlock the call).
-const CALLERS = ['validate-issue.yml', 'code-generation.yml', 'reset-auto-fix.yml', 'pr-review.yml', 'auto-fix-pr.yml'];
+const CALLERS = ['validate-issue.yml', 'code-generation.yml', 'reset-auto-fix.yml', 'pr-review.yml', 'auto-fix-pr.yml', 'conflicts-fix.yml'];
 // pr-review is the one caller that keeps its group: it covers the whole run (evidence and review), and the
 // body declares none. Everywhere else the group is job-level in the body.
 const GROUP_ON_CALLER = ['pr-review.yml'];
@@ -154,11 +154,11 @@ const SITE_GROUP = 'pages-site-${{ github.repository }}';
 const SITE_WORKFLOW_GROUP = 'pipeline-site-${{ github.repository }}';
 // Triggers fire for unrelated labels/comments too; a workflow-level group would let a
 // skipped run replace the pending real one, so the group must sit on the gated job.
-const JOB_LEVEL_CONCURRENCY = ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'pr-evals.yml'];
+const JOB_LEVEL_CONCURRENCY = ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-conflicts-fix.yml', 'pr-evals.yml'];
 
 test('every workflow declares a concurrency group keyed per PR/issue', () => {
   const workflows = readWorkflows();
-  assert.equal(workflows.length, 17, `expected 17 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
+  assert.equal(workflows.length, 19, `expected 19 workflows, found ${workflows.map((w) => w.name).join(', ')}`);
   for (const { name, text } of workflows) {
     const groups = [...text.matchAll(/^\s*concurrency:\s*\n\s+group:\s*(.+)$/gm)].map((m) => m[1].trim()).filter((g) => g !== SITE_GROUP);
     if (CALLERS.includes(name) && !GROUP_ON_CALLER.includes(name)) {
@@ -237,11 +237,11 @@ test('adl-auto-fix-pr.yml does not write the raw multi-line PR payload to GITHUB
 // branch must come from a file outside it, never from the working-tree metrics/runs.jsonl.
 test('workflows that commit metrics read them from $RUNNER_TEMP, not the checkout', () => {
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
-  assert.deepEqual(committing.map((w) => w.name).sort(), ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-pr-review.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml', 'item-closed.yml']);
+  assert.deepEqual(committing.map((w) => w.name).sort(), ['adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-conflicts-fix.yml', 'adl-pr-review.yml', 'adl-reset-auto-fix.yml', 'adl-validate-issue.yml', 'item-closed.yml']);
   for (const { name, text } of committing) {
     assert.ok(!/(wc -l|tail|cat)[^\n]*metrics\/runs\.jsonl/.test(text), `${name} must not read the working-tree metrics file`);
     // ADR-0041: reset-auto-fix writes no runs.jsonl line, only its run record and the trace index.
-    if (name === 'adl-reset-auto-fix.yml' || name === 'item-closed.yml') { assert.ok(!text.includes('METRICS_FILE'), `${name}: record only`); continue; }
+    if (name === 'adl-reset-auto-fix.yml' || name === 'adl-conflicts-fix.yml' || name === 'item-closed.yml') { assert.ok(!text.includes('METRICS_FILE'), `${name}: record only`); continue; }
     const envLines = text.match(/METRICS_FILE: \$\{\{ runner\.temp \}\}\/pipeline-metrics\.jsonl/g) ?? [];
     assert.ok(envLines.length >= 2, `${name} must pass METRICS_FILE under runner.temp to the script and to "Commit metrics"`);
   }
@@ -256,7 +256,7 @@ test('workflows that commit metrics read and write the metrics branch, never the
   assert.equal(METRICS_BRANCH, 'metrics');
   assert.equal(RUNS_JSONL_PATH, 'metrics/runs.jsonl');
   const committing = readWorkflows().filter(({ text }) => text.includes('name: Commit metrics'));
-  assert.equal(committing.length, 6);
+  assert.equal(committing.length, 7);
   for (const { name, text } of committing) {
     const step = text.slice(text.indexOf('- name: Commit metrics')).split(/\n      - name: /)[0];
     const trusted = BRANCH_TRIGGERED_SECRET_WORKFLOWS.includes(name);
@@ -277,7 +277,7 @@ test('workflows that commit metrics read and write the metrics branch, never the
 
 // ADR-0023: workflows triggered by branch/PR activity hold LLM secrets and AI_PR_TOKEN;
 // they must execute pipeline code from the default branch, never from the checked-out branch.
-const BRANCH_TRIGGERED_SECRET_WORKFLOWS = ['adl-auto-fix-pr.yml', 'adl-pr-review.yml'];
+const BRANCH_TRIGGERED_SECRET_WORKFLOWS = ['adl-auto-fix-pr.yml', 'adl-pr-review.yml', 'adl-conflicts-fix.yml'];
 
 test('branch-triggered workflows with secrets run pipeline scripts from the trusted default-branch copy', () => {
   for (const name of BRANCH_TRIGGERED_SECRET_WORKFLOWS) {
@@ -370,9 +370,9 @@ test('adl-auto-fix-pr.yml resolves the head ref only for trusted rerun comments'
 // ADR-0028 amendment: a Groq rate limit must never fail a job. Every workflow that hands
 // GROQ_API_KEY to a step must let that step wait out TPM windows (hint-less limits wait 60 s)
 // within an explicit job timeout, keeping 3 minutes for evidence, the call and the rest.
-const LLM_WORKFLOWS = ['adl-pr-review.yml', 'adl-auto-fix-pr.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'evals.yml', 'pr-evals.yml'];
+const LLM_WORKFLOWS = ['adl-pr-review.yml', 'adl-auto-fix-pr.yml', 'adl-conflicts-fix.yml', 'adl-code-generation.yml', 'adl-validate-issue.yml', 'evals.yml', 'pr-evals.yml'];
 // The callers of this repository hand the key to the reusable workflow in a `secrets:` mapping (ADR-0045).
-const KEY_PASSING_CALLERS = ['code-generation.yml', 'validate-issue.yml', 'pr-review.yml', 'auto-fix-pr.yml'];
+const KEY_PASSING_CALLERS = ['code-generation.yml', 'validate-issue.yml', 'pr-review.yml', 'auto-fix-pr.yml', 'conflicts-fix.yml'];
 
 // Splits a workflow into its jobs (2-space-indented keys under `jobs:`).
 function jobsOf(text) {
@@ -447,8 +447,9 @@ test('config/models.yaml: every Groq stage input budget + max_tokens keeps the 1
   assert.equal(models.groq_max_retries, undefined, 'retries are per workflow (GROQ_MAX_RETRIES), sized to each job timeout');
   // autofix_max_input_tokens bounds the user prompt only: its system prompt comes on top.
   const autofixSystem = estimateTokens(readFileSync(resolve(ROOT, 'prompts/auto-fix-system.md'), 'utf8').trim());
-  const extra = { autofix: autofixSystem };
-  for (const stage of ['validation', 'generation', 'review', 'autofix']) {
+  const conflictsSystem = estimateTokens(readFileSync(resolve(ROOT, 'prompts/conflicts-system.md'), 'utf8').trim());
+  const extra = { autofix: autofixSystem, conflicts: conflictsSystem };
+  for (const stage of ['validation', 'generation', 'review', 'autofix', 'conflicts']) {
     const maxTokens = Number(models[`${stage}_max_tokens`]);
     const budget = Number(models[`${stage}_max_input_tokens`]);
     assert.ok(maxTokens > 0 && budget > 0, `${stage}: max_tokens and max_input_tokens must be set`);
@@ -1153,7 +1154,7 @@ test('jobs that never git push check out without persisting the token (audit F15
 // Reusable workflows and their callers (ADR-0045)
 // ---------------------------------------------------------------------------
 
-const REUSABLES = ['adl-validate-issue.yml', 'adl-code-generation.yml', 'adl-reset-auto-fix.yml', 'adl-pr-review.yml', 'adl-auto-fix-pr.yml'];
+const REUSABLES = ['adl-validate-issue.yml', 'adl-code-generation.yml', 'adl-reset-auto-fix.yml', 'adl-pr-review.yml', 'adl-auto-fix-pr.yml', 'adl-conflicts-fix.yml'];
 const reusable = (name) => readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
 const topKeys = (text) => [...text.matchAll(/^([a-z_-]+):/gm)].map((m) => m[1]);
 
@@ -1187,7 +1188,7 @@ test('no workflow of this repository or caller of the pipeline triggers on pull_
 });
 
 test('the callers of this repository keep their name and trigger, call the reusable body and map the secrets explicitly (ADR-0045)', () => {
-  const triggers = { 'validate-issue.yml': 'issues:', 'code-generation.yml': 'issues:', 'reset-auto-fix.yml': 'workflow_dispatch:', 'pr-review.yml': 'push:', 'auto-fix-pr.yml': 'pull_request:' };
+  const triggers = { 'validate-issue.yml': 'issues:', 'code-generation.yml': 'issues:', 'reset-auto-fix.yml': 'workflow_dispatch:', 'pr-review.yml': 'push:', 'auto-fix-pr.yml': 'pull_request:', 'conflicts-fix.yml': 'push:' };
   for (const name of CALLERS) {
     const text = readFileSync(resolve(WORKFLOWS_DIR, name), 'utf8');
     const body = `adl-${name}`;

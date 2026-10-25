@@ -89,6 +89,52 @@
       "pull-requests": "write"
     }
   },
+  "adl-conflicts-fix.yml": {
+    "inputs": {
+      "config_dir": {
+        "type": "string",
+        "required": false,
+        "default": ".autonomous-dev-loop"
+      },
+      "pipeline_ref": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      },
+      "pipeline_repository": {
+        "type": "string",
+        "required": false,
+        "default": "koydas/autonomous-dev-loop"
+      },
+      "pr_number": {
+        "type": "string",
+        "required": false,
+        "default": ""
+      }
+    },
+    "secrets": {
+      "AI_PR_TOKEN": {
+        "required": false
+      },
+      "ANTHROPIC_API_KEY": {
+        "required": false
+      },
+      "GROQ_API_KEY": {
+        "required": false
+      }
+    },
+    "jobs": [
+      "resolve",
+      "detect",
+      "fix"
+    ],
+    "ceiling": {
+      "actions": "read",
+      "contents": "write",
+      "issues": "write",
+      "pull-requests": "write"
+    }
+  },
   "adl-pr-review.yml": {
     "inputs": {
       "autofix_workflow_file": {

@@ -42,3 +42,17 @@ autofix:
     name: needs-human
     color: b60205
     description: Automation stopped (no change proposed or patch rejected by a guardrail); a human must decide
+
+conflicts:
+  conflicting:
+    name: merge-conflict
+    color: e11d21
+    description: PR conflicts with its base branch; conflicts-fix resolves it or escalates (ADR-0058)
+  attempt1:
+    name: conflict-fix-attempt-1
+    color: fbca04
+    description: Conflicts-fix iteration 1 ran on this conflict
+  attempt2:
+    name: conflict-fix-attempt-2
+    color: fbca04
+    description: Conflicts-fix iteration 2 ran on this conflict

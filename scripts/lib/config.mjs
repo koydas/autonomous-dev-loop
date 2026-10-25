@@ -24,7 +24,7 @@ const ANTHROPIC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // without an effort, run at their own default (Opus 5.5 medium, Sonnet 5.5 high). Rejected rather than silently run so.
 const THINKING_ALWAYS_ON_MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5']);
 
-const STAGES = ['validation', 'generation', 'review', 'autofix'];
+const STAGES = ['validation', 'generation', 'review', 'autofix', 'conflicts'];
 
 // anthropic_<stage> in config/models.yaml; ANTHROPIC_MODEL overrides every stage at runtime.
 export const ANTHROPIC_MODEL_DEFAULTS = Object.fromEntries(
@@ -77,7 +77,7 @@ function repoWideProvider() {
   return raw ? resolveProvider('AI_PROVIDER', raw, () => keyBased) : keyBased;
 }
 
-// Primary provider (ADR-0032). With a stage, AI_PROVIDER_<STAGE> (VALIDATION, GENERATION, REVIEW, AUTOFIX)
+// Primary provider (ADR-0032). With a stage, AI_PROVIDER_<STAGE> (VALIDATION, GENERATION, REVIEW, AUTOFIX, CONFLICTS)
 // overrides AI_PROVIDER for that stage only; an unknown per-stage value yields to the repo-wide provider.
 export function detectProvider(stage) {
   const name = STAGES.includes(stage) ? `AI_PROVIDER_${stage.toUpperCase()}` : null;
