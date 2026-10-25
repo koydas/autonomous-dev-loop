@@ -318,6 +318,7 @@ Key steps to expand per workflow:
 
 ### `eval-replay` (`eval-replay.yml`)
 - **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 when a threshold the published numbers meet breaks (PR thresholds on both sides), or when the PR's code cannot run the replay (malformed dataset, suite crash); an unreachable dashboard, an unpublished suite or a changed dataset only warns
+- **When it runs** — on `pull_request` when the PR touches a prompt, a dataset, the replay scripts, `config/models.yaml` or a module the eval suites load: `review_prompt.mjs`, `review_evidence.mjs`, `review_decision.mjs`, `adversarial_review.mjs`, `review_findings.mjs`, `issue_validator.mjs`, `output_writer.mjs`, `eval_*.mjs` and the rest of their import graph (`workflow_gates.test.mjs` fails on an uncovered module). A PR that only changes docs does not run it. The full list is in `docs/evals.md` → PR replay gate.
 
 ### `pr-evals` (`pr-evals.yml`)
 - **plan → Resolve PR and trigger / Plan** — labeler permission, pinned head SHA, the plan (`run`, `refused` with the reason, `nothing`) and the suites; `pr-evals-plan-<run_id>` artifact

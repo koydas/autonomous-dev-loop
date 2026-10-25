@@ -89,34 +89,98 @@ function fit(expected, detected, tolerance) {
   return score;
 }
 
+// Minimum-cost assignment of n rows to m columns (n <= m), Hungarian algorithm: the column of each row.
+function assignRows(cost) {
+  const n = cost.length;
+  const m = cost[0].length;
+  const u = Array(n + 1).fill(0);
+  const v = Array(m + 1).fill(0);
+  const p = Array(m + 1).fill(0);
+  const way = Array(m + 1).fill(0);
+  for (let i = 1; i <= n; i++) {
+    p[0] = i;
+    let j0 = 0;
+    const minv = Array(m + 1).fill(Infinity);
+    const used = Array(m + 1).fill(false);
+    do {
+      used[j0] = true;
+      const i0 = p[j0];
+      let delta = Infinity;
+      let j1 = 0;
+      for (let j = 1; j <= m; j++) {
+        if (used[j]) continue;
+        const cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+        if (cur < minv[j]) {
+          minv[j] = cur;
+          way[j] = j0;
+        }
+        if (minv[j] < delta) {
+          delta = minv[j];
+          j1 = j;
+        }
+      }
+      for (let j = 0; j <= m; j++) {
+        if (used[j]) {
+          u[p[j]] += delta;
+          v[j] -= delta;
+        } else {
+          minv[j] -= delta;
+        }
+      }
+      j0 = j1;
+    } while (p[j0] !== 0);
+    do {
+      const j1 = way[j0];
+      p[j0] = p[j1];
+      j0 = j1;
+    } while (j0);
+  }
+  const columnOf = Array(n).fill(-1);
+  for (let j = 1; j <= m; j++) if (p[j]) columnOf[p[j] - 1] = j - 1;
+  return columnOf;
+}
+
+// A pair is worth more than any combination of scores, so the assignment first reports as many defects as can be
+// reported at all; among those, the best total fit wins; the last term settles ties towards the diagonal (the earlier
+// defect with the earlier finding). Integers, so the sums stay exact.
+const PAIR_BASE = 1e12;
+const weight = (score, ei, di) => PAIR_BASE + Math.round(score * 1000) * 10000 - Math.min((di - ei) ** 2, 9999);
+
 /**
- * Pairs expected defects with detected findings, one to one, best fit first: every possible pair is scored and the
- * highest scores are assigned before the others, so a finding goes to the defect it describes best, not to
- * the first defect that could also account for it. Ties go to the earlier defect and the earlier finding.
+ * Pairs expected defects with detected findings, one to one: the most defects reported first, then the best fit.
+ * A finding that could account for two defects goes to the one that no other finding can explain, and otherwise to
+ * the one whose own vocabulary it uses most. Ties go to the earlier defect and the earlier finding.
  * @returns {{ matched: { id: string, detected: number }[], missed: string[], unmatched: number[] }} indexes refer to `detected`
  */
 export function matchFindings(expected, detected, { lineTolerance = DEFAULT_LINE_TOLERANCE } = {}) {
-  const pairs = [];
-  expected.forEach((e, ei) => detected.forEach((d, di) => {
+  const w = expected.map((e, ei) => detected.map((d, di) => {
     const score = fit(e, d, lineTolerance);
-    if (score >= 0) pairs.push({ ei, di, score });
+    return score < 0 ? 0 : weight(score, ei, di);
   }));
-  pairs.sort((x, y) => y.score - x.score || x.ei - y.ei || x.di - y.di);
-  const takenExpected = new Set();
-  const takenDetected = new Set();
-  const matched = [];
-  for (const { ei, di } of pairs) {
-    if (takenExpected.has(ei) || takenDetected.has(di)) continue;
-    takenExpected.add(ei);
-    takenDetected.add(di);
-    matched.push({ id: expected[ei].id, detected: di });
+  const taken = Array(expected.length).fill(-1);
+  if (expected.length > 0 && detected.length > 0) {
+    // Rows are the smaller side: the algorithm needs n <= m.
+    if (expected.length <= detected.length) {
+      assignRows(w.map((row) => row.map((x) => -x))).forEach((col, ei) => { taken[ei] = col; });
+    } else {
+      const transposed = detected.map((_, di) => expected.map((__, ei) => -w[ei][di]));
+      assignRows(transposed).forEach((ei, di) => { if (ei >= 0) taken[ei] = di; });
+    }
   }
-  const order = new Map(expected.map((e, i) => [e.id, i]));
-  matched.sort((x, y) => order.get(x.id) - order.get(y.id));
+  const matched = [];
+  const usedDetected = new Set();
+  expected.forEach((e, ei) => {
+    const di = taken[ei];
+    if (di >= 0 && w[ei][di] > 0) {
+      matched.push({ id: e.id, detected: di });
+      usedDetected.add(di);
+    }
+  });
+  const matchedIds = new Set(matched.map((m) => m.id));
   return {
     matched,
-    missed: expected.filter((_, i) => !takenExpected.has(i)).map((e) => e.id),
-    unmatched: detected.map((_, i) => i).filter((i) => !takenDetected.has(i)),
+    missed: expected.filter((e) => !matchedIds.has(e.id)).map((e) => e.id),
+    unmatched: detected.map((_, i) => i).filter((i) => !usedDetected.has(i)),
   };
 }
 

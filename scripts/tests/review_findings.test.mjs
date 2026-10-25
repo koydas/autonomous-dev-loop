@@ -99,6 +99,77 @@ test('matchFindings assigns a finding to the defect it describes best, not to th
   assert.deepEqual(matchFindings([first], [finding]).matched, [{ id: 'FRAMING', detected: 0 }]);
 });
 
+test('matchFindings reports as many defects as possible: a finding that two defects could take goes to the one nothing else explains', () => {
+  // The first finding fits both defects (lines and a cleanup word for the first, a link word for the second); the
+  // second fits only the first. Best-fit-first would give the first finding to the first defect and strand the second.
+  const leak = E({ id: 'LEAK', lines: [30, 36], match: 'leak|cleanup|temporary' });
+  const link = E({ id: 'LINK', match: 'symlink|symbolic|link' });
+  const both = D('medium', 'src/a.mjs', [31, 31], 'a symlink is followed into the temporary tree during cleanup');
+  const onlyLeak = D('medium', 'src/a.mjs', [34, 34], 'no cleanup when the copy fails');
+  const r = matchFindings([leak, link], [both, onlyLeak]);
+  assert.deepEqual(r.matched, [{ id: 'LEAK', detected: 1 }, { id: 'LINK', detected: 0 }]);
+  assert.deepEqual([r.missed, r.unmatched], [[], []]);
+  const rest = analyzeFindings(review(finding('Medium', 'a', 'src/a.mjs', '31', 'a symlink is followed into the temporary tree during cleanup'), finding('Medium', 'b', 'src/a.mjs', '34', 'no cleanup when the copy fails')), [leak, link]);
+  assert.deepEqual([rest.recall, rest.precision], [1, 1]);
+});
+
+test('matchFindings reports the maximum number of defects, checked against an exhaustive search on random cases', () => {
+  // Feasibility is the file, the lines when both are known, and one shared word when the defect names its cause.
+  // Scores differ (lines, how many of the defect's words a finding uses), so a strong pair can tempt an assignment
+  // away from the largest set of pairs.
+  let seed = 12345;
+  const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const files = ['a.mjs', 'b.mjs', 'c.mjs'];
+  const words = ['red', 'green', 'blue', 'cyan'];
+  const some = (list) => list.filter(() => rand(2) === 0);
+  for (let round = 0; round < 400; round++) {
+    const expected = Array.from({ length: 1 + rand(5) }, (_, i) => {
+      const cause = some(words);
+      const at = rand(30);
+      return E({ id: `E${i}`, path: files[rand(3)], ...(cause.length ? { match: cause.join('|') } : {}), ...(rand(2) ? { lines: [at, at + rand(3)] } : {}) });
+    });
+    const detected = Array.from({ length: rand(6) }, () => {
+      const at = rand(30);
+      return { severity: 'high', files: some(files), lines: rand(3) ? [at, at + rand(2)] : null, text: some(words).join(' ') };
+    });
+    const near = (a, b) => a[0] - 5 <= b[1] && b[0] - 5 <= a[1];
+    const fits = (e, d) => d.files.includes(e.path)
+      && (!e.lines || !d.lines || near([e.lines[0], e.lines[1]], d.lines))
+      && (!e.match || e.match.split('|').some((w) => d.text.includes(w)));
+    const best = (ei, used) => (ei === expected.length ? 0 : Math.max(
+      best(ei + 1, used),
+      ...detected.map((d, di) => (!used.has(di) && fits(expected[ei], d) ? 1 + best(ei + 1, new Set([...used, di])) : -1)),
+    ));
+    const r = matchFindings(expected, detected);
+    assert.equal(r.matched.length, best(0, new Set()), `round ${round}`);
+    assert.equal(new Set(r.matched.map((m) => m.detected)).size, r.matched.length, `round ${round}: a finding used twice`);
+    for (const m of r.matched) assert.ok(fits(expected.find((e) => e.id === m.id), detected[m.detected]), `round ${round}: unfit pair`);
+    assert.equal(r.matched.length + r.missed.length, expected.length);
+  }
+});
+
+test('matchFindings: a strong pair never costs a defect that a weaker pair could have reported', () => {
+  // X fits finding 1 very well (file, lines, both words) and finding 2 only a little; the other defect fits finding 1 only.
+  // Taking the strong pair first would strand the second defect: 4 points for one defect, against 2.5 + 1 for two.
+  const strong = E({ id: 'X', path: 'src/a.mjs', lines: [10], match: 'red|green' });
+  const weak = E({ id: 'Y', path: 'src/b.mjs' });
+  const f1 = { severity: 'high', files: ['src/a.mjs', 'src/b.mjs'], lines: [10, 10], text: 'red green' };
+  const f2 = { severity: 'high', files: ['src/a.mjs'], lines: null, text: 'red' };
+  const r = matchFindings([strong, weak], [f1, f2]);
+  assert.deepEqual(r.matched, [{ id: 'X', detected: 1 }, { id: 'Y', detected: 0 }]);
+  assert.deepEqual(r.missed, []);
+});
+
+test('matchFindings: more defects than findings, more findings than defects, and none of either', () => {
+  const defects = [E({ id: 'A' }), E({ id: 'B', path: 'src/b.mjs' }), E({ id: 'C', path: 'src/c.mjs' })];
+  const one = matchFindings(defects, [D('high', 'src/b.mjs', [1, 1])]);
+  assert.deepEqual([one.matched, one.missed], [[{ id: 'B', detected: 0 }], ['A', 'C']]);
+  const many = matchFindings([E({ id: 'A' })], [D('high', 'src/x.mjs', [1, 1]), D('high', 'src/a.mjs', [1, 1]), D('high', 'src/y.mjs', [1, 1])]);
+  assert.deepEqual([many.matched, many.unmatched], [[{ id: 'A', detected: 1 }], [0, 2]]);
+  assert.deepEqual(matchFindings([], [D('high', 'src/a.mjs', [1, 1])]), { matched: [], missed: [], unmatched: [0] });
+  assert.deepEqual(matchFindings([E()], []), { matched: [], missed: ['BUG-1'], unmatched: [] });
+});
+
 test('matchFindings: ties go to the earlier defect and the earlier finding, and matches are reported in the order of the defects', () => {
   const same = D('high', 'src/a.mjs', [1, 1], 'same text');
   const r = matchFindings([E({ id: 'A' }), E({ id: 'B' })], [same, { ...same }]);
