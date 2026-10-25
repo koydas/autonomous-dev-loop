@@ -15,7 +15,7 @@ name: Pipeline site
 # - workflow_dispatch: manual rebuild; init_site starts an empty eval history on a site without one.
 on:
   workflow_run:
-    workflows: [Issue Validation Agent, Code Generation, PR Review, Auto-Fix PR, Reset Auto-Fix Counter, Item Closed]
+    workflows: [Issue Validation Agent, Code Generation, PR Review, Auto-Fix PR, Reset Auto-Fix Counter, Conflicts Fix, Item Closed]
     types: [completed]
   push:
     branches: [metrics]

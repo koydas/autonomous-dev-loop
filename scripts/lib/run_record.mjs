@@ -101,6 +101,27 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'autofix_reset.retriggered': [...ID, 'label'],
   'autofix_reset.complete': [...ID, 'retrigger'],
   'autofix_reset.error': [...ID, ...ERR],
+  // ADR-0059 conflicts-fix. Counts, closed reason / rule codes and label names only: never a file name, a hunk,
+  // a PR title or model text. `state` is the closed mergeability class of conflicts.mjs.
+  'conflicts_detect.start': ID,
+  'conflicts_detect.classified': [...ID, 'state'],
+  'conflicts_detect.labeled': [...ID, 'added', 'removed'],
+  'conflicts_detect.comment_posted': [...ID, 'url'],
+  'conflicts_detect.dispatched': ID,
+  'conflicts_detect.dispatch_complete': ['dispatched', 'failed'],
+  'conflicts_detect.complete': ['checked', 'conflicting', 'fixable'],
+  'conflicts_detect.error': ERR,
+  'conflicts.start': ID,
+  'conflicts.skipped': [...ID, 'reason', 'sig'],
+  'conflicts.model_unavailable': ERR,
+  'conflicts.llm_request': ['model', 'input_tokens_est'],
+  'conflicts.llm_response': ['output_tokens_est'],
+  'conflicts.adr_renumbered': [...ID, 'from', 'to'],
+  'conflicts.push': [...ID, 'head_sha', 'files_count'],
+  'conflicts.resolved': [...ID, 'rung', 'files_count', 'hunks', 'renumbered', 'url'],
+  'conflicts.escalated': [...ID, 'reason', 'rules', 'labels_added', 'url'],
+  'conflicts.complete': [...ID, 'outcome'],
+  'conflicts.error': [...ID, ...ERR],
   // ADR-0043 amendment (2026-10-21): the end of a work item, written by item-closed.yml. Only the closing
   // reason of an issue (enum) and whether a PR was merged: no title, body or actor.
   'item.closed': ['state_reason', 'merged'],
@@ -121,7 +142,7 @@ export const SPAN_META_ALLOWLIST = Object.freeze([
 // EVENT_META_ALLOWLIST keys of their event. Never listed: prompts, completions, file contents,
 // titles/bodies, env values.
 const STAGE_ATTRIBUTES = [...SPAN_META_ALLOWLIST.map(attributeName), 'adl.outcome'];
-const STAGES = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'review_evidence', 'autofix', 'autofix_reset', 'eval', 'eval_replay', 'pr_evals', 'pr_evals_report'];
+const STAGES = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'review_evidence', 'autofix', 'autofix_reset', 'conflicts_detect', 'conflicts', 'eval', 'eval_replay', 'pr_evals', 'pr_evals_report'];
 export const SPAN_ATTRIBUTE_ALLOWLIST = Object.freeze({
   run: ['adl.item.kind', 'adl.item.number', 'adl.item.source', 'cicd.pipeline.name', 'cicd.pipeline.run.id', 'adl.run.attempt',
     'adl.event_name', 'adl.actor_type', 'adl.issue_number', 'vcs.change.id', 'vcs.ref.head.revision', 'adl.outcome'],

@@ -1,0 +1,46 @@
+name: Conflicts Fix
+
+# Caller of the autonomous-dev-loop pipeline (docs/installation.md of koydas/autonomous-dev-loop).
+# Replace <PIPELINE_SHA> with the full commit SHA of the release you install and <PIPELINE_VERSION> with its
+# tag (vMAJOR.MINOR.PATCH): that line is the only pin, a branch name is refused at run time.
+on:
+  push:
+    # Replace "main" with your default branch: a push to it is how most conflicts are born.
+    branches: [main]
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'One PR to fix (bypasses the attempt cap and the circuit breaker); empty = sweep every open PR'
+        required: false
+        type: string
+        default: ''
+      sweep:
+        description: 'Set by the sweep when it dispatches a run per PR; leave empty'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  conflicts-fix:
+    permissions:
+      # git push to a PR branch when AI_PR_TOKEN is unset, and the `metrics` branch (run records).
+      contents: write
+      # Labels and comments on the PRs.
+      pull-requests: write
+      issues: write
+      # The run lookup that gives the pipeline commit, and the dispatch of one fix run per conflicting PR.
+      actions: write
+    uses: koydas/autonomous-dev-loop/.github/workflows/adl-conflicts-fix.yml@<PIPELINE_SHA> # <PIPELINE_VERSION>
+    with:
+      config_dir: .autonomous-dev-loop
+      pr_number: ${{ inputs.pr_number }}
+      sweep: ${{ inputs.sweep }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}

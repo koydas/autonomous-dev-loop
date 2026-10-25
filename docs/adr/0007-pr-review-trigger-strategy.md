@@ -75,3 +75,7 @@ The `pull_request: synchronize` type is intentionally omitted: subsequent pushes
 - ✅ The guardrail of this ADR holds again, and is tested rather than stated.
 - ⚠️ A new GitHub API call in a stage script needs its scope added to the job, or it fails with 403; the job's comment names what each scope is for.
 - ⚠️ `pull-requests: write` on `auto-fix` and `reset` is kept by caution, not by need shown.
+
+## Amendment (2026-10-25): a second dispatch, the conflicts-fix sweep (ADR-0059)
+
+`actions: write` is still the one scope a dispatch needs, and is still held by the smallest job that dispatches. `adl-conflicts-fix.yml` joins `adl-validate-issue.yml`: its `detect` job dispatches the caller (`conflicts-fix.yml`) once per fixable PR (`scripts/dispatch_conflicts.mjs`), so that each PR is a run of its own with its own record (ADR-0041). The `fix` job, which checks out and merges the pull request's tree, holds `contents`, `pull-requests` and `issues` only. `workflow_gates.test.mjs` lists both files and the caller; any other workflow granting `actions: write` still fails it.

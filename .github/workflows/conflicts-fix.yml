@@ -1,0 +1,49 @@
+name: Conflicts Fix
+
+# Thin caller (ADR-0045, ADR-0059): the body is adl-conflicts-fix.yml. The name, the triggers and the permission
+# ceiling stay here. A push to the default branch is how most conflicts are born (a pull_request event never fires
+# on a conflicting PR: its merge ref does not exist); the schedule is the safety net. This repository runs its own
+# pipeline from its default branch (ADR-0023).
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'One PR to fix (bypasses the attempt cap and the circuit breaker); empty = sweep every open PR'
+        required: false
+        type: string
+        default: ''
+      sweep:
+        description: 'Set by the sweep when it dispatches a run per PR; leave empty'
+        required: false
+        type: string
+        default: ''
+
+# Per job (ADR-0007 amendment 2026-10-20).
+permissions:
+  contents: read
+
+jobs:
+  conflicts-fix:
+    permissions:
+      # git push to a PR branch when AI_PR_TOKEN is unset, and the `metrics` branch (Commit metrics).
+      contents: write
+      # Labels and comments on the PRs (detect_conflicts.mjs, conflicts_fix.mjs).
+      pull-requests: write
+      issues: write
+      # The run lookup that gives the pipeline commit, and the dispatch of one fix run per conflicting PR.
+      actions: write
+    uses: ./.github/workflows/adl-conflicts-fix.yml
+    with:
+      pipeline_repository: ${{ github.repository }}
+      pipeline_ref: ${{ github.event.repository.default_branch }}
+      config_dir: config
+      pr_number: ${{ inputs.pr_number }}
+      sweep: ${{ inputs.sweep }}
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      AI_PR_TOKEN: ${{ secrets.AI_PR_TOKEN }}

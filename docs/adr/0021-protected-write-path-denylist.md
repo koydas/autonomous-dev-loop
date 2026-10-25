@@ -72,3 +72,7 @@ Consequences:
 ## Amendment (2026-10-20): the list is a floor plus per-repository config
 
 `PROTECTED_WRITE_PATHS` is no longer one hard-coded constant: the universal entries (`.git/`, `.github/`, manifests, lock files, registry config, and their .NET and Python equivalents) are a non-overridable floor, and the pipeline self-protection and documentation entries above (`scripts/`, `config/`, `prompts/`, `checkpoints/`, `metrics/`, `observability/`, `docs/`, `README.md`) are this repository's `config/protected-paths.yaml`. The exported list is unchanged for this repository. See [ADR-0044](./0044-protected-paths-floor-and-repo-config.md).
+
+## Amendment (2026-10-25): conflict resolution writes into `CHANGELOG.md` and `docs/adr/` through a named allowlist
+
+[ADR-0059](./0059-auto-conflicts-fix.md) (conflicts-fix) lets the model resolve the **conflict hunks** of `CHANGELOG.md`, `docs/adr/README.md` and `docs/adr/NNNN-*.md`, the only protected paths where two PRs routinely conflict on structure (an appended entry, an ADR number taken twice). The allowlist is named and pinned (`planFile`, `scripts/lib/conflicts.mjs`), not a general exception: the other protected paths of this ADR stay L3 there (an escalation to `needs-human`), the model returns hunks and never whole files, each hunk is post-checked (every entry of both sides kept, nothing invented), and the ADR number is renumbered by code. The content the base brings in through the merge commit is not an AI write.

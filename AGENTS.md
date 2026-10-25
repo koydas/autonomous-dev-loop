@@ -99,6 +99,7 @@ Minimum required path coverage for automation modules, enforced by code review. 
 | `scripts/lib/prompts.mjs` — `loadPrompt`, `interpolatePrompt` | 100% of branches | missing file and empty file raise explicit errors with the path; unknown placeholders stay unchanged |
 | Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields give path-oriented errors (e.g. `pull_request.number`) |
 | `adversarial_review`, `circuit_breaker`, `lessons`, `lessons_loader` in `scripts/lib/` (ADR-0049, ADR-0050, ADR-0051) | every failure branch (c8 ≥ 80 %, `config/coverage-gates.json`) | protocol → `WITHHELD`; breaker opens at 3 equal signatures; lessons fail closed to none |
+| `conflicts`, `conflict_resolver`, `conflicts_engine`, `conflicts_github` in `scripts/lib/` — conflicts-fix (ADR-0059) | every failure branch (c8 ≥ 80 %, `config/coverage-gates.json`) | every reason the engine returns leaves the merge aborted and nothing committed; malformed marker or model answer is rejected; a forged marker is ignored |
 | `.claude/hooks/test-gate.mjs` — Claude Code test gate (Stop + `git push`) | 100% of branches | watched paths run the suite, others skip; an unchanged change set is never re-run; `git push` tests `HEAD` and is blocked on dirty watched paths |
 
 Any PR that adds a new exported function to `scripts/lib/` must include tests for every failure branch, not only the happy path. PRs that lack these tests are considered incomplete regardless of whether existing tests pass.
