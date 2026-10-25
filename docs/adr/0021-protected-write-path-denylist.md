@@ -81,3 +81,8 @@ Consequences:
 - Both system prompts list them (enforced by `smoke.test.mjs`). To stay inside the ADR-0037 headroom of `auto-fix-system.md`, two rules were shortened without changing their meaning.
 - Consequence: an issue that only changes agent rules or hooks is blocked at generation (`protected path`), like documentation (amendment of 2026-10-05).
 - ADR-0044 listed these paths as "not covered, open audit item F16": closed by this amendment.
+- Conflicts-fix (ADR-0059) plans a protected path as `protected_path` (escalated, never model-resolved): a merge conflict in `AGENTS.md`, `CLAUDE.md` or `.claude/` is resolved by a human.
+
+## Amendment (2026-10-25): conflict resolution writes into `CHANGELOG.md` and `docs/adr/` through a named allowlist
+
+[ADR-0059](./0059-auto-conflicts-fix.md) (conflicts-fix) lets the model resolve the **conflict hunks** of `CHANGELOG.md`, `docs/adr/README.md` and `docs/adr/NNNN-*.md`, the only protected paths where two PRs routinely conflict on structure (an appended entry, an ADR number taken twice). The allowlist is named and pinned (`planFile`, `scripts/lib/conflicts.mjs`), not a general exception: the other protected paths of this ADR stay L3 there (an escalation to `needs-human`), the model returns hunks and never whole files, each hunk is post-checked (every entry of both sides kept, nothing invented), and the ADR number is renumbered by code. The content the base brings in through the merge commit is not an AI write.

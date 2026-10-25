@@ -28,6 +28,10 @@ export const LEVERS = Object.freeze({
     target('config', 'config/models.yaml#autofix_max_input_tokens'), target('config', 'config/models.yaml#autofix_diff_ratio'),
     target('config', 'config/models.yaml#autofix_feedback_ratio'), target('prompt', 'prompts/auto-fix-system.md'),
   ], ['0017', '0029']),
+  'conflicts-unresolved': entry('conflicts', 'Conflicts-fix attempts end without a merge commit', [
+    target('config', 'config/models.yaml#conflicts_max_input_tokens'), target('variable', 'AI_PROVIDER_CONFLICTS'),
+    target('prompt', 'prompts/conflicts-system.md'),
+  ], ['0017', '0059']),
   'codegen-blocked': entry('generation', 'Code generation is blocked before it proposes a patch', [
     target('config', 'config/models.yaml#generation_max_input_tokens'), target('prompt', 'prompts/generation-system.md'),
     target('prompt', 'prompts/validation-system.md', 'validation'),

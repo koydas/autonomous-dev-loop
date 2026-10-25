@@ -69,6 +69,7 @@ Entries for v1 (the other rules are listed in the table as `NO_LEVER` with a rea
 | `review-withheld` (anomaly share only, ADR-0043) | review | `review_max_input_tokens`, `anthropic_review_max_diff_chars`, `AI_PROVIDER_REVIEW`, `config/review-evidence.yaml#checks` | `review` |
 | `review-coverage` | review | the same two budget keys; provider | `review` |
 | `autofix-ineffective` (anomaly share only) | autofix | `autofix_max_input_tokens`, `autofix_diff_ratio`, `autofix_feedback_ratio`, `prompts/auto-fix-system.md` | none |
+| `conflicts-unresolved` (anomaly share only, ADR-0059) | conflicts | `conflicts_max_input_tokens`, `AI_PROVIDER_CONFLICTS`, `prompts/conflicts-system.md` | none |
 | `codegen-blocked` (anomaly) | generation | `generation_max_input_tokens`, `prompts/generation-system.md` (no gate); `prompts/validation-system.md`, scope rules (`validation` suite) | per target |
 | `llm-fallbacks` | provider | `AI_PROVIDER_<STAGE>`, retry policy (ADR-0022), provider tier | none |
 
