@@ -374,3 +374,10 @@ test('extractExportedSignatures exposes the masked parameter text, so a caller c
   assert.ok(sigs.get('g').raw.includes('/'), 'the regex literal is still in the masked text');
   assert.equal(sigs.get('h').raw, 'x');
 });
+
+test('extractExportedSignatures compares a quoted parameter key by its text, whatever its position in the file', () => {
+  const at = (src) => extractExportedSignatures(src).get('f').params;
+  assert.deepEqual(at("export function f({ 'a-b': v }, x) {}\n"), ['{"a-b"}', 'x']);
+  assert.deepEqual(at("const s = 'first';\nexport function f({ 'a-b': v }, x) {}\n"), ['{"a-b"}', 'x']);
+  assert.deepEqual(at('export function f({ "a-b": v, c }, x) {}\n'), ['{"a-b",c}', 'x']);
+});

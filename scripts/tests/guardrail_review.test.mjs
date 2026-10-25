@@ -405,3 +405,16 @@ test('findFileRuleViolations: a function the parser stops recognizing is not rep
   const run = (base, head) => findFileRuleViolations(modified('src/a.mjs'), { readBase: () => base, readHead: () => head, fileExists: () => true, manifestFor: () => new Set() }).map((f) => f.rule);
   assert.deepEqual(run('export function f(p = /x/, q) {}\n', 'export function f(p = /\\(/, q) {}\n'), []);
 });
+
+test('findFileRuleViolations: a quoted parameter key is compared by its text, not by the position of its string in the file', () => {
+  const run = (base, head) => findFileRuleViolations(modified('src/a.mjs'), { readBase: () => base, readHead: () => head, fileExists: () => true, manifestFor: () => new Set() }).map((f) => `${f.rule}: ${f.reason}`);
+  const fn = "export function f({ 'foo': value }, opts) {}\n";
+  // An unrelated string added (or removed) above shifts every placeholder number: no signature change.
+  assert.deepEqual(run(fn, `const label = 'new';\n${fn}`), []);
+  assert.deepEqual(run(`const a = 'x';\nconst b = 'y';\n${fn}`, fn), []);
+  assert.deepEqual(run(fn, `const label = 'new';\nexport function f({ "foo": value }, opts) {}\n`), [], 'quote style is not part of the key');
+  // A real rename of the key is a change, whether or not the placeholder numbers move, and it shows the real text.
+  const renamed = run(fn, "export function f({ 'bar': value }, opts) {}\n");
+  assert.match(renamed[0], /^exported_signature: changes the parameters of exported f\(\{"foo"\}, opts\) to f\(\{"bar"\}, opts\)/);
+  assert.equal(run(fn, `const label = 'new';\nexport function f({ 'bar': value }, opts) {}\n`).length, 1);
+});

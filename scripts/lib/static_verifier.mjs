@@ -227,10 +227,13 @@ function declaredSignature(code, m, offset) {
  * @returns {Map<string, { params: string[], isAsync: boolean, local: string }>}
  */
 export function extractExportedSignatures(source) {
-  const { code } = maskSource(source);
+  const { code, strings } = maskSource(source);
+  // The masker numbers strings by their position in the file: a quoted key of a destructured parameter must be compared
+  // by its text, or an unrelated string added earlier renames it (`{ 'foo': v }` → `"S0"` then `"S1"`).
+  const resolveStrings = (text) => text.replace(/"S(\d+)"/g, (_, n) => JSON.stringify(strings[Number(n)] ?? ''));
   const locals = new Map();
   const exported = new Map();
-  const add = (map, name, sig, local = name) => { if (name && sig) map.set(name, { ...sig, local }); };
+  const add = (map, name, sig, local = name) => { if (name && sig) map.set(name, { ...sig, params: sig.params.map(resolveStrings), local }); };
 
   for (const m of code.matchAll(new RegExp(`(?<![\\w$.])${FN_HEAD}`, 'g'))) {
     add(locals, m[2], signatureAt(code, m, { isAsync: m[1] }));
