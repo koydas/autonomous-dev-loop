@@ -26,6 +26,9 @@ const SECRET_ENV_PATTERN = /(?:^|_)(?:TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIA
 // Env-injected git config (e.g. http.extraheader auth) is dropped as a whole family: removing only the
 // KEY_n entries the pattern above matches would leave GIT_CONFIG_COUNT dangling and make git fail.
 const GIT_CONFIG_ENV_PATTERN = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
+// Point the pipeline's scripts at the trusted default-branch config (ADR-0023, ADR-0045). The evidence script reads the
+// check list from there before spawning; the checks run the PR tree's own code and must resolve the PR tree's own config.
+const PIPELINE_CONFIG_ENV_PATTERN = /^ADL_CONFIG_(DIR|PATH)$/;
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 /**
@@ -65,10 +68,10 @@ function unquoteCommand(name, raw) {
   );
 }
 
-/** Drops env vars whose name looks like a credential, and env-injected git config, before handing env to PR code. */
+/** Drops credential-like env vars, env-injected git config and the pipeline's config pointers before handing env to PR code. */
 export function sanitizeEnv(env) {
   return Object.fromEntries(
-    Object.entries(env ?? {}).filter(([key]) => !SECRET_ENV_PATTERN.test(key) && !GIT_CONFIG_ENV_PATTERN.test(key)),
+    Object.entries(env ?? {}).filter(([key]) => !SECRET_ENV_PATTERN.test(key) && !GIT_CONFIG_ENV_PATTERN.test(key) && !PIPELINE_CONFIG_ENV_PATTERN.test(key)),
   );
 }
 

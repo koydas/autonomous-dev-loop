@@ -7,6 +7,8 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Review evidence: the checks resolve the PR tree's own config** (ADR-0045 amendment). `sanitizeEnv` drops `ADL_CONFIG_DIR` / `ADL_CONFIG_PATH` from each check's environment, so `npm test` in the evidence job sees the PR's `config/` like `test.yml`, not `main`'s. The check list is still read from the trusted default-branch config. A PR that changed a pinned config file no longer fails its evidence on tests that pass in CI.
+
 - **Conflicts fix: a bare `=======` or `|||||||` line that none of the sides had is a leftover marker** (`checkHunkResolution`, ADR-0059). The hunk post-check only saw the opening and closing markers, so such a line passed in the `generic` resolver (3 invented lines allowed); a separator a side already had (a Markdown setext heading) stays legitimate. `docs/code-generation.md` and `docs/runbook.md` state the rule.
 
 - **Review: the reviewer sees the code outside the diff that depends on what the diff changes** (RV-02, ADR-0058).
