@@ -7,6 +7,8 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Docs: ADR-0058 (Proposed), auto conflicts-fix.** ADR only, no behavior change: detection of conflicting PRs (all open PRs), a resolution ladder (merge-forward, deterministic resolvers, LLM hunk resolver, escalation), guards (protected-paths allowlist for `CHANGELOG.md` / `docs/adr/`, ADR-0029 write guard, own attempt counter, breaker) and a five-slice delivery order.
+
 - **Run records: the approved `pr` record carries the external review's round-trips** (`external_review: {rounds, threads, p0p1}`, new `scripts/lib/external_review.mjs`, c8 ≥ 80 % gate).
   - `review_cycles` counts the internal review only, so a PR with seven Codex rounds recorded one cycle: over the 250 PRs read on 2026-10-24, 19 PRs (7.6 %) held 181 of the 320 Codex threads, 70 % of them on one file, while the internal review approved every PR that later got a Codex P0/P1 (9 of 9). `pr_review.mjs` now reads the PR's reviews and inline comments once per approval (paginated, read-only, same token) and counts, for the `chatgpt-codex-connector` login only, the distinct commits reviewed, the root threads and those badged P0/P1.
   - Observational and a lower bound (the bot answers a head after the run that wrote the record; the newest record of a PR is the most complete). When GitHub cannot be read the field is absent and the PR is still recorded (`External review read failed` in the log), never 0. No model text, no comment body: counts only. No consumer yet (Diagnostics and the lessons are a follow-up).

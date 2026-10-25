@@ -61,3 +61,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0055: Benchmark mode: Copilot runs against an isolated sandbox, never `main`](./0055-copilot-benchmark-mode.md) — proposed
 - [ADR-0056: Dashboard: `writer=copilot` on runs, and an opaque stage is "not traced"](./0056-dashboard-writer-and-not-traced.md) — proposed
 - [ADR-0057: Push rulesets as a platform-level path guard: not viable here, and not sufficient where available](./0057-push-rulesets-as-platform-guard.md) — proposed
+- [ADR-0058: Auto conflicts-fix: a PR that conflicts with its base is merged forward, by escalating resolvers](./0058-auto-conflicts-fix.md) — proposed
