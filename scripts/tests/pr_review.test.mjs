@@ -2181,6 +2181,10 @@ test('pr_review adds the external review round-trips to the approved PR record',
   assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
   const pr = lines.find((l) => l.type === 'pr');
   assert.deepEqual(pr.external_review, { rounds: 2, threads: 2, p0p1: 1 });
+  // The same counts are journaled (counts only) so Diagnostics can read them from the published trace.
+  const journaled = result.stderr.split('\n').filter((l) => l.includes('"event":"review.external"')).map((l) => JSON.parse(l));
+  assert.equal(journaled.length, 1);
+  assert.deepEqual(journaled[0].meta, { prNumber: PR_NUMBER, rounds: 2, threads: 2, p0p1: 1 });
 });
 
 test('pr_review leaves external_review out of the record when GitHub cannot be read, and still records the PR', async () => {
@@ -2190,6 +2194,7 @@ test('pr_review leaves external_review out of the record when GitHub cannot be r
   assert.equal(pr.final_verdict, 'APPROVE');
   assert.ok(!('external_review' in pr), 'unknown is absent, never zero');
   assert.match(result.stdout + result.stderr, /External review read failed/);
+  assert.ok(!result.stderr.includes('review.external'), 'unknown is not journaled as zero');
 });
 
 test('pr_review does not read the external review for a verdict that writes no PR record', async () => {

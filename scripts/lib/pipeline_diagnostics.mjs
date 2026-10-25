@@ -20,6 +20,7 @@ export const RULES = Object.freeze({
   durationMinRuns: 3, // runs per 7-day period to compare stage durations
   durationRatio: 1.5, // p50 growth reported as a degradation
   stageFailures: 2, // failed spans of one stage
+  externalRounds: 3, // external review (Codex) rounds on one PR that are reported
   activeWindow: 10, // a finding is active while it occurs in the last N eligible runs of its rule; else resolved
 });
 
@@ -274,6 +275,35 @@ function reviewFindings(runs) {
   return out;
 }
 
+// PRs that took several rounds of the external review (Codex), from `review.external` (counts the approving run
+// read from GitHub; the newest, highest count of a PR stands, as it is a lower bound that only grows). The loop does
+// not control that reviewer, so the finding is an observation (`info`), never a warning, and has no lever: the
+// practice that shortens it is AGENTS.md's, and the size of the PR (ADR-0043 amendment 2026-10-25).
+function externalReviewFindings(runs) {
+  const seen = events(runs, 'review.external').filter(({ e }) => ['rounds', 'threads', 'p0p1'].every((k) => Number.isSafeInteger(e.meta[k]) && e.meta[k] >= 0));
+  // The model lists runs newest first: the observation of a PR is chosen by value (highest count, then newest,
+  // then run id), never by position, so no input order changes the counts or the lifecycle occurrence.
+  const newer = (a, b) => a.e.meta.rounds - b.e.meta.rounds || at(a) - at(b) || a.run.run_id.localeCompare(b.run.run_id);
+  const latest = new Map();
+  for (const x of seen) {
+    const pr = prOf(x);
+    if (pr && (!latest.has(pr) || newer(x, latest.get(pr)) > 0)) latest.set(pr, x);
+  }
+  const churn = [...latest.entries()].filter(([, x]) => x.e.meta.rounds >= RULES.externalRounds).sort((a, b) => a[0] - b[0]);
+  if (!churn.length) return [];
+  const threads = churn.reduce((n, [, x]) => n + x.e.meta.threads, 0);
+  const total = [...latest.values()].reduce((n, x) => n + x.e.meta.threads, 0);
+  const rounds = churn.map(([, x]) => x.e.meta.rounds);
+  return [finding({
+    id: 'external-review-churn', severity: 'info', category: 'Review', title: 'PRs needed several external review rounds',
+    fact: `${churn.length} of ${latest.size} PR(s) with a recorded external review had ${RULES.externalRounds}+ rounds (${churn.map(([pr, x]) => `#${pr}: ${x.e.meta.rounds} rounds, ${x.e.meta.threads} threads, ${x.e.meta.p0p1} P0/P1`).join('; ')}); `
+      + `they hold ${threads} of the ${total} external threads recorded. Counts are a lower bound: the reviewer answers a head after the run that recorded them.`,
+    hypothesis: 'Each round may find a neighbour of the previous fix (same defect class), which a fix that sweeps the class would remove; the records hold counts, not the findings, so this is not verified.',
+    impact: `${rounds.reduce((a, b) => a + b, 0)} external review round(s) on ${churn.length} PR(s)`, frequency: `${churn.length} PR(s)`,
+    items: churn.map(([pr]) => pr), eligible: withEvent(runs, 'review.external'), runs: runIds(churn.map(([, x]) => x)), evidence: evidenceOf(churn.map(([, x]) => x)), link: 'flows.html?problem=review',
+  })];
+}
+
 // An auto-fix attempt blocked by design: every rejected target protected, unshown or withheld (ADR-0021,
 // ADR-0029); no change proposed while the budget withheld files from the prompt (ADR-0029: the records do
 // not name the files the fix needed, so this is the closest observable cause). Anything else that did not
@@ -469,7 +499,7 @@ export function diagnose({ model, journeys = [], protectedPaths } = {}) {
   if (!runs.length) return { status: 'no_data', findings: [], gaps: model ? telemetryGaps(model, journeys) : [] };
   const durations = durationFindings(runs);
   const findings = [
-    ...executionFailures(runs), ...interventions(waitingOnYou({ model, journeys, protectedPaths })), ...reviewFindings(runs), ...autofixFindings(runs),
+    ...executionFailures(runs), ...interventions(waitingOnYou({ model, journeys, protectedPaths })), ...reviewFindings(runs), ...externalReviewFindings(runs), ...autofixFindings(runs),
     ...generationFindings(runs), ...providerFindings(runs), ...durations.findings,
   ].map(withLifecycle).sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
   const status = findings.some((f) => f.severity === 'critical') ? 'critical' : findings.some((f) => f.severity === 'warning') ? 'warning' : 'ok';
