@@ -341,3 +341,36 @@ test('an unexpected failure aborts the merge before it propagates', async () => 
     assert.equal(r.git('status', '--porcelain'), '', 'no half-merged tree is left behind');
   } finally { r.cleanup(); }
 });
+
+test('ADR renumber: a second ADR of the PR that links to the renamed one, and an amended base ADR citing it, follow the new number', async () => {
+  const r = repo();
+  try {
+    const baseSha = diverge(r, { 'docs/adr/0021-old.md': '# ADR-0021: Old\n\nStatus.\n' },
+      () => r.commit('base adds 0058', { 'docs/adr/0058-base.md': '# ADR-0058: Base\n' }),
+      () => r.commit('pr adds 0058 and 0059', {
+        'docs/adr/0058-pr.md': '# ADR-0058: Mine\n',
+        'docs/adr/0059-next.md': '# ADR-0059: Next\n\nBuilds on [ADR-0058](./0058-pr.md).\n',
+        'docs/adr/0021-old.md': '# ADR-0021: Old\n\nStatus.\n\nAmended by ADR-0058.\n',
+      }));
+    const res = await mergeForward(input(r, baseSha, { callModel: refusingModel }));
+    assert.deepEqual([res.outcome, res.renumbered], ['resolved', [{ from: '0058', to: '0060' }]]);
+    assert.equal(r.read('docs/adr/0060-pr.md'), '# ADR-0060: Mine\n');
+    assert.equal(r.read('docs/adr/0059-next.md'), '# ADR-0059: Next\n\nBuilds on [ADR-0060](./0060-pr.md).\n', 'its own number and title are kept, its link follows');
+    assert.equal(r.read('docs/adr/0021-old.md'), '# ADR-0021: Old\n\nStatus.\n\nAmended by ADR-0060.\n', 'the line the PR added to an existing ADR follows');
+    assert.equal(r.read('docs/adr/0058-base.md'), '# ADR-0058: Base\n');
+    assert.equal(r.git('status', '--porcelain'), '');
+  } finally { r.cleanup(); }
+});
+
+test('ADR renumber: two renames in one run do not chain into each other', async () => {
+  const r = repo();
+  try {
+    const baseSha = diverge(r, { 'docs/adr/0057-old.md': '# ADR-0057: Old\n' },
+      () => r.commit('base adds 0058 and 0059', { 'docs/adr/0058-b1.md': '# ADR-0058: B1\n', 'docs/adr/0059-b2.md': '# ADR-0059: B2\n' }),
+      () => r.commit('pr adds 0058 and 0059', { 'docs/adr/0058-p1.md': '# ADR-0058: P1\n\nSee ADR-0059.\n', 'docs/adr/0059-p2.md': '# ADR-0059: P2\n' }));
+    const res = await mergeForward(input(r, baseSha, { callModel: refusingModel }));
+    assert.deepEqual(res.renumbered, [{ from: '0058', to: '0060' }, { from: '0059', to: '0061' }]);
+    assert.equal(r.read('docs/adr/0060-p1.md'), '# ADR-0060: P1\n\nSee ADR-0061.\n');
+    assert.equal(r.read('docs/adr/0061-p2.md'), '# ADR-0061: P2\n');
+  } finally { r.cleanup(); }
+});

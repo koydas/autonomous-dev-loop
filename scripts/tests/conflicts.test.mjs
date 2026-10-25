@@ -7,7 +7,7 @@ import {
   MAX_CONFLICT_ATTEMPTS, MAX_MODEL_FILES, CONFLICT_BREAKER_THRESHOLD, classifyMergeability, canPushToHead, conflictSignature,
   formatConflictMarker, parseConflictMarker, latestConflictMarker, nextConflictStreak, decideConflictRun, parseConflicts,
   conflictsOf, hasConflictMarkers, applyResolutions, planFile, inventedLines, checkHunkResolution, adrNumber, planAdrRenumber,
-  renumberReferences, renumberOwnAdr, addedLinesOf, CONFLICT_ESCALATION_REASONS,
+  renumberReferences, addedLinesOf, CONFLICT_ESCALATION_REASONS,
 } from '../lib/conflicts.mjs';
 import { loadLabelsConfigAll } from '../lib/layered_config.mjs';
 
@@ -244,8 +244,15 @@ test('renumberReferences: only the lines the PR added, ADR- labels and link targ
   assert.equal(renumberReferences('a\nb', new Set(['b']), { from: '0058', to: '0059' }), 'a\nb', 'an added line without the number is untouched');
 });
 
-test('renumberOwnAdr and addedLinesOf', () => {
-  assert.equal(renumberOwnAdr('# ADR-0058: T\nsee ADR-0058 and ADR-0057\n', { from: '0058', to: '0059' }), '# ADR-0059: T\nsee ADR-0059 and ADR-0057\n');
+test('renumberReferences: several renames in one pass, a bare link target, an empty plan; no chain 0058 → 0059 → 0060', () => {
+  const lines = new Set(['See ADR-0058 and ADR-0059, [a](0058-a.md) [b](./0059-b.md), ADR-00580.']);
+  const content = [...lines][0];
+  assert.equal(renumberReferences(content, lines, [{ from: '0058', to: '0059' }, { from: '0059', to: '0060' }]),
+    'See ADR-0059 and ADR-0060, [a](0059-a.md) [b](./0060-b.md), ADR-00580.');
+  assert.equal(renumberReferences(content, lines, []), content);
+});
+
+test('addedLinesOf', () => {
   assert.deepEqual([...addedLinesOf('a\nb\nb\n', 'a\nb\nb\nb\nc\n\n')].sort(), ['b', 'c'], 'multiset difference, blank lines ignored');
   assert.deepEqual([...addedLinesOf(undefined, 'x')], ['x']);
   assert.deepEqual([...addedLinesOf('x', 'x')], []);

@@ -262,19 +262,22 @@ export function planAdrRenumber(treePaths, addedPaths) {
 }
 
 /**
- * Rewrites `ADR-<from>` and `/<from>-` link targets to `<to>` on the lines the PR itself added (exact match),
- * so references to the base's own ADR of that number elsewhere in the file are left alone.
+ * Rewrites `ADR-<from>` labels and `<from>-` link targets to `<to>`, for every rename at once, on the lines the PR
+ * added (exact match), so the base's own references to a number keep it. One pass for all renames: renaming
+ * 0058 → 0059 and 0059 → 0060 must not send a 0058 reference on to 0060.
  * @param {string} content merged file
  * @param {Set<string>} addedLines lines the PR added to this file (merge-base → head)
+ * @param {{ from: string, to: string } | { from: string, to: string }[]} renames
  */
-export function renumberReferences(content, addedLines, { from, to }) {
-  const rewrite = (line) => line.replaceAll(`ADR-${from}`, `ADR-${to}`).replace(new RegExp(`(/|\\./)${from}-`, 'g'), `$1${to}-`);
-  return String(content).split('\n').map((line) => (addedLines.has(line) && (line.includes(`ADR-${from}`) || line.includes(`${from}-`)) ? rewrite(line) : line)).join('\n');
-}
-
-/** Whole-file renumber of the PR's own ADR (title, self references). */
-export function renumberOwnAdr(content, { from, to }) {
-  return String(content).replaceAll(`ADR-${from}`, `ADR-${to}`);
+export function renumberReferences(content, addedLines, renames) {
+  const list = Array.isArray(renames) ? renames : [renames];
+  if (list.length === 0) return String(content);
+  const to = new Map(list.map((r) => [r.from, r.to]));
+  const alternatives = [...to.keys()].join('|');
+  const label = new RegExp(`ADR-(${alternatives})(?![0-9])`, 'g');
+  const link = new RegExp(`(?<![0-9A-Za-z])(${alternatives})-`, 'g');
+  const rewrite = (line) => line.replace(label, (_, n) => `ADR-${to.get(n)}`).replace(link, (_, n) => `${to.get(n)}-`);
+  return String(content).split('\n').map((line) => (addedLines.has(line) ? rewrite(line) : line)).join('\n');
 }
 
 /** Lines present in `after` and absent from `before` (multiset difference), as a Set for exact-line matching. */

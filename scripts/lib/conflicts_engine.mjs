@@ -13,7 +13,7 @@ import { readPackageJsonDependencies } from './dependency_manifest.mjs';
 import { log as obsLog } from './observability.mjs';
 import {
   planFile, parseConflicts, conflictsOf, conflictSignature, hasConflictMarkers, MAX_MODEL_FILES,
-  planAdrRenumber, renumberReferences, renumberOwnAdr, addedLinesOf,
+  planAdrRenumber, renumberReferences, addedLinesOf,
 } from './conflicts.mjs';
 import { resolveFile } from './conflict_resolver.mjs';
 
@@ -203,27 +203,26 @@ export async function mergeForward(input) {
     const tree = lines0(git.out(['ls-files', '-z']));
     const plan = planAdrRenumber(tree, addedAdrs);
     if (plan.length) {
-      const prChanged = lines0(git.out(['diff', '--name-only', '--diff-filter=AM', '-z', mergeBase, 'HEAD']));
+      // Every file moves first, then every text file the PR touched (an ADR it adds or amends included) gets the
+      // references on the lines the PR itself added: a PR adding 0058 and 0059 that link to each other keeps its links.
       for (const r of plan) {
         git.run(['mv', '--', r.fromPath, r.toPath]);
-        const own = path.join(cwd, r.toPath);
-        fs.writeFileSync(own, renumberOwnAdr(fs.readFileSync(own, 'utf8'), r));
-        git.run(['add', '--', r.toPath]);
-        for (const file of prChanged) {
-          if (file === r.fromPath || !tree.includes(file) || /^docs\/adr\/\d{4}-/.test(file)) continue;
-          const buf = fs.readFileSync(path.join(cwd, file));
-          if (!isText(buf)) continue;
-          const before = blob(git, mergeBase, file) ?? '';
-          const added = addedLinesOf(before, blob(git, 'HEAD', file) ?? '');
-          const next = renumberReferences(buf.toString('utf8'), added, r);
-          if (next === buf.toString('utf8')) continue;
-          fs.writeFileSync(path.join(cwd, file), next);
-          git.run(['add', '--', file]);
-          resolvedFiles.push(file);
-        }
         resolvedFiles.push(r.toPath);
         result.renumbered.push({ from: r.from, to: r.to });
         obsLog({ stage: STAGE, event: 'conflicts.adr_renumbered', level: 'info', meta: { prNumber, from: r.from, to: r.to } });
+      }
+      const moved = new Map(plan.map((r) => [r.fromPath, r.toPath]));
+      const prChanged = lines0(git.out(['diff', '--name-only', '--diff-filter=AM', '-z', mergeBase, 'HEAD']));
+      for (const file of prChanged) {
+        const current = moved.get(file) ?? file;
+        if (!fs.existsSync(path.join(cwd, current))) continue;
+        const buf = fs.readFileSync(path.join(cwd, current));
+        if (!isText(buf)) continue;
+        const added = addedLinesOf(blob(git, mergeBase, file) ?? '', blob(git, 'HEAD', file) ?? '');
+        const next = renumberReferences(buf.toString('utf8'), added, plan);
+        if (next !== buf.toString('utf8')) fs.writeFileSync(path.join(cwd, current), next);
+        git.run(['add', '--', current]);
+        if (next !== buf.toString('utf8')) resolvedFiles.push(current);
       }
     }
 
