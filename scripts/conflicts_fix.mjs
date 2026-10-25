@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * conflicts-fix (ADR-0058): brings a conflicting PR up to date with its base by merging the base into the head.
+ * conflicts-fix (ADR-0059): brings a conflicting PR up to date with its base by merging the base into the head.
  * Runs in a checkout of the PR head (the PR tree is data, ADR-0023) with the pipeline from the default branch:
  *   fetch base → mergeForward (L0 merge, L1 lockfile, L2 model hunks, mechanical ADR renumber, guards) → push
  * or, on any refusal, abort the merge, label `needs-human` and say which file stopped it and why.

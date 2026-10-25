@@ -1,6 +1,6 @@
 name: ADL Conflicts Fix (reusable)
 
-# Reusable workflow (ADR-0045, ADR-0058): called by conflicts-fix.yml in this repository and by the caller template
+# Reusable workflow (ADR-0045, ADR-0059): called by conflicts-fix.yml in this repository and by the caller template
 # of a target repository. The triggers (push to the default branch, a schedule, workflow_dispatch) belong to the
 # caller. `detect` reads the mergeability of the open PRs and keeps the `merge-conflict` label; `fix` merges the base
 # into the head of each conflicting PR, one at a time, on the per-PR group shared with pr-review and auto-fix (ADR-0020).

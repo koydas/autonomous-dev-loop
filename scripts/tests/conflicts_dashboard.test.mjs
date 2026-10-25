@@ -1,4 +1,4 @@
-// Dashboard side of conflicts-fix (ADR-0058): the journey step, the "Waiting on you" explanation, the Diagnostics
+// Dashboard side of conflicts-fix (ADR-0059): the journey step, the "Waiting on you" explanation, the Diagnostics
 // finding with its lever, the cost mapping and the flow card, which draws the optional step only when it ran.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

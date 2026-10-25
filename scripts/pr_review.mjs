@@ -18,6 +18,7 @@ import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, isCommitSha, findReviewComment, stripReviewMarkers } from './lib/review_marker.mjs';
 import { findStaleReferences, formatStaleRefsContext, formatStaleRefsSection } from './lib/stale_refs.mjs';
 import { findRelatedAdrs } from './lib/related_adrs.mjs';
+import { findImpact } from './lib/impact_context.mjs';
 import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudgetSection } from './lib/prompt_budget.mjs';
 import { modelsFromContent, loadReviewGuidelines } from './lib/layered_config.mjs';
 import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
@@ -328,7 +329,9 @@ const repoFiles = {
 };
 const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
 const relatedAdrs = findRelatedAdrs({ rawDiff, ...repoFiles });
-log('Review context searched', { prNumber, staleRefs: staleRefs.length, relatedAdrs: relatedAdrs.map((a) => a.id) });
+// RV-02: the code outside the diff that depends on the exports it changes (callers, tests); the PR tree again, as data.
+const impact = findImpact({ rawDiff, ...repoFiles });
+log('Review context searched', { prNumber, staleRefs: staleRefs.length, relatedAdrs: relatedAdrs.map((a) => a.id), impactSymbols: impact.symbols.length });
 // ADR-0037: token cost of changed prompts/*.md. Base side at the merge base (the .diff is base...head),
 // head side and config/models.yaml from the PR tree (trusted defaults when the PR tree has none).
 const git = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
@@ -393,15 +396,20 @@ obsLog({ stage: 'review', event: 'review.evidence_assessed', level: 'info', meta
 // ADR-0028: input × 1.10 + review_max_tokens must fit one 8K TPM window, else Groq answers 413.
 // Shrinks the diff, then the PR body; throws (no LLM call) when the fixed part alone is over.
 // ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
-const { userPrompt, diffTruncated, bodyTruncated, adrCount, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
+const { userPrompt, diffTruncated, bodyTruncated, adrCount, impactIncluded, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars, evidence, dependencyManifestContext,
-  staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, promptBudgetContext: formatPromptBudgetContext(promptBudget),
+  staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, impact, promptBudgetContext: formatPromptBudgetContext(promptBudget),
   automationGates: selfTarget,
 });
 if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, maxDiffChars, unreviewedCodeFiles });
 if (adrCount < relatedAdrs.length) log('Related ADRs left out of the review prompt', { prNumber, shown: adrCount, found: relatedAdrs.length, maxInputTokens });
 if (diffTruncated || bodyTruncated || adrCount < relatedAdrs.length) {
   obsLog({ stage: 'review', event: 'review.prompt_truncated', level: 'warn', meta: { prNumber, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles.length, adrs_shown: adrCount, adrs_found: relatedAdrs.length, max_input_tokens: maxInputTokens } });
+}
+
+// RV-02: what the impact analysis found and whether the prompt had room for it (counts only, no code).
+if (impact.symbols.length || impact.tests.length) {
+  obsLog({ stage: 'review', event: 'review.impact_context', level: 'info', meta: { prNumber, symbols: impact.symbols.length, with_refs: impact.symbols.filter((x) => x.refFiles > 0).length, refs: impact.symbols.reduce((n, x) => n + x.refs.length, 0), tests: impact.tests.length, included: impactIncluded, scanned: impact.scanned, truncated: impact.truncated } });
 }
 
 obsLog({ stage: 'review', event: 'review.llm_request', level: 'info', meta: { model, input_tokens_est: estimateTokens(systemPrompt + userPrompt), prNumber } });
@@ -627,6 +635,10 @@ const updatedPrMetrics = {
 await writeCheckpoint(checkpointRunId, 'pr_metrics', updatedPrMetrics);
 log('PR metrics checkpoint updated', { prNumber, review_cycles: updatedPrMetrics.review_cycles });
 
+// ADR-0043 amendment: the external review's round-trips, counts only, journaled before the trace is finalized.
+const externalReview = isApproved ? await readExternalReview() : null;
+if (externalReview) obsLog({ stage: 'review', event: 'review.external', level: 'info', meta: { prNumber, ...externalReview } });
+
 const reviewDurationMs = Date.now() - _reviewStartMs;
 obsLog({
   stage: 'review',
@@ -642,7 +654,6 @@ tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updated
 await tracer.finalize(isApproved ? 'success' : 'partial');
 
 if (isApproved) {
-  const externalReview = await readExternalReview();
   await appendMetric({
     type: 'pr',
     run_id: process.env.GITHUB_RUN_ID ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? 1}` : `local-${Date.now()}`,

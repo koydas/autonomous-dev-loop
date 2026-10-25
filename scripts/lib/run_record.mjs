@@ -57,10 +57,14 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'lessons.loaded': ['stage', 'count', 'ids'],
   'lessons.unavailable': ['stage', 'reason', 'status'],
   'review.escalated': [...ID, 'reason', 'streak', 'labels_added', 'url'],
+  'review.external': [...ID, 'prNumber', 'rounds', 'threads', 'p0p1'],
   'review.skipped': [...ID, 'reason', 'headSha'],
   'review.error': ERR,
   'review.stale_refs_error': ERR,
   'review.related_adrs_error': ERR,
+  'review.impact_error': ERR,
+  // RV-02: counts only; the references and snippets of the impact analysis are PR-tree text and never leave the run.
+  'review.impact_context': [...ID, 'symbols', 'with_refs', 'refs', 'tests', 'included', 'scanned', 'truncated'],
   'review.prompt_budget_error': ERR,
   'review.models_config_ignored': [...ERR, 'path'],
   'review.file_skipped': ['path', 'reason', 'size', 'max_bytes'],
@@ -97,7 +101,7 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'autofix_reset.retriggered': [...ID, 'label'],
   'autofix_reset.complete': [...ID, 'retrigger'],
   'autofix_reset.error': [...ID, ...ERR],
-  // ADR-0058 conflicts-fix. Counts, closed reason / rule codes and label names only: never a file name, a hunk,
+  // ADR-0059 conflicts-fix. Counts, closed reason / rule codes and label names only: never a file name, a hunk,
   // a PR title or model text. `state` is the closed mergeability class of conflicts.mjs.
   'conflicts_detect.start': ID,
   'conflicts_detect.classified': [...ID, 'state'],

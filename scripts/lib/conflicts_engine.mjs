@@ -1,4 +1,4 @@
-// Local part of conflicts-fix (ADR-0058 §C): merges a fetched base commit into the checked-out PR head and walks
+// Local part of conflicts-fix (ADR-0059 §C): merges a fetched base commit into the checked-out PR head and walks
 // the ladder (L0 merge, L1 lockfile, L2 model, mechanical ADR renumber), then guards the result. Everything runs in
 // `cwd` with git; nothing here touches the network or GitHub (fetch, push, labels and comments belong to
 // scripts/conflicts_fix.mjs), and the merge is aborted on any refusal so nothing half-resolved is left behind.

@@ -1,4 +1,4 @@
-# ADR-0058: Auto conflicts-fix: a PR that conflicts with its base is merged forward, by escalating resolvers
+# ADR-0059: Auto conflicts-fix: a PR that conflicts with its base is merged forward, by escalating resolvers
 
 - **Date:** 2026-10-25
 - **Status:** Accepted

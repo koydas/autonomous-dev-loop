@@ -319,6 +319,51 @@
           "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feature | Tests expected: yes — new executable helper\n\n### ✅ Summary\nAdds `backoffMs(attempt, baseMs)`, capped at `MAX_BACKOFF_MS`, and a table-driven test.\nNot verified (diff truncated): the `RangeError` test of test/backoff.test.mjs is past the cut.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/x.js:1 an empty value is not handled\n- **Side effects** — src/x.js:1 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
+    },
+    {
+      "case_id": "incident-removed-test-case",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: refactor | Tests expected: yes — the diff touches code and its tests\n\n### ✅ Summary\nRetires two helpers and the import that used them; the remaining tests still pass.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — scripts/lib/gate_list.mjs:6 callers of the removed helpers outside the diff are not visible\n- **Side effects** — scripts/tests/gate_list.test.mjs:3 the import list shrinks with the helpers\n- **Type integrity** — none, checked the signatures\n- **Issue fit** — none, the diff matches the description\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
+    },
+    {
+      "case_id": "incident-low-continuation-axes",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feat | Tests expected: yes — new module with tests\n\n### ✅ Summary\nAdds blockingAxes and two tests.\n\n### ⚠️ Issues Found\n- [Medium] A wrapped Low finding is counted as blocking — File: src/review/finding_axes.mjs Lines: 16-17 Root cause: the fallback branch opens an empty entry for every non-blocking bullet and the next continuation line is appended to it, so its Axis tag is counted although the finding is Low Fix: track whether the current finding is blocking and drop the continuation lines of the others Axis: robustness\n\n### 🚀 Verdict\nREQUEST_CHANGES"
+        }
+      ]
+    },
+    {
+      "case_id": "incident-docs-contradict-new-behavior",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feat | Tests expected: yes — code, tests and docs change together\n\n### ✅ Summary\nMoves the three stages into one function used by production and the suite; docs and changelog are updated.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — scripts/lib/review_decision.mjs:8 the analysis argument may be undefined for a caller that skips the protocol\n- **Side effects** — scripts/lib/eval_suites.mjs:4 the suite now depends on the protocol module\n- **Type integrity** — none, checked the signatures\n- **Issue fit** — none, the diff matches the description\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
+    },
+    {
+      "case_id": "incident-grader-first-push",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feat | Tests expected: yes — new module with tests\n\n### ✅ Summary\nAdds the grader runner: digests, patch application, hidden tests and test commands.\n\n### ⚠️ Issues Found\n- [Medium] The temporary copy is left behind when applying the patch fails — File: src/grader/runner.mjs Lines: 30-36 Root cause: the directory is created before the copy and the writes, and nothing removes it when one of them throws, because the caller never receives its path Fix: remove it in a catch before rethrowing Axis: side_effects\n- [Medium] A symbolic link in the hidden tests is pinned by its target name — File: src/grader/runner.mjs Root cause: the digest records the link target as text while copyFile follows the link, so the content that runs can change without changing the digest Fix: refuse links in both trees Axis: robustness\n- [High] The exec callback may reject — File: src/grader/runner.mjs Lines: 71 Root cause: an exception from the callback is reported as a string only Fix: wrap it Axis: robustness\n\n### 🚀 Verdict\nREQUEST_CHANGES"
+        }
+      ]
+    },
+    {
+      "case_id": "impact-caller-misses-new-parameter",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feat | Tests expected: yes — tests updated\n\n### ✅ Summary\nApplies currency-aware rounding in applyDiscount.\n\n### ⚠️ Issues Found\n- [High] applyDiscount gains a required currency parameter that its existing caller does not pass — File: src/pricing.mjs Lines: 1-4 Root cause: src/checkout.mjs:14 still calls applyDiscount(cart.subtotal, cart.rate), so currency is undefined there and every checkout rounds to cents even for JPY Fix: default currency to a configured value or update the checkout caller in the same change Axis: correctness\n\n### 🚀 Verdict\nREQUEST_CHANGES"
+        }
+      ]
     }
   ]
 }

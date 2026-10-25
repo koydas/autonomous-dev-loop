@@ -1,6 +1,6 @@
 name: Conflicts Fix
 
-# Thin caller (ADR-0045, ADR-0058): the body is adl-conflicts-fix.yml. The name, the triggers and the permission
+# Thin caller (ADR-0045, ADR-0059): the body is adl-conflicts-fix.yml. The name, the triggers and the permission
 # ceiling stay here. A push to the default branch is how most conflicts are born (a pull_request event never fires
 # on a conflicting PR: its merge ref does not exist); the schedule is the safety net. This repository runs its own
 # pipeline from its default branch (ADR-0023).

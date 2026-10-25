@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * conflicts-fix, detection (ADR-0058 §A): reads the mergeability of the open pull requests (or one, PR_NUMBER),
+ * conflicts-fix, detection (ADR-0059 §A): reads the mergeability of the open pull requests (or one, PR_NUMBER),
  * keeps the `merge-conflict` label in step with it, clears the attempt labels of a PR that is clean again, and
  * writes the PRs the pipeline can fix to the step output `prs` (a JSON matrix). A conflicting PR whose head
  * cannot be pushed to (fork without "allow edits from maintainers") is labelled and told once, never skipped silently.

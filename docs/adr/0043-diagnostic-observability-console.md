@@ -89,6 +89,17 @@ The home had grown to about 5,800 px at 375 px wide (nine screens on an iPhone 1
 
 Consequences. The home reads the scorecard as well as the metrics branch, like `status.json`; both are left out of the "eval half unchanged" check of a pipeline-only build, as `index.html` and `findings.json` already were. The fit in one screen is held by structure (four rows, one line of chips that scrolls sideways) and checked by hand in Chromium at 375 × 629; there is no browser in the test suite.
 
-## Amendment (2026-10-25): conflicts-fix on the dashboard (ADR-0058)
+## Amendment (2026-10-25): external review churn is an observation
+
+**Context.** The loop's own review counts its cycles (`review_cycles`); the external reviewer (Codex) answers every push on its own, and `review_cycles` does not see it. Over the 250 PRs read on 2026-10-24, 19 PRs held 57 % of the 320 external threads, 70 % of them on one file. `external_review` on the approved `pr` record (`metrics/runs.jsonl`) holds the counts, but Diagnostics reads the published run records, not that file.
+
+**Decision.**
+- An approving run journals `review.external` (`prNumber`, `rounds`, `threads`, `p0p1`), counts only, through `EVENT_META_ALLOWLIST`; no login, comment body or title. Not emitted when GitHub could not be read: unknown is never 0.
+- Rule `external-review-churn` (category Review): PRs whose newest highest `rounds` reaches `RULES.externalRounds` (3). It is always `info`, so it never raises the dashboard status: the loop does not control that reviewer, and the counts are a lower bound (the reviewer answers a head after the run that recorded them). It resolves like any rule (`RULES.activeWindow`). The hypothesis names a possible cause (each round finds a neighbour of the previous fix) and says it is not verified; the records hold no finding text.
+- No lever (`NO_LEVER`): the practice that shortens it is `AGENTS.md`'s (fix the class, not the instance; keep a PR small), not a setting, and a lever applies to `warning` / `critical` findings only (ADR-0047).
+
+**Not done.** Active lessons (ADR-0051) take no signal from this: they carry closed ids written by code, and the external findings are free text from a third party; a classifier of their titles would make a text the model could be steered by cross into a prompt.
+
+## Amendment (2026-10-25): conflicts-fix on the dashboard (ADR-0059)
 
 The new stage is read by the same pure modules, nothing else changes. `pipeline_journey.mjs` gains a sixth step, **Conflicts fix** (`optional: true`): its decision comes from `conflicts.resolved` / `.escalated` / `.skipped` / `.error`, a successful merge after a conflicts-fix escalation settles the item (as an APPROVE settles a review escalation), and the flow card draws the step only on an item where it ran (an icon "not recorded" on every card that never conflicted says nothing). `pipeline_waiting.mjs` explains a `conflicts.escalated` reason: a structural limit (protected path, unsupported or binary file, size, file count, registry change, token scope) is `by_design`, a post-check, write-guard, parse, npm or push failure is not; the record names no file. `pipeline_diagnostics.mjs` adds the rule `conflicts-unresolved` (attempts without a merge commit; `warning` only when the stage's own failures reach `conflictsUnresolvedShare`, otherwise `info` "left to a human by design"), with its lever in `meta_levers.mjs` ([ADR-0047](./0047-findings-export-and-lever-table.md)); `llm_cost.mjs` maps the `conflicts` LLM stage to its pipeline stage.

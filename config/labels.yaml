@@ -47,7 +47,7 @@ conflicts:
   conflicting:
     name: merge-conflict
     color: e11d21
-    description: PR conflicts with its base branch; conflicts-fix resolves it or escalates (ADR-0058)
+    description: PR conflicts with its base branch; conflicts-fix resolves it or escalates (ADR-0059)
   attempt1:
     name: conflict-fix-attempt-1
     color: fbca04

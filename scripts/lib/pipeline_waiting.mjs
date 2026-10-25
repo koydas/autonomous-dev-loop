@@ -11,7 +11,7 @@ import { safeUrl } from './pipeline_model.mjs';
 // Rules of the write guard that stop a patch because of where it points, not because of what it contains
 // (ADR-0021, ADR-0029): a guardrail doing its job.
 export const DESIGN_RULES = new Set(['protected_path', 'unshown_file', 'withheld_file']);
-// Conflicts-fix escalations (ADR-0058) that a structural limit explains: a protected file, a file kind or size the
+// Conflicts-fix escalations (ADR-0059) that a structural limit explains: a protected file, a file kind or size the
 // model is not given, a registry the PR chose, a token scope. The rest (a post-check, a guard, a parse, npm, a push)
 // is a failure of the stage itself.
 export const CONFLICT_DESIGN_REASONS = new Set(['protected_path', 'unsupported_conflict', 'binary_file', 'too_large', 'too_many_files', 'lockfile_unsafe', 'workflow_scope']);

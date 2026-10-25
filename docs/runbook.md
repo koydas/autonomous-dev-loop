@@ -217,6 +217,7 @@ git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[
 | `🧪 Tool Evidence` says *missing* | The default branch has no `config/review-evidence.yaml` or no evidence runner yet (expected: evidence is opt-in and read from the default branch, the job logs `skipped: "no config"` or fails to find the script), the `evidence` job crashed (invalid config, see `review_evidence.error` in its log), or the artifact upload/download failed — review ran without evidence |
 | A check reports `ERROR (exit 127)` or `(exit 126)` | The command could not be executed: typo, binary not installed in the evidence job, or quotes/inline comment in `config/review-evidence.yaml` — fix the config; never forces `REQUEST_CHANGES` |
 | `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json`, `pr-review.yml` or `adl-pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
+| The review has no `## Impact analysis` block, or the log shows `review.impact_error` | The block only exists when the diff edits a JS/TS export and the PR tree references it from outside the diff (`review.impact_context` carries the counts). It is the first context dropped after the related ADRs when the prompt does not fit (`included: false`), and a listing or read error skips it without failing the review. Not a verdict input |
 | `🧪 Tool Evidence` says *stale* | A push landed between the evidence run and the review's PR fetch; the review of the newer push will carry fresh evidence |
 | Review verdict is always `REQUEST_CHANGES` loop never resolves | AI prompt regression; issue body too vague for the generated code to satisfy review criteria; consider manual review |
 | `auto-fix-pr` does not trigger after `changes-requested` label | Label name mismatch (`config/labels.yaml` `review.changes.name` vs actual label); `AI_PR_TOKEN` cannot emit `labeled` events; auto-fix workflow not enabled |
@@ -318,6 +319,7 @@ Key steps to expand per workflow:
 
 ### `eval-replay` (`eval-replay.yml`)
 - **Replay published eval runs** — reads the eval dashboard, replays the last live run of each suite against the PR's code (no LLM call, no secret), writes the per-metric Δ and the cases that change verdict to the job summary. Exits 1 when a threshold the published numbers meet breaks (PR thresholds on both sides), or when the PR's code cannot run the replay (malformed dataset, suite crash); an unreachable dashboard, an unpublished suite or a changed dataset only warns
+- **When it runs** — on `pull_request` when the PR touches a prompt, a dataset, the replay scripts, `config/models.yaml` or a module the eval suites load: `review_prompt.mjs`, `review_evidence.mjs`, `review_decision.mjs`, `adversarial_review.mjs`, `review_findings.mjs`, `issue_validator.mjs`, `output_writer.mjs`, `eval_*.mjs` and the rest of their import graph (`workflow_gates.test.mjs` fails on an uncovered module). A PR that only changes docs does not run it. The full list is in `docs/evals.md` → PR replay gate.
 
 ### `pr-evals` (`pr-evals.yml`)
 - **plan → Resolve PR and trigger / Plan** — labeler permission, pinned head SHA, the plan (`run`, `refused` with the reason, `nothing`) and the suites; `pr-evals-plan-<run_id>` artifact
@@ -548,7 +550,7 @@ only by GitHub's `merged_at`, never by workflow success; a PR closed without it
 shows ⊘ "closed without merge", an open one ○ "PR open".
 
 Cards start collapsed. The summary shows the PR/issue title and one icon per
-step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge; plus Conflicts fix on a card where it ran, ADR-0058):
+step (Validation, Code generation, PR preparation, Review, Auto-fix, Merge; plus Conflicts fix on a card where it ran, ADR-0059):
 ✓ success, ✗ failed, ⊘ skipped, ○ not recorded. A step's icon is the span
 outcome of its final execution, ordered by when each attempt ended: its last
 event of the step, including the workflow event that decides it

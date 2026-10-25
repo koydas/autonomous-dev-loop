@@ -1,4 +1,4 @@
-// Model resolution of the conflict hunks of one file (ADR-0058 §C-E). The model returns resolved HUNKS, never the
+// Model resolution of the conflict hunks of one file (ADR-0059 §C-E). The model returns resolved HUNKS, never the
 // file: the script splices them into the conflict blocks, so the non-conflicting part of the file is untouched
 // (the whole-file contract of ADR-0029 would let a conflict serve as cover for a rewrite). Pure apart from the
 // injected `callModel`; every refusal is a reason code, never model text.

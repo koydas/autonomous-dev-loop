@@ -98,6 +98,7 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.llm_response`| info | —             | `output_tokens_est`, `prNumber`                          |
 | `review.verdict`   | info   | ✓             | `verdict` (`"APPROVE"` \| `"REQUEST_CHANGES"` \| `"WITHHELD"`), `attempt`, `prNumber`, `evidence_state` (`available` \| `missing` \| `stale`), `evidence_override`, `unreviewed_code_files` (count of code files cut from the reviewed diff; > 0 turns an approval into `WITHHELD`, ADR-0038), `withheld_from` (`APPROVE` \| `REQUEST_CHANGES` \| null: the verdict the unseen-code backstop turned into `WITHHELD`, ADR-0038 / #219), `withheld_for` (`protocol` \| null: the adversarial protocol withheld an approval, ADR-0049), `adversarial_points` (axes that named a risk), `adversarial_axes` (their ids), `blocking_axes` (axis ids tagged on the High / Medium findings), `streak` (consecutive reviews with the same failure signature, ADR-0050) |
 | `review.escalated` | warn   | —             | `prNumber`, `reason` (`circuit_breaker`), `streak`, `labels_added` (`needs-human`), `url` (the review comment) — the same failure was reported by `BREAKER_THRESHOLD` (3) consecutive reviews: no re-pulse of `changes-requested`, so no auto-fix (ADR-0050) |
+| `review.external` | info | — | `prNumber`, `rounds` (distinct commits the external reviewer, the `chatgpt-codex-connector` login, reviewed), `threads` (its root inline comments), `p0p1` (those marked P0 or P1) — counts read from GitHub by an approving run before the trace is finalized; a lower bound; not emitted when GitHub could not be read, never 0 (ADR-0043 amendment 2026-10-25) |
 | `review.skipped`   | info   | ✓             | `reason` (`already_reviewed` \| `superseded`), `prNumber`, `headSha` — no LLM call (ADR-0028) |
 | `review.evidence_assessed` | info | —           | `prNumber`, `state` (`available` \| `missing` \| `stale`), `reason`, `failing`, `unverified` (check names) — the CI evidence read (ADR-0024, ADR-0026) |
 | `review.prompt_truncated` | warn | —            | `prNumber`, `diff_truncated`, `body_truncated`, `unreviewed_code_files`, `adrs_shown`, `adrs_found`, `max_input_tokens` — the token budget cut the prompt (ADR-0028, ADR-0036, ADR-0038) |
@@ -107,6 +108,8 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.error`     | error  | —             | `error`                                                  |
 | `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0035) |
 | `review.related_adrs_error` | warn | — | `error` — file listing or ADR read failed; the review continues without related ADRs (ADR-0036) |
+| `review.impact_error` | warn | — | `error` — file listing failed; the review continues without the impact analysis (RV-02) |
+| `review.impact_context` | info | — | `prNumber`, `symbols` (changed or removed exports found), `with_refs` (those still referenced outside the diff), `refs` (references listed), `tests` (related tests), `included` (the prompt had room for the block), `scanned` (source files read), `truncated` (the scan hit its cap) — counts only, never the code (RV-02) |
 | `review.prompt_budget_error` | warn | — | `error` — base (`git show`) or head read of a changed prompt failed; the review continues without the prompt budget block (ADR-0037) |
 | `review.file_skipped` | warn | — | `path`, `reason` (`too_large`), `size`, `max_bytes` — a PR-tree file is over `PR_TREE_MAX_BYTES` (1 MiB, `scripts/lib/pr_tree_reader.mjs`): it is never read, and is left out of the stale-reference / related-ADR searches or treated as unreadable by the prompt budget; one event per file, the review continues (F22) |
 | `review.models_config_ignored` | warn | — | `path`, `error` — the PR tree's `config/models.yaml` is not a regular file (symlink, FIFO, …) or cannot be read; the prompt budget uses the trusted defaults and the review continues (ADR-0023, ADR-0037) |
@@ -154,7 +157,7 @@ Emitted by `scripts/reset_auto_fix.mjs` (`reset-auto-fix.yml`, ADR-0041): the re
 
 ### `conflicts_detect`
 
-Emitted by `scripts/detect_conflicts.mjs` (`conflicts-fix.yml`, ADR-0058): the `merge-conflict` label kept in step with each open PR's mergeability. No LLM, no push.
+Emitted by `scripts/detect_conflicts.mjs` (`conflicts-fix.yml`, ADR-0059): the `merge-conflict` label kept in step with each open PR's mergeability. No LLM, no push.
 
 | Event | Level | `duration_ms` | Key `meta` fields |
 |---|---|---|---|
@@ -167,7 +170,7 @@ Emitted by `scripts/detect_conflicts.mjs` (`conflicts-fix.yml`, ADR-0058): the `
 
 ### `conflicts`
 
-Emitted by `scripts/conflicts_fix.mjs` (ADR-0058): the base merged into the head of one conflicting PR. The run joins the trace of the PR's work item (ADR-0041).
+Emitted by `scripts/conflicts_fix.mjs` (ADR-0059): the base merged into the head of one conflicting PR. The run joins the trace of the PR's work item (ADR-0041).
 
 | Event | Level | `duration_ms` | Key `meta` fields |
 |---|---|---|---|
@@ -417,7 +420,7 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 | `llm_provider_error` | no (never had it) | code and status only |
 | `issue_validation.fail`, `code_gen.error`, `review.error`, `autofix.error`, stage span meta (`error`, OTLP `adl.error`) | yes, sanitized | an unexpected exception: may be `callLLM`'s `All providers failed: <provider>: … HTTP error <status>: <body>`, cut at the body |
 | `pr_prepare.error`, `code_gen.skipped`, `pr_prepare.skipped` | yes, sanitized | our own message: write guard, static verifier or a GitHub API call |
-| `review.stale_refs_error`, `review.related_adrs_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
+| `review.stale_refs_error`, `review.related_adrs_error`, `review.impact_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
 | `autofix_reset.error`, `conflicts_detect.error` | yes, sanitized | our own message: a GitHub API call |
 | `conflicts.error`, `conflicts.model_unavailable` | yes, sanitized | an unexpected exception: may be `callLLM`'s provider error (sanitized), a git failure or a GitHub API call |
 | `trace_write_failed`, `start_span_failed`, `end_span_failed`, `trace_finalize_failed` | yes, sanitized | our own message: a trace-file write |

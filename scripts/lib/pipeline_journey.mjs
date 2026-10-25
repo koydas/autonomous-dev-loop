@@ -13,7 +13,7 @@ export const STEPS = Object.freeze([
   Object.freeze({ key: 'pr_prepare', name: 'PR preparation', issueOnly: true }),
   Object.freeze({ key: 'review', name: 'Review', issueOnly: false }),
   Object.freeze({ key: 'autofix', name: 'Auto-fix', issueOnly: false }),
-  // ADR-0058: runs when the PR conflicts with its base; between the other steps, whenever the base moves.
+  // ADR-0059: runs when the PR conflicts with its base; between the other steps, whenever the base moves.
   Object.freeze({ key: 'conflicts', name: 'Conflicts fix', issueOnly: false, optional: true }),
 ]);
 
@@ -235,7 +235,7 @@ function itemState(steps, escalated, runs, closing) {
   const decisions = review.attempts.filter((a) => a.decision && a.decision.key !== 'skipped');
   const lastReview = decisions.at(-1);
   const lastEscalation = escalated.at(-1);
-  // A conflicts-fix escalation is settled by a later successful merge of the base (ADR-0058), as one of review is by an APPROVE.
+  // A conflicts-fix escalation is settled by a later successful merge of the base (ADR-0059), as one of review is by an APPROVE.
   const conflicts = steps.find((s) => s.key === 'conflicts');
   const mergedAfter = lastEscalation?.stage === 'conflicts' && conflicts.final?.decision?.key === 'resolved' && (conflicts.final.ended_at ?? 0) > (lastEscalation.ts ?? 0);
   if (lastEscalation && !mergedAfter && !(lastReview?.decision.key === 'APPROVE' && (lastReview.ended_at ?? 0) > (lastEscalation.ts ?? 0))) return 'escalated';

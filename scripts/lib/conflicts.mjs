@@ -1,4 +1,4 @@
-// Auto conflicts-fix, pure part (ADR-0058): classification of a PR's mergeability, the circuit breaker's
+// Auto conflicts-fix, pure part (ADR-0059): classification of a PR's mergeability, the circuit breaker's
 // signature and marker, conflict-marker parsing, the resolver allowlist and the post-checks of a model
 // resolution, ADR renumbering. No I/O, no LLM: scripts/conflicts_fix.mjs and scripts/detect_conflicts.mjs
 // own both. Conflict hunks are data, never interpolated into a command and never logged.
@@ -171,7 +171,7 @@ export function applyResolutions(segments, resolutions) {
   }).join('');
 }
 
-// ── resolver allowlist (ADR-0058 §F) ──────────────────────────────────────────────────────────────
+// ── resolver allowlist (ADR-0059 §F) ──────────────────────────────────────────────────────────────
 
 /**
  * How a conflicted path is resolved: the ladder rung and, for the model, the resolver that post-checks it.
@@ -229,7 +229,7 @@ export function checkHunkResolution(resolver, { ours, base = '', theirs }, resol
   return violations;
 }
 
-// ── ADR renumbering (mechanical, ADR-0058 §E) ─────────────────────────────────────────────────────
+// ── ADR renumbering (mechanical, ADR-0059 §E) ─────────────────────────────────────────────────────
 
 /** ADR number of a repo path (`docs/adr/0058-x.md` → 58), or null. */
 export function adrNumber(path) {

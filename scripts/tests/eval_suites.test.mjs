@@ -15,6 +15,7 @@ import { buildChangeClassificationContext } from '../lib/change_classifier.mjs';
 import { parseEvidence } from '../lib/review_evidence.mjs';
 import { GROQ_MODEL_DEFAULTS, loadLLMConfig, reviewMaxDiffChars } from '../lib/config.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
+import { validateExpectedFindings, parseFindings } from '../lib/review_findings.mjs';
 import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage, liveCallArgs, createLiveLLM, buildLLM, applyEvalOverrides, liveModelId } from '../run_evals.mjs';
 import { partitionPublishable, partitionByPublishedModel, runCost } from '../lib/eval_scorecard.mjs';
 
@@ -417,7 +418,9 @@ const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
   ? reviewText({
     verdict: 'REQUEST_CHANGES',
     summary: ['Changes X.', ...(c.expected.must_note ?? []).map((n) => `Note: ${n.split('|')[0]}.`)].join('\n'),
-    issues: (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: x Lines: 1 Root cause: r Fix: f`),
+    issues: c.expected.findings
+      ? c.expected.findings.map((f) => `[${f.severity[0].toUpperCase()}${f.severity.slice(1)}] ${f.match?.split('|')[0] ?? 'defect'} — File: ${f.path} Lines: ${f.lines?.[0] ?? 'unknown'} Root cause: r Fix: f`)
+      : (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: x Lines: 1 Root cause: r Fix: f`),
   })
   : reviewText({ verdict: 'APPROVED', issues: (c.expected.must_advise ?? []).map((a) => `[Low] ${a.split('|')[0]}: x — File: x Lines: 1`) }));
 
@@ -459,6 +462,38 @@ test('review dataset parses, labels every case with a pipeline verdict and its t
       assert.equal(c.expected.verdict, 'REQUEST_CHANGES', `${c.id}: ${key} on a case that should not raise findings`);
       assert.ok(Array.isArray(c.expected[key]) && c.expected[key].length > 0, `${c.id}: ${key}`);
       for (const entry of c.expected[key]) assert.ok(entry.split('|').every((k) => k.trim()), `${c.id}: empty keyword in "${entry}"`);
+    }
+  }
+});
+
+test('review dataset: expected.findings are well formed and only on cases that must be rejected (RV-01)', async () => {
+  const cases = await loadReviewCases();
+  const withFindings = cases.filter((c) => c.expected.findings !== undefined);
+  assert.ok(withFindings.length >= 4, `only ${withFindings.length} cases list their defects`);
+  for (const c of withFindings) {
+    assert.deepEqual(validateExpectedFindings(c.expected.findings), [], c.id);
+    assert.equal(c.expected.verdict, 'REQUEST_CHANGES', `${c.id}: a case that lists defects must be rejected`);
+    assert.ok(c.tags.includes('findings'), `${c.id}: tag findings`);
+    // A defect points at a file the diff shows, unless it needs context: a file outside the diff, or a repository rule
+    // the review is not given, which the diff does not show.
+    const shown = new Set([...c.input.diff.matchAll(/^diff --git a\/(\S+) b\//gm)].map((m) => m[1]));
+    for (const f of c.expected.findings.filter((x) => x.needs !== 'context')) assert.ok(shown.has(f.path), `${c.id}/${f.id}: ${f.path} is not in the diff but the defect does not need context`);
+  }
+  for (const c of cases.filter((x) => x.expected.acceptable_findings !== undefined)) {
+    assert.ok(Array.isArray(c.expected.acceptable_findings) && c.expected.acceptable_findings.every((a) => a.path || a.match), `${c.id}: acceptable_findings`);
+  }
+  // The pinned expectation of the reduced #283 case: six independent defects, each told apart by where and what.
+  const grader = withFindings.find((c) => c.id === 'incident-grader-first-push');
+  assert.equal(grader.expected.findings.length, 6);
+});
+
+test('review dataset: the lines of an expected defect point inside the new file of the diff (RV-01)', async () => {
+  for (const c of (await loadReviewCases()).filter((x) => x.expected.findings !== undefined)) {
+    for (const f of c.expected.findings.filter((x) => x.lines)) {
+      const file = c.input.diff.split(/^diff --git /m).find((part) => part.startsWith(`a/${f.path} `));
+      assert.ok(file, `${c.id}/${f.id}: ${f.path} not in the diff`);
+      const added = [...file.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].flatMap((m) => [Number(m[1]), Number(m[1]) + Number(m[2] ?? 1) - 1]);
+      assert.ok(f.lines[0] >= Math.min(...added) && (f.lines[1] ?? f.lines[0]) <= Math.max(...added), `${c.id}/${f.id}: lines ${f.lines} outside the hunks ${added}`);
     }
   }
 });
@@ -855,6 +890,9 @@ test('review suite end-to-end with an oracle reviewer meets every threshold', as
   assert.equal(summary.scores.advisory.mean, 1);
   assert.equal(summary.scores.no_spurious_flag.mean, 1);
   assert.deepEqual(checkThresholds(summary, reviewSuite.thresholds), []);
+  // An oracle that reports exactly the listed defects finds them all and invents none (known-gap cases: their own block).
+  const gap = summary.known_gap.scores;
+  assert.deepEqual([gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [1, 1, 1]);
 });
 
 const UNTESTED_CLAIM_CASES = ['incident-untested-claim-symlink-dir', 'incident-tested-claim-symlink-dir', 'clean-empty-body-no-claim', 'docs-only-behavior-sentence', 'truncated-claim-tests-past-cut'];
@@ -901,15 +939,37 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   }
   assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 35 cases run, 34 gated: the known-gap case is counted only in summary.known_gap.
+  // 40 cases run, 34 gated: the six known-gap cases are counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [35, 0.0294, 0.9118, 0.8667, 0.7895],
+    [40, 0.0294, 0.9118, 0.8667, 0.7895],
   );
+  // Finding level (RV-01): the four incident cases that list their defects are known-gap, so the gated metrics
+  // above are unchanged and the finding metrics live in summary.known_gap. Recorded answers: a miss (approved), a
+  // hit, a miss, and 2 of 6 defects with one invented High finding.
+  const r4 = (x) => (x == null ? x : Math.round(x * 1e4) / 1e4); // per-case scores are exact, the summary rounds to 4 decimals
+  const fx = (id) => Object.fromEntries(Object.entries(byId[id].scores).map(([k, v]) => [k, r4(v)]));
+  assert.deepEqual([fx('incident-removed-test-case').finding_recall, fx('incident-removed-test-case').finding_precision, fx('incident-removed-test-case').critical_recall], [0, null, 0]);
+  assert.deepEqual([fx('incident-low-continuation-axes').finding_recall, fx('incident-low-continuation-axes').finding_precision, fx('incident-low-continuation-axes').critical_recall], [1, 1, null]);
+  assert.deepEqual([fx('incident-docs-contradict-new-behavior').finding_recall, fx('incident-docs-contradict-new-behavior').finding_precision], [0, null]);
+  assert.deepEqual([fx('incident-grader-first-push').finding_recall, fx('incident-grader-first-push').finding_precision, fx('incident-grader-first-push').critical_recall], [0.3333, 0.6667, 0]);
+  // Why the others were missed is in the results file: each missed defect carries what it takes to see it.
+  assert.deepEqual(byId['incident-grader-first-push'].output.finding_analysis, {
+    detected: 3,
+    matched: ['BUG-3', 'BUG-5'],
+    missed: [{ id: 'BUG-1', needs: 'reasoning' }, { id: 'BUG-2', needs: 'reasoning' }, { id: 'BUG-4', needs: 'reasoning' }, { id: 'BUG-6', needs: 'reasoning' }],
+    false_positives: 1,
+  });
+  assert.equal(byId['incident-removed-test-case'].output.finding_analysis.missed[0].needs, 'context');
+  assert.equal(byId['bug-off-by-one-chunk'].output.finding_analysis, undefined, 'a case without expected.findings has no analysis');
+  assert.equal(byId['bug-off-by-one-chunk'].scores.finding_recall, null);
+  const gap = summary.known_gap.scores;
+  assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [6, 0.4667, 0.8889, 0.3333]);
   assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
   assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9333, 0.8667]);
   // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
-  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id)));
+  const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push', 'impact-caller-misses-new-parameter']; // RV-01 / RV-02, known-gap
+  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id)));
   assert.deepEqual(
     [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
     [30, 0.0345, 0.8966, 0.8667, 0.7143],
@@ -918,7 +978,8 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.deepEqual([before.scores.advisory.n, before.scores.no_spurious_flag.n], [0, 0]);
   assert.deepEqual(
     [summary.known_gap.n_cases, summary.known_gap.error_rate, summary.known_gap.scores.verdict_match.mean, summary.known_gap.per_class.request_changes.recall],
-    [1, 0, 0, 0],
+    // The #194 case is missed, as on Groq; of the four RV-01 cases the recorded answers reject two and approve two; the RV-02 case is rejected.
+    [6, 0, 0.5, 0.5],
   );
 });
 

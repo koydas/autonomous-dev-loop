@@ -31,7 +31,7 @@ export const LEVERS = Object.freeze({
   'conflicts-unresolved': entry('conflicts', 'Conflicts-fix attempts end without a merge commit', [
     target('config', 'config/models.yaml#conflicts_max_input_tokens'), target('variable', 'AI_PROVIDER_CONFLICTS'),
     target('prompt', 'prompts/conflicts-system.md'),
-  ], ['0017', '0058']),
+  ], ['0017', '0059']),
   'codegen-blocked': entry('generation', 'Code generation is blocked before it proposes a patch', [
     target('config', 'config/models.yaml#generation_max_input_tokens'), target('prompt', 'prompts/generation-system.md'),
     target('prompt', 'prompts/validation-system.md', 'validation'),
@@ -48,6 +48,7 @@ export const NO_LEVER = Object.freeze({
   'stage-failures-*': 'a repeated stage failure needs a root cause (docs/runbook.md), not a setting',
   'review-stuck': 'depends on the content of the pull request',
   escalations: 'a person is the lever (ADR-0001)',
+  'external-review-churn': 'a practice (AGENTS.md, PR Review Comment Workflow) and the size of the pull request, not a setting; the reviewer is external',
   'rate-limit-waits': 'a symptom of the provider tier; revisit with data',
   'duration-*': 'a symptom of the provider tier; revisit with data',
 });

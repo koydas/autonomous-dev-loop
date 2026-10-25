@@ -65,7 +65,7 @@ autofix_max_input_tokens: 2500
 autofix_diff_ratio:     0.15
 autofix_feedback_ratio: 0.25
 
-# Conflicts-fix (ADR-0058): the model resolves the conflict hunks of a PR's files; one call per file.
+# Conflicts-fix (ADR-0059): the model resolves the conflict hunks of a PR's files; one call per file.
 # (system ≈ 330 + 2500) × 1.10 + 4096 = 7209 ≤ 8000. A file whose hunks do not fit is escalated, never cut.
 conflicts:              openai/gpt-oss-120b
 conflicts_temperature:  0

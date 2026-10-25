@@ -1,4 +1,4 @@
-// GitHub REST access of the conflicts-fix stage (ADR-0058): one request function with the retry policy of
+// GitHub REST access of the conflicts-fix stage (ADR-0059): one request function with the retry policy of
 // ADR-0022, and the label / comment helpers both scripts share. Every helper takes `request`, so the tests
 // inject a fake. REST only: nothing here uses GraphQL, so ADR-0011's fallback does not apply.
 import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from './retry.mjs';
