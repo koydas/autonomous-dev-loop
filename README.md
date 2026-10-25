@@ -86,6 +86,8 @@ Once a PR is opened, the automation continues:
 
 The loop runs up to **3 auto-fix iterations** per PR. After that, a comment is posted requesting manual intervention.
 
+A PR that conflicts with its base never reaches either stage (its merge ref does not exist, so no `pull_request` event fires). **Conflicts Fix** (`.github/workflows/conflicts-fix.yml`, [ADR-0059](docs/adr/0059-auto-conflicts-fix.md)) finds it on every push to the default branch (and on a schedule), labels it `merge-conflict` and merges the base into its head: a clean merge, a regenerated `package-lock.json`, or model-resolved conflict hunks for `CHANGELOG.md`, the ADR index and unprotected files, with the PR's ADR renumbered mechanically when the base holds its number. Any other protected file, any guard rejection, or a repeated failure escalates to `needs-human`. The push re-triggers the review.
+
 ## Fail-Fast Startup & Payload Validation
 
 Automation entrypoints now validate critical runtime inputs before network calls:

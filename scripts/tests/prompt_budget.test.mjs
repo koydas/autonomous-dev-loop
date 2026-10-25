@@ -22,7 +22,7 @@ const run = ({ rawDiff, base = {}, head = {}, models = MODELS, ...rest }) => com
 
 test('PROMPT_STAGES maps every prompts/*.md loaded by a stage, auto-fix-system on the TPM window', () => {
   assert.deepEqual(Object.keys(PROMPT_STAGES).sort(), [
-    'prompts/auto-fix-system.md', 'prompts/auto-fix-user.md', 'prompts/generation-system.md', 'prompts/generation-user.md',
+    'prompts/auto-fix-system.md', 'prompts/auto-fix-user.md', 'prompts/conflicts-system.md', 'prompts/conflicts-user.md', 'prompts/generation-system.md', 'prompts/generation-user.md',
     'prompts/pr-review-repo-rules.md', 'prompts/pr-review-system.md', 'prompts/pr-review-user.md', 'prompts/validation-system.md', 'prompts/validation-user.md',
   ]);
   assert.deepEqual(readdirSync(resolve(ROOT, 'prompts')).filter((f) => f.endsWith('.md')).map((f) => `prompts/${f}`).sort(), Object.keys(PROMPT_STAGES).sort(),

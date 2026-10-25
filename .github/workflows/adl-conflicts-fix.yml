@@ -1,0 +1,305 @@
+name: ADL Conflicts Fix (reusable)
+
+# Reusable workflow (ADR-0045, ADR-0059): called by conflicts-fix.yml in this repository and by the caller template
+# of a target repository. The triggers (push to the default branch, a schedule, workflow_dispatch) belong to the
+# caller. A run record belongs to one work item (ADR-0041), so a run handles at most one PR: without `pr_number`
+# `detect` sweeps the open PRs, keeps the `merge-conflict` label and dispatches the caller once per fixable PR; with
+# one, `detect` reads that PR and `fix` merges the base into its head, on the per-PR group shared with pr-review and
+# auto-fix (ADR-0020).
+on:
+  workflow_call:
+    inputs:
+      pipeline_repository:
+        description: 'Repository holding the pipeline (scripts, prompts, default config)'
+        type: string
+        default: 'koydas/autonomous-dev-loop'
+      pipeline_ref:
+        description: 'Self-calls only: the default branch. Any other repository is pinned by the ref of its `uses:` line.'
+        type: string
+        default: ''
+      config_dir:
+        description: "Directory of the repository's own pipeline configuration"
+        type: string
+        default: '.autonomous-dev-loop'
+      pr_number:
+        description: 'One PR to fix (a run of its own); empty = sweep every open PR and dispatch one run per fixable PR'
+        type: string
+        default: ''
+      sweep:
+        description: "'true' when a sweep dispatched this run: the attempt cap and the circuit breaker apply. Any other value with a pr_number is a manual run, which bypasses both"
+        type: string
+        default: ''
+      caller_workflow_file:
+        description: 'Caller workflow that the sweep dispatches once per conflicting PR'
+        type: string
+        default: 'conflicts-fix.yml'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      GROQ_API_KEY:
+        required: false
+      AI_PR_TOKEN:
+        required: false
+
+# Per job (ADR-0007 amendment 2026-10-20).
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    permissions:
+      # The run lookup that gives the pipeline commit of an external caller.
+      actions: read
+    outputs:
+      pipeline_ref: ${{ steps.pipeline.outputs.ref }}
+    steps:
+      - name: Resolve pipeline version
+        id: pipeline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+          PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        # ADR-0045: one pin per caller, the `uses: …@<ref>` of the reusable workflow; its commit is read from the run.
+        # A call from the pipeline repository itself runs the default branch, as ADR-0023 requires.
+        run: |
+          set -euo pipefail
+          # pull_request_target runs the base workflow with secrets on the contents of a pull request: never.
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            echo "::error::The pipeline does not run on pull_request_target"
+            exit 1
+          fi
+          if [ "${PIPELINE_REPOSITORY,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            if [ -n "$PIPELINE_REF" ] && [ "$PIPELINE_REF" != "$DEFAULT_BRANCH" ]; then
+              echo "::error::pipeline_ref must be the default branch ($DEFAULT_BRANCH) when the pipeline repository calls itself, got $PIPELINE_REF"
+              exit 1
+            fi
+            echo "ref=$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ENTRY=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '[.referenced_workflows[]? | select((.path | ascii_downcase) | startswith((env.PIPELINE_REPOSITORY | ascii_downcase) + "/.github/workflows/adl-"))] | .[0] // empty | [.path, .sha, (.ref // "")] | @tsv')
+          if [ -z "$ENTRY" ]; then
+            echo "::error::This run does not reference a reusable workflow of $PIPELINE_REPOSITORY"
+            exit 1
+          fi
+          IFS=$'\t' read -r WORKFLOW_PATH SHA REF <<< "$ENTRY"
+          PIN="${WORKFLOW_PATH#*@}"
+          if ! [[ "$PIN" =~ ^[0-9a-f]{40}$ || "$PIN" =~ ^(refs/tags/)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The reusable workflow is pinned to \"$PIN\": pin a commit SHA or a vMAJOR.MINOR.PATCH tag, never a branch"
+            exit 1
+          fi
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The run does not give the commit of the reusable workflow"
+            exit 1
+          fi
+          # The API reports a tag pinned as `@v1.2.3` with ref `refs/tags/v1.2.3`: compare without the prefix.
+          if [ -n "$REF" ] && [ "${REF#refs/tags/}" != "${PIN#refs/tags/}" ]; then
+            echo "::error::The run reports the reusable workflow at \"$REF\" but its path pins \"$PIN\""
+            exit 1
+          fi
+          echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+
+  detect:
+    needs: resolve
+    runs-on: ubuntu-latest
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    timeout-minutes: 15
+    permissions:
+      # The `metrics` branch only (Commit metrics step, ADR-0040).
+      contents: write
+      # Reads PR mergeability; the label and the comment of a PR the pipeline cannot push to (detect_conflicts.mjs).
+      pull-requests: write
+      issues: write
+      # The dispatch of one fix run per conflicting PR (dispatch_conflicts.mjs).
+      actions: write
+    outputs:
+      prs: ${{ steps.detect.outputs.prs }}
+      count: ${{ steps.detect.outputs.count }}
+    steps:
+      # No step runs PR code and none pushes: the pipeline and the configuration come from trusted refs.
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pipeline_repository }}
+          ref: ${{ needs.resolve.outputs.pipeline_ref }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      - name: Checkout target configuration (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-config
+          sparse-checkout: ${{ inputs.config_dir }}
+          persist-credentials: false
+
+      - name: Move the pipeline and the configuration out of the workspace
+        run: |
+          mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+          mv .trusted-config "$RUNNER_TEMP/target-config"
+          echo "ADL_CONFIG_DIR=$RUNNER_TEMP/target-config/$ADL_CONFIG_PATH" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Detect conflicting pull requests
+        id: detect
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/detect_conflicts.mjs"
+
+      # A sweep dispatches one run per fixable PR instead of fixing them here: each run is one work item with its own record.
+      - name: Dispatch one fix run per conflicting PR
+        if: ${{ inputs.pr_number == '' && steps.detect.outputs.count != '' && steps.detect.outputs.count != '0' }}
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PRS: ${{ steps.detect.outputs.prs }}
+          CALLER_WORKFLOW_FILE: ${{ inputs.caller_workflow_file }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/dispatch_conflicts.mjs"
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-detect
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      # Only a sweep records here: a single-PR run records its fix (same run id, one record per run).
+      - name: Commit metrics
+        if: always() && inputs.pr_number == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_RECORD_MESSAGE: "metrics: conflicts-fix sweep [skip ci]"
+        # The checkout is a pull request tree: the trusted copy is the pinned pipeline, and one that does not ship the script
+        # yet is a warning, not a red job.
+        run: |
+          SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
+          [ -f "$SCRIPT" ] || { echo "::warning::commit_run_record.mjs is not in the pipeline yet; metrics not committed"; exit 0; }
+          node "$SCRIPT"
+
+  fix:
+    needs: [resolve, detect]
+    if: ${{ inputs.pr_number != '' && needs.detect.outputs.count != '' && needs.detect.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    strategy:
+      # One PR at a time, and a failure on one never stops the others.
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        pr: ${{ fromJSON(needs.detect.outputs.prs) }}
+    env:
+      ADL_PIPELINE_REPOSITORY: ${{ inputs.pipeline_repository }}
+      ADL_CONFIG_PATH: ${{ inputs.config_dir }}
+    # 15 Groq retries x 60 s + 5 min for checkout, merge, push and labels (ADR-0028).
+    timeout-minutes: 20
+    permissions:
+      # git push to the PR branch when AI_PR_TOKEN is unset, and the `metrics` branch (Commit metrics).
+      contents: write
+      # Labels and comments on the PR (conflicts_fix.mjs, this token).
+      pull-requests: write
+      issues: write
+    # Job-level, shared with pr-review, auto-fix-pr and reset-auto-fix (ADR-0020). Never cancel: this job pushes.
+    concurrency:
+      group: pr-pipeline-${{ matrix.pr.head_ref }}
+      cancel-in-progress: false
+    steps:
+      # The PR head is data (ADR-0023): a fork's head when the PR comes from one. No credential is kept in
+      # the checkout; conflicts_fix.mjs pushes with the token in the environment of that one git call.
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.pr.head_repo }}
+          ref: ${{ matrix.pr.head_ref }}
+          token: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # ADR-0023, ADR-0045: pipeline code runs from the pinned pipeline; the branch above is data only.
+      - name: Checkout pipeline
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pipeline_repository }}
+          ref: ${{ needs.resolve.outputs.pipeline_ref }}
+          path: .trusted-pipeline
+          persist-credentials: false
+
+      # ADR-0045: the target's own configuration comes from its default branch, never from a pull request tree.
+      - name: Checkout target configuration (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .trusted-config
+          sparse-checkout: ${{ inputs.config_dir }}
+          persist-credentials: false
+
+      - name: Move the pipeline and the configuration out of the workspace
+        run: |
+          mv .trusted-pipeline "$RUNNER_TEMP/pipeline"
+          mv .trusted-config "$RUNNER_TEMP/target-config"
+          echo "ADL_CONFIG_DIR=$RUNNER_TEMP/target-config/$ADL_CONFIG_PATH" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Resolve merge conflicts
+        id: fix
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          # ADR-0028: a Groq rate limit (429, or 413 rate_limit_exceeded) is waited out, never fatal.
+          # Hint-less limits wait one 60 s TPM window; retries × wait ≤ timeout-minutes − 3 min.
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          GROQ_MAX_RETRIES: '15'
+          # The PAT: a push with GITHUB_TOKEN triggers no workflow, so the review would not run on the merge commit.
+          GITHUB_TOKEN: ${{ secrets.AI_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ matrix.pr.number }}
+          # A person's dispatch bypasses the cap and the breaker; a sweep's dispatch (sweep: 'true') does not.
+          CONFLICTS_MANUAL: ${{ inputs.pr_number != '' && inputs.sweep != 'true' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          AI_PROVIDER_CONFLICTS: ${{ vars.AI_PROVIDER_CONFLICTS }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          GROQ_API_URL: ${{ vars.GROQ_API_URL }}
+          GROQ_REASONING_EFFORT: ${{ vars.GROQ_REASONING_EFFORT }}
+        run: node "$RUNNER_TEMP/pipeline/scripts/conflicts_fix.mjs"
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-pr-${{ matrix.pr.number }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      # ADR-0041: the run joins the trace of the PR's work item — record + trace index on `metrics` (ADR-0040).
+      - name: Commit metrics
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_RECORD_MESSAGE: "metrics: pr ${{ matrix.pr.number }} conflicts-fix [skip ci]"
+          RUN_RECORD_PR_NUMBER: ${{ matrix.pr.number }}
+        # The checkout is a pull request tree: the trusted copy is the pinned pipeline, and one that does not ship the script
+        # yet is a warning, not a red job.
+        run: |
+          SCRIPT="$RUNNER_TEMP/pipeline/scripts/commit_run_record.mjs"
+          [ -f "$SCRIPT" ] || { echo "::warning::commit_run_record.mjs is not in the pipeline yet; metrics not committed"; exit 0; }
+          node "$SCRIPT"
