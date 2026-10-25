@@ -164,6 +164,17 @@ test('orderDiffForReview keeps prompts and docs/code-generation.md with the code
   assert.deepEqual(filesOf(orderDiffForReview(raw)), ['docs/code-generation.md', 'prompts/pr-review-system.md', 'README.md']);
 });
 
+test('orderDiffForReview reviews agent-rule files as code, ahead of tests and docs (ADR-0038 amendment)', () => {
+  const raw = ['README.md', 'scripts/tests/a.test.mjs', 'AGENTS.md', '.claude/skills/x/SKILL.md', 'svc/CLAUDE.md', 'scripts/b.mjs'].map((f) => fileDiff(f, '+x')).join('');
+  assert.deepEqual(filesOf(orderDiffForReview(raw)), ['AGENTS.md', '.claude/skills/x/SKILL.md', 'svc/CLAUDE.md', 'scripts/b.mjs', 'scripts/tests/a.test.mjs', 'README.md']);
+});
+
+test('buildReviewPrompt counts a cut agent-rule file as unreviewed code, so its approval is withheld', () => {
+  const lines = Array.from({ length: 2000 }, (_, i) => `+rule ${String(i).padStart(4, '0')}`);
+  const { unreviewedCodeFiles } = build({ rawDiff: fileDiff('AGENTS.md', lines.join('\n')), maxInputTokens: null });
+  assert.deepEqual(unreviewedCodeFiles, ['AGENTS.md']);
+});
+
 test('orderDiffForReview keeps every hunk, a leading preamble, and the trailing newline (or its absence)', () => {
   const raw = `preamble\n${fileDiff('docs/a.md', '+doc')}${fileDiff('src/a.js', '+code')}`;
   const ordered = orderDiffForReview(raw);

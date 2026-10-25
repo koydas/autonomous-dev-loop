@@ -68,6 +68,17 @@ function isDependencyFile(filePath) {
   return DEPENDENCY_PATTERNS.some((p) => p.test(filePath));
 }
 
+// Agent-rule files steer every later agent session (rules, skills, hooks): reviewed as code although they are Markdown.
+const AGENT_RULE_PATTERNS = [
+  /(^|\/)AGENTS\.md$/i,
+  /(^|\/)CLAUDE\.md$/i,
+  /^\.claude\//i,
+];
+
+export function isAgentRuleFile(filePath) {
+  return AGENT_RULE_PATTERNS.some((p) => p.test(filePath));
+}
+
 export function isTestFile(filePath) {
   return TEST_PATTERNS.some((p) => p.test(filePath));
 }

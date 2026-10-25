@@ -78,3 +78,7 @@ Review evals on Anthropic (runs 38994398984 Opus ×3, 39039845652 Sonnet ×3, 39
 - ⚠️ "Diff cut" on an Anthropic eval run now counts the `requires_cut` cases (5 of 30, 17%): forced by the dataset, not budget pressure. In production it counts only PRs over the cap.
 - ⚠️ An Anthropic primary with a Groq fallback: a prompt over the Groq budget skips the fallback (`over_input_budget`, ADR-0032) instead of sending it. A 12,000-char diff already left little room under 6,300 tokens.
 - Not changed: the withheld logic, the cut and the marker, the Groq budget, the prompt.
+
+## Amendment (2026-10-25): agent-rule files are code for the review (audit F13)
+
+`AGENTS.md`, `CLAUDE.md` and everything under `.claude/` change what an agent does, but the `.md` ones were classified as documentation: reviewed last, and never counted as unreviewed code when a cut diff hid them. `isAgentRuleFile` (`change_classifier.mjs`) puts them in the code tier of `orderDiffForReview`, so they are reviewed first and an approval is withheld when the cut leaves one unseen. `classifyChangedFiles` is unchanged: a PR that only edits agent rules still expects no tests. Cut test files stay out of the withheld set, as decided above. Matching ignores case, so `docs/agents.md` is also reviewed as code: conservative, no other effect.

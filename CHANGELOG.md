@@ -7,6 +7,10 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Agent rules and hooks are protected from AI writes and reviewed as code** (audit F16, F13; ADR-0021 and ADR-0038 amendments).
+  - `config/protected-paths.yaml`: `.claude/`, `AGENTS.md`, `CLAUDE.md`. Generation and auto-fix reject a patch that targets them; both system prompts list them (two auto-fix rules shortened to keep the ADR-0037 headroom).
+  - `change_classifier.mjs`: new `isAgentRuleFile`; the review orders these files with the code and withholds an approval when a cut diff hides one. Test expectation and every other classification are unchanged.
+
 - **Review evidence: the checks resolve the PR tree's own config** (ADR-0045 amendment). `sanitizeEnv` drops `ADL_CONFIG_DIR` / `ADL_CONFIG_PATH` from each check's environment, so `npm test` in the evidence job sees the PR's `config/` like `test.yml`, not `main`'s. The check list is still read from the trusted default-branch config. A PR that changed a pinned config file no longer fails its evidence on tests that pass in CI.
 
 - **Conflicts fix: a bare `=======` or `|||||||` line that none of the sides had is a leftover marker** (`checkHunkResolution`, ADR-0059). The hunk post-check only saw the opening and closing markers, so such a line passed in the `generic` resolver (3 invented lines allowed); a separator a side already had (a Markdown setext heading) stays legitimate. `docs/code-generation.md` and `docs/runbook.md` state the rule.
