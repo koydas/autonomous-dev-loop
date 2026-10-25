@@ -610,3 +610,24 @@ test('external-review-churn resolves once the last eligible runs are below the t
   assert.equal(f.status, 'resolved');
   assert.match(f.title, /resolved since/);
 });
+
+test('external-review-churn picks a PR\'s observation by value, not by position: newest wins a tie, in any input order (the model lists runs newest first)', () => {
+  const old = run({ t: T, pr: 9, events: [verdict('APPROVE'), external(3, { threads: 5, p0p1: 1 })] });
+  const fillers = Array.from({ length: RULES.activeWindow }, (_, i) => run({ t: T + 1 + i, pr: 30 + i, sha: String(i % 10).repeat(40), events: [verdict('APPROVE'), external(1, {}, 30 + i)] }));
+  const newest = run({ t: T + 100, pr: 9, sha: 'e'.repeat(40), events: [verdict('APPROVE'), external(3, { threads: 7, p0p1: 2 })] });
+  const asOrdered = (list) => find(diagnose({ model: model(list) }), 'external-review-churn');
+  const newestFirst = asOrdered([newest, ...[...fillers].reverse(), old]);
+  const oldestFirst = asOrdered([old, ...fillers, newest]);
+  for (const f of [newestFirst, oldestFirst]) {
+    assert.equal(f.status, 'active', 'the newest observation meets the threshold: not resolved by an older one');
+    assert.match(f.fact, /#9: 3 rounds, 7 threads, 2 P0\/P1/);
+    assert.deepEqual(f.runs, [newest.run_id]);
+  }
+  assert.equal(newestFirst.fact, oldestFirst.fact);
+  // A higher count still beats a newer lower one, and two PRs are listed by number whatever the order.
+  const lower = run({ t: T + 200, pr: 9, sha: 'f'.repeat(40), events: [verdict('APPROVE'), external(2, { threads: 3 })] });
+  assert.match(asOrdered([lower, newest, old]).fact, /#9: 3 rounds, 7 threads/);
+  const two = [run({ pr: 12, sha: '1'.repeat(40), events: [verdict('APPROVE'), external(4, {}, 12)] }), run({ pr: 11, sha: '2'.repeat(40), events: [verdict('APPROVE'), external(3, {}, 11)] })];
+  assert.match(asOrdered(two).fact, /#11: 3 rounds.*; #12: 4 rounds/);
+  assert.match(asOrdered([...two].reverse()).fact, /#11: 3 rounds.*; #12: 4 rounds/);
+});

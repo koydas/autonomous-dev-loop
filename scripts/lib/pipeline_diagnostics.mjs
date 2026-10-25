@@ -281,13 +281,15 @@ function reviewFindings(runs) {
 // practice that shortens it is AGENTS.md's, and the size of the PR (ADR-0043 amendment 2026-10-25).
 function externalReviewFindings(runs) {
   const seen = events(runs, 'review.external').filter(({ e }) => ['rounds', 'threads', 'p0p1'].every((k) => Number.isSafeInteger(e.meta[k]) && e.meta[k] >= 0));
+  // The model lists runs newest first: the observation of a PR is chosen by value (highest count, then newest,
+  // then run id), never by position, so no input order changes the counts or the lifecycle occurrence.
+  const newer = (a, b) => a.e.meta.rounds - b.e.meta.rounds || at(a) - at(b) || a.run.run_id.localeCompare(b.run.run_id);
   const latest = new Map();
   for (const x of seen) {
     const pr = prOf(x);
-    if (!pr) continue;
-    latest.set(pr, !latest.has(pr) || x.e.meta.rounds >= latest.get(pr).e.meta.rounds ? x : latest.get(pr));
+    if (pr && (!latest.has(pr) || newer(x, latest.get(pr)) > 0)) latest.set(pr, x);
   }
-  const churn = [...latest.entries()].filter(([, x]) => x.e.meta.rounds >= RULES.externalRounds);
+  const churn = [...latest.entries()].filter(([, x]) => x.e.meta.rounds >= RULES.externalRounds).sort((a, b) => a[0] - b[0]);
   if (!churn.length) return [];
   const threads = churn.reduce((n, [, x]) => n + x.e.meta.threads, 0);
   const total = [...latest.values()].reduce((n, x) => n + x.e.meta.threads, 0);
