@@ -25,9 +25,15 @@ export function percentile(values, p) {
   return v[Math.min(v.length - 1, Math.max(0, Math.ceil((p / 100) * v.length) - 1))];
 }
 
-/** Provider of an eval scorecard run, which records the model only: Anthropic models are `claude-*`. */
+/**
+ * Provider of an eval scorecard run: the `provider:` prefix of a live model id (`liveModelId`), else inferred
+ * from a bare name (older runs): Anthropic models are `claude-*`.
+ */
 export function evalProvider(model) {
-  return /^claude/i.test(String(model ?? '')) ? 'anthropic' : 'groq';
+  const m = String(model ?? '').replace(/^replay:/, '');
+  if (/^anthropic:/i.test(m)) return 'anthropic';
+  if (/^groq:/i.test(m)) return 'groq';
+  return /^claude/i.test(m) ? 'anthropic' : 'groq';
 }
 
 const eventsOf = (run, name) => run.events.filter((e) => e.event === name);
@@ -300,7 +306,8 @@ function evalCosts(scorecard) {
     for (const r of Array.isArray(s?.runs) ? s.runs : []) {
       if (typeof r?.run_id !== 'string') continue;
       const usd = Number.isFinite(r.cost_est?.usd) ? r.cost_est.usd : null;
-      const status = usd != null ? 'priced' : evalProvider(r.model) === 'groq' ? 'free' : 'unpriced';
+      // Free only when the harness priced nothing (cost_est null) and the run is Groq; an explicit unpriced result stays unpriced.
+      const status = usd != null ? 'priced' : !r.cost_est?.unpriced && evalProvider(r.model) === 'groq' ? 'free' : 'unpriced';
       const tin = Number(r.tokens_est?.in) || 0;
       const tout = Number(r.tokens_est?.out) || 0;
       const g = bySuite.get(suite) ?? { suite, ...empty() };

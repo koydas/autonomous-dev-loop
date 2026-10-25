@@ -19,6 +19,9 @@ test('evalProvider infers the provider of a scorecard model', () => {
   assert.equal(evalProvider('claude-opus-5-5'), 'anthropic');
   assert.equal(evalProvider('openai/gpt-oss-120b'), 'groq');
   assert.equal(evalProvider(undefined), 'groq');
+  assert.equal(evalProvider('anthropic:claude-haiku-5-5'), 'anthropic');
+  assert.equal(evalProvider('anthropic:claude-haiku-5-5+effort=high'), 'anthropic');
+  assert.equal(evalProvider('groq:openai/gpt-oss-120b'), 'groq');
 });
 
 test('funnel: issue items through validation, PR and approval; merge is not recorded', () => {
@@ -240,6 +243,7 @@ test('eval_costs: scorecard runs priced apart from the operational costs; Groq f
   const run = (run_id, model, cost_est, tokens_est = { in: 100, out: 10 }) => ({ run_id, model, ts: '2026-10-14T12:00:00Z', cost_est, tokens_est });
   const scorecard = { suites: {
     review: { runs: [run('e1', 'claude-opus-5-5', { usd: 0.5 }), run('e2', 'claude-opus-5-5', { usd: 0.25 }), run('e3', 'openai/gpt-oss-120b', null)] },
+    prefixed: { runs: [run('p1', 'anthropic:claude-haiku-5-5', { usd: null, unpriced: 'anthropic:claude-haiku-5-5', over_prompt_limit: 100000 }), run('p2', 'anthropic:claude-future', null), run('p3', 'groq:openai/gpt-oss-120b', null)] },
     validation: { runs: [run('e4', 'claude-unknown', { usd: null, unpriced: 'claude-unknown' }), run('e5', 'claude-opus-5-5', null), { model: 'claude-opus-5-5' }] },
     bad: null,
   } };
@@ -247,10 +251,10 @@ test('eval_costs: scorecard runs priced apart from the operational costs; Groq f
   const without = computeHealth({ model: model(records) });
   assert.deepEqual(withEvals.costs, without.costs, 'eval runs never enter the operational total');
   const { total, by_suite: suites, top_runs: top } = withEvals.eval_costs;
-  assert.deepEqual([total.runs, total.priced, total.free, total.unpriced], [5, 2, 1, 2]);
+  assert.deepEqual([total.runs, total.priced, total.free, total.unpriced], [8, 2, 2, 4]);
   assert.equal(total.usd, 0.75);
-  assert.deepEqual([total.tokens_in, total.tokens_out], [500, 50]);
-  assert.deepEqual(suites.map((g) => [g.suite, g.runs, g.usd]), [['review', 3, 0.75], ['validation', 2, 0]]);
+  assert.deepEqual([total.tokens_in, total.tokens_out], [800, 80]);
+  assert.deepEqual(suites.map((g) => [g.suite, g.runs, g.usd]), [['review', 3, 0.75], ['prefixed', 3, 0], ['validation', 2, 0]]);
   assert.deepEqual(top.map((r) => r.run_id), ['e1', 'e2']);
   const empty = without.eval_costs;
   assert.deepEqual([empty.total.runs, empty.by_suite, empty.top_runs], [0, [], []]);
