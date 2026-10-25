@@ -114,7 +114,7 @@ Any PR that adds a new exported function to `scripts/lib/` must include tests fo
 
 When reading and acting on review comments or inline threads on a pull request:
 
-1. **Fix the code** — implement the requested change and push the commit.
+1. **Fix the code** — implement the requested change and push the commit. Fix the **class**, not the instance: before the push, name the defect class of each finding (for example "a grader input can bypass the check", "a count includes runs the producer never emits") and enumerate the same class in the touched function, its file and its siblings (callers, mirrored branches, the docs and tests that state it); fix every occurrence in the same commit, each with its regression test. Measured on 250 PRs: 19 of them held 57 % of the Codex threads, 70 % on one file, each round finding a neighbour of the previous fix (#283: nine variants of one grader hardening).
 2. **Reply to each thread** — for every inline review thread addressed, post a reply explaining what was changed and which commit contains the fix (e.g. "Fixed in `abc1234` — …"). If no code change was needed (e.g. the comment was a false positive or already correct), explain why in the reply.
 3. **Resolve each thread** — after replying, mark the thread as resolved so reviewers can see at a glance what is still open.
 4. **Request a new review** — **only if at least one thread required an actual code fix** (i.e. a new commit was pushed): post a PR comment with `@Codex review` to trigger the next automated review cycle. If all threads were addressed with explanations only and no code was changed, do **not** post `@Codex review`.

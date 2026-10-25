@@ -67,6 +67,8 @@ function makeHandler({
   diffText = SAMPLE_DIFF,
   prTitle = 'Test PR',
   prBody = 'Test PR body',
+  externalReviews = null,
+  externalComments = [],
 } = {}) {
   const groqContent = analysis ? `${ANALYSIS}${rawGroqContent}` : rawGroqContent;
   return (req, res) => {
@@ -89,6 +91,16 @@ function makeHandler({
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ title: prTitle, body: prBody, head: { ref: prHeadRef, sha: prHeadSha }, base: { sha: prBaseSha } }));
+    }
+
+    // External review bot lists (reviews, inline comments) read for the PR record; null = not served (404).
+    if (method === 'GET' && externalReviews && /\/pulls\/\d+\/reviews\?/.test(url)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(externalReviews));
+    }
+    if (method === 'GET' && externalReviews && /\/pulls\/\d+\/comments\?/.test(url)) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(externalComments));
     }
 
     if (method === 'GET' && url.includes('/issues/') && url.includes('/comments')) {
@@ -2154,4 +2166,34 @@ test('pr_review records no review_signal for an approval, a withheld approval or
     assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
     assert.equal(lines.filter((l) => l.type === 'review_signal').length, 0, name);
   }
+});
+
+// ── External review round-trips on the PR record ────────────────────────────────────────────────────────────────
+const CODEX = { login: 'chatgpt-codex-connector[bot]' };
+const codexThread = (prio, extra = {}) => ({ user: CODEX, body: `![${prio} Badge](https://img.shields.io/badge/${prio}-orange?style=flat)`, ...extra });
+
+test('pr_review adds the external review round-trips to the approved PR record', async () => {
+  const { result, lines } = await runWithMetrics({
+    groqContent: 'Fine.\n\nVerdict: APPROVED',
+    externalReviews: [{ user: CODEX, commit_id: 'a'.repeat(40) }, { user: CODEX, commit_id: 'b'.repeat(40) }],
+    externalComments: [codexThread('P1'), codexThread('P2'), codexThread('P1', { in_reply_to_id: 1 })],
+  });
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  const pr = lines.find((l) => l.type === 'pr');
+  assert.deepEqual(pr.external_review, { rounds: 2, threads: 2, p0p1: 1 });
+});
+
+test('pr_review leaves external_review out of the record when GitHub cannot be read, and still records the PR', async () => {
+  const { result, lines } = await runWithMetrics({ groqContent: 'Fine.\n\nVerdict: APPROVED' }); // the lists answer 404
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  const pr = lines.find((l) => l.type === 'pr');
+  assert.equal(pr.final_verdict, 'APPROVE');
+  assert.ok(!('external_review' in pr), 'unknown is absent, never zero');
+  assert.match(result.stdout + result.stderr, /External review read failed/);
+});
+
+test('pr_review does not read the external review for a verdict that writes no PR record', async () => {
+  const { requests, lines } = await runWithMetrics({ groqContent: '### ⚠️ Issues Found\n- [High] t — File: foo.js Lines: 1\n\nVerdict: REQUEST_CHANGES', externalReviews: [] });
+  assert.equal(lines.filter((l) => l.type === 'pr').length, 0);
+  assert.ok(!requests.some((r) => /\/pulls\/\d+\/reviews\?/.test(r.url)));
 });
