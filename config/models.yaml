@@ -81,7 +81,7 @@ conflicts_max_input_tokens: 2500
 #   Defaults when none is sent: claude-opus-5-5 and claude-haiku-5-5 medium, claude-sonnet-5-5 high.
 # anthropic_<stage>_max_tokens: output cap, thinking included. No input budget: 1M context, no TPM cap.
 #   Kept at 16000: requests are not streamed, a larger cap risks an HTTP timeout on long turns.
-#   The 1M is a statement, not a setting: auto-fix budgets against MODEL_CONTEXT_WINDOW (scripts/auto_fix_pr.mjs),
+#   The 1M is a statement, not a setting: auto-fix budgets against MODEL_CONTEXT_WINDOW (scripts/lib/autofix_core.mjs),
 #   200000 for these ids.
 # No temperature: Opus 4.7+ / 5.x reject sampling parameters (400).
 #

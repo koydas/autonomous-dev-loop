@@ -39,7 +39,7 @@ test('describes expected behavior', () => {
 
 When adding a new exported function to `scripts/lib/`, tests for **every failure branch** are required — not just the happy path. PRs lacking failure-branch tests are considered incomplete.
 
-Modules with CI-enforced ≥ 80% coverage (lines, branches, functions, statements) are listed once, in `config/coverage-gates.json`, and run by `node scripts/coverage_gates.mjs` (`--only scripts/lib/<m>.mjs` runs one). To gate a new module, add it there (a bare path measured through `scripts/tests/<name>.test.mjs`, or `{ "module": …, "test": … }`), then run `node scripts/coverage_gates.mjs --sync` to refresh the list in the review prompt. `test.yml` has no per-module step to edit.
+Modules with CI-enforced ≥ 80% coverage (lines, branches, functions, statements) are listed once, in `config/coverage-gates.json`, and run by `node scripts/coverage_gates.mjs` (`--only scripts/lib/<m>.mjs` runs one). To gate a new module, add it there (a bare path measured through `scripts/tests/<name>.test.mjs`, or `{ "module": …, "test": … }`). The review reads that file and `test.yml` has no per-module step, so there is no other list to update (`coverage_gates.mjs` takes only `--only <module>`).
 
 Required test paths per module: `AGENTS.md` → Test Coverage Policy (summary) and `docs/testing.md` → Required Test Paths per Module (exact paths).
 
