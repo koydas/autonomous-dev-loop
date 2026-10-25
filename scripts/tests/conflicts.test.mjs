@@ -190,6 +190,14 @@ test('checkHunkResolution changelog: keeps every entry of both sides, invents no
   assert.deepEqual(checkHunkResolution('changelog', side, '- theirs entry\n- ours entry rewritten\n  detail\n').sort(), ['entry_dropped', 'invented_content'].sort());
 });
 
+test('checkHunkResolution: a bare separator or base marker is a marker only when no side had it (setext headings stay)', () => {
+  const side = { ours: 'Title\n=======\none\n', theirs: 'Title\n=======\ntwo\n' };
+  assert.deepEqual(checkHunkResolution('generic', side, 'Title\n=======\none\ntwo\n'), [], 'the heading was in both sides');
+  assert.deepEqual(checkHunkResolution('generic', { ours: 'a\n', theirs: 'b\n' }, 'a\n=======\n'), ['marker_left']);
+  assert.deepEqual(checkHunkResolution('generic', { ours: 'a\n', theirs: 'b\n' }, 'a\n||||||| base\n'), ['marker_left']);
+  assert.deepEqual(checkHunkResolution('generic', { ours: 'a\n', theirs: 'b\n' }, 'a\r\n=======\r\n'), ['marker_left'], 'CRLF');
+});
+
 test('checkHunkResolution adr_index: every line of both sides kept, nothing invented', () => {
   const side = { ours: '- [ADR-0058](./0058-a.md)\n', theirs: '- [ADR-0058](./0058-b.md)\n' };
   assert.deepEqual(checkHunkResolution('adr_index', side, '- [ADR-0058](./0058-b.md)\n- [ADR-0058](./0058-a.md)\n'), []);
