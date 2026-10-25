@@ -124,6 +124,11 @@ const KNOWN_GAP = {
   review: {
     // PR #194 incident, expected missed on Groq: the #199 provider comparison case.
     "incident-toctou-untested-claim": "3f6da6d06c69",
+    // RV-01: Codex findings on PR #276, #279 and #283 that the review approved; outside the gate until a live run shows the review finds them.
+    "incident-removed-test-case": "96c7fb461153",
+    "incident-low-continuation-axes": "685e8b033c27",
+    "incident-docs-contradict-new-behavior": "10e103c22072",
+    "incident-grader-first-push": "8206d6405973",
   },
 };
 const KNOWN_GAP_TAG = 'known-gap';
