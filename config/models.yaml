@@ -79,9 +79,10 @@ conflicts_max_input_tokens: 2500
 #   (ANTHROPIC_EFFORT overrides every stage). `off` sends none: only for models that reject effort
 #   (Sonnet 4.5, Haiku 4.5); rejected for claude-opus-5-5 and claude-sonnet-5-5, which cannot disable thinking.
 #   Defaults when none is sent: claude-opus-5-5 and claude-haiku-5-5 medium, claude-sonnet-5-5 high.
-# anthropic_<stage>_max_tokens: output cap, thinking included. No input budget: 1M context, no TPM cap. The 1M is a
-# statement, not a setting: auto-fix budgets against MODEL_CONTEXT_WINDOW (scripts/auto_fix_pr.mjs), 200000 for these ids.
+# anthropic_<stage>_max_tokens: output cap, thinking included. No input budget: 1M context, no TPM cap.
 #   Kept at 16000: requests are not streamed, a larger cap risks an HTTP timeout on long turns.
+#   The 1M is a statement, not a setting: auto-fix budgets against MODEL_CONTEXT_WINDOW (scripts/auto_fix_pr.mjs),
+#   200000 for these ids.
 # No temperature: Opus 4.7+ / 5.x reject sampling parameters (400).
 #
 # Per-stage models (ADR-0032 amendment): PROVISIONAL until measured. A stage moves to a model only after its
