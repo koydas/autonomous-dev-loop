@@ -132,7 +132,7 @@ export function renderFeedIndex(model, { generatedAt = null } = {}) {
     ['Runs (window)', compact(model.runs.length)],
     ['Work-item traces', compact(model.traces.length)],
     ['Actions', compact(all.length)],
-    ['LLM cost (window)', costAmount(sumCosts(model.runs.flatMap((r) => r.llm)))], // pipeline runs only: eval cost is on Health
+    ['Operational LLM cost (window)', costAmount(sumCosts(model.runs.flatMap((r) => r.llm)))],
     ['Latest run', latest ? time(latest.started_at) : '—'],
   ].map(([l, v]) => `<div class="tile"><div class="label">${e(l)}</div><div class="value">${e(v)}</div></div>`).join('');
   const window = model.months.length ? `Records of ${e(model.months.at(-1))} → ${e(model.months[0])}${model.skippedMonths.length ? ` (older months stay on the <code>metrics</code> branch: ${model.skippedMonths.map(e).join(', ')})` : ''}.` : 'No run record on the <code>metrics</code> branch yet.';
