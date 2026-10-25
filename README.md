@@ -16,7 +16,7 @@ Label an issue → an LLM writes the PR → a second LLM reviews it against real
 | **Dogfooded** | The loop wrote [13 merged PRs of its own](https://github.com/koydas/autonomous-dev-loop/pulls?q=is%3Apr+is%3Amerged+head%3Aai%2Fissue-) (11 features, 2 bug fixes — error taxonomy, bounded retry, checkpoint resume, provider fallback), each merged after human review. Then it was locked out of its own code: `scripts/`, `prompts/` and `config/` are now on the write denylist ([ADR-0021](docs/adr/0021-protected-write-path-denylist.md)). |
 | **Tested** | 2,400+ tests on the built-in `node:test` runner, zero test dependencies, smoke tests wired to the real prompts and config |
 | **Measured** | [Offline evals](#evals) run each LLM stage against a labelled dataset: verdict accuracy, per-class precision/recall/F1, error rate, consistency across repeats, latency, tokens — gated by thresholds, latest results on the [eval dashboard](https://koydas.github.io/autonomous-dev-loop/) ([ADR-0027](docs/adr/0027-offline-eval-harness.md)) |
-| **Decided in writing** | [57 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
+| **Decided in writing** | [59 ADRs](docs/adr/README.md), each with context, rejected alternatives and trade-offs |
 
 ## Bounded autonomy, not "fully autonomous"
 
