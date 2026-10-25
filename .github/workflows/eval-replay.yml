@@ -18,6 +18,10 @@ on:
       - 'scripts/lib/adversarial_review.mjs'
       - 'scripts/lib/review_findings.mjs'
       - 'scripts/lib/impact_context.mjs'
+      - 'scripts/lib/guardrail_review.mjs'
+      - 'scripts/lib/static_verifier.mjs'
+      - 'scripts/lib/autofix_guard.mjs'
+      - 'scripts/lib/protected_paths.mjs'
       - 'scripts/lib/output_writer.mjs'
       - 'scripts/lib/eval_*.mjs'
       # Everything else the suites load: workflow_gates.test.mjs walks the import graph of

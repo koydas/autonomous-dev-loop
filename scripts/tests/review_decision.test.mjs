@@ -10,6 +10,8 @@ const review = (analysis, issues = 'None.') => `### ✅ Summary\nSmall.\n\n${ana
 const AVAILABLE = { state: 'available', reason: null, failing: [], unverified: [] };
 const base = { llmApproved: true, cleanReview: review(ANALYSIS_2), evidence: AVAILABLE, evidenceRequired: true, unreviewedCodeFiles: [], shownFiles: [] };
 
+const GUARD = { rule: 'test_count_drop', path: 't/a.test.mjs', severity: 'High', reason: 'removes 1 test case' };
+
 const CASES = [
   ['approved, protocol met, evidence available', {}, 'APPROVE', null],
   ['approved without the adversarial section', { cleanReview: review('') }, 'WITHHELD', 'protocol'],
@@ -20,6 +22,12 @@ const CASES = [
   ['evidence unverified', { evidence: { ...AVAILABLE, unverified: ['lint'] } }, 'WITHHELD', 'evidence'],
   ['code cut, approved', { unreviewedCodeFiles: ['src/big.js'] }, 'WITHHELD', 'unreviewed_code'],
   ['model REQUEST_CHANGES, no analysis needed', { llmApproved: false, cleanReview: review('', '- [High] bug — File: a.mjs Lines: 1') }, 'REQUEST_CHANGES', null],
+  ['guardrail finding, approved', { guardrailFindings: [GUARD] }, 'REQUEST_CHANGES', null],
+  ['guardrail finding, approval withheld for the protocol', { guardrailFindings: [GUARD], cleanReview: review('') }, 'REQUEST_CHANGES', null],
+  ['guardrail finding, evidence unverified', { guardrailFindings: [GUARD], evidence: { ...AVAILABLE, unverified: ['lint'] } }, 'REQUEST_CHANGES', null],
+  ['guardrail finding, code cut', { guardrailFindings: [GUARD], unreviewedCodeFiles: ['src/big.js'] }, 'REQUEST_CHANGES', null],
+  ['guardrail finding, model already rejects', { guardrailFindings: [GUARD], llmApproved: false, cleanReview: review('', '- [High] bug — File: a.mjs Lines: 1') }, 'REQUEST_CHANGES', null],
+  ['no guardrail finding', { guardrailFindings: [] }, 'APPROVE', null],
   ['REQUEST_CHANGES citing only cut files', { llmApproved: false, cleanReview: review('', '- [High] bug — File: src/big.js Lines: 1'), unreviewedCodeFiles: ['src/big.js'] }, 'WITHHELD', 'unseen_findings'],
 ];
 
@@ -59,4 +67,12 @@ test('reviewSuite.run: an approval without the adversarial analysis scores WITHH
   assert.equal(approved.verdict, 'APPROVE');
   assert.equal(approved.adversarial_protocol_met, true);
   assert.equal(approved.adversarial_points, 2);
+});
+
+test('resolveReviewDecision: guardrailOverride is set only when a guardrail finding changed the verdict', () => {
+  const overridden = resolveReviewDecision({ ...base, guardrailFindings: [GUARD, { ...GUARD, rule: 'module_system' }] });
+  assert.deepEqual([overridden.guardrailOverride, overridden.reason], [true, 'guardrail findings: test_count_drop, module_system']);
+  assert.equal(overridden.withheldFor, null);
+  assert.equal(resolveReviewDecision({ ...base, guardrailFindings: [GUARD], llmApproved: false, cleanReview: review('', '- [High] bug — File: a.mjs Lines: 1') }).guardrailOverride, false);
+  assert.equal(resolveReviewDecision(base).guardrailOverride, false);
 });

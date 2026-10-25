@@ -1959,6 +1959,63 @@ test('pr_review gives the reviewer the callers of a changed export, from regular
   }
 });
 
+test('pr_review turns an approval into REQUEST_CHANGES when the diff breaks a hard guardrail, and says why', async () => {
+  const T = (title) => `test('${title}', () => {});\n`;
+  const fixture = await makePrTree({
+    files: {
+      'src/pricing.mjs': 'export function applyDiscount(price, rate) {\n  return price * rate;\n}\n',
+      'tests/pricing.test.mjs': T('rounds to cents') + T('rejects a negative rate'),
+    },
+  });
+  await fs.writeFile(path.join(fixture.tree, 'src/pricing.mjs'), 'export function applyDiscount(price, rate, currency) {\n  return price * rate;\n}\n');
+  await fs.writeFile(path.join(fixture.tree, 'tests/pricing.test.mjs'), T('rounds to cents'));
+  const diffText = 'diff --git a/src/pricing.mjs b/src/pricing.mjs\n--- a/src/pricing.mjs\n+++ b/src/pricing.mjs\n@@ -1,3 +1,3 @@\n-export function applyDiscount(price, rate) {\n+export function applyDiscount(price, rate, currency) {\n   return price * rate;\n }\n'
+    + 'diff --git a/tests/pricing.test.mjs b/tests/pricing.test.mjs\n--- a/tests/pricing.test.mjs\n+++ b/tests/pricing.test.mjs\n@@ -1,2 +1,1 @@\n test(\'rounds to cents\', () => {});\n-test(\'rejects a negative rate\', () => {});\n';
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /review\.guardrail_error/);
+    const review = JSON.parse(server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url)).body);
+    assert.equal(review.event, 'REQUEST_CHANGES');
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    assert.match(comment, /### 🛡️ Guardrail Findings[\s\S]*File: `src\/pricing\.mjs` Root cause: changes the arity of exported applyDiscount\(price, rate\)/);
+    assert.match(comment, /File: `tests\/pricing\.test\.mjs` Root cause: 1 test case removed without a replacement \("rejects a negative rate"\)/);
+    assert.match(comment, /Verdict overridden to REQUEST_CHANGES\*\* — guardrail findings/);
+    assert.ok(comment.indexOf('Guardrail Findings') < comment.indexOf('All good.'), 'listed before the model text, where the auto-fixer reads first');
+    const events = Object.fromEntries(['review.guardrail_findings', 'review.verdict'].map((name) => [name, result.stderr.split('\n').filter((l) => l.includes(`"event":"${name}"`)).map((l) => JSON.parse(l))]));
+    assert.deepEqual([events['review.guardrail_findings'][0].meta.findings, events['review.guardrail_findings'][0].meta.rules.sort()], [2, ['exported_signature', 'test_count_drop']]);
+    assert.equal(events['review.verdict'][0].meta.guardrail_override, true);
+    assert.ok(!JSON.stringify(events['review.guardrail_findings'][0].meta).includes('rejects a negative rate'), 'no title in the event');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
+  }
+});
+
+test('pr_review approves a diff whose PR description names the test it removes', async () => {
+  const T = (title) => `test('${title}', () => {});\n`;
+  const fixture = await makePrTree({ files: { 'tests/pricing.test.mjs': T('rounds to cents') + T('rejects a negative rate') } });
+  await fs.writeFile(path.join(fixture.tree, 'tests/pricing.test.mjs'), T('rounds to cents'));
+  const diffText = 'diff --git a/tests/pricing.test.mjs b/tests/pricing.test.mjs\n--- a/tests/pricing.test.mjs\n+++ b/tests/pricing.test.mjs\n@@ -1,2 +1,1 @@\n test(\'rounds to cents\', () => {});\n-test(\'rejects a negative rate\', () => {});\n';
+  const prBody = 'Drops the "rejects a negative rate" test: negative rates are now impossible by construction.';
+  const server = await startMockServer(makeHandler({ diffText, prBody, prBaseSha: fixture.sha, groqContent: 'All good.\n\nVerdict: APPROVED' }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    assert.doesNotMatch(comment, /Guardrail Findings/);
+    assert.equal(JSON.parse(server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url)).body).event, 'APPROVE');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
+  }
+});
+
 // F22 (2026-10-19 audit): no PR-tree file over PR_TREE_MAX_BYTES (1 MiB) is read. An oversized doc is
 // left out of the searches and an oversized config/models.yaml falls back to the defaults, each with a
 // review.file_skipped warn event; the review proceeds.

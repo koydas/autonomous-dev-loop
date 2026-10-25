@@ -263,7 +263,7 @@ export function extractExportedSignatures(source) {
   return exported;
 }
 
-function mentions(text, name) {
+export function mentions(text, name) {
   if (!text || !name) return false;
   return new RegExp(`(?<![\\w$])${name.replace(/[$]/g, '\\$')}(?![\\w$])`).test(text);
 }

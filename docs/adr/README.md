@@ -62,3 +62,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0056: Dashboard: `writer=copilot` on runs, and an opaque stage is "not traced"](./0056-dashboard-writer-and-not-traced.md) — proposed
 - [ADR-0057: Push rulesets as a platform-level path guard: not viable here, and not sufficient where available](./0057-push-rulesets-as-platform-guard.md) — proposed
 - [ADR-0058: Impact analysis: the reviewer may use existing code outside the diff as evidence](./0058-impact-analysis-for-the-reviewer.md)
+- [ADR-0059: Hard Guardrails are checked in code on the PR under review](./0059-guardrail-findings-in-the-review.md)

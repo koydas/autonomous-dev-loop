@@ -184,6 +184,19 @@ The reviewer otherwise sees only the diff, so a changed export whose callers wer
 - **Budget:** 8,000 characters without a token budget, 1,200 on Groq. Dropped after the related ADRs and before the diff or the PR body are shrunk; if it does not fit alone it is left out.
 - **Events:** `review.impact_context` (counts only: `symbols`, `with_refs`, `refs`, `tests`, `included`, `scanned`, `truncated`); a search error logs `review.impact_error` and the review runs without the block. Never changes the verdict.
 
+### Guardrail findings (RV-03, ADR-0059)
+
+The AGENTS.md Hard Guardrails that the pipeline enforces in code on generated patches (ADR-0019, ADR-0029) are also checked on the PR under review (`scripts/lib/guardrail_review.mjs`, deterministic, no LLM; this repository only, a target repository of ADR-0045 does not have them). A finding **blocks approval**: an APPROVE or a WITHHELD becomes REQUEST_CHANGES (`review.verdict` `guardrail_override`), the comment starts with a `### 🛡️ Guardrail Findings` section (where the auto-fixer reads first) and the circuit breaker signature includes `guardrail:<rule>:<path>`.
+
+| Rule | Severity | What is flagged | Waived when |
+|---|---|---|---|
+| `test_count_drop` | High | a test file that ends with fewer test cases (exact from the diff: case lines removed minus added; a case moved to another file or renamed in place is not a loss; deleted files are out of scope) | the PR title or body names the removed case's title (8+ characters) |
+| `exported_signature` | Medium | an exported function whose arity, parameters or sync/async changes, or that is removed | the PR title or body names the function (whole word) |
+| `module_system` | High | `require()` added to an `.mjs`, ESM added to a `.cjs`, a CommonJS file converted | — |
+| `unresolved_import` | High | an added import that is not a file of the PR tree, a Node builtin, or a package of the nearest `package.json` (no manifest: bare packages are not judged; a `.js` specifier is satisfied by its `.ts` source) | — |
+
+Bounds: 40 JavaScript files per review, 12 findings listed (the rest counted), base content read at the merge base with `git show`, head content through the safe reader (ADR-0023; symlinks and files over 1 MiB are not read). A failure skips the check (`review.guardrail_error`, warn); `review.guardrail_findings` carries counts and rule ids only. Not covered: dependency additions in `package.json`, the 30 % rewrite rule, deleted test files.
+
 ### Prompt budget impact (ADR-0037)
 
 When a PR changes a `prompts/*.md` file, `pr_review.mjs` reports what the change costs in input budget (`scripts/lib/prompt_budget.mjs`). On Groq, every token a stage prompt gains is taken from the stage's variable input (the reviewed diff, the issue, the injected files).
