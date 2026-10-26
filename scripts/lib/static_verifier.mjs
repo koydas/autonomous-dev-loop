@@ -109,7 +109,8 @@ export function maskSource(source) {
 }
 
 const STR = String.raw`"S(\d+)"`;
-const STATIC_IMPORT = new RegExp(String.raw`(?:^|[;\n}])\s*(?:import|export)\b(?:[\w$*{}\s,]*?\bfrom)?\s*${STR}`, 'g');
+const STATIC_KEYWORD = /(?:import|export)\b/g;
+const STRING_AT = new RegExp(STR, 'y');
 const DYNAMIC_IMPORT = new RegExp(String.raw`\bimport\s*\(\s*${STR}\s*\)`, 'g');
 const REQUIRE_LITERAL = new RegExp(String.raw`(?<![.\w$])require\s*\(\s*${STR}\s*\)`, 'g');
 const REQUIRE_CALL = /(?<![.\w$])require\s*\(/g;
@@ -120,10 +121,46 @@ const CJS_SYNTAX = /(?<![.\w$])(?:require\s*\(|module\.exports\b|exports\.[\w$]+
 export function extractImportSpecifiers(source) {
   const { code, strings } = maskSource(source);
   const specs = new Set();
-  for (const re of [STATIC_IMPORT, DYNAMIC_IMPORT, REQUIRE_LITERAL]) {
+  for (const re of [DYNAMIC_IMPORT, REQUIRE_LITERAL]) {
     for (const m of code.matchAll(re)) specs.add(strings[Number(m[1])]);
   }
+  for (const index of staticImportStrings(code)) specs.add(strings[index]);
   return [...specs];
+}
+
+// True when `index` starts a statement: after `;`, `}`, a line break or the start of the text.
+function startsStatement(code, index) {
+  let i = index - 1;
+  while (i >= 0 && /\s/.test(code[i])) {
+    if (code[i] === '\n') return true;
+    i -= 1;
+  }
+  return i < 0 || code[i] === ';' || code[i] === '}';
+}
+
+// Indexes of the strings in `import|export [clause from] "S<n>"`. One pass, no backtracking: the clause is the run
+// of `[\w$*{}\s,]` after the keyword (found once per run), and the string must end it, preceded by `from` or by nothing.
+function staticImportStrings(code) {
+  const found = [];
+  let run = { start: 0, end: -1 };
+  for (const m of code.matchAll(STATIC_KEYWORD)) {
+    if (!startsStatement(code, m.index)) continue;
+    const from = m.index + m[0].length;
+    if (from < run.start || from > run.end) {
+      let end = from;
+      while (end < code.length && /[\w$*{}\s,]/.test(code[end])) end += 1;
+      run = { start: from, end };
+    }
+    let last = run.end - 1;
+    while (last >= from && /\s/.test(code[last])) last -= 1;
+    const bare = last < from;
+    const afterFrom = last - 3 >= from && code.slice(last - 3, last + 1) === 'from' && !/\w/.test(code[last - 4] ?? '');
+    if (!bare && !afterFrom) continue;
+    STRING_AT.lastIndex = run.end;
+    const str = STRING_AT.exec(code);
+    if (str) found.push(Number(str[1]));
+  }
+  return found;
 }
 
 function countMatches(code, re) {
@@ -220,6 +257,34 @@ function declaredSignature(code, m, offset) {
   return [name, signatureAt(code, m, { isAsync, single, arrow: !fn && !single })];
 }
 
+// Text between each `{` that ends `head` and the next `}`, matches not overlapping; `skipReExport` drops `} from '…'`.
+// The next `}` is looked up once per run of unclosed `{`, and none left ends the scan: linear on `export {` repeated.
+function bracedLists(code, head, skipReExport) {
+  const lists = [];
+  const reExport = /\s*from\b/y;
+  let close = -2;
+  let consumed = 0;
+  let reExportOf = -1;
+  let isReExport = false;
+  for (const m of code.matchAll(head)) {
+    const open = m.index + m[0].length;
+    if (m.index < consumed) continue;
+    if (close !== -1 && close < open) close = code.indexOf('}', open);
+    if (close === -1) break;
+    if (skipReExport) {
+      if (reExportOf !== close) {
+        reExport.lastIndex = close + 1;
+        isReExport = reExport.test(code);
+        reExportOf = close;
+      }
+      if (isReExport) continue;
+    }
+    lists.push(code.slice(open, close));
+    consumed = close + 1;
+  }
+  return lists;
+}
+
 /**
  * Exported functions and their signatures: `export [async] function`, `export default function`,
  * `export const f = (…) =>` / `function`, `export { a, b as c }`, and CommonJS `exports.f = …` /
@@ -254,8 +319,8 @@ export function extractExportedSignatures(source) {
 
   // `export { local as name }` and `module.exports = { name: local }` point at local functions.
   const lists = [
-    ...[...code.matchAll(/\bexport\s*\{([^}]*)\}(?!\s*from\b)/g)].map((m) => ({ list: m[1], esm: true })),
-    ...[...code.matchAll(/\bmodule\.exports\s*=\s*\{([^}]*)\}/g)].map((m) => ({ list: m[1], esm: false })),
+    ...bracedLists(code, /\bexport\s*\{/g, true).map((list) => ({ list, esm: true })),
+    ...bracedLists(code, /\bmodule\.exports\s*=\s*\{/g, false).map((list) => ({ list, esm: false })),
   ];
   for (const { list, esm } of lists) {
     for (const entry of list.split(',').map((e) => e.trim()).filter(Boolean)) {

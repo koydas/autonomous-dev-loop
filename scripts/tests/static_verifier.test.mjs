@@ -185,6 +185,27 @@ test('extractExportedSignatures ignores an unbalanced parameter list and re-expo
   assert.equal(extractExportedSignatures("export function broken(a, b {\nexport { x } from './x.js';").size, 0);
 });
 
+test('extractExportedSignatures and extractImportSpecifiers stay linear on a file of unclosed `export {` / `import {`', () => {
+  const deadlineMs = 2000; // the quadratic versions needed ~13 s for 40 000 repetitions
+  for (const unit of ['export { ', 'export { a\n', 'import { a,\n', '\n\nexport {\n']) {
+    const source = unit.repeat(40000);
+    const start = performance.now();
+    extractExportedSignatures(source);
+    extractImportSpecifiers(source);
+    assert.ok(performance.now() - start < deadlineMs, `${JSON.stringify(unit)} x 40000 took ${Math.round(performance.now() - start)} ms`);
+  }
+});
+
+test('extractExportedSignatures skips a re-export list, whatever whitespace precedes `from`, and an unclosed one at the end', () => {
+  const sigs = extractExportedSignatures("function f(a) {}\nexport { f as g }\nexport { f as h } from './h.js';\nexport { f as i }  \n  from './i.js';\nexport { f as j");
+  assert.deepEqual([...sigs.keys()], ['g']);
+});
+
+test('extractImportSpecifiers: the clause must end with `from` right before the string', () => {
+  const src = "import a from 'ok1';\nimport {b,\n c} from\n 'ok2';\nimport fromx 'no1';\nimport a, b 'no2';\nexport * from 'ok3';\nimport 'ok4';\nx.import y from 'no3';\nimport {\nimport z from 'ok5';";
+  assert.deepEqual(extractImportSpecifiers(src).sort(), ['ok1', 'ok2', 'ok3', 'ok4', 'ok5']);
+});
+
 test('signature: the PR #122 attempt-3 rewrite of coverage_checker.mjs is rejected (ADR-0009)', () => {
   const reasons = findSignatureViolations('scripts/lib/coverage_checker.mjs', fixture('coverage_checker.before.txt'), fixture('coverage_checker.after.txt'));
   assert.ok(reasons.some((r) => /parameters of exported buildAutomationGateContext\(rawDiffText\) to buildAutomationGateContext\(\{prBody,coverageReport\}\)/.test(r)), reasons.join('\n'));
