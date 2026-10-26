@@ -58,6 +58,7 @@
     "scripts/lib/review_findings.mjs",
     "scripts/lib/impact_context.mjs",
     "scripts/lib/guardrail_review.mjs",
+    "scripts/lib/finding_evidence.mjs",
     "scripts/lib/guardrail_runner.mjs",
     "scripts/lib/circuit_breaker.mjs",
     "scripts/lib/lessons.mjs",

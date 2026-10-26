@@ -343,6 +343,10 @@ Cases reproduced from a production misjudgment (AGENTS.md → Eval Gates), tag `
 
 `incident-note-instead-of-fix` is classified documentation (`tests_expected: false`), so no gate of the prompt caught it: `prompts/pr-review-system.md` gained one generic rule (a PR that changes no code when the issue asks for a code change does not resolve it; example from another domain), +110 tokens, headroom 3471 of 6300 (55%, ADR-0037). Not measured live: the replay gate cannot measure a prompt change; a `run-evals` label run will.
 
+### Evidence for outside findings (RV-04a)
+
+The `review` suite assesses the findings of a recorded answer like production (`assessFindings`, `resolveReviewDecision({ findingAssessment })`), with no tree: the lines of the case's `input.impact` stand in for the files, so only a caller or test that block lists can be quoted. A finding about a file outside the diff that quotes nothing it can find makes the review WITHHELD, and `output.evidence_check` carries the counts. The incident case `incident-docs-contradict-new-behavior` (a document outside the diff) therefore cannot be met until a source of documents is added to the context (RV-04b).
+
 ### Impact cases (RV-02)
 
 A case may carry `input.impact`, the precomputed shape `findImpact()` returns (`symbols[{name, file, status, refs[{path, line, text}], refFiles, generic}]`, `tests`, `scanned`, `truncated`), rendered like production. `impact-caller-misses-new-parameter` is `known-gap`: the defect (a caller outside the diff that does not pass the new parameter) is visible only through the Impact analysis block, so it measures whether the reviewer uses it. The replay does not exercise the prompt change; a live run (suite `review`, repeats 3) does. Remove the tag only after a live baseline.

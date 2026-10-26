@@ -184,6 +184,15 @@ The reviewer otherwise sees only the diff, so a changed export whose callers wer
 - **Budget:** 8,000 characters without a token budget, 1,200 on Groq. Dropped after the related ADRs and before the diff or the PR body are shrunk; if it does not fit alone it is left out.
 - **Events:** `review.impact_context` (counts only: `symbols`, `with_refs`, `refs`, `tests`, `included`, `scanned`, `truncated`); a search error logs `review.impact_error` and the review runs without the block. Never changes the verdict.
 
+### Evidence for findings outside the diff (RV-04a, ADR-0061)
+
+The "review only the diff" rule keeps findings grounded, but it hides a defect class: a caller, a test or a document the diff does not touch. The prompt now lets a finding concern such code when it **quotes it**: `Evidence: path:line "exact text"`, copied from the Impact analysis block (`scripts/lib/finding_evidence.mjs`, deterministic, no LLM).
+
+- **Outside** = the finding cites files and none is in the diff (renames count both sides; a finding with no file, or a diff with no `diff --git` header, is judged as before). An outside finding is **verified** when every quote is written in the PR-tree file within 5 lines of the line given (whitespace and quote marks ignored, quotes of 12+ characters, read whole even if they hold quote marks, and at least one in a file the finding cites; the PR tree is read through the safe reader, so a symlink, a large file or a path outside the tree proves nothing).
+- **Unproven** = a High or Medium outside finding without verified evidence. It stays in the comment, in an `### 🔎 Evidence Check` section (`✅ verified` / `⚠️ unproven`).
+- **Decision:** a REQUEST_CHANGES whose blocking findings are **all** unproven becomes **WITHHELD** (`withheld_for: unproven_findings`, label `review-withheld`, no auto-fix: it cannot edit what it is not shown), the same way as a review whose findings cite only cut code (ADR-0038). One proven or in-the-diff blocking finding, a failing check or a guardrail finding keeps its REQUEST_CHANGES. An approval is never changed.
+- **Limits:** the quote proves the text exists, not that the finding is right; a PR can plant text for the model to quote, so a verified outside finding is a lead a human still merges on. Events: `review.finding_evidence` (counts only), `review.finding_evidence_error`.
+
 ### Guardrail findings (RV-03, ADR-0060)
 
 The AGENTS.md Hard Guardrails that the pipeline enforces in code on generated patches (ADR-0019, ADR-0029) are also checked on the PR under review (`scripts/lib/guardrail_review.mjs`, deterministic, no LLM; this repository only, a target repository of ADR-0045 does not have them). A finding **blocks approval**: an APPROVE or a WITHHELD becomes REQUEST_CHANGES (`review.verdict` `guardrail_override`), the comment starts with a `### 🛡️ Guardrail Findings` section (where the auto-fixer reads first) and the circuit breaker signature includes `guardrail:<rule>:<path>`.

@@ -2046,6 +2046,63 @@ test('pr_review resolves an imported file over the read limit and a symlinked on
   }
 });
 
+// RV-04a: a finding about code outside the diff must quote it, and the quote is looked up in the PR tree.
+async function runEvidenceReview(groqContent) {
+  const fixture = await makePrTree({
+    files: {
+      'src/pricing.mjs': 'export function applyDiscount(price, rate, currency) {\n  return price * rate;\n}\n',
+      'src/checkout.mjs': "import { applyDiscount } from './pricing.mjs';\n\nexport function total(cart) {\n  return applyDiscount(cart.subtotal, cart.rate);\n}\n",
+    },
+  });
+  const diffText = 'diff --git a/src/pricing.mjs b/src/pricing.mjs\n--- a/src/pricing.mjs\n+++ b/src/pricing.mjs\n@@ -1,3 +1,3 @@\n-export function applyDiscount(price, rate) {\n+export function applyDiscount(price, rate, currency) {\n   return price * rate;\n }\n';
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    const review = JSON.parse(server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url)).body);
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    return { result, review, comment, labels: reviewLabelCalls(server) };
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
+  }
+}
+const outsideFinding = (evidence) => `### ⚠️ Issues Found\n- [High] The caller still passes two arguments — File: \`src/checkout.mjs\` Lines: 4 Root cause: applyDiscount now takes a currency. ${evidence}Fix: pass it.\n\n### 🚀 Verdict\nREQUEST_CHANGES`;
+
+test('pr_review keeps a REQUEST_CHANGES whose outside-the-diff finding quotes text the PR tree holds', async () => {
+  const { result, review, comment, labels } = await runEvidenceReview(outsideFinding('Evidence: src/checkout.mjs:4 "return applyDiscount(cart.subtotal, cart.rate);" '));
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(review.event, 'REQUEST_CHANGES');
+  assert.match(comment, /### 🔎 Evidence Check[\s\S]*✅ verified — \[high\] `src\/checkout\.mjs` \(outside the diff\): `src\/checkout\.mjs:4` found/);
+  assert.ok(labels.added.includes('changes-requested'));
+  const evt = result.stderr.split('\n').filter((l) => l.includes('"event":"review.finding_evidence"')).map((l) => JSON.parse(l));
+  assert.deepEqual([evt.length, evt[0].meta.blocking, evt[0].meta.outside, evt[0].meta.verified, evt[0].meta.unproven], [1, 1, 1, 1, 0]);
+  assert.ok(!JSON.stringify(evt[0].meta).includes('checkout'), 'counts only');
+});
+
+test('pr_review withholds a REQUEST_CHANGES whose only blocking finding is about outside code without verified evidence', async () => {
+  for (const [name, evidence] of [['no evidence', ''], ['a quote that is not there', 'Evidence: src/checkout.mjs:4 "return applyDiscount(cart.subtotal, cart.rate, cart.currency);" '], ['a file that does not exist', 'Evidence: src/nowhere.mjs:4 "return applyDiscount(cart.subtotal)" ']]) {
+    const { result, review, comment, labels } = await runEvidenceReview(outsideFinding(evidence));
+    assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
+    assert.equal(review.event, 'COMMENT', name);
+    assert.match(review.body, /Changes not requested: every blocking finding concerns code outside the diff without verified evidence/, name);
+    assert.match(comment, /⚠️ unproven — \[high\] `src\/checkout\.mjs` \(outside the diff\)/, name);
+    assert.match(comment, /Changes not requested\*\* — every blocking finding above \(1\) concerns code outside the diff/, name);
+    assert.deepEqual(labels.added, ['review-withheld'], name);
+    assert.match(result.stderr, /"event":"review.verdict"[^\n]*"withheld_from":"REQUEST_CHANGES"[^\n]*"withheld_for":"unproven_findings"/, name);
+  }
+});
+
+test('pr_review requests changes when an unproven outside finding comes with a blocking finding in the diff', async () => {
+  const mixed = '### ⚠️ Issues Found\n- [High] The new parameter is unused — File: `src/pricing.mjs` Lines: 1 Root cause: currency is never read. Fix: use it.\n- [High] The caller still passes two arguments — File: `src/checkout.mjs` Lines: 4 Root cause: x. Fix: y.\n\n### 🚀 Verdict\nREQUEST_CHANGES';
+  const { result, review, comment } = await runEvidenceReview(mixed);
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(review.event, 'REQUEST_CHANGES');
+  assert.match(comment, /⚠️ unproven — \[high\] `src\/checkout\.mjs`/);
+  assert.doesNotMatch(comment, /pricing\.mjs`[^\n]*outside the diff/, 'the finding in the diff is not listed');
+});
+
 // F22 (2026-10-19 audit): no PR-tree file over PR_TREE_MAX_BYTES (1 MiB) is read. An oversized doc is
 // left out of the searches and an oversized config/models.yaml falls back to the defaults, each with a
 // review.file_skipped warn event; the review proceeds.

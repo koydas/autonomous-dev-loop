@@ -25,8 +25,9 @@ import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, formatWithheldNote } from './lib/review_evidence.mjs';
 import { formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
 import { resolveReviewDecision } from './lib/review_decision.mjs';
-import { formatGuardrailSection, guardrailSignature } from './lib/guardrail_review.mjs';
+import { formatGuardrailSection, guardrailSignature, parseDiffChanges } from './lib/guardrail_review.mjs';
 import { runGuardrailChecks } from './lib/guardrail_runner.mjs';
+import { assessFindings, evidenceCounts, formatEvidenceCheck, formatUnprovenNote } from './lib/finding_evidence.mjs';
 import { summarizeExternalReview } from './lib/external_review.mjs';
 import { failureSignature, nextStreak, isBreakerOpen, formatEscalationNote } from './lib/circuit_breaker.mjs';
 
@@ -451,6 +452,27 @@ obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { o
 // No verdict line (e.g. a truncated review) fails closed: not approved.
 const { cleanReview, verdict: llmVerdict } = parseReviewVerdict(rawReview);
 const llmApproved = llmVerdict === 'APPROVED';
+// RV-04a: a finding about code outside the diff must quote it; the quotes are looked up in the PR tree (no LLM). A
+// failure to assess leaves the findings as they were.
+let findingAssessment = null;
+try {
+  findingAssessment = assessFindings({
+    review: cleanReview,
+    diffFiles: parseDiffChanges(rawDiff).flatMap((f) => [f.after, f.before]),
+    lookup: (p) => {
+      try {
+        return repoFiles.readFile(p);
+      } catch {
+        return null;
+      }
+    },
+  });
+  if (findingAssessment.outside > 0 || findingAssessment.verified + findingAssessment.unverified > 0) {
+    obsLog({ stage: 'review', event: 'review.finding_evidence', level: 'info', meta: { prNumber, ...evidenceCounts(findingAssessment) } });
+  }
+} catch (err) {
+  obsLog({ stage: 'review', event: 'review.finding_evidence_error', level: 'warn', meta: { prNumber, error: err.message } });
+}
 // ADR-0024: a failing check blocks APPROVE in code, whatever the LLM concluded.
 // ADR-0026: evidence that is missing, stale or unverified withholds APPROVE without requesting changes.
 // Same resolution as run_review_evidence.mjs: without a config the repo has not opted in to evidence.
@@ -459,11 +481,12 @@ const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? repoConfigFile(
 // So is a REQUEST_CHANGES whose findings all cite only cut code files (#219), unless a check failed.
 // ADR-0049: an approval that did not attack the diff on the four axes (at least 2 risks named) is withheld too.
 // One resolution shared with the `review` eval suite (EV-01).
-const decision = resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired: fs.existsSync(evidenceConfigPath), unreviewedCodeFiles, shownFiles, guardrailFindings: guardrails.findings });
+const decision = resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired: fs.existsSync(evidenceConfigPath), unreviewedCodeFiles, shownFiles, guardrailFindings: guardrails.findings, findingAssessment });
 const { verdict, reason: verdictReason, adversarial } = decision;
 const withheldForUnreviewedCode = decision.withheldFor === 'unreviewed_code';
 const withheldForUnseenFindings = decision.withheldFor === 'unseen_findings';
 const withheldForProtocol = decision.withheldFor === 'protocol';
+const withheldForUnproven = decision.withheldFor === 'unproven_findings';
 // ADR-0050: consecutive reviews reporting the same failure. At BREAKER_THRESHOLD the loop is ESCALATED:
 // no re-pulse of changes-requested (so no auto-fix), needs-human instead.
 const previousMarker = parseReviewMarker(existing?.body);
@@ -478,8 +501,8 @@ const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_C
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 // ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
 const guardrailSection = formatGuardrailSection(guardrails, { overridden: guardrailOverride });
-const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget)
-  + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : withheldForUnseenFindings ? formatUnseenFindingsNote(unreviewedCodeFiles) : withheldForProtocol ? formatProtocolNote(adversarial) : formatWithheldNote(verdictReason)) : '')
+const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatEvidenceCheck(findingAssessment) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget)
+  + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : withheldForUnseenFindings ? formatUnseenFindingsNote(unreviewedCodeFiles) : withheldForProtocol ? formatProtocolNote(adversarial) : withheldForUnproven ? formatUnprovenNote(findingAssessment) : formatWithheldNote(verdictReason)) : '')
   + (breakerOpen ? formatEscalationNote(streak) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict, streak, sig })}` : '';
@@ -511,7 +534,9 @@ const shortReviewBody = isApproved
         ? 'Changes not requested: every finding cites only code cut from the reviewed diff. See the review comment for details.'
         : withheldForProtocol
           ? 'Approval withheld: the adversarial analysis is incomplete. See the review comment for details.'
-          : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
+          : withheldForUnproven
+            ? 'Changes not requested: every blocking finding concerns code outside the diff without verified evidence. See the review comment for details.'
+            : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')
     : breakerOpen
       ? `Changes required, loop ESCALATED: the same failure was reported ${streak} times in a row. See the review comment for details.`
       : 'Changes required. See the automated review comment above for details.';
@@ -669,7 +694,7 @@ obsLog({
   // withheld_from: the verdict the unseen-code backstop turned into WITHHELD (ADR-0038, #219), else null.
   // adversarial_points / adversarial_axes (ADR-0049): the closed axis ids that named a risk, never the model's text.
   // withheld_for: 'protocol' when the adversarial protocol, not the evidence or the cut, withheld the approval.
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, guardrail_override: guardrailOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, blocking_axes: blockingAxes, streak },
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, guardrail_override: guardrailOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings || withheldForUnproven ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : withheldForUnproven ? 'unproven_findings' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, blocking_axes: blockingAxes, streak },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');

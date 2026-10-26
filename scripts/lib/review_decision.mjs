@@ -12,18 +12,27 @@ import { analyzeAdversarial, enforceAdversarialProtocol } from './adversarial_re
  * `stages` keeps each intermediate decision so callers can tell which stage withheld.
  * A guardrail finding (RV-03, ADR-0060) is a deterministic defect: it turns an APPROVE or a WITHHELD into
  * REQUEST_CHANGES, like a failing check (`guardrailOverride`).
- * @returns {{ verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'WITHHELD', reason: string | null, withheldFor: 'evidence' | 'unreviewed_code' | 'unseen_findings' | 'protocol' | null, guardrailOverride: boolean, adversarial: ReturnType<typeof analyzeAdversarial>, stages: { evidence: object, code: object } }}
+ * `findingAssessment` (RV-04a, ADR-0061, finding_evidence.mjs): a REQUEST_CHANGES whose blocking findings all concern
+ * code outside the diff without verified evidence is WITHHELD (`unproven_findings`): a human decides, auto-fix does not
+ * run. A failing check or a guardrail finding keeps its REQUEST_CHANGES.
+ * @returns {{ verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'WITHHELD', reason: string | null, withheldFor: 'evidence' | 'unreviewed_code' | 'unseen_findings' | 'protocol' | 'unproven_findings' | null, guardrailOverride: boolean, adversarial: ReturnType<typeof analyzeAdversarial>, stages: { evidence: object, code: object } }}
  */
-export function resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired, unreviewedCodeFiles = [], shownFiles = [], guardrailFindings = [] }) {
+export function resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired, unreviewedCodeFiles = [], shownFiles = [], guardrailFindings = [], findingAssessment = null }) {
   const evidenceDecision = decideVerdict(llmApproved, evidence, { evidenceRequired });
   const codeDecision = withholdOnUnreviewedCode(evidenceDecision, unreviewedCodeFiles, cleanReview, { checksFailed: evidence.failing.length > 0, shownFiles });
   const adversarial = analyzeAdversarial(cleanReview);
   const protocol = enforceAdversarialProtocol(codeDecision, adversarial);
   const guardrailOverride = guardrailFindings.length > 0 && protocol.verdict !== 'REQUEST_CHANGES';
-  const { verdict, reason } = guardrailOverride
+  const afterGuardrails = guardrailOverride
     ? { verdict: 'REQUEST_CHANGES', reason: `guardrail findings: ${[...new Set(guardrailFindings.map((f) => f.rule))].join(', ')}` }
     : protocol;
-  const withheldFor = verdict !== 'WITHHELD' ? null
+  const unprovenOnly = Boolean(findingAssessment) && findingAssessment.blocking > 0 && findingAssessment.unproven === findingAssessment.blocking;
+  const unprovenWithheld = unprovenOnly && afterGuardrails.verdict === 'REQUEST_CHANGES' && evidence.failing.length === 0 && guardrailFindings.length === 0;
+  const { verdict, reason } = unprovenWithheld
+    ? { verdict: 'WITHHELD', reason: `${findingAssessment.unproven} blocking finding(s), all about code outside the diff without verified evidence` }
+    : afterGuardrails;
+  const withheldFor = unprovenWithheld ? 'unproven_findings'
+    : verdict !== 'WITHHELD' ? null
     : evidenceDecision.verdict === 'APPROVE' && codeDecision.verdict === 'WITHHELD' ? 'unreviewed_code'
     : evidenceDecision.verdict === 'REQUEST_CHANGES' && codeDecision.verdict === 'WITHHELD' ? 'unseen_findings'
     : codeDecision.verdict === 'APPROVE' ? 'protocol'

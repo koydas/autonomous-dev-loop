@@ -28,6 +28,13 @@ const CASES = [
   ['guardrail finding, code cut', { guardrailFindings: [GUARD], unreviewedCodeFiles: ['src/big.js'] }, 'REQUEST_CHANGES', null],
   ['guardrail finding, model already rejects', { guardrailFindings: [GUARD], llmApproved: false, cleanReview: review('', '- [High] bug — File: a.mjs Lines: 1') }, 'REQUEST_CHANGES', null],
   ['no guardrail finding', { guardrailFindings: [] }, 'APPROVE', null],
+  ['rejected, every blocking finding is unproven', { llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), findingAssessment: { blocking: 2, unproven: 2 } }, 'WITHHELD', 'unproven_findings'],
+  ['rejected, one blocking finding is proven', { llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), findingAssessment: { blocking: 2, unproven: 1 } }, 'REQUEST_CHANGES', null],
+  ['rejected, no blocking finding was parsed', { llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), findingAssessment: { blocking: 0, unproven: 0 } }, 'REQUEST_CHANGES', null],
+  ['rejected, unproven, but a check fails', { llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), evidence: { ...AVAILABLE, failing: ['tests'] }, findingAssessment: { blocking: 1, unproven: 1 } }, 'REQUEST_CHANGES', null],
+  ['rejected, unproven, but a guardrail finding', { llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), guardrailFindings: [GUARD], findingAssessment: { blocking: 1, unproven: 1 } }, 'REQUEST_CHANGES', null],
+  ['approved with an unproven assessment', { findingAssessment: { blocking: 1, unproven: 1 } }, 'APPROVE', null],
+  ['no assessment', { llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), findingAssessment: null }, 'REQUEST_CHANGES', null],
   ['REQUEST_CHANGES citing only cut files', { llmApproved: false, cleanReview: review('', '- [High] bug — File: src/big.js Lines: 1'), unreviewedCodeFiles: ['src/big.js'] }, 'WITHHELD', 'unseen_findings'],
 ];
 
@@ -75,4 +82,10 @@ test('resolveReviewDecision: guardrailOverride is set only when a guardrail find
   assert.equal(overridden.withheldFor, null);
   assert.equal(resolveReviewDecision({ ...base, guardrailFindings: [GUARD], llmApproved: false, cleanReview: review('', '- [High] bug — File: a.mjs Lines: 1') }).guardrailOverride, false);
   assert.equal(resolveReviewDecision(base).guardrailOverride, false);
+});
+
+test('resolveReviewDecision: the unproven-findings reason counts the findings', () => {
+  const d = resolveReviewDecision({ ...base, llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), findingAssessment: { blocking: 3, unproven: 3 } });
+  assert.match(d.reason, /^3 blocking finding\(s\), all about code outside the diff without verified evidence$/);
+  assert.equal(d.guardrailOverride, false);
 });
