@@ -226,6 +226,16 @@ Emitted by `run_evals.mjs` (ADR-0027).
 | `eval.complete` | info  | ✓             | `suite`, `passed`, `resultsFile` |
 | `eval.error`    | error | ✓             | `error`; on a circuit-breaker abort also `reason: "provider_quota"`, the breaker fields and `resultsFile` |
 
+### `eval_grader`
+
+Emitted by `grade_autofix_eval.mjs` (EV-03, ADR-0052): the grader job of the `autofix` suite, no secret.
+
+| Event                | Level | `duration_ms` | Key `meta` fields |
+|----------------------|-------|---------------|-------------------|
+| `eval_grader.start`    | info  | —             | — |
+| `eval_grader.complete` | info  | ✓             | `runs`, `graded`, `passed`, `errored` |
+| `eval_grader.error`    | error | ✓             | `error` |
+
 ### `eval_replay`
 
 Emitted by `replay_evals_ci.mjs`.
@@ -430,7 +440,7 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 | `autofix_reset.error`, `conflicts_detect.error` | yes, sanitized | our own message: a GitHub API call |
 | `conflicts.error`, `conflicts.model_unavailable` | yes, sanitized | an unexpected exception: may be `callLLM`'s provider error (sanitized), a git failure or a GitHub API call |
 | `trace_write_failed`, `start_span_failed`, `end_span_failed`, `trace_finalize_failed` | yes, sanitized | our own message: a trace-file write |
-| `review_evidence.error`, `eval.error`, `eval_replay.error`, `pr_evals.error`, `pr_evals_report.error` | no (not allowlisted: `meta: {}`) | out of the allowlist since ADR-0040 |
+| `review_evidence.error`, `eval.error`, `eval_grader.error`, `eval_replay.error`, `pr_evals.error`, `pr_evals_report.error` | no (not allowlisted: `meta: {}`) | out of the allowlist since ADR-0040 |
 
 
 ### Schema (`schema_version: 2`)

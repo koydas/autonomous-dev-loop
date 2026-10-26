@@ -56,6 +56,7 @@
     "scripts/lib/autofix_core.mjs",
     "scripts/lib/autofix_eval_adapter.mjs",
     "scripts/lib/autofix_dataset.mjs",
+    "scripts/lib/autofix_eval_grading.mjs",
     "scripts/lib/review_findings.mjs",
     "scripts/lib/impact_context.mjs",
     "scripts/lib/guardrail_review.mjs",

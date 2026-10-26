@@ -146,7 +146,7 @@ export const SPAN_META_ALLOWLIST = Object.freeze([
 // EVENT_META_ALLOWLIST keys of their event. Never listed: prompts, completions, file contents,
 // titles/bodies, env values.
 const STAGE_ATTRIBUTES = [...SPAN_META_ALLOWLIST.map(attributeName), 'adl.outcome'];
-const STAGES = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'review_evidence', 'autofix', 'autofix_reset', 'conflicts_detect', 'conflicts', 'eval', 'eval_replay', 'pr_evals', 'pr_evals_report'];
+const STAGES = ['issue_validation', 'code_gen', 'pr_prepare', 'review', 'review_evidence', 'autofix', 'autofix_reset', 'conflicts_detect', 'conflicts', 'eval', 'eval_grader', 'eval_replay', 'pr_evals', 'pr_evals_report'];
 export const SPAN_ATTRIBUTE_ALLOWLIST = Object.freeze({
   run: ['adl.item.kind', 'adl.item.number', 'adl.item.source', 'cicd.pipeline.name', 'cicd.pipeline.run.id', 'adl.run.attempt',
     'adl.event_name', 'adl.actor_type', 'adl.issue_number', 'vcs.change.id', 'vcs.ref.head.revision', 'adl.outcome'],
