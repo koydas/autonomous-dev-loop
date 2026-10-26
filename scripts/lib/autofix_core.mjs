@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { filterDiff, shouldIncludeFile } from './file_filters.mjs';
 import { interpolatePrompt } from './prompts.mjs';
-import { parseJsonResponse } from './output_writer.mjs';
+import { parseJsonResponse, shrinkRejection } from './output_writer.mjs';
 import { normalizeRepoPath } from './autofix_guard.mjs';
 import { findGuardrailViolations } from './static_verifier.mjs';
 import { readPackageJsonDependencies } from './dependency_manifest.mjs';
@@ -32,6 +32,16 @@ export function truncateToTokenBudget(text, tokenBudget) {
   const maxChars = tokenBudget * 4;
   if (text.length <= maxChars) return text;
   return text.slice(0, maxChars);
+}
+
+/** The diff and feedback shares of the input budget (config, else 0.15 and 0.25); their sum must leave room for files. */
+export function resolveBudgetRatios({ diffRatio, feedbackRatio }) {
+  const effectiveDiffRatio = diffRatio ?? 0.15;
+  const effectiveFeedbackRatio = feedbackRatio ?? 0.25;
+  if (effectiveDiffRatio + effectiveFeedbackRatio >= 1) {
+    throw new Error(`Token budget config error: autofix_diff_ratio (${effectiveDiffRatio}) + autofix_feedback_ratio (${effectiveFeedbackRatio}) must sum to less than 1.0; adjust config/models.yaml`);
+  }
+  return { diffRatio: effectiveDiffRatio, feedbackRatio: effectiveFeedbackRatio };
 }
 
 /**
@@ -163,4 +173,21 @@ export function findAutofixViolations({ changes, context, root, mentionText }) {
     fileExists: (p) => fs.existsSync(path.resolve(root, p)),
     mentionText,
   })];
+}
+
+/**
+ * The ADR-0009 shrink guard on a validated patch, as a dry run: production applies it when it writes
+ * (`writeGeneratedFiles`), an eval must not write. Same predicate and message (`shrinkRejection`). A new file, a file
+ * that is not a regular one (already a `non_regular_target` violation) and a target over MAX_FILE_SIZE bytes (never
+ * shown, already rejected as withheld) have no comparable content.
+ */
+export function findShrinkViolations({ changes, root }) {
+  const violations = [];
+  for (const { targetPath, fileContent } of changes) {
+    const read = readPrTreeFile(root, normalizeRepoPath(targetPath), { maxBytes: MAX_FILE_SIZE });
+    if (read.kind !== 'file') continue;
+    const reason = shrinkRejection(targetPath, read.content, fileContent);
+    if (reason) violations.push({ targetPath, rule: 'destructive_shrink', reason });
+  }
+  return violations;
 }
