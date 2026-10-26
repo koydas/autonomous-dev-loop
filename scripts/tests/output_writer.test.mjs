@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS, isDestructiveShrink, SHRINK_GUARD_MIN_LINES, GuardrailError, protectedPathEntry } from '../lib/output_writer.mjs';
+import { parseJsonResponse, validateAiOutput, writeGeneratedFiles, JsonParseError, PROTECTED_WRITE_PATHS, isDestructiveShrink, shrinkRejection, SHRINK_GUARD_MIN_LINES, GuardrailError, protectedPathEntry } from '../lib/output_writer.mjs';
 
 // parseJsonResponse tests
 
@@ -529,4 +529,13 @@ test('protectedPathEntry returns the matching denylist entry, or null for a writ
   assert.equal(protectedPathEntry('packages/app/Package.json'), 'package.json');
   assert.equal(protectedPathEntry('src/a.js'), null);
   assert.equal(protectedPathEntry(null), null);
+});
+
+// ADR-0009: one verdict for the write and for a dry run (the autofix eval).
+test('shrinkRejection: null for a new file or a rewrite that keeps enough, the rejection message for one that does not', () => {
+  const hundred = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
+  assert.equal(shrinkRejection('a.mjs', null, 'x'), null);
+  assert.equal(shrinkRejection('a.mjs', 'short\nfile', ''), null, 'a file under the minimum is exempt');
+  assert.equal(shrinkRejection('a.mjs', hundred, hundred.replace('line 1', 'edited')), null);
+  assert.match(shrinkRejection('big.mjs', hundred, 'line 0'), /^target_path "big\.mjs" would shrink from 100 to 1 lines \(\d+ to \d+ non-blank chars, more than 50% removed\); rewrite rejected \(ADR-0009\)$/);
 });

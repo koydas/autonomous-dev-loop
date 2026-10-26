@@ -14,6 +14,8 @@ import {
   buildAutofixContext,
   parseAutofixResponse,
   findAutofixViolations,
+  resolveBudgetRatios,
+  findShrinkViolations,
 } from '../lib/autofix_core.mjs';
 
 let root;
@@ -229,4 +231,44 @@ test('findAutofixViolations: a target whose pre-patch read throws a filesystem e
     () => findAutofixViolations({ changes: [patch(UNREADABLE, 'export const x = 1;\n')], context, root, mentionText: '' }),
     (err) => err.code === 'ENAMETOOLONG',
   );
+});
+
+// --- resolveBudgetRatios ---
+
+test('resolveBudgetRatios: config values win, absent ones default to 0.15 and 0.25', () => {
+  assert.deepEqual(resolveBudgetRatios({}), { diffRatio: 0.15, feedbackRatio: 0.25 });
+  assert.deepEqual(resolveBudgetRatios({ diffRatio: 0.3, feedbackRatio: 0.4 }), { diffRatio: 0.3, feedbackRatio: 0.4 });
+  assert.deepEqual(resolveBudgetRatios({ diffRatio: 0 }), { diffRatio: 0, feedbackRatio: 0.25 }, 'zero is a value, not a missing one');
+});
+
+test('resolveBudgetRatios: a pair that leaves no room for files is a config error naming both keys', () => {
+  assert.throws(() => resolveBudgetRatios({ diffRatio: 0.5, feedbackRatio: 0.5 }), /Token budget config error: autofix_diff_ratio \(0\.5\) \+ autofix_feedback_ratio \(0\.5\) must sum to less than 1\.0; adjust config\/models\.yaml/);
+  assert.throws(() => resolveBudgetRatios({ diffRatio: 0.9 }), /must sum to less than 1\.0/);
+});
+
+// --- findShrinkViolations ---
+
+test('findShrinkViolations: a rewrite that keeps under half of a 20-line file is flagged with the shrink guard\'s own message', async () => {
+  const lines = Array.from({ length: 30 }, (_, i) => `export const s${i} = ${i};`).join('\n') + '\n';
+  await write('src/shrinkable.mjs', lines);
+  const violations = findShrinkViolations({ changes: [patch('src/shrinkable.mjs', 'export const s0 = 0;\n')], root });
+  assert.deepEqual(violations.map((v) => [v.targetPath, v.rule]), [['src/shrinkable.mjs', 'destructive_shrink']]);
+  assert.match(violations[0].reason, /would shrink from 31 to 2 lines.*rewrite rejected \(ADR-0009\)/);
+});
+
+test('findShrinkViolations: a new file, a small file, a modest rewrite, a symlink and an oversize target are not flagged', async () => {
+  const big = Array.from({ length: 30 }, (_, i) => `export const m${i} = ${i};`).join('\n') + '\n';
+  await write('src/modest.mjs', big);
+  const changes = [
+    patch('src/brand-new.mjs', 'x\n'),
+    patch('src/a.mjs', 'export const a = 2;\n'),
+    patch('src/modest.mjs', big.replace('m0 = 0', 'm0 = 9')),
+    patch('src/link.mjs', 'x\n'),
+    patch('src/big.mjs', 'x\n'),
+  ];
+  assert.deepEqual(findShrinkViolations({ changes, root }), []);
+});
+
+test('findShrinkViolations: a read that throws a filesystem error propagates', () => {
+  assert.throws(() => findShrinkViolations({ changes: [patch(UNREADABLE, 'x\n')], root }), (err) => err.code === 'ENAMETOOLONG');
 });

@@ -94,6 +94,15 @@ export function isDestructiveShrink(existingContent, nextContent) {
     || contentSize(nextContent) < contentSize(existingContent) * SHRINK_GUARD_MAX_RATIO;
 }
 
+/**
+ * The ADR-0009 shrink guard's verdict on one rewrite: the rejection message, or null when the file is new or the
+ * rewrite keeps enough of it. One source for the write (`writeGeneratedFiles`) and for a dry run (the autofix eval).
+ */
+export function shrinkRejection(targetPath, existingContent, fileContent) {
+  if (existingContent === null || !isDestructiveShrink(existingContent, fileContent)) return null;
+  return `target_path "${targetPath}" would shrink from ${lineCount(existingContent)} to ${lineCount(fileContent)} lines (${contentSize(existingContent)} to ${contentSize(fileContent)} non-blank chars, more than ${SHRINK_GUARD_MAX_RATIO * 100}% removed); rewrite rejected (ADR-0009)`;
+}
+
 function findProtectedPathEntry(targetPath) {
   // Normalize before matching: backslashes, "./" and "." segments, repeated slashes, case.
   const normalized = path.posix
@@ -207,9 +216,8 @@ export async function writeGeneratedFiles(changes) {
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
-    if (existingContent !== null && isDestructiveShrink(existingContent, fileContent)) {
-      throw new GuardrailError(`target_path "${targetPath}" would shrink from ${lineCount(existingContent)} to ${lineCount(fileContent)} lines (${contentSize(existingContent)} to ${contentSize(fileContent)} non-blank chars, more than ${SHRINK_GUARD_MAX_RATIO * 100}% removed); rewrite rejected (ADR-0009)`);
-    }
+    const shrink = shrinkRejection(targetPath, existingContent, fileContent);
+    if (shrink) throw new GuardrailError(shrink);
   }
 
   for (const { targetPath, fileContent } of changes) {
