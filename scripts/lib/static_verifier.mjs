@@ -121,10 +121,10 @@ const CJS_SYNTAX = /(?<![.\w$])(?:require\s*\(|module\.exports\b|exports\.[\w$]+
 export function extractImportSpecifiers(source) {
   const { code, strings } = maskSource(source);
   const specs = new Set();
+  for (const index of staticImportStrings(code)) specs.add(strings[index]);
   for (const re of [DYNAMIC_IMPORT, REQUIRE_LITERAL]) {
     for (const m of code.matchAll(re)) specs.add(strings[Number(m[1])]);
   }
-  for (const index of staticImportStrings(code)) specs.add(strings[index]);
   return [...specs];
 }
 

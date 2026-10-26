@@ -209,6 +209,10 @@ test('extractExportedSignatures skips a re-export list, whatever whitespace prec
   assert.deepEqual([...sigs.keys()], ['g']);
 });
 
+test('extractImportSpecifiers lists static specifiers first, then dynamic, then require, each in source order', () => {
+  assert.deepEqual(extractImportSpecifiers("require('r1'); import('d1'); import a from 's1'; import('d2'); export * from 's2'; require('r2');"), ['s1', 's2', 'd1', 'd2', 'r1', 'r2']);
+});
+
 test('extractImportSpecifiers: the clause must end with `from` right before the string', () => {
   const src = "import a from 'ok1';\nimport {b,\n c} from\n 'ok2';\nimport fromx 'no1';\nimport a, b 'no2';\nexport * from 'ok3';\nimport 'ok4';\nx.import y from 'no3';\nimport {\nimport z from 'ok5';";
   assert.deepEqual(extractImportSpecifiers(src).sort(), ['ok1', 'ok2', 'ok3', 'ok4', 'ok5']);
