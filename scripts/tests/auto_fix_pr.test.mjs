@@ -356,6 +356,39 @@ test('auto_fix_pr falls back to automated review comment when review payload has
   }
 });
 
+test('auto_fix_pr does not send the fixer the findings the review set aside as unsubstantiated (RV-05)', async () => {
+  const body = [
+    '## 🔍 Automated Code Review', '', '### ⚠️ Issues Found', '- [High] Fix the lint error — File: `src/index.js` Lines: 1 Root cause: r. Fix: f.', '',
+    '### 🔎 Unsubstantiated Findings', '_Not requests._', '', '- [High] SETASIDE-MARKER — File: `docs/other.md` Lines: 9 Root cause: r. Fix: f.', '', '### 🚀 Verdict', 'REQUEST_CHANGES',
+  ].join('\n');
+  const server = await startMockServer(
+    makeHandler({
+      commentsBody: JSON.stringify([{ body, user: { login: 'github-actions[bot]' } }]),
+      llmResponse: validLLMJson('fixed.txt'),
+      inlineCommentsBody: JSON.stringify([]),
+    }),
+  );
+  const eventFile = await writeEventFile();
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'auto-fix-setaside-'));
+  const outputFile = path.join(os.tmpdir(), `autofix-output-${Date.now()}.txt`);
+  try {
+    const rawEvent = JSON.parse(await fs.readFile(eventFile, 'utf8'));
+    rawEvent.review.body = '';
+    await fs.writeFile(eventFile, JSON.stringify(rawEvent));
+    const result = await runAutoFix(server.address().port, eventFile, { cwd: tmpDir, extraEnv: { GITHUB_OUTPUT: outputFile } });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const prompt = JSON.parse(server.requests.find((r) => r.url === '/v1/messages').body).messages.map((m) => (typeof m.content === 'string' ? m.content : m.content.map((c) => c.text).join('')) ).join('\n');
+    assert.match(prompt, /Fix the lint error/);
+    assert.doesNotMatch(prompt, /SETASIDE-MARKER|Unsubstantiated Findings/);
+    assert.match(prompt, /Verdict/, 'what follows the section is kept');
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(outputFile).catch(() => {});
+    await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+  }
+});
+
 test('auto_fix_pr paginates review comments to find latest automated review fallback', async () => {
   const commentsByPage = {
     1: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ body: `noise ${i}` }))),

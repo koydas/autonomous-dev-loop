@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseFindings, pathMatches, matchFindings, analyzeFindings, validateExpectedFindings, FINDING_NEEDS,
+  parseFindings, pathMatches, matchFindings, analyzeFindings, validateExpectedFindings, moveUnsubstantiated, stripUnsubstantiated, UNSUBSTANTIATED_HEADING, FINDING_NEEDS,
 } from '../lib/review_findings.mjs';
 
 const finding = (sev, title, file, lines, cause = 'a cause') => `- [${sev}] ${title} — File: ${file} Lines: ${lines} Root cause: ${cause} Fix: f Axis: robustness`;
@@ -242,4 +242,40 @@ test('validateExpectedFindings accepts a well formed list and names every proble
   ]).join('\n');
   for (const part of ['not an object', 'id missing', 'path missing', 'duplicate id A', 'severity must be', 'lines must be', 'match must be', 'needs must be', 'blocking must be']) assert.match(problems, new RegExp(part));
   assert.deepEqual([...FINDING_NEEDS], ['diff', 'context', 'knowledge', 'reasoning', 'execution']);
+});
+
+const REVIEW = ['### ✅ Summary', 'x', '', '### ⚠️ Issues Found', '- [High] A — File: a.mjs Lines: 1 Root cause: r. Fix: f.', '  continued on a second line', '- [Medium] B — File: b.mjs Lines: 2 Root cause: r. Fix: f.', '', '### 🚀 Verdict', 'REQUEST_CHANGES', ''].join('\n');
+const textsOf = (review) => parseFindings(review.split('### ⚠️ Issues Found\n')[1].split('### 🚀')[0]).map((f) => f.text);
+
+test('moveUnsubstantiated: the chosen findings leave Issues Found for a section of their own, before the verdict', () => {
+  const [a] = textsOf(REVIEW);
+  const moved = moveUnsubstantiated(REVIEW, [a]);
+  const issues = moved.slice(moved.indexOf('### ⚠️ Issues Found'), moved.indexOf(UNSUBSTANTIATED_HEADING));
+  assert.match(issues, /\[Medium\] B/);
+  assert.doesNotMatch(issues, /\[High\] A/);
+  assert.match(moved, new RegExp(`${UNSUBSTANTIATED_HEADING}\\n_Not requests[^\\n]*\\n\\n- \\[High\\] A[^\\n]*\\n  continued on a second line\\n\\n### 🚀 Verdict`));
+  assert.deepEqual(parseFindings(moved.slice(moved.indexOf('### ⚠️ Issues Found'), moved.indexOf(UNSUBSTANTIATED_HEADING))).map((f) => f.severity), ['medium'], 'the parser no longer sees the moved one');
+  const both = moveUnsubstantiated(REVIEW, textsOf(REVIEW));
+  assert.match(both, /### ⚠️ Issues Found\n\n### 🔎 Unsubstantiated Findings[\s\S]*\[High\] A[\s\S]*\[Medium\] B/);
+});
+
+test('moveUnsubstantiated: nothing to move, a text that is not in the review, no verdict heading', () => {
+  assert.equal(moveUnsubstantiated(REVIEW, []), REVIEW);
+  assert.equal(moveUnsubstantiated(REVIEW, ['- [High] not in the review']), REVIEW);
+  assert.equal(moveUnsubstantiated(REVIEW, ['', null, undefined]), REVIEW);
+  assert.equal(moveUnsubstantiated(undefined, ['x']), '');
+  const noVerdict = '### ⚠️ Issues Found\n- [High] A — File: a.mjs Lines: 1 Root cause: r. Fix: f.\n';
+  const moved = moveUnsubstantiated(noVerdict, textsOf(`${noVerdict}### 🚀 Verdict\nx\n`));
+  assert.match(moved, /Issues Found\n\n### 🔎 Unsubstantiated Findings[\s\S]*- \[High\] A[\s\S]*\n$/);
+});
+
+test('stripUnsubstantiated removes the section up to the next heading or marker, and nothing else', () => {
+  const [a] = textsOf(REVIEW);
+  const moved = moveUnsubstantiated(REVIEW, [a]);
+  const stripped = stripUnsubstantiated(moved);
+  assert.equal(stripped, REVIEW.replace(`${a}\n`, ''));
+  assert.equal(stripUnsubstantiated(REVIEW), REVIEW);
+  assert.equal(stripUnsubstantiated(`head\n\n${UNSUBSTANTIATED_HEADING}\ntext\n<!-- adl-review sha=x -->`), 'head\n\n<!-- adl-review sha=x -->');
+  assert.equal(stripUnsubstantiated(`head\n\n${UNSUBSTANTIATED_HEADING}\ntext to the end`), 'head\n\n');
+  assert.equal(stripUnsubstantiated(null), '');
 });

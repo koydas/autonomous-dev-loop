@@ -4,9 +4,13 @@
 // reason about what a quote means, it may not invent the quote. A blocking finding about outside code whose evidence is
 // missing or not found is unproven, and a review whose blocking findings are all unproven requests no change
 // (review_decision.mjs). Pure: the caller passes `lookup(path) -> text | null`.
+//
+// RV-05 (ADR-0063) generalizes the check to every finding: `substantiateFindings` gives each one a status, VERIFIED /
+// SUPPORTED / UNVERIFIED / REFUTED, and a blocking finding that is neither verified nor supported is unproven.
 
 import { issuesFoundText } from './review_prompt.mjs';
-import { parseFindings, pathMatches } from './review_findings.mjs';
+import { parseFindings, pathMatches, DEFAULT_LINE_TOLERANCE } from './review_findings.mjs';
+import { parseDiffChanges } from './guardrail_review.mjs';
 
 export const MAX_EVIDENCE_PER_FINDING = 5;
 export const MAX_FINDINGS_CHECKED = 30;
@@ -73,11 +77,11 @@ export function assessFindings({ review, diffFiles = [], lookup }) {
       } catch {
         text = null;
       }
-      return { ...item, found: text != null && quoteIsAt(text, item.line, item.quote) };
+      return { ...item, read: text != null, found: text != null && quoteIsAt(text, item.line, item.quote) };
     });
     const about = evidence.some((e) => f.files.some((file) => pathMatches(file, e.path)));
     const status = evidence.length === 0 ? 'none' : evidence.every((e) => e.found) && (about || !outside) ? 'verified' : 'unverified';
-    return { severity: f.severity, files: f.files, blocking, outside, evidence, status, unproven: blocking && outside && status !== 'verified' };
+    return { severity: f.severity, files: f.files, lines: f.lines, text: f.text, blocking, outside, evidence, status, unproven: blocking && outside && status !== 'verified' };
   });
   const count = (pick) => findings.filter(pick).length;
   return {
@@ -86,6 +90,74 @@ export function assessFindings({ review, diffFiles = [], lookup }) {
     outside: count((f) => f.outside),
     verified: count((f) => f.status === 'verified'),
     unverified: count((f) => f.status === 'unverified'),
+    unproven: count((f) => f.unproven),
+  };
+}
+
+export const FINDING_STATUSES = Object.freeze(['verified', 'supported', 'unverified', 'refuted']);
+
+/**
+ * Line ranges of each file's hunks (old and new side), from a unified diff: the lines the reviewer was shown. A file
+ * is keyed by both its paths; a file with no hunk (a pure rename, a binary file) has an empty list.
+ * @returns {Map<string, Array<[number, number]>>}
+ */
+export function diffHunkRanges(rawDiff) {
+  const ranges = new Map();
+  for (const part of String(rawDiff ?? '').split(/^diff --git /m).slice(1)) {
+    const names = part.match(/^a\/(.+?) b\/(.+)$/m);
+    if (!names) continue;
+    const list = [];
+    for (const m of part.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+      list.push([Number(m[1]), Number(m[1]) + Math.max(Number(m[2] ?? 1), 1) - 1], [Number(m[3]), Number(m[3]) + Math.max(Number(m[4] ?? 1), 1) - 1]);
+    }
+    for (const name of new Set([names[1], names[2]])) ranges.set(name, list);
+  }
+  return ranges;
+}
+
+// A finding that cites a file of the diff is located when its lines (if any) fall within a hunk of that file, give or
+// take the tolerance the finding-level metrics use; a file with no hunk cannot be judged and counts as located.
+function isLocated(finding, ranges) {
+  const cited = [...ranges.entries()].filter(([file]) => finding.files.some((f) => pathMatches(f, file)));
+  if (cited.length === 0) return false;
+  if (!finding.lines) return true;
+  const [from, to] = finding.lines;
+  return cited.some(([, list]) => list.length === 0 || list.some(([a, b]) => from - DEFAULT_LINE_TOLERANCE <= b && a - DEFAULT_LINE_TOLERANCE <= to));
+}
+
+/**
+ * The status of every finding of the review (RV-05, ADR-0063), deterministic and without an LLM:
+ * - `verified`: every quote of its Evidence field is written in the PR tree (see assessFindings).
+ * - `supported`: it points at the diff: a cited file is in the diff and its lines, if given, fall in a hunk. The
+ *   reviewer was shown that code, and so is the auto-fixer. Without a list of the files of the diff nothing can be
+ *   judged and a finding is supported as before.
+ * - `refuted`: it is not located in the diff and a quote it gives is not in a file that was read.
+ * - `unverified`: any other finding that is not located in the diff (outside it, no file, lines the diff does not show).
+ * A blocking finding that is neither verified nor supported is `unproven`: a review whose blocking findings are all
+ * unproven requests no change (review_decision.mjs), and the ones that remain are kept out of the auto-fixer's feedback.
+ * @param {{ review: string, rawDiff: string, lookup: (path: string) => string | null }} input
+ */
+export function substantiateFindings({ review, rawDiff, lookup }) {
+  const diffFiles = parseDiffChanges(rawDiff).flatMap((f) => [f.after, f.before]);
+  const ranges = diffHunkRanges(rawDiff);
+  const base = assessFindings({ review, diffFiles, lookup });
+  const findings = base.findings.map((f) => {
+    const judged = diffFiles.length > 0;
+    const status = f.status === 'verified' ? 'verified'
+      : !judged || (!f.outside && f.files.length > 0 && isLocated(f, ranges)) ? 'supported'
+      : f.evidence.some((e) => e.read && !e.found) ? 'refuted'
+      : 'unverified';
+    return { ...f, status, unproven: f.blocking && (status === 'unverified' || status === 'refuted') };
+  });
+  const count = (pick) => findings.filter(pick).length;
+  return {
+    findings,
+    blocking: base.blocking,
+    outside: base.outside,
+    verified: count((f) => f.status === 'verified'),
+    supported: count((f) => f.status === 'supported'),
+    unverified: count((f) => f.status === 'unverified'),
+    refuted: count((f) => f.status === 'refuted'),
     unproven: count((f) => f.unproven),
   };
 }
@@ -108,26 +180,28 @@ export function impactLookup(impact) {
   return (path) => (files.has(path) ? Array.from(files.get(path), (line) => line ?? '').join('\n') : null);
 }
 
-/** The comment section: findings about outside code and what their evidence came to. Empty when there is none. */
+const MARKS = { verified: '✅ verified', supported: '✔️ supported', refuted: '❌ refuted', unverified: '⚠️ unverified' };
+
+/** The comment section: each blocking finding with its status, and the other findings that are outside the diff or quote something. */
 export function formatEvidenceCheck(assessment) {
-  const shown = (assessment?.findings ?? []).filter((f) => f.outside || f.status !== 'none');
+  const shown = (assessment?.findings ?? []).filter((f) => f.blocking || f.outside || f.evidence.length > 0);
   if (shown.length === 0) return '';
-  const lines = ['', '### 🔎 Evidence Check', '_A finding about code outside the diff must quote it (`Evidence: path:line "text"`); the quote is looked up in the PR tree, no LLM. An unproven finding does not request changes alone._', ''];
+  const lines = ['', '### 🔎 Evidence Check', '_Each blocking finding is checked in code, no LLM: **verified** (its `Evidence:` quotes are in the PR tree), **supported** (it points at lines of the diff), **unverified** (outside the diff without a checked quote, or lines the diff does not show) or **refuted** (a quote it gives is not in the file). An unsubstantiated finding does not request changes alone and is not sent to auto-fix._', ''];
   for (const f of shown) {
     const where = f.files.map((x) => `\`${plain(x)}\``).join(', ') || '(no file)';
     const quotes = f.evidence.map((e) => `\`${plain(`${e.path}:${e.line}`)}\` ${e.found ? 'found' : 'not found'}`).join(', ');
-    const mark = f.unproven ? '⚠️ unproven' : f.status === 'verified' ? '✅ verified' : '• not checked';
+    const mark = MARKS[f.status] ?? '• not checked';
     lines.push(`- ${mark} — [${f.severity}] ${where}${f.outside ? ' (outside the diff)' : ''}${quotes ? `: ${quotes}` : f.unproven ? ': no evidence quoted' : ''}`);
   }
   return lines.join('\n');
 }
 
-/** Note appended when every blocking finding is unproven and the review is therefore withheld. */
+/** Note appended when every blocking finding is unsubstantiated and the review is therefore withheld. */
 export function formatUnprovenNote(assessment) {
   return [
     '',
-    `> **Changes not requested** — every blocking finding above (${assessment.unproven}) concerns code outside the diff and does not quote it, or quotes text the PR tree does not hold.`,
-    '> An unproven claim about code nobody showed is not a reason to change the PR, and auto-fix cannot edit what it is not shown: a human decides. Auto-fix is not triggered.',
+    `> **Changes not requested** — every blocking finding above (${assessment.unproven}) is unsubstantiated: it concerns code outside the diff without a quote the PR tree holds, or points at lines the diff does not show.`,
+    '> An unproven claim is not a reason to change the PR, and auto-fix cannot edit what it is not shown: a human decides. Auto-fix is not triggered.',
   ].join('\n');
 }
 
@@ -137,6 +211,8 @@ export const evidenceCounts = (assessment) => ({
   blocking: assessment.blocking,
   outside: assessment.outside,
   verified: assessment.verified,
+  supported: assessment.supported ?? 0,
   unverified: assessment.unverified,
+  refuted: assessment.refuted ?? 0,
   unproven: assessment.unproven,
 });
