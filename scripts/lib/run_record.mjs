@@ -63,12 +63,15 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'review.stale_refs_error': ERR,
   'review.related_adrs_error': ERR,
   'review.impact_error': ERR,
+  'review.doc_mentions_error': ERR,
   'review.guardrail_error': ERR,
   'review.finding_evidence': [...ID, 'findings', 'blocking', 'outside', 'verified', 'unverified', 'unproven'],
   'review.finding_evidence_error': ERR,
   'review.guardrail_findings': [...ID, 'findings', 'rules'],
   // RV-02: counts only; the references and snippets of the impact analysis are PR-tree text and never leave the run.
   'review.impact_context': [...ID, 'symbols', 'with_refs', 'refs', 'tests', 'included', 'scanned', 'truncated'],
+  // RV-04b: counts only; the document lines are PR-tree text and never leave the run.
+  'review.doc_mentions': [...ID, 'terms', 'refs', 'docs', 'included', 'scanned', 'truncated'],
   'review.prompt_budget_error': ERR,
   'review.models_config_ignored': [...ERR, 'path'],
   'review.file_skipped': ['path', 'reason', 'size', 'max_bytes'],

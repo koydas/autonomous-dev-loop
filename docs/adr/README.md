@@ -65,3 +65,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0059: Auto conflicts-fix: a PR that conflicts with its base is merged forward, by escalating resolvers](./0059-auto-conflicts-fix.md)
 - [ADR-0060: Hard Guardrails are checked in code on the PR under review](./0060-guardrail-findings-in-the-review.md)
 - [ADR-0061: A finding about code outside the diff must quote it, and the quote is checked in code](./0061-evidence-for-findings-outside-the-diff.md)
+- [ADR-0062: Documents that mention what the diff changes are a source of evidence for the reviewer](./0062-documents-as-evidence-for-the-reviewer.md)
