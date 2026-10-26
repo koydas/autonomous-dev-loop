@@ -23,6 +23,7 @@ import { loadPrompt } from './prompts.mjs';
 import { detectProvider, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './config.mjs';
 import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from './review_prompt.mjs';
 import { resolveReviewDecision } from './review_decision.mjs';
+import { collectGuardrailFindings, findTestCountDrops, withGuardrailIssues } from './guardrail_review.mjs';
 import { MIN_CRITICAL_POINTS } from './adversarial_review.mjs';
 import { analyzeFindings } from './review_findings.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
@@ -275,6 +276,8 @@ export const reviewSuite = {
     // so a format regression shows in error_rate rather than inflating request_changes recall.
     if (!llmVerdict) throw new Error('No verdict line in the review (expected APPROVED or REQUEST_CHANGES)');
     // The same resolution as pr_review.mjs (evidence, cut code, adversarial protocol): the scored verdict is the published one.
+    // RV-03: the guardrail checks that need only the diff (a test case removed); the file-based ones need the PR tree.
+    const guardrails = collectGuardrailFindings([findTestCountDrops(input.diff, { mentionText: `${input.title}\n${input.body || '(no description provided)'}` })]);
     const { verdict, reason, withheldFor, adversarial } = resolveReviewDecision({
       llmApproved: llmVerdict === 'APPROVED',
       cleanReview,
@@ -282,8 +285,10 @@ export const reviewSuite = {
       evidenceRequired: input.evidence !== undefined,
       unreviewedCodeFiles,
       shownFiles,
+      guardrailFindings: guardrails.findings,
     });
-    return { verdict, llm_verdict: llmVerdict, reason, withheld_for: withheldFor, adversarial_protocol_met: adversarial.criticalPoints >= MIN_CRITICAL_POINTS, adversarial_points: adversarial.criticalPoints, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, review: cleanReview, finding_analysis: summarizeFindingAnalysis(findingAnalysis(testCase?.expected, cleanReview)) };
+    const scoredReview = withGuardrailIssues(cleanReview, guardrails);
+    return { verdict, llm_verdict: llmVerdict, reason, withheld_for: withheldFor, adversarial_protocol_met: adversarial.criticalPoints >= MIN_CRITICAL_POINTS, adversarial_points: adversarial.criticalPoints, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, guardrail_findings: guardrails.findings.map((f) => ({ rule: f.rule, path: f.path })), review: scoredReview, finding_analysis: summarizeFindingAnalysis(findingAnalysis(testCase?.expected, scoredReview)) };
   },
 
   scorers: {

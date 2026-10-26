@@ -367,3 +367,17 @@ test('guardrailRules classifies output_writer rejections that carry no rules', (
   assert.deepEqual(guardrailRules(Object.assign(new GuardrailError('x'), { rules: [] })), ['unsafe_path']);
   assert.deepEqual(guardrailRules(undefined), ['unsafe_path']);
 });
+
+test('extractExportedSignatures exposes the masked parameter text, so a caller can tell an unambiguous list', () => {
+  const sigs = extractExportedSignatures("export function f(a, b = 'x)') {}\nexport function g(p = /\\)/, q) {}\nexport const h = x => x;\n");
+  assert.equal(sigs.get('f').raw, 'a, b = "S0"');
+  assert.ok(sigs.get('g').raw.includes('/'), 'the regex literal is still in the masked text');
+  assert.equal(sigs.get('h').raw, 'x');
+});
+
+test('extractExportedSignatures compares a quoted parameter key by its text, whatever its position in the file', () => {
+  const at = (src) => extractExportedSignatures(src).get('f').params;
+  assert.deepEqual(at("export function f({ 'a-b': v }, x) {}\n"), ['{"a-b"}', 'x']);
+  assert.deepEqual(at("const s = 'first';\nexport function f({ 'a-b': v }, x) {}\n"), ['{"a-b"}', 'x']);
+  assert.deepEqual(at('export function f({ "a-b": v, c }, x) {}\n'), ['{"a-b",c}', 'x']);
+});

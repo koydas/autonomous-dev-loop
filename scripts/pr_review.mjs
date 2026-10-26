@@ -25,6 +25,8 @@ import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, formatWithheldNote } from './lib/review_evidence.mjs';
 import { formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
 import { resolveReviewDecision } from './lib/review_decision.mjs';
+import { formatGuardrailSection, guardrailSignature } from './lib/guardrail_review.mjs';
+import { runGuardrailChecks } from './lib/guardrail_runner.mjs';
 import { summarizeExternalReview } from './lib/external_review.mjs';
 import { failureSignature, nextStreak, isBreakerOpen, formatEscalationNote } from './lib/circuit_breaker.mjs';
 
@@ -383,6 +385,23 @@ const promptBudget = !selfTarget ? [] : computePromptBudgetImpact({
   models: prModels == null ? GROQ_MODEL_DEFAULTS : prModelsOrDefaults(prModels),
 });
 if (promptBudget.length) log('Prompt budget impact', { prNumber, promptBudget });
+// RV-03: the AGENTS.md Hard Guardrails checked in code against the diff (test cases, signatures, module format,
+// imports). This repository's rules: a target repository (ADR-0045) does not have them. The checks parse PR text with
+// regular expressions, so they run in a child process with a deadline; a failure or a timeout skips the check.
+let guardrails = { findings: [], omitted: 0 };
+if (selfTarget) {
+  try {
+    guardrails = runGuardrailChecks({ rawDiff, mentionText: `${prTitle}\n${prBody}`, repoRoot, mergeBase });
+  } catch (err) {
+    obsLog({ stage: 'review', event: 'review.guardrail_error', level: 'warn', meta: { prNumber, error: err.code === 'ETIMEDOUT' ? 'guardrail checks timed out' : err.message } });
+  }
+}
+if (guardrails.findings.length) {
+  const byRule = {};
+  for (const f of guardrails.findings) byRule[f.rule] = (byRule[f.rule] ?? 0) + 1;
+  log('Guardrail findings', { prNumber, byRule, omitted: guardrails.omitted });
+  obsLog({ stage: 'review', event: 'review.guardrail_findings', level: 'info', meta: { prNumber, findings: guardrails.findings.length + guardrails.omitted, rules: Object.keys(byRule) } });
+}
 const evidencePath = process.env.REVIEW_EVIDENCE_PATH ?? path.join('evidence', 'review-evidence.json');
 const evidenceParse = fs.existsSync(evidencePath)
   ? parseEvidence(fs.readFileSync(evidencePath, 'utf8'))
@@ -440,7 +459,7 @@ const evidenceConfigPath = process.env.REVIEW_EVIDENCE_CONFIG ?? repoConfigFile(
 // So is a REQUEST_CHANGES whose findings all cite only cut code files (#219), unless a check failed.
 // ADR-0049: an approval that did not attack the diff on the four axes (at least 2 risks named) is withheld too.
 // One resolution shared with the `review` eval suite (EV-01).
-const decision = resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired: fs.existsSync(evidenceConfigPath), unreviewedCodeFiles, shownFiles });
+const decision = resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired: fs.existsSync(evidenceConfigPath), unreviewedCodeFiles, shownFiles, guardrailFindings: guardrails.findings });
 const { verdict, reason: verdictReason, adversarial } = decision;
 const withheldForUnreviewedCode = decision.withheldFor === 'unreviewed_code';
 const withheldForUnseenFindings = decision.withheldFor === 'unseen_findings';
@@ -448,22 +467,24 @@ const withheldForProtocol = decision.withheldFor === 'protocol';
 // ADR-0050: consecutive reviews reporting the same failure. At BREAKER_THRESHOLD the loop is ESCALATED:
 // no re-pulse of changes-requested (so no auto-fix), needs-human instead.
 const previousMarker = parseReviewMarker(existing?.body);
-const { streak, sig } = nextStreak(previousMarker, { verdict, sig: failureSignature({ failing: evidence.failing, review: cleanReview }) });
+const { streak, sig } = nextStreak(previousMarker, { verdict, sig: failureSignature({ failing: [...evidence.failing, ...guardrailSignature(guardrails.findings)], review: cleanReview }) });
 const breakerOpen = verdict === 'REQUEST_CHANGES' && isBreakerOpen(streak);
-const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES';
+const evidenceOverride = llmApproved && verdict === 'REQUEST_CHANGES' && evidence.failing.length > 0;
+const guardrailOverride = llmApproved && decision.guardrailOverride;
 const isApproved = verdict === 'APPROVE';
 const isWithheld = verdict === 'WITHHELD';
 const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_CHANGES';
 
 const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
 // ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
+const guardrailSection = formatGuardrailSection(guardrails, { overridden: guardrailOverride });
 const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget)
   + (isWithheld ? (withheldForUnreviewedCode ? formatUnreviewedCodeNote(unreviewedCodeFiles) : withheldForUnseenFindings ? formatUnseenFindingsNote(unreviewedCodeFiles) : withheldForProtocol ? formatProtocolNote(adversarial) : formatWithheldNote(verdictReason)) : '')
   + (breakerOpen ? formatEscalationNote(streak) : '');
 // Auto-fix truncates its feedback from the end: when a check failed, its output goes right after the heading.
 const reviewMarker = headSha ? `\n\n${formatReviewMarker({ sha: headSha, verdict, streak, sig })}` : '';
-const body = stripReviewMarkers(evidence.failing.length > 0
-  ? `${HEADING}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
+const body = stripReviewMarkers(evidence.failing.length > 0 || guardrailSection
+  ? `${HEADING}${guardrailSection}\n${evidenceSection}\n\n${reviewText.replace(HEADING, '').trim()}`
   : `${reviewText}\n${evidenceSection}`) + reviewMarker;
 
 const commentUrl = existing
@@ -648,7 +669,7 @@ obsLog({
   // withheld_from: the verdict the unseen-code backstop turned into WITHHELD (ADR-0038, #219), else null.
   // adversarial_points / adversarial_axes (ADR-0049): the closed axis ids that named a risk, never the model's text.
   // withheld_for: 'protocol' when the adversarial protocol, not the evidence or the cut, withheld the approval.
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, blocking_axes: blockingAxes, streak },
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, guardrail_override: guardrailOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, blocking_axes: blockingAxes, streak },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');

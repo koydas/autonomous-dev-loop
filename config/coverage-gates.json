@@ -56,6 +56,8 @@
     "scripts/lib/autofix_core.mjs",
     "scripts/lib/review_findings.mjs",
     "scripts/lib/impact_context.mjs",
+    "scripts/lib/guardrail_review.mjs",
+    "scripts/lib/guardrail_runner.mjs",
     "scripts/lib/circuit_breaker.mjs",
     "scripts/lib/lessons.mjs",
     {"module": "scripts/lib/lessons_loader.mjs", "test": "lessons.test.mjs"},

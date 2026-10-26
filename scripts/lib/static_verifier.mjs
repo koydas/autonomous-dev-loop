@@ -195,7 +195,8 @@ function normalizeParam(param) {
 function parseParams(code, open) {
   const close = matchingParen(code, open);
   if (close === -1) return null;
-  return { params: splitTopLevel(code.slice(open + 1, close), ',').map(normalizeParam).filter(Boolean), close };
+  const raw = code.slice(open + 1, close);
+  return { params: splitTopLevel(raw, ',').map(normalizeParam).filter(Boolean), close, raw };
 }
 
 const FN_HEAD = String.raw`(async\s+)?function\b\s*\*?\s*([\w$]*)\s*(?:<[^>()]*>)?\s*\(`;
@@ -205,11 +206,12 @@ const DECLARATOR = String.raw`(?:const|let|var)\s+([\w$]+)\s*(?::[^=;]+)?=\s*`;
 
 // `m` ends at the parameter list's `(` unless the single-parameter group `single` matched.
 function signatureAt(code, m, { isAsync, single = null, arrow = false }) {
-  if (single) return { params: [single], isAsync: Boolean(isAsync) };
+  if (single) return { params: [single], isAsync: Boolean(isAsync), raw: single };
   const parsed = parseParams(code, m.index + m[0].length - 1);
   if (!parsed) return null;
   if (arrow && !/^\s*(?::[^=;{]+)?=>/.test(code.slice(parsed.close + 1))) return null;
-  return { params: parsed.params, isAsync: Boolean(isAsync) };
+  // `raw` is the masked parameter text, for callers that must know whether the boundary was read without doubt.
+  return { params: parsed.params, isAsync: Boolean(isAsync), raw: parsed.raw };
 }
 
 // Groups of a DECLARATOR + ARROW_HEAD match, from `offset`: name, async, `function`, single param.
@@ -225,10 +227,13 @@ function declaredSignature(code, m, offset) {
  * @returns {Map<string, { params: string[], isAsync: boolean, local: string }>}
  */
 export function extractExportedSignatures(source) {
-  const { code } = maskSource(source);
+  const { code, strings } = maskSource(source);
+  // The masker numbers strings by their position in the file: a quoted key of a destructured parameter must be compared
+  // by its text, or an unrelated string added earlier renames it (`{ 'foo': v }` → `"S0"` then `"S1"`).
+  const resolveStrings = (text) => text.replace(/"S(\d+)"/g, (_, n) => JSON.stringify(strings[Number(n)] ?? ''));
   const locals = new Map();
   const exported = new Map();
-  const add = (map, name, sig, local = name) => { if (name && sig) map.set(name, { ...sig, local }); };
+  const add = (map, name, sig, local = name) => { if (name && sig) map.set(name, { ...sig, params: sig.params.map(resolveStrings), local }); };
 
   for (const m of code.matchAll(new RegExp(`(?<![\\w$.])${FN_HEAD}`, 'g'))) {
     add(locals, m[2], signatureAt(code, m, { isAsync: m[1] }));
@@ -263,7 +268,7 @@ export function extractExportedSignatures(source) {
   return exported;
 }
 
-function mentions(text, name) {
+export function mentions(text, name) {
   if (!text || !name) return false;
   return new RegExp(`(?<![\\w$])${name.replace(/[$]/g, '\\$')}(?![\\w$])`).test(text);
 }
