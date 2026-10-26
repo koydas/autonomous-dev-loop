@@ -10,6 +10,7 @@ import { formatEvidenceContext } from './review_evidence.mjs';
 import { fitReviewPrompt } from './token_budget.mjs';
 import { formatRelatedAdrsContext } from './related_adrs.mjs';
 import { formatImpactContext } from './impact_context.mjs';
+import { formatDocMentionsContext } from './doc_mentions.mjs';
 
 // ADR-0036: related ADRs shown to the reviewer. Groq gets one at most, and only when it fits
 // with the diff and the PR body uncut: the block is the first thing dropped.
@@ -19,6 +20,9 @@ export const MAX_RELATED_ADRS_ON_BUDGET = 1;
 // token budget (Groq), where it is also the first optional block kept when the prompt is tight.
 export const IMPACT_MAX_CHARS = 8000;
 export const IMPACT_MAX_CHARS_ON_BUDGET = 1200;
+// Documents that mention what the diff changes (RV-04b): the second half of the same optional block, kept or dropped with it.
+export const DOC_MENTIONS_MAX_CHARS = 4000;
+export const DOC_MENTIONS_MAX_CHARS_ON_BUDGET = 1200;
 
 // Diff cap without an input budget when the caller passes no maxDiffChars: the former fixed cap, kept for callers
 // that do not resolve one (pr_review.mjs and the review suite pass reviewMaxDiffChars).
@@ -213,18 +217,19 @@ export function loadGatedModules(root = PIPELINE_ROOT) {
  * is told when it saw a partial diff. Throws (no LLM call) when the fixed part alone is over budget.
  * Optional `staleRefsContext` (ADR-0035) and `promptBudgetContext` (ADR-0037) are fixed context like the dependency manifest;
  * `relatedAdrs` (ADR-0036) and `impact` (RV-02, the code outside the diff that depends on what it changes, see
- * impact_context.mjs) are dropped before the PR body or the diff is shrunk: the related ADRs first, the impact analysis
+ * impact_context.mjs, with the `docMentions` of RV-04b: the documents that name what it changes, doc_mentions.mjs) are dropped before the PR body or the diff is shrunk: the related ADRs first, the impact analysis
  * only when it does not fit even alone.
  * `automationGates` (default true): the automation-gate context written for this repository (ADR-0045: off for a target).
  * `unreviewedCodeFiles` (ADR-0038): code files the cut left out, in full or in part. `shownFiles`: the other files
  * of the filtered diff (shown in full, or tests / docs cut), for withholdOnUnreviewedCode.
  * @returns {{ userPrompt: string, diffTruncated: boolean, bodyTruncated: boolean, adrCount: number, impactIncluded: boolean, unreviewedCodeFiles: string[], shownFiles: string[] }}
  */
-export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars = null, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [], impact = null, automationGates = true }) {
+export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars = null, evidence, dependencyManifestContext = '', staleRefsContext = '', promptBudgetContext = '', relatedAdrs = [], impact = null, docMentions = null, automationGates = true }) {
   const orderedDiff = orderDiffForReview(rawDiff);
   const fullDiff = filterDiff(orderedDiff, Infinity);
   const cappedDiff = maxInputTokens == null ? filterDiff(orderedDiff, maxDiffChars ?? UNBUDGETED_MAX_DIFF_CHARS) : fullDiff;
-  const impactContext = formatImpactContext(impact, { maxChars: maxInputTokens == null ? IMPACT_MAX_CHARS : IMPACT_MAX_CHARS_ON_BUDGET });
+  const impactContext = formatImpactContext(impact, { maxChars: maxInputTokens == null ? IMPACT_MAX_CHARS : IMPACT_MAX_CHARS_ON_BUDGET })
+    + formatDocMentionsContext(docMentions, { maxChars: maxInputTokens == null ? DOC_MENTIONS_MAX_CHARS : DOC_MENTIONS_MAX_CHARS_ON_BUDGET });
   const fit = (adrCount, withImpact) => {
     const reviewContexts = `${automationGates ? buildAutomationGateContext(rawDiff, loadGatedModules()) : ''}${dependencyManifestContext}${staleRefsContext}${promptBudgetContext}${withImpact ? impactContext : ''}${formatRelatedAdrsContext(relatedAdrs, adrCount)}${formatEvidenceContext(evidence)}`;
     return fitReviewPrompt({

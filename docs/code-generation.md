@@ -186,12 +186,21 @@ The reviewer otherwise sees only the diff, so a changed export whose callers wer
 
 ### Evidence for findings outside the diff (RV-04a, ADR-0061)
 
-The "review only the diff" rule keeps findings grounded, but it hides a defect class: a caller, a test or a document the diff does not touch. The prompt now lets a finding concern such code when it **quotes it**: `Evidence: path:line "exact text"`, copied from the Impact analysis block (`scripts/lib/finding_evidence.mjs`, deterministic, no LLM).
+The "review only the diff" rule keeps findings grounded, but it hides a defect class: a caller, a test or a document the diff does not touch. The prompt now lets a finding concern such code when it **quotes it**: `Evidence: path:line "exact text"`, copied from the Impact analysis block or, since RV-04b, the Documents block (`scripts/lib/finding_evidence.mjs`, deterministic, no LLM).
 
 - **Outside** = the finding cites files and none is in the diff (renames count both sides; a finding with no file, or a diff with no `diff --git` header, is judged as before). An outside finding is **verified** when every quote is written in the PR-tree file within 5 lines of the line given (whitespace and quote marks ignored, quotes of 12+ characters, read whole even if they hold quote marks, and at least one in a file the finding cites; the PR tree is read through the safe reader, so a symlink, a large file or a path outside the tree proves nothing).
 - **Unproven** = a High or Medium outside finding without verified evidence. It stays in the comment, in an `### 🔎 Evidence Check` section (`✅ verified` / `⚠️ unproven`).
 - **Decision:** a REQUEST_CHANGES whose blocking findings are **all** unproven becomes **WITHHELD** (`withheld_for: unproven_findings`, label `review-withheld`, no auto-fix: it cannot edit what it is not shown), the same way as a review whose findings cite only cut code (ADR-0038). One proven or in-the-diff blocking finding, a failing check or a guardrail finding keeps its REQUEST_CHANGES. An approval is never changed.
 - **Limits:** the quote proves the text exists, not that the finding is right; a PR can plant text for the model to quote, so a verified outside finding is a lead a human still merges on. Events: `review.finding_evidence` (counts only), `review.finding_evidence_error`.
+
+### Documents that mention the change (RV-04b, ADR-0062)
+
+The Impact analysis lists callers and tests, so a document that the change makes false (PR #279: a doc still describing the old behavior of a file the PR edited) had nothing a finding could quote. `scripts/lib/doc_mentions.mjs` (deterministic, no LLM) takes what the diff changes that a document could name, and searches the repository's documents for it.
+
+- **Terms:** the exports the diff changes or removes (the same detection as the Impact analysis, 4+ characters) and the files it modifies, renames or deletes, by their old path (not new files, tests, documents, lock files, `package.json`, `index.*`). Removed, deleted and renamed first; at most 12. A file is matched by its path, or by its base name when that is 8+ characters.
+- **Documents searched:** `docs/**/*.md`, `.claude/skills/**/*.md`, `AGENTS.md` and the root `README.md`, outside the diff, never `CHANGELOG.md`, never a Superseded or Deprecated ADR (they quote the old rule on purpose); ADRs after the other documents. Same listing and safe reader as the Impact analysis (ADR-0023): no symlink, no file over 1 MiB. Bounds: 500 documents, 25 M characters, 4 lines per term (3 when 20+ documents mention it, reported as too generic).
+- **Prompt:** a `## Documents that mention what this diff changes` block after the Impact analysis, fenced and labelled data. It is the same optional block as the Impact analysis (kept or dropped with it, after the related ADRs): 4,000 characters without a token budget, 1,200 on Groq. A finding about one of these documents quotes it with `Evidence: path:line "exact text"` like any outside finding, and is checked the same way: in production the document is read from the PR tree.
+- **Events:** `review.doc_mentions` (counts only: `terms`, `refs`, `docs`, `included`, `scanned`, `truncated`); a listing error logs `review.doc_mentions_error` and the review runs without the block. Never changes the verdict by itself.
 
 ### Guardrail findings (RV-03, ADR-0060)
 

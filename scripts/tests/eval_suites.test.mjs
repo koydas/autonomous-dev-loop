@@ -1510,6 +1510,26 @@ test('reviewSuite.run renders the precomputed stale_refs, related_adrs and promp
   assert.doesNotMatch(bare.request.prompt, /Stale references|Related ADRs|Prompt budget impact/);
 });
 
+// RV-04b: the document lines of a case's doc_mentions reach the prompt like production and are the only text a finding can quote besides the Impact analysis.
+test('reviewSuite.run renders doc_mentions and checks a finding about a document against its lines', async () => {
+  const doc = 'The suite scores with `scoreReview` only.';
+  const input = {
+    title: 'T', body: 'B', diff: SMALL_DIFF,
+    doc_mentions: { terms: [{ kind: 'export', name: 'scoreReview', file: 'src/a.js', status: 'changed', refs: [{ path: 'docs/guide.md', line: 3, text: doc }], refFiles: 1, generic: false }], scanned: 1, truncated: false },
+  };
+  const finding = (evidence) => reviewText({ verdict: 'REQUEST_CHANGES', issues: [`[High] A document is now false — File: docs/guide.md Lines: 3 Root cause: r. ${evidence}Fix: f`] });
+  const proven = await runReview(input, finding(`Evidence: docs/guide.md:3 "${doc}" `));
+  assert.match(proven.request.prompt, /## Documents that mention what this diff changes[\s\S]*docs\/guide\.md:3: The suite scores with `scoreReview` only\./);
+  assert.deepEqual([proven.output.verdict, proven.output.evidence_check.verified, proven.output.evidence_check.unproven], ['REQUEST_CHANGES', 1, 0]);
+  for (const evidence of ['', 'Evidence: docs/guide.md:3 "The suite also scores the adversarial protocol." ']) {
+    const unproven = await runReview(input, finding(evidence));
+    assert.deepEqual([unproven.output.verdict, unproven.output.withheld_for, unproven.output.evidence_check.unproven], ['WITHHELD', 'unproven_findings', 1], evidence);
+  }
+  const without = await runReview({ ...input, doc_mentions: undefined }, finding(`Evidence: docs/guide.md:3 "${doc}" `));
+  assert.equal(without.output.verdict, 'WITHHELD', 'without the lines, the same quote is not found');
+  assert.doesNotMatch(without.request.prompt, /## Documents that mention/);
+});
+
 test('liveCallArgs: only the suite config fields + options, pinned to the primary', () => {
   const config = { provider: 'groq', apiKey: 'k', model: 'm', apiUrl: 'u', temperature: 0.6, maxTokens: 1024, maxInputTokens: 6300, diffRatio: undefined, feedbackRatio: undefined, reasoningEffort: 'low' };
   assert.deepEqual(liveCallArgs(reviewSuite, config, { prompt: 'p', systemPrompt: 's' }), {

@@ -524,6 +524,36 @@ test('buildReviewPrompt places the impact analysis after the budget context and 
   assert.match(userPrompt, /src\/b\.js:4/);
 });
 
+const DOC_MENTIONS = {
+  terms: [{ kind: 'export', name: 'parseThing', file: 'src/a.js', status: 'changed', refs: [{ path: 'docs/a.md', line: 7, text: 'parseThing returns a list' }], refFiles: 1, generic: false }],
+  scanned: 1, truncated: false,
+};
+
+test('buildReviewPrompt adds the documents that mention the change right after the impact analysis, and either alone counts as the block', () => {
+  const both = build({ maxInputTokens: null, impact: IMPACT, docMentions: DOC_MENTIONS, relatedAdrs: ADRS });
+  const order = ['## Impact analysis', '## Documents that mention what this diff changes', '## Related ADRs'].map((s) => both.userPrompt.indexOf(s));
+  assert.ok(order.every((i) => i > 0) && order.every((x, i) => i === 0 || x > order[i - 1]), `order: ${order}`);
+  assert.match(both.userPrompt, /docs\/a\.md:7: parseThing returns a list/);
+  const docsOnly = build({ maxInputTokens: null, docMentions: DOC_MENTIONS });
+  assert.equal(docsOnly.impactIncluded, true);
+  assert.doesNotMatch(docsOnly.userPrompt, /## Impact analysis/);
+  for (const docMentions of [null, { terms: [], scanned: 3, truncated: false }]) {
+    const none = build({ docMentions });
+    assert.doesNotMatch(none.userPrompt, /## Documents that mention/);
+    assert.equal(none.impactIncluded, false);
+  }
+});
+
+test('buildReviewPrompt drops the document lines with the impact analysis, never the diff, when they do not fit', () => {
+  const rawDiff = fileDiff('src/a.js', `+${'y'.repeat(4000)}`);
+  const base = build({ rawDiff, maxInputTokens: null });
+  const exact = estimateTokens(SYSTEM + base.userPrompt);
+  const { userPrompt, impactIncluded, diffTruncated } = build({ rawDiff, maxInputTokens: exact, impact: IMPACT, docMentions: DOC_MENTIONS });
+  assert.equal(impactIncluded, false);
+  assert.doesNotMatch(userPrompt, /## Documents that mention|## Impact analysis/);
+  assert.equal(diffTruncated, false);
+});
+
 test('buildReviewPrompt shows no impact block without impact, with an empty one, or reports it as not included', () => {
   for (const impact of [null, { symbols: [], tests: [], scanned: 0, truncated: false }]) {
     const { userPrompt, impactIncluded } = build({ impact });

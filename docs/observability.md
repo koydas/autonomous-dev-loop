@@ -112,6 +112,8 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.finding_evidence_error` | warn | — | `error` — the findings could not be assessed; they are judged as before (RV-04a) |
 | `review.guardrail_error` | warn | — | `error` — the guardrail checks failed or overran their 60 s deadline (`guardrail checks timed out`); the review continues without them (RV-03) |
 | `review.guardrail_findings` | info | — | `prNumber`, `findings` (count, including those not listed), `rules` (rule ids among `test_count_drop`, `exported_signature`, `module_system`, `unresolved_import`). No path, title or reason (RV-03) |
+| `review.doc_mentions` | info | — | `prNumber`, `terms` (changed exports and files that a document names), `refs` (document lines listed), `docs` (documents mentioning them, summed per term), `included` (the prompt had room for the block), `scanned` (documents read), `truncated` (the scan hit its cap) — counts only, never a path or a line of a document (RV-04b) |
+| `review.doc_mentions_error` | warn | — | `error` — document listing failed; the review continues without the documents block (RV-04b) |
 | `review.impact_error` | warn | — | `error` — file listing failed; the review continues without the impact analysis (RV-02) |
 | `review.impact_context` | info | — | `prNumber`, `symbols` (changed or removed exports found), `with_refs` (those still referenced outside the diff), `refs` (references listed), `tests` (related tests), `included` (the prompt had room for the block), `scanned` (source files read), `truncated` (the scan hit its cap) — counts only, never the code (RV-02) |
 | `review.prompt_budget_error` | warn | — | `error` — base (`git show`) or head read of a changed prompt failed; the review continues without the prompt budget block (ADR-0037) |
@@ -426,7 +428,7 @@ Each participating workflow uploads the trace file as a GitHub Actions artifact 
 | `llm_provider_error` | no (never had it) | code and status only |
 | `issue_validation.fail`, `code_gen.error`, `review.error`, `autofix.error`, stage span meta (`error`, OTLP `adl.error`) | yes, sanitized | an unexpected exception: may be `callLLM`'s `All providers failed: <provider>: … HTTP error <status>: <body>`, cut at the body |
 | `pr_prepare.error`, `code_gen.skipped`, `pr_prepare.skipped` | yes, sanitized | our own message: write guard, static verifier or a GitHub API call |
-| `review.stale_refs_error`, `review.related_adrs_error`, `review.impact_error`, `review.guardrail_error`, `review.finding_evidence_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
+| `review.stale_refs_error`, `review.related_adrs_error`, `review.impact_error`, `review.doc_mentions_error`, `review.guardrail_error`, `review.finding_evidence_error`, `review.prompt_budget_error`, `review.models_config_ignored` | yes, sanitized | our own message: a git or file read of the PR tree |
 | `autofix_reset.error`, `conflicts_detect.error` | yes, sanitized | our own message: a GitHub API call |
 | `conflicts.error`, `conflicts.model_unavailable` | yes, sanitized | an unexpected exception: may be `callLLM`'s provider error (sanitized), a git failure or a GitHub API call |
 | `trace_write_failed`, `start_span_failed`, `end_span_failed`, `trace_finalize_failed` | yes, sanitized | our own message: a trace-file write |

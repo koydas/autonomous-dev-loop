@@ -22,8 +22,8 @@ const SEARCHED_PATHS = [/^docs\/.+\.md$/, /^\.claude\/skills\/.+\.md$/, /^AGENTS
 const LIVE_PATHS = /^prompts\/[^/]+\.md$/;
 const HISTORICAL = /(^|\/)CHANGELOG\.md$/;
 // A Superseded or Deprecated ADR quotes the replaced rule on purpose, like CHANGELOG.md.
-const INACTIVE_ADR = /^- \*\*Status:\*\*\s*(superseded|deprecated)\b/im;
-const ADR_PATH = /^docs\/adr\/\d{4}-[^/]+\.md$/;
+export const INACTIVE_ADR = /^- \*\*Status:\*\*\s*(superseded|deprecated)\b/im;
+export const ADR_PATH = /^docs\/adr\/\d{4}-[^/]+\.md$/;
 
 /** Markdown-insensitive form used on both sides of the search: no backticks, `*`, `_`; one space; lowercase. */
 export function normalizeText(text) {
