@@ -12,7 +12,7 @@ import { retryWithBackoff, transientHttpError, isRetrySafeGitHubRequest } from '
 import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
-import { fitAutofixBudget, listChangedFiles, buildAutofixContext, parseAutofixResponse, findAutofixViolations } from './lib/autofix_core.mjs';
+import { resolveBudgetRatios, fitAutofixBudget, listChangedFiles, buildAutofixContext, parseAutofixResponse, findAutofixViolations } from './lib/autofix_core.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 import { isSelfTarget } from './lib/roots.mjs';
@@ -305,11 +305,7 @@ if (!feedbackParts.length) {
   }
 }
 
-const effectiveDiffRatio = cfgDiffRatio ?? 0.15;
-const effectiveFeedbackRatio = cfgFeedbackRatio ?? 0.25;
-if (effectiveDiffRatio + effectiveFeedbackRatio >= 1) {
-  throw new Error(`Token budget config error: autofix_diff_ratio (${effectiveDiffRatio}) + autofix_feedback_ratio (${effectiveFeedbackRatio}) must sum to less than 1.0; adjust config/models.yaml`);
-}
+const { diffRatio: effectiveDiffRatio, feedbackRatio: effectiveFeedbackRatio } = resolveBudgetRatios({ diffRatio: cfgDiffRatio, feedbackRatio: cfgFeedbackRatio });
 
 // ADR-0051: constraints the recent runs of this repository broke again and again, appended to the system prompt
 // (empty when none recurs, the metrics branch cannot be read, or ADL_LESSONS=off). Counted in the budget below.
