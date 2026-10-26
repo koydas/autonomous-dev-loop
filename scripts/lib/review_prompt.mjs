@@ -88,6 +88,18 @@ const FINDING_BULLET = /^ ?(?:[-*]|\d+[.)])\s+/;
 // a token that names no cut file keeps the finding, and so the REQUEST_CHANGES.
 const PATH_TOKEN = /(?:[\w.-]+\/)*[\w-][\w.-]*\.[A-Za-z]\w{0,7}\b/g;
 
+/** The lines of the review's Issues Found section, up to the next heading (empty when there is none). */
+export function issuesFoundText(review) {
+  const lines = [];
+  let inIssues = false;
+  for (const line of String(review ?? '').split('\n')) {
+    if (ISSUES_HEADING.test(line)) inIssues = true;
+    else if (OTHER_HEADING.test(line)) inIssues = false;
+    else if (inIssues) lines.push(line);
+  }
+  return lines.join('\n');
+}
+
 /**
  * Files cited by each finding of the review's Issues Found section (#219): one array per finding
  * bullet (its continuation lines included). [] when the section has no finding bullet.
