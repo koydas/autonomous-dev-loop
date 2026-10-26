@@ -19,6 +19,7 @@ on:
       - 'scripts/lib/review_findings.mjs'
       - 'scripts/lib/impact_context.mjs'
       - 'scripts/lib/guardrail_review.mjs'
+      - 'scripts/lib/finding_evidence.mjs'
       - 'scripts/lib/static_verifier.mjs'
       - 'scripts/lib/autofix_guard.mjs'
       - 'scripts/lib/protected_paths.mjs'

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "changes": [
+    {
+      "targetPath": "src/clamp.mjs",
+      "content": "export function clamp(n, min, max) {\n  return Math.max(min, Math.min(n, max));\n}\n"
+    }
+  ]
+}

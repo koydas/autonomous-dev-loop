@@ -38,7 +38,7 @@ export function parseFindings(issuesText) {
     }
   }
   return entries.map(({ severity, text }) => {
-    const fileField = text.match(/\bFile:\s*(.+?)(?=\s+Lines?:|\s+Root cause:|\s+Fix:|\s+Axis:|\n|$)/i)?.[1] ?? '';
+    const fileField = text.match(/\bFile:\s*(.+?)(?=\s+Lines?:|\s+Root cause:|\s+Fix:|\s+Axis:|\s+Evidence:|\n|$)/i)?.[1] ?? '';
     const files = [];
     let inlineLine = null;
     for (const raw of fileField.split(/\s*,\s*|\s+and\s+/)) {

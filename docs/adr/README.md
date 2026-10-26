@@ -64,3 +64,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0058: Impact analysis: the reviewer may use existing code outside the diff as evidence](./0058-impact-analysis-for-the-reviewer.md)
 - [ADR-0059: Auto conflicts-fix: a PR that conflicts with its base is merged forward, by escalating resolvers](./0059-auto-conflicts-fix.md)
 - [ADR-0060: Hard Guardrails are checked in code on the PR under review](./0060-guardrail-findings-in-the-review.md)
+- [ADR-0061: A finding about code outside the diff must quote it, and the quote is checked in code](./0061-evidence-for-findings-outside-the-diff.md)

@@ -16,6 +16,7 @@ import { parseEvidence } from '../lib/review_evidence.mjs';
 import { GROQ_MODEL_DEFAULTS, loadLLMConfig, reviewMaxDiffChars } from '../lib/config.mjs';
 import { estimateTokens } from '../lib/metrics.mjs';
 import { validateExpectedFindings, parseFindings } from '../lib/review_findings.mjs';
+import { parseDiffChanges } from '../lib/guardrail_review.mjs';
 import { parseCliArgs, resolveReplayRepeats, circuitBreakerMessage, liveCallArgs, createLiveLLM, buildLLM, applyEvalOverrides, liveModelId } from '../run_evals.mjs';
 import { partitionPublishable, partitionByPublishedModel, runCost } from '../lib/eval_scorecard.mjs';
 
@@ -414,13 +415,15 @@ const reviewText = ({ verdict, issues = [], summary = 'Changes X.', analysis = t
 // Oracle reviewer: approves the clean cases (one Low finding per must_advise entry), requests changes with every
 // must_flag keyword otherwise.
 // For an evidence case the LLM verdict differs from the final one (WITHHELD comes from an approval).
+// A reviewer cites the files of the diff (a finding about outside code needs quoted evidence, RV-04a).
+const firstDiffFile = (c) => parseDiffChanges(c.input.diff)[0]?.after ?? 'x';
 const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
   ? reviewText({
     verdict: 'REQUEST_CHANGES',
     summary: ['Changes X.', ...(c.expected.must_note ?? []).map((n) => `Note: ${n.split('|')[0]}.`)].join('\n'),
     issues: c.expected.findings
       ? c.expected.findings.map((f) => `[${f.severity[0].toUpperCase()}${f.severity.slice(1)}] ${f.match?.split('|')[0] ?? 'defect'} — File: ${f.path} Lines: ${f.lines?.[0] ?? 'unknown'} Root cause: r Fix: f`)
-      : (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: x Lines: 1 Root cause: r Fix: f`),
+      : (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: ${firstDiffFile(c)} Lines: 1 Root cause: r Fix: f`),
   })
   : reviewText({ verdict: 'APPROVED', issues: (c.expected.must_advise ?? []).map((a) => `[Low] ${a.split('|')[0]}: x — File: x Lines: 1`) }));
 
