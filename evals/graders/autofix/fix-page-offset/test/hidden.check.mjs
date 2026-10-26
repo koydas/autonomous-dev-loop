@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pageOf } from '../src/pages.mjs';
+
+// The subject is in the fixture copy this file is graded in (no src/ beside it here), so it is loaded at run time.
+const { pageOf } = await import(new URL('../src/pages.mjs', import.meta.url));
 
 const list = [1, 2, 3, 4, 5];
 

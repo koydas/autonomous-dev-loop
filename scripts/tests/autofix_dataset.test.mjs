@@ -211,3 +211,13 @@ test('golden set: a refusal case has a fixture the answer cannot be graded on, a
     for (const p of c.expected.must_name) assert.ok(JSON.stringify(c.input).includes(p), `${c.id}: ${p} is not in the case's feedback or diff`);
   }
 });
+
+test('golden set: a hidden test loads its subject at run time, since src/ is not beside it in the repository (a static relative import would be an unresolved_import for the review, RV-03)', async () => {
+  for (const c of dataset().filter((x) => x.expected.status === 'PATCH')) {
+    for (const f of c.grader.hidden_files) {
+      const source = await fs.readFile(path.join(PIPELINE_ROOT, c.grader.dir, f), 'utf8');
+      assert.doesNotMatch(source, /^\s*import\b[^'"\n]*from\s+['"]\.{1,2}\//m, `${c.id}: ${f} has a static relative import`);
+      assert.match(source, /await import\(new URL\('\.\.\/src\/[\w.-]+', import\.meta\.url\)\)/, `${c.id}: ${f} must load its subject with import(new URL(…))`);
+    }
+  }
+});
