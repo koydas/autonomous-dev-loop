@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "changes": [
+    {
+      "targetPath": "src/pages.mjs",
+      "content": "// Page numbers start at 1.\nexport function pageOf(list, page, size) {\n  const start = (page - 1) * size;\n  return list.slice(start, start + size);\n}\n"
+    }
+  ]
+}

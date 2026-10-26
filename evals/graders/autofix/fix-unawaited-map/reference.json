@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "changes": [
+    {
+      "targetPath": "src/load.mjs",
+      "content": "// Loads every id with the given fetcher, keeping the order of ids.\nexport async function loadAll(ids, fetchOne) {\n  return Promise.all(ids.map(async (id) => ({ id, value: await fetchOne(id) })));\n}\n"
+    }
+  ]
+}
