@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LINE_WINDOW, MAX_EVIDENCE_PER_FINDING, MAX_FINDINGS_CHECKED, assessFindings, evidenceCounts, formatEvidenceCheck, formatUnprovenNote, impactLookup, parseEvidence, quoteIsAt,
+  LINE_WINDOW, MAX_EVIDENCE_PER_FINDING, MAX_FINDINGS_CHECKED, MIN_QUOTE_CHARS, assessFindings, evidenceCounts, formatEvidenceCheck, formatUnprovenNote, impactLookup, parseEvidence, quoteIsAt,
 } from '../lib/finding_evidence.mjs';
 
 const CHECKOUT = ['import { applyDiscount } from "./pricing.mjs";', '', 'export function total(cart) {', '  return applyDiscount(cart.subtotal, cart.rate);', '}', ''].join('\n');
@@ -138,4 +138,47 @@ test('impactLookup rebuilds the lines an Impact analysis lists, at their line nu
   assert.equal(lookup('src/bad.mjs'), null, 'lines out of range are not kept');
   assert.equal(impactLookup(null)('x'), null);
   assert.equal(impactLookup({ symbols: [{ name: 'a' }] })('x'), null);
+});
+
+test('parseEvidence reads a quote whole when it holds quote marks or semicolons of its own', () => {
+  const nested = 'Evidence: src/caller.mjs:1 "return applyDiscount(cart.subtotal, "USD", cart.rate);" Fix: x';
+  assert.deepEqual(parseEvidence(nested), [{ path: 'src/caller.mjs', line: 1, quote: 'return applyDiscount(cart.subtotal, "USD", cart.rate);' }]);
+  assert.deepEqual(parseEvidence('Evidence: a.mjs:1 `const s = `x` + y;` Fix: x'), [{ path: 'a.mjs', line: 1, quote: 'const s = `x` + y;' }]);
+  assert.deepEqual(parseEvidence('Evidence: a.mjs:1 “say “hello” twice” Fix: x'), [{ path: 'a.mjs', line: 1, quote: 'say “hello” twice' }]);
+  // Items are still told apart, and the text between a closing mark and the next item is not part of a quote.
+  assert.deepEqual(parseEvidence('Evidence: a.mjs:1 "first, with a; semicolon" and b.mjs:2 "second item here" (see above) Fix: x'), [
+    { path: 'a.mjs', line: 1, quote: 'first, with a; semicolon' },
+    { path: 'b.mjs', line: 2, quote: 'second item here' },
+  ]);
+  // A quote that is never closed proves nothing.
+  assert.deepEqual(parseEvidence('Evidence: a.mjs:1 "never closed Fix: x'), []);
+  assert.deepEqual(parseEvidence('Evidence: a.mjs:1 " Fix: x'), []);
+});
+
+test('assessFindings: a quote that holds more than the file does is unverified, not accepted by its prefix', () => {
+  const caller = 'export function total(cart) {\n  return applyDiscount(cart.subtotal, cart.rate);\n}\n';
+  const lookupCaller = (p) => (p === 'src/caller.mjs' ? caller : null);
+  const claim = (quote) => assessFindings({ review: review(`- [High] Wrong argument — File: src/caller.mjs Lines: 2 Root cause: x. Evidence: src/caller.mjs:2 "${quote}" Fix: y.`), diffFiles: ['src/pricing.mjs'], lookup: lookupCaller }).findings[0];
+  assert.equal(claim('return applyDiscount(cart.subtotal, "USD", cart.rate);').status, 'unverified', 'the USD argument is not in the file');
+  assert.equal(claim('return applyDiscount(cart.subtotal, cart.rate);').status, 'verified');
+  assert.equal(claim('return applyDiscount(cart.subtotal, cart.rate); // and more').status, 'unverified');
+});
+
+test('a quote proves something only when it is specific: MIN_QUOTE_CHARS characters at least', () => {
+  const text = 'function f() {\n  return value;\n}\n';
+  assert.equal(MIN_QUOTE_CHARS, 12);
+  assert.equal(quoteIsAt(text, 2, 'return'), false, 'one common word is in every file');
+  assert.equal(quoteIsAt(text, 2, 'return valu'), false, '11 characters');
+  assert.equal(quoteIsAt(text, 2, 'return value'), true, '12 characters');
+});
+
+test('assessFindings: a verified quote from another file proves nothing about the file the finding cites', () => {
+  const tree2 = { 'src/checkout.mjs': CHECKOUT, 'docs/pricing.md': '# Pricing\n\nDiscounts are always rounded to cents.\n' };
+  const lookup2 = (p) => tree2[p] ?? null;
+  const assess = (file, evidence) => assessFindings({ review: review(`- [High] Stale — File: ${file} Lines: 3 Root cause: x. Evidence: ${evidence} Fix: y.`), diffFiles: ['src/pricing.mjs'], lookup: lookup2 }).findings[0];
+  assert.equal(assess('docs/pricing.md', 'src/checkout.mjs:4 "return applyDiscount(cart.subtotal, cart.rate);"').status, 'unverified', 'true quote, wrong file');
+  assert.equal(assess('docs/pricing.md', 'docs/pricing.md:3 "Discounts are always rounded to cents."').status, 'verified');
+  assert.equal(assess('docs/pricing.md', 'src/checkout.mjs:4 "return applyDiscount(cart.subtotal, cart.rate);"; docs/pricing.md:3 "Discounts are always rounded to cents."').status, 'verified', 'one quote in the cited file is enough, the others must still be found');
+  assert.equal(assess('docs/pricing.md', 'src/checkout.mjs:4 "return applyDiscount(cart.subtotal, cart.rate);"; docs/pricing.md:3 "Discounts are never rounded at all."').status, 'unverified');
+  assert.equal(assess('pricing.md', 'docs/pricing.md:3 "Discounts are always rounded to cents."').status, 'verified', 'a bare file name is a suffix of the path');
 });

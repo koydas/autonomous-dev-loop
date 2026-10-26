@@ -11,23 +11,35 @@ import { parseFindings, pathMatches } from './review_findings.mjs';
 export const MAX_EVIDENCE_PER_FINDING = 5;
 export const MAX_FINDINGS_CHECKED = 30;
 export const LINE_WINDOW = 5;
-export const MIN_QUOTE_CHARS = 6;
+export const MIN_QUOTE_CHARS = 12;
 const MAX_NOTE_TEXT = 140;
 
 const EVIDENCE_FIELD = /\bEvidence:\s*([\s\S]*?)(?=\s+(?:Fix|Axis|Root cause|File|Lines?):|$)/i;
-// path:line (or path:from-to), then the quote in double, curly or back quotes. Linear: no nested quantifier.
-const EVIDENCE_ITEM = /`?([\w./@-]+)`?:(\d+)(?:[-–]\d+)?[\s:—-]*(?:"([^"]+)"|“([^”]+)”|`([^`]+)`)/g;
+// An item starts at `path:line` (or `path:from-to`) followed by an opening quote mark. Linear: no nested quantifier.
+const ITEM_START = /`?([\w./@-]+)`?:(\d+)(?:[-–]\d+)?[\s:—-]*(?=["“`])/g;
+const CLOSING = { '"': '"', '“': '”', '`': '`' };
 
 const squash = (text) => String(text ?? '').replace(/[`“”"']/g, '').replace(/\s+/g, ' ').trim();
 const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f`]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_NOTE_TEXT);
 
-/** The `path:line "quote"` items of a finding's Evidence field (at most MAX_EVIDENCE_PER_FINDING). */
+/**
+ * The `path:line "quote"` items of a finding's Evidence field (at most MAX_EVIDENCE_PER_FINDING). An item runs from its
+ * opening quote mark to the last matching mark before the next item (or the end of the field), so a quoted source line
+ * that holds quote marks of its own is read whole: stopping at the first inner mark would accept a prefix of the quote as
+ * proof of all of it. An item whose quote is never closed is dropped.
+ */
 export function parseEvidence(findingText) {
   const field = EVIDENCE_FIELD.exec(String(findingText ?? ''))?.[1];
   if (!field) return [];
-  return [...field.matchAll(EVIDENCE_ITEM)]
-    .slice(0, MAX_EVIDENCE_PER_FINDING)
-    .map((m) => ({ path: m[1], line: Number(m[2]), quote: m[3] ?? m[4] ?? m[5] }));
+  const starts = [...field.matchAll(ITEM_START)];
+  const items = [];
+  starts.forEach((m, i) => {
+    const from = m.index + m[0].length;
+    const segment = field.slice(from, i + 1 < starts.length ? starts[i + 1].index : field.length);
+    const end = segment.lastIndexOf(CLOSING[segment[0]]);
+    if (end > 0) items.push({ path: m[1], line: Number(m[2]), quote: segment.slice(1, end) });
+  });
+  return items.slice(0, MAX_EVIDENCE_PER_FINDING);
 }
 
 /** Whether `quote` is written in `text` within LINE_WINDOW lines of `line` (whitespace and quote marks ignored). */
@@ -44,7 +56,8 @@ export function quoteIsAt(text, line, quote) {
  * - `anchored`: it cites a file of the diff, or no file at all: it is judged as before.
  * - `outside`: it cites files and none is in the diff: it needs proof. Without a list of the files of the diff (a diff with
  *   no `diff --git` header) nothing can be said to be outside it, and no finding is judged.
- * - `status`: `none` (no evidence given), `verified` (every quote found) or `unverified` (a quote is not where it says).
+ * - `status`: `none` (no evidence given), `verified` (every quote found, and at least one is in a file the finding cites:
+ *   a quote from another file proves nothing about it) or `unverified`.
  * - `unproven`: a High or Medium finding about outside code without verified evidence.
  * @param {{ review: string, diffFiles: string[], lookup: (path: string) => string | null }} input
  */
@@ -62,7 +75,8 @@ export function assessFindings({ review, diffFiles = [], lookup }) {
       }
       return { ...item, found: text != null && quoteIsAt(text, item.line, item.quote) };
     });
-    const status = evidence.length === 0 ? 'none' : evidence.every((e) => e.found) ? 'verified' : 'unverified';
+    const about = evidence.some((e) => f.files.some((file) => pathMatches(file, e.path)));
+    const status = evidence.length === 0 ? 'none' : evidence.every((e) => e.found) && (about || !outside) ? 'verified' : 'unverified';
     return { severity: f.severity, files: f.files, blocking, outside, evidence, status, unproven: blocking && outside && status !== 'verified' };
   });
   const count = (pick) => findings.filter(pick).length;
