@@ -139,20 +139,21 @@ function startsStatement(code, index) {
 }
 
 // Indexes of the strings in `import|export [clause from] "S<n>"`. One pass, no backtracking: the clause is the run
-// of `[\w$*{}\s,]` after the keyword (found once per run), and the string must end it, preceded by `from` or by nothing.
+// of `[\w$*{}\s,]` after the keyword (its end and last non-space found once per run), and the string must end it, preceded by `from` or by nothing.
 function staticImportStrings(code) {
   const found = [];
-  let run = { start: 0, end: -1 };
+  let run = { start: 0, end: -1, last: -1 };
   for (const m of code.matchAll(STATIC_KEYWORD)) {
     if (!startsStatement(code, m.index)) continue;
     const from = m.index + m[0].length;
     if (from < run.start || from > run.end) {
       let end = from;
       while (end < code.length && /[\w$*{}\s,]/.test(code[end])) end += 1;
-      run = { start: from, end };
+      let last = end - 1;
+      while (last >= from && /\s/.test(code[last])) last -= 1;
+      run = { start: from, end, last };
     }
-    let last = run.end - 1;
-    while (last >= from && /\s/.test(code[last])) last -= 1;
+    const { last } = run; // last non-space of the run, shared by every keyword inside it
     const bare = last < from;
     const afterFrom = last - 3 >= from && code.slice(last - 3, last + 1) === 'from' && !/\w/.test(code[last - 4] ?? '');
     if (!bare && !afterFrom) continue;

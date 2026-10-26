@@ -196,6 +196,14 @@ test('extractExportedSignatures and extractImportSpecifiers stay linear on a fil
   }
 });
 
+test('extractImportSpecifiers stays linear when an import clause holds many keywords and ends in a long whitespace run', () => {
+  const source = `import {\n${'import as a,\n'.repeat(4000)}} from${' '.repeat(40000)}'pkg';`;
+  const start = performance.now();
+  const specs = extractImportSpecifiers(source);
+  assert.deepEqual(specs, ['pkg']);
+  assert.ok(performance.now() - start < 2000, `took ${Math.round(performance.now() - start)} ms (the per-keyword trim took ~4.5 s)`);
+});
+
 test('extractExportedSignatures skips a re-export list, whatever whitespace precedes `from`, and an unclosed one at the end', () => {
   const sigs = extractExportedSignatures("function f(a) {}\nexport { f as g }\nexport { f as h } from './h.js';\nexport { f as i }  \n  from './i.js';\nexport { f as j");
   assert.deepEqual([...sigs.keys()], ['g']);
