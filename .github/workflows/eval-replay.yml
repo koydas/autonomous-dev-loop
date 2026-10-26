@@ -18,6 +18,7 @@ on:
       - 'scripts/lib/adversarial_review.mjs'
       - 'scripts/lib/review_findings.mjs'
       - 'scripts/lib/impact_context.mjs'
+      - 'scripts/lib/doc_mentions.mjs'
       - 'scripts/lib/guardrail_review.mjs'
       - 'scripts/lib/finding_evidence.mjs'
       - 'scripts/lib/static_verifier.mjs'

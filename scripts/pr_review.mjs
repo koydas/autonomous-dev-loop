@@ -19,6 +19,7 @@ import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, i
 import { findStaleReferences, formatStaleRefsContext, formatStaleRefsSection } from './lib/stale_refs.mjs';
 import { findRelatedAdrs } from './lib/related_adrs.mjs';
 import { findImpact } from './lib/impact_context.mjs';
+import { findDocMentions } from './lib/doc_mentions.mjs';
 import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudgetSection } from './lib/prompt_budget.mjs';
 import { modelsFromContent, loadReviewGuidelines } from './lib/layered_config.mjs';
 import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
@@ -334,6 +335,8 @@ const staleRefs = findStaleReferences({ rawDiff, ...repoFiles });
 const relatedAdrs = findRelatedAdrs({ rawDiff, ...repoFiles });
 // RV-02: the code outside the diff that depends on the exports it changes (callers, tests); the PR tree again, as data.
 const impact = findImpact({ rawDiff, ...repoFiles });
+// RV-04b: the documents outside the diff that name a file or export it changes, the other source of evidence for an outside finding.
+const docMentions = findDocMentions({ rawDiff, ...repoFiles });
 log('Review context searched', { prNumber, staleRefs: staleRefs.length, relatedAdrs: relatedAdrs.map((a) => a.id), impactSymbols: impact.symbols.length });
 // ADR-0037: token cost of changed prompts/*.md. Base side at the merge base (the .diff is base...head),
 // head side and config/models.yaml from the PR tree (trusted defaults when the PR tree has none).
@@ -418,7 +421,7 @@ obsLog({ stage: 'review', event: 'review.evidence_assessed', level: 'info', meta
 // ADR-0036: the related-ADR block is dropped before the diff or the body is shrunk.
 const { userPrompt, diffTruncated, bodyTruncated, adrCount, impactIncluded, unreviewedCodeFiles, shownFiles } = buildReviewPrompt({
   systemPrompt, userPromptTemplate, rawDiff, prTitle, prBody, maxInputTokens, maxDiffChars, evidence, dependencyManifestContext,
-  staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, impact, promptBudgetContext: formatPromptBudgetContext(promptBudget),
+  staleRefsContext: formatStaleRefsContext(staleRefs), relatedAdrs, impact, docMentions, promptBudgetContext: formatPromptBudgetContext(promptBudget),
   automationGates: selfTarget,
 });
 if (diffTruncated || bodyTruncated) log('Review prompt truncated to fit the token budget', { prNumber, diffTruncated, bodyTruncated, maxInputTokens, maxDiffChars, unreviewedCodeFiles });
@@ -427,7 +430,10 @@ if (diffTruncated || bodyTruncated || adrCount < relatedAdrs.length) {
   obsLog({ stage: 'review', event: 'review.prompt_truncated', level: 'warn', meta: { prNumber, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles.length, adrs_shown: adrCount, adrs_found: relatedAdrs.length, max_input_tokens: maxInputTokens } });
 }
 
-// RV-02: what the impact analysis found and whether the prompt had room for it (counts only, no code).
+// RV-02 / RV-04b: what the impact analysis and the document search found, and whether the prompt had room for it (counts only, no code).
+if (docMentions.terms.length) {
+  obsLog({ stage: 'review', event: 'review.doc_mentions', level: 'info', meta: { prNumber, terms: docMentions.terms.length, refs: docMentions.terms.reduce((n, x) => n + x.refs.length, 0), docs: docMentions.terms.reduce((n, x) => n + x.refFiles, 0), included: impactIncluded, scanned: docMentions.scanned, truncated: docMentions.truncated } });
+}
 if (impact.symbols.length || impact.tests.length) {
   obsLog({ stage: 'review', event: 'review.impact_context', level: 'info', meta: { prNumber, symbols: impact.symbols.length, with_refs: impact.symbols.filter((x) => x.refFiles > 0).length, refs: impact.symbols.reduce((n, x) => n + x.refs.length, 0), tests: impact.tests.length, included: impactIncluded, scanned: impact.scanned, truncated: impact.truncated } });
 }

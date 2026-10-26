@@ -93,7 +93,7 @@ export function touchedExports(rawDiff) {
   return out;
 }
 
-const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const stem = (file) => {
   const base = file.slice(file.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
   return base === 'index' ? (file.split('/').at(-2) ?? base) : base;
@@ -102,8 +102,8 @@ const importsModule = (content, moduleStem) => new RegExp(`(?:from\\s*|require\\
 const IMPORT_LINE = /^\s*(?:import\b|(?:const|let|var)\s.*\brequire\s*\(|export\s.*\bfrom\b)/;
 // Text from the PR tree reaches the prompt only through these: no control character (a newline would start a new line
 // of the block), and a snippet is short.
-const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ');
-const clip = (text) => plain(text).trim().slice(0, MAX_SNIPPET_CHARS);
+export const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ');
+export const clip = (text) => plain(text).trim().slice(0, MAX_SNIPPET_CHARS);
 
 /** Related tests of a changed module: files named after it, or importing it. */
 function relatedTests(changedModules, scanned, touchedPaths) {

@@ -239,7 +239,7 @@ export const reviewSuite = {
     options: { responseFormat: null },
   },
 
-  // input: { title, body, diff, dependencies?, evidence?, head_sha?, stale_refs?, related_adrs?, impact?, prompt_budget? }.
+  // input: { title, body, diff, dependencies?, evidence?, head_sha?, stale_refs?, related_adrs?, impact?, doc_mentions?, prompt_budget? }.
   // A case without `evidence` is a repository that has not opted in (no config): the evidence is missing and
   // does not withhold approval. stale_refs / related_adrs / impact / prompt_budget are precomputed, in the shapes
   // findStaleReferences / findRelatedAdrs / findImpact / computePromptBudgetImpact return (the PR tree is not in the case),
@@ -266,6 +266,7 @@ export const reviewSuite = {
       staleRefsContext: formatStaleRefsContext(input.stale_refs),
       relatedAdrs: input.related_adrs ?? [],
       impact: input.impact ?? null,
+      docMentions: input.doc_mentions ?? null,
       promptBudgetContext: formatPromptBudgetContext(input.prompt_budget),
     });
     // A requires_cut case left whole would score a verdict its expectation does not hold for: no LLM call, errored run.
@@ -280,7 +281,7 @@ export const reviewSuite = {
     // RV-03: the guardrail checks that need only the diff (a test case removed); the file-based ones need the PR tree.
     const guardrails = collectGuardrailFindings([findTestCountDrops(input.diff, { mentionText: `${input.title}\n${input.body || '(no description provided)'}` })]);
     // RV-04a: proof for the findings about code outside the diff; with no tree, the lines of the case's Impact analysis.
-    const findingAssessment = assessFindings({ review: cleanReview, diffFiles: parseDiffChanges(input.diff).flatMap((f) => [f.after, f.before]), lookup: impactLookup(input.impact) });
+    const findingAssessment = assessFindings({ review: cleanReview, diffFiles: parseDiffChanges(input.diff).flatMap((f) => [f.after, f.before]), lookup: impactLookup({ symbols: [...(input.impact?.symbols ?? []), ...(input.doc_mentions?.terms ?? [])] }) });
     const { verdict, reason, withheldFor, adversarial } = resolveReviewDecision({
       llmApproved: llmVerdict === 'APPROVED',
       cleanReview,

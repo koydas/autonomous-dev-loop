@@ -2103,6 +2103,53 @@ test('pr_review requests changes when an unproven outside finding comes with a b
   assert.doesNotMatch(comment, /pricing\.mjs`[^\n]*outside the diff/, 'the finding in the diff is not listed');
 });
 
+// RV-04b: the documents outside the diff that name what it changes are shown to the reviewer and are quotable evidence.
+async function runDocReview(groqContent) {
+  const fixture = await makePrTree({
+    files: {
+      'src/pricing.mjs': 'export function applyDiscount(price, rate, currency) {\n  return price * rate;\n}\n',
+      'docs/pricing.md': '# Pricing\n\n`applyDiscount(price, rate)` takes two arguments and returns the price.\n',
+    },
+    outsideFiles: { 'leak.md': 'applyDiscount leaked-outside-doc\n' },
+    links: { 'docs/linked.md': 'leak.md' },
+  });
+  const diffText = 'diff --git a/src/pricing.mjs b/src/pricing.mjs\n--- a/src/pricing.mjs\n+++ b/src/pricing.mjs\n@@ -1,3 +1,3 @@\n-export function applyDiscount(price, rate) {\n+export function applyDiscount(price, rate, currency) {\n   return price * rate;\n }\n';
+  const server = await startMockServer(makeHandler({ diffText, prBaseSha: fixture.sha, groqContent }));
+  const eventFile = await writeEventFile();
+  try {
+    const result = await runPrReview(server.address().port, eventFile, {}, { cwd: fixture.tree });
+    const review = JSON.parse(server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url)).body);
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    return { result, review, comment, prompt: llmPrompt(server) };
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fixture.cleanup();
+  }
+}
+const docFinding = (evidence) => `### ⚠️ Issues Found\n- [High] The guide still documents two arguments — File: \`docs/pricing.md\` Lines: 3 Root cause: applyDiscount now takes a currency. ${evidence}Fix: update the guide.\n\n### 🚀 Verdict\nREQUEST_CHANGES`;
+
+test('pr_review shows the documents that name a changed export, from regular files only, and a finding that quotes one keeps its REQUEST_CHANGES', async () => {
+  const { result, review, comment, prompt } = await runDocReview(docFinding('Evidence: docs/pricing.md:3 "`applyDiscount(price, rate)` takes two arguments and returns the price." '));
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.doesNotMatch(result.stderr, /review\.doc_mentions_error/);
+  assert.match(prompt, /## Documents that mention what this diff changes[\s\S]*`applyDiscount` \(export, changed, src\/pricing\.mjs\)[\s\S]*docs\/pricing\.md:3: /);
+  assert.ok(!prompt.includes('leaked-outside-doc') && !prompt.includes('docs/linked.md'), 'a symlinked document is not read');
+  assert.equal(review.event, 'REQUEST_CHANGES');
+  assert.match(comment, /✅ verified — \[high\] `docs\/pricing\.md` \(outside the diff\): `docs\/pricing\.md:3` found/);
+  const evt = result.stderr.split('\n').filter((l) => l.includes('"event":"review.doc_mentions"')).map((l) => JSON.parse(l));
+  assert.equal(evt.length, 1);
+  assert.deepEqual([evt[0].meta.terms, evt[0].meta.refs, evt[0].meta.docs, evt[0].meta.included], [1, 1, 1, true]);
+  assert.ok(!JSON.stringify(evt[0].meta).includes('pricing'), 'counts only, no paths');
+});
+
+test('pr_review withholds a finding about a document whose quote the PR tree does not hold', async () => {
+  const { result, review, comment } = await runDocReview(docFinding('Evidence: docs/pricing.md:3 "`applyDiscount(price, rate, currency)` takes three arguments." '));
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(review.event, 'COMMENT');
+  assert.match(comment, /⚠️ unproven — \[high\] `docs\/pricing\.md` \(outside the diff\)/);
+});
+
 // F22 (2026-10-19 audit): no PR-tree file over PR_TREE_MAX_BYTES (1 MiB) is read. An oversized doc is
 // left out of the searches and an oversized config/models.yaml falls back to the defaults, each with a
 // review.file_skipped warn event; the review proceeds.
