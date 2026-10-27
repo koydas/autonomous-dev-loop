@@ -136,13 +136,10 @@ export function liveModelId(config, overrides = {}) {
   return `${config.provider}:${config.model}${effort}`;
 }
 
-// `scoresRecording`: the replay is the scoring of a two-phase run, not a re-score: it reports the model that answered.
-export async function buildLLM(suite, replayFile, { scoresRecording = false } = {}) {
+export async function buildLLM(suite, replayFile) {
   if (replayFile) {
     const recorded = JSON.parse(await fs.readFile(replayFile, 'utf8'));
-    if (scoresRecording && recorded.meta?.phase !== 'model') throw new Error(`${replayFile} is not the results of a --phase model run (meta.phase)`);
-    const model = scoresRecording ? (recorded.meta?.model ?? 'unknown') : `replay:${recorded.meta?.model ?? 'unknown'}`;
-    return { llmFor: createReplayLLM(recorded.results), model, temperature: recorded.meta?.temperature, recorded };
+    return { llmFor: createReplayLLM(recorded.results), model: `replay:${recorded.meta?.model ?? 'unknown'}`, temperature: recorded.meta?.temperature, recorded };
   }
   const overrides = applyEvalOverrides();
   const config = loadLLMConfig(suite.stage);
@@ -204,6 +201,14 @@ export async function recordModelPhase({ suite, opts, results, summary, meta, tr
   await tracer.finalize('success');
 }
 
+// The recording of a --phase model run, replayed to be scored with the grader's verdicts: unlike a re-score, the run
+// reports the model that answered (not `replay:<model>`), and only a model-phase recording is accepted.
+export async function buildScoringLLM(replayFile) {
+  const recorded = JSON.parse(await fs.readFile(replayFile, 'utf8'));
+  if (recorded.meta?.phase !== 'model') throw new Error(`${replayFile} is not the results of a --phase model run (meta.phase)`);
+  return { llmFor: createReplayLLM(recorded.results), model: recorded.meta.model ?? 'unknown', temperature: recorded.meta.temperature, recorded };
+}
+
 async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const { suite: registered } = opts;
@@ -237,7 +242,7 @@ async function main() {
     logStart({ cases: cases.length, tokens_est: estimate.tokens, tokens_est_per_run: estimate.per_run, tokens_est_source: estimate.source });
     const refusal = opts.replay ? null : checkTokenBudget(estimate, process.env.EVAL_TOKEN_BUDGET);
     if (refusal) throw new Error(`Eval ${suite.name} refused before any LLM call: ${refusal}`);
-    const { llmFor, model, temperature, recorded: replayed } = await buildLLM(suite, opts.replay, { scoresRecording: Boolean(opts.graderResultsFile) });
+    const { llmFor, model, temperature, recorded: replayed } = await (opts.graderResultsFile ? buildScoringLLM(opts.replay) : buildLLM(suite, opts.replay));
     if (replayed) opts.repeats = resolveReplayRepeats(replayed.meta, opts);
 
     const results = await runSuite({

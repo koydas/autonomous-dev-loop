@@ -11,7 +11,7 @@ import { autofixSuite, autofixPromptConfig, SUITES } from '../lib/eval_suites.mj
 import { loadAutofixCases } from '../lib/autofix_dataset.mjs';
 import { gradeModelResults } from '../lib/autofix_eval_grading.mjs';
 import { createReplayLLM, runSuite, summarize } from '../lib/eval_harness.mjs';
-import { parseCliArgs, withGraderResults, buildLLM, recordModelPhase } from '../run_evals.mjs';
+import { parseCliArgs, withGraderResults, buildLLM, buildScoringLLM, recordModelPhase } from '../run_evals.mjs';
 import { PIPELINE_ROOT } from '../lib/roots.mjs';
 
 function withEnv(vars, fn) {
@@ -200,16 +200,16 @@ test('parseCliArgs: --phase and --grader-results are refused for a single-phase 
   assert.equal(parseCliArgs(['--suite', 'review']).phase, null);
 });
 
-test('buildLLM for a scoring replay reports the model that answered, and only accepts a model-phase recording', async () => {
+test('buildScoringLLM reports the model that answered, and only accepts a model-phase recording', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'autofix-suite-'));
   try {
     const model = path.join(dir, 'model.json');
     const other = path.join(dir, 'other.json');
     await fs.writeFile(model, JSON.stringify({ meta: { phase: 'model', model: 'anthropic:m1', temperature: null }, results: [] }));
     await fs.writeFile(other, JSON.stringify({ meta: { model: 'anthropic:m1' }, results: [] }));
-    assert.equal((await buildLLM(autofixSuite, model, { scoresRecording: true })).model, 'anthropic:m1');
+    assert.equal((await buildScoringLLM(model)).model, 'anthropic:m1');
     assert.equal((await buildLLM(autofixSuite, model)).model, 'replay:anthropic:m1', 'a plain re-score keeps the replay prefix');
-    await assert.rejects(buildLLM(autofixSuite, other, { scoresRecording: true }), /is not the results of a --phase model run/);
+    await assert.rejects(buildScoringLLM(other), /is not the results of a --phase model run/);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
