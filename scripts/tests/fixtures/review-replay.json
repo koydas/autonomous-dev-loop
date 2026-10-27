@@ -364,6 +364,15 @@
           "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: feat | Tests expected: yes — tests updated\n\n### ✅ Summary\nApplies currency-aware rounding in applyDiscount.\n\n### ⚠️ Issues Found\n- [High] applyDiscount gains a required currency parameter that its existing caller does not pass — File: src/pricing.mjs Lines: 1-4 Root cause: src/checkout.mjs:14 still calls applyDiscount(cart.subtotal, cart.rate), so currency is undefined there and every checkout rounds to cents even for JPY Fix: default currency to a configured value or update the checkout caller in the same change Axis: correctness\n\n### 🚀 Verdict\nREQUEST_CHANGES"
         }
       ]
+    },
+    {
+      "case_id": "incident-unreadable-verdict-clean-change",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: mixed | Tests expected: yes\n\n### ✅ Summary\nAdds `markLocated`, its tests, a note in docs/report.md and a changelog entry.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/report/located.mjs:5 an item without a numeric line is never located\n- **Side effects** — src/report/located.mjs:4 callers are not in the diff\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none, the diff matches the issue\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
     }
   ]
 }

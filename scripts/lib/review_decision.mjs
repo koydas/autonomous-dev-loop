@@ -40,3 +40,26 @@ export function resolveReviewDecision({ llmApproved, cleanReview, evidence, evid
     : 'evidence';
   return { verdict, reason, withheldFor, guardrailOverride, adversarial, stages: { evidence: evidenceDecision, code: codeDecision } };
 }
+
+/**
+ * A review with no readable verdict line (a model that answered in another layout, a truncated answer) is not a
+ * rejection: pr_review.mjs used to fail closed into REQUEST_CHANGES, which starts auto-fix on a review that holds no
+ * request. It is WITHHELD (`unreadable_verdict`): a human reads the comment, auto-fix does not run. A deterministic
+ * defect (a failing check, a guardrail finding) keeps its REQUEST_CHANGES, and a decision that is already WITHHELD stays
+ * as it was. Applied by pr_review.mjs only: the `review` eval suite counts a missing verdict as an errored run.
+ * @param {ReturnType<typeof resolveReviewDecision>} decision
+ * @param {{ verdictReadable: boolean, deterministicDefect?: boolean }} options
+ */
+export function withholdUnreadableVerdict(decision, { verdictReadable, deterministicDefect = false }) {
+  if (verdictReadable || deterministicDefect || decision.verdict !== 'REQUEST_CHANGES') return decision;
+  return { ...decision, verdict: 'WITHHELD', reason: 'the review has no readable verdict line', withheldFor: 'unreadable_verdict' };
+}
+
+/** Note appended to the review comment when the verdict could not be read. */
+export function formatUnreadableVerdictNote() {
+  return [
+    '',
+    '> **Changes not requested** — the review has no readable verdict line (`### 🚀 Verdict` followed by `APPROVED` or `REQUEST_CHANGES`), so it cannot be read as an approval or as a request.',
+    '> No check failed and no guardrail finding was raised: a human reads the review above, and auto-fix is not triggered. Push a new commit to review again.',
+  ].join('\n');
+}

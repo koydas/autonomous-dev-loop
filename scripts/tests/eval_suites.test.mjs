@@ -929,6 +929,8 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.equal(byId['incident-clean-code-cut'].label, 'withheld');
   assert.equal(byId['incident-note-instead-of-fix'].scores.flags_issue, 1);
   assert.equal(byId['incident-stale-refs-shared-phrasing'].scores.no_false_alarm, 1);
+  // PR #311: a clean change whose review is readable and approved (the format regression it came from is an errored run).
+  assert.deepEqual([byId['incident-unreadable-verdict-clean-change'].label, byId['incident-unreadable-verdict-clean-change'].scores.no_false_alarm], ['approve', 1]);
   assert.equal(byId['incident-toctou-untested-claim'].label, 'approve');
   // #219: the recorded false REQUEST_CHANGES cite only code files the cut hid, so the verdict is withheld
   // (ADR-0038 amendment); the High / Medium finding itself still counts as a false alarm.
@@ -944,10 +946,10 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   }
   assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 40 cases run, 35 gated: the five known-gap cases are counted only in summary.known_gap.
+  // 41 cases run, 36 gated: the five known-gap cases are counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [40, 0.0286, 0.9143, 0.8667, 0.7895],
+    [41, 0.0278, 0.9167, 0.8667, 0.8],
   );
   // Finding level (RV-01): the four incident cases that list their defects are known-gap, so the gated metrics
   // above are unchanged and the finding metrics live in summary.known_gap. Recorded answers: a miss (approved), a
@@ -973,10 +975,11 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   const gap = summary.known_gap.scores;
   assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [5, 0.5833, 0.8889, 0.5]);
   assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
-  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9375, 0.8667]);
+  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9375, 0.875]);
   // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
   const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push', 'impact-caller-misses-new-parameter']; // RV-01 / RV-02, known-gap
-  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id)));
+  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these.
+  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && r.case_id !== 'incident-unreadable-verdict-clean-change'));
   assert.deepEqual(
     [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
     [30, 0.0345, 0.8966, 0.8667, 0.7143],

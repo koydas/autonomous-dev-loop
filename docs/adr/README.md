@@ -67,3 +67,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0061: A finding about code outside the diff must quote it, and the quote is checked in code](./0061-evidence-for-findings-outside-the-diff.md)
 - [ADR-0062: Documents that mention what the diff changes are a source of evidence for the reviewer](./0062-documents-as-evidence-for-the-reviewer.md)
 - [ADR-0063: Every finding gets a verification status, and only substantiated findings request changes or reach the auto-fixer](./0063-finding-verification-statuses.md)
+- [ADR-0064: A review with no readable verdict is withheld, not a request for changes](./0064-unreadable-verdict-is-withheld.md)

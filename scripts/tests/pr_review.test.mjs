@@ -472,7 +472,7 @@ test('pr_review submits REQUEST_CHANGES event when verdict is REQUEST_CHANGES', 
   }
 });
 
-test('pr_review defaults to REQUEST_CHANGES when verdict is absent from LLM response', async () => {
+test('pr_review withholds, and does not request changes, when the verdict is absent from the LLM response', async () => {
   const server = await startMockServer(
     makeHandler({ groqContent: 'No verdict line in this response.' }),
   );
@@ -484,10 +484,34 @@ test('pr_review defaults to REQUEST_CHANGES when verdict is absent from LLM resp
       (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
     );
     assert.ok(review, 'expected POST to reviews endpoint');
-    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.match(JSON.parse(review.body).body, /Changes not requested: the review has no readable verdict line/);
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld'], 'no changes-requested label: auto-fix does not start');
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    assert.match(comment, /\*\*Changes not requested\*\* — the review has no readable verdict line/);
+    assert.match(result.stderr, /"event":"review.verdict"[^\n]*"verdict":"WITHHELD"[^\n]*"withheld_from":"REQUEST_CHANGES"[^\n]*"withheld_for":"unreadable_verdict"/);
+    assert.match(comment, /verdict=WITHHELD -->$/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review keeps REQUEST_CHANGES for an unreadable verdict when a check failed', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'No verdict line in this response.' }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile([EVIDENCE_FAIL]);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: evidenceFile });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.ok(reviewLabelCalls(server).added.includes('changes-requested'));
+    assert.doesNotMatch(result.stderr, /unreadable_verdict/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
   }
 });
 
@@ -587,7 +611,7 @@ test('pr_review detects APPROVE when verdict uses single asterisk (*APPROVED*)',
   }
 });
 
-test('pr_review defaults to REQUEST_CHANGES when verdict line echoes template placeholder', async () => {
+test('pr_review withholds when verdict line echoes template placeholder', async () => {
   const groqContent = '### 🚀 Verdict\n(APPROVED | REQUEST_CHANGES)';
   const server = await startMockServer(makeHandler({ groqContent }));
   const eventFile = await writeEventFile();
@@ -598,7 +622,8 @@ test('pr_review defaults to REQUEST_CHANGES when verdict line echoes template pl
       (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
     );
     assert.ok(review, 'expected POST to reviews endpoint');
-    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -1327,7 +1352,7 @@ test('pr_review reviews again when the marker names an older head', async () => 
   assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
   assert.equal(llmCalls(requests), 1);
   const patch = requests.find((r) => r.method === 'PATCH' && r.url.endsWith(`/issues/comments/${COMMENT_ID}`));
-  assert.match(JSON.parse(patch.body).body, new RegExp(`sha=${HEAD_SHA} verdict=REQUEST_CHANGES -->$`));
+  assert.match(JSON.parse(patch.body).body, new RegExp(`sha=${HEAD_SHA} verdict=WITHHELD -->$`), 'the default answer has no verdict line');
 });
 
 test('pr_review re-reviews an already reviewed head on a manual workflow re-run', async () => {

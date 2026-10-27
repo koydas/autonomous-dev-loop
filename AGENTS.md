@@ -94,7 +94,7 @@ Minimum required path coverage for automation modules, enforced by code review. 
 | Module | Coverage | Invariant to cover |
 |---|---|---|
 | `pr_review.mjs` — verdict → review event and labels (ADR-0026) | 100% of verdicts | `APPROVE`, `REQUEST_CHANGES`, `WITHHELD` each yield their event and labels; `review-withheld` is cleared by the next `APPROVE` / `REQUEST_CHANGES` |
-| `pr_review.mjs` — verdict parsing | 100% of accepted forms | every documented verdict form; placeholder or missing verdict → `REQUEST_CHANGES` |
+| `pr_review.mjs` — verdict parsing | 100% of accepted forms | every documented verdict form; placeholder or missing verdict → `WITHHELD` (`unreadable_verdict`, ADR-0064), `REQUEST_CHANGES` only with a failing check or a guardrail finding |
 | `scripts/lib/review_marker.mjs` — per-SHA dedup (ADR-0028) | 100% of branches | `decideReviewRun` / `decideAutofixRun` outcomes, marker parse and trust rules, and the `pr_review.mjs` / `auto_fix_pr.mjs` skip paths (no LLM call, no mutation) |
 | `scripts/lib/prompts.mjs` — `loadPrompt`, `interpolatePrompt` | 100% of branches | missing file and empty file raise explicit errors with the path; unknown placeholders stay unchanged |
 | Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields give path-oriented errors (e.g. `pull_request.number`) |
