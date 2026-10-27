@@ -24,7 +24,7 @@ protected_paths:
   - .claude/
   - AGENTS.md
   - CLAUDE.md
-  # Eval fixtures and graders (ADR-0052 amendment): the trees the autofix suite pins by SHA-256 and the hidden tests that
+  # Eval fixtures and graders (ADR-0021 amendment; the suite is ADR-0052): the trees the autofix suite pins by SHA-256 and the hidden tests that
   # score a patch. A patch that edits a hidden test or its fixture would decide its own grade.
   - evals/fixtures/
   - evals/graders/
