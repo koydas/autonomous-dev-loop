@@ -100,6 +100,16 @@ test('renderTemplate: the default branch replaces main in pr-review.yml and conf
   }
 });
 
+test('renderTemplate: a CRLF checkout (autocrlf) gets the default branch too, line endings kept', () => {
+  const pin = { ...PIN, defaultBranch: 'trunk' };
+  for (const name of ['pr-review.yml', 'conflicts-fix.yml']) {
+    const crlf = fs.readFileSync(path.join(TEMPLATES, name), 'utf8').replace(/\n/g, '\r\n');
+    const out = renderTemplate(name, crlf, pin);
+    assert.equal(out, renderTemplate(name, crlf.replace(/\r\n/g, '\n'), pin).replace(/\n/g, '\r\n'), name);
+    assert.match(out, /trunk/, name);
+  }
+});
+
 test('renderTemplate: an unknown placeholder left in a template throws with the file and line', () => {
   assert.throws(() => renderTemplate('x.yml', 'a: <PIPELINE_SHA>\nb: <PIPELINE_OTHER>\n', PIN), /x\.yml: placeholder left after rendering: b: <PIPELINE_OTHER>/);
 });
@@ -212,6 +222,13 @@ test('install: a missing target and the pipeline itself as target are refused', 
   withPipeline(({ pipeline, target }) => {
     assert.throws(() => install(['--target', path.join(target, 'nope')], { pipelineRoot: pipeline, log: quiet }), /--target: not a directory/);
     assert.throws(() => install(['--target', pipeline], { pipelineRoot: pipeline, log: quiet }), /the pipeline repository itself/);
+  });
+});
+
+test('install: a pipeline root that is not a git repository fails with the git command and directory', () => {
+  withPipeline(({ pipeline, target }) => {
+    fs.rmSync(path.join(pipeline, '.git'), { recursive: true, force: true });
+    assert.throws(() => install(['--target', target], { pipelineRoot: pipeline, log: quiet }), /^Error: git status --porcelain -- templates\/consumer failed in .+: .+/);
   });
 });
 

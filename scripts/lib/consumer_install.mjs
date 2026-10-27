@@ -57,15 +57,16 @@ export function validatePin({ sha, version, defaultBranch }) {
 
 /**
  * Fills a template: the pin and its version comment, and the default branch where a template names `main`
- * (pr-review.yml excludes it, conflicts-fix.yml watches it). Throws if a placeholder is left.
+ * (pr-review.yml excludes it, conflicts-fix.yml watches it), LF or CRLF (a Windows checkout with autocrlf).
+ * Throws if a placeholder is left.
  */
 export function renderTemplate(name, text, pin) {
   validatePin(pin);
   const out = text
     .replaceAll('<PIPELINE_SHA>', pin.sha)
     .replaceAll('<PIPELINE_VERSION>', pin.version)
-    .replace(/^(\s+branches: \["\*\*", ")!main("\])$/m, `$1!${pin.defaultBranch}$2`)
-    .replace(/^(\s+branches: \[)main(\])$/m, `$1${pin.defaultBranch}$2`);
+    .replace(/^(\s+branches: \["\*\*", ")!main("\]\r?)$/m, `$1!${pin.defaultBranch}$2`)
+    .replace(/^(\s+branches: \[)main(\]\r?)$/m, `$1${pin.defaultBranch}$2`);
   const left = out.split('\n').find((line) => line.includes('<PIPELINE_'));
   if (left) throw new Error(`${name}: placeholder left after rendering: ${left.trim()}`);
   return out;

@@ -83,7 +83,9 @@ Inside `adl-pr-review.yml` the `evidence` job, which runs your pull request's co
 
 ## Updating
 
-Change the SHA (and the version comment) in the six callers and the label setup, in one pull request: check the clone out at the new tag and rerun the installer with `--force` (it lists which callers change). Callers you edited are overwritten; diff before committing. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment, once releases are published as tags. For Dependabot:
+Change the SHA (and the version comment) in the six callers and the label setup, in one pull request: check the clone out at the new tag and rerun the installer with `--force` (it lists which callers change). Callers you edited are overwritten; diff before committing. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment, once releases are published as tags. Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
+
+For Dependabot:
 
 ```yaml
 # .github/dependabot.yml
@@ -94,7 +96,6 @@ updates:
     schedule:
       interval: weekly
 ```
- Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
 
 ## Security rules that hold for every installation
 

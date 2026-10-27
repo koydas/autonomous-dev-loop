@@ -19,7 +19,12 @@ import { PIPELINE_ROOT } from './lib/roots.mjs';
 import { parseInstallArgs, pickReleaseTag, planInstall, UNTAGGED, WORKFLOWS_DIR } from './lib/consumer_install.mjs';
 
 function git(cwd, ...args) {
-  return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  try {
+    return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch (err) {
+    const detail = String(err.stderr ?? '').trim().split('\n')[0] || err.message;
+    throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${detail}`);
+  }
 }
 
 function detectDefaultBranch(target) {
