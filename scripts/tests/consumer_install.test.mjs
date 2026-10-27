@@ -84,7 +84,9 @@ test('renderTemplate: every shipped template renders with no placeholder left an
   for (const name of shipped) {
     const out = renderTemplate(name, fs.readFileSync(path.join(TEMPLATES, name), 'utf8'), PIN);
     assert.ok(!out.includes('<PIPELINE_'), name);
-    assert.ok(out.includes(`${SHA} # v1.2.3`), name);
+    // install.yml takes the version as a workflow input: the only template with no pin to fill.
+    if (name === 'install.yml') assert.ok(!out.includes(SHA), name);
+    else assert.ok(out.includes(`${SHA} # v1.2.3`), name);
   }
 });
 
