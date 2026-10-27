@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { resolveReviewDecision } from '../lib/review_decision.mjs';
+import { resolveReviewDecision, withholdUnreadableVerdict, formatUnreadableVerdictNote } from '../lib/review_decision.mjs';
 import { reviewSuite } from '../lib/eval_suites.mjs';
 
 const ANALYSIS_2 = '### 🔬 Adversarial Analysis\n- **Robustness** — a.mjs:1 an empty list is not handled\n- **Side effects** — b.mjs:2 the cache is shared\n- **Type integrity** — none, checked\n- **Issue fit** — none, matches\n\n';
@@ -88,4 +88,25 @@ test('resolveReviewDecision: the unproven-findings reason counts the findings', 
   const d = resolveReviewDecision({ ...base, llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), findingAssessment: { blocking: 3, unproven: 3 } });
   assert.match(d.reason, /^3 blocking finding\(s\), all about code outside the diff without verified evidence$/);
   assert.equal(d.guardrailOverride, false);
+});
+
+test('withholdUnreadableVerdict: an unreadable verdict is withheld, unless a check failed or a guardrail finding was raised', () => {
+  const rejected = resolveReviewDecision({ ...base, llmApproved: false });
+  assert.equal(rejected.verdict, 'REQUEST_CHANGES');
+  const withheld = withholdUnreadableVerdict(rejected, { verdictReadable: false });
+  assert.deepEqual([withheld.verdict, withheld.reason, withheld.withheldFor], ['WITHHELD', 'the review has no readable verdict line', 'unreadable_verdict']);
+  assert.equal(withheld.stages, rejected.stages, 'the rest of the decision is kept');
+  assert.equal(withholdUnreadableVerdict(rejected, { verdictReadable: true }), rejected, 'a readable verdict is never touched');
+  assert.equal(withholdUnreadableVerdict(rejected, { verdictReadable: false, deterministicDefect: true }), rejected, 'a failing check or a guardrail finding keeps its REQUEST_CHANGES');
+  const alreadyWithheld = resolveReviewDecision({ ...base, llmApproved: true, evidence: { ...AVAILABLE, state: 'missing', reason: 'no file' } });
+  assert.equal(alreadyWithheld.verdict, 'WITHHELD');
+  assert.equal(withholdUnreadableVerdict(alreadyWithheld, { verdictReadable: false }), alreadyWithheld, 'a decision that is already withheld keeps its own reason');
+  const approved = resolveReviewDecision({ ...base });
+  assert.equal(withholdUnreadableVerdict(approved, { verdictReadable: false }), approved, 'only a REQUEST_CHANGES is withheld');
+});
+
+test('formatUnreadableVerdictNote says why and that auto-fix is not triggered', () => {
+  const note = formatUnreadableVerdictNote();
+  assert.match(note, /^\n> \*\*Changes not requested\*\* — the review has no readable verdict line/);
+  assert.match(note, /auto-fix is not triggered/);
 });
