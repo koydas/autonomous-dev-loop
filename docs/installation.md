@@ -1,6 +1,6 @@
 # Installing the Pipeline in Another Repository
 
-ADR-0045. A repository installs the pipeline with five caller workflows and its own configuration directory. The scripts, prompts and default configuration are not copied: each run fetches them at the commit the callers pin, and an update is one new SHA.
+ADR-0045. A repository installs the pipeline with six caller workflows and its own configuration directory. The scripts, prompts and default configuration are not copied: each run fetches them at the commit the callers pin, and an update is one new SHA.
 
 ## How it fits together
 
