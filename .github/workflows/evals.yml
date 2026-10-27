@@ -238,6 +238,8 @@ jobs:
           EVAL_RUN_ID: ${{ github.run_id }}-autofix
           REPEATS: ${{ inputs.repeats || '3' }}
           LLM_MAX_RETRY_WAIT_MS: '60000'
+          # Optional pre-flight cap, as on the eval job: a manual run honours it, the weekly one never does.
+          EVAL_TOKEN_BUDGET: ${{ github.event_name != 'schedule' && vars.EVAL_TOKEN_BUDGET || '' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
@@ -311,7 +313,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: run-trace-${{ github.run_id }}-autofix-grade
-          path: ./observability/traces/${{ github.run_id }}.json
+          # grade_autofix_eval.mjs names its trace <run_id>-eval-grader (it shares the run id with the model job's trace).
+          path: ./observability/traces/${{ github.run_id }}-eval-grader.json
           if-no-files-found: ignore
           overwrite: true
 

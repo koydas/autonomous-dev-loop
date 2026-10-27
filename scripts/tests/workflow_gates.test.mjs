@@ -653,6 +653,17 @@ test('evals.yml autofix-model holds the API key but never runs a patch; autofix-
   assert.deepEqual([...new Set(secrets)].sort(), ['ANTHROPIC_API_KEY', 'GROQ_API_KEY']);
 });
 
+test('evals.yml autofix: each job uploads the trace file its script actually writes', () => {
+  const read = (file) => readFileSync(resolve(ROOT, 'scripts', file), 'utf8');
+  // run_evals.mjs traces under the bare run id; grade_autofix_eval.mjs under <run_id>-eval-grader.
+  assert.match(read('run_evals.mjs'), /const traceRunId = workflowRunId \?\? /);
+  assert.match(read('grade_autofix_eval.mjs'), /\$\{process\.env\.GITHUB_RUN_ID \?\? `local-\$\{Date\.now\(\)\}`\}-eval-grader/);
+  const trace = (job) => autofixJob(job).match(/path: \.\/observability\/traces\/(.+)\n/)?.[1];
+  assert.equal(trace('autofix-model'), '${{ github.run_id }}.json');
+  assert.equal(trace('autofix-grade'), '${{ github.run_id }}-eval-grader.json');
+  assert.equal(trace('autofix-score'), '${{ github.run_id }}.json');
+});
+
 test('evals.yml plan refuses autofix on Groq, and the Anthropic exemption of the 48 h rule is the pin', async () => {
   const plan = withoutComments(evalsJobs().plan);
   assert.match(plan, /PROVIDER: \$\{\{ github\.event_name == 'schedule' && 'repo-variable' \|\| inputs\.provider \}\}/);
@@ -668,7 +679,8 @@ test('evals.yml plan refuses autofix on Groq, and the Anthropic exemption of the
 // TPD would refuse every weekly run. Gates only tighten (ADR-0031), so the scheduled run keeps repeats 3.
 test('evals.yml scheduled runs keep repeats 3 and ignore EVAL_TOKEN_BUDGET; manual runs keep it', () => {
   const job = evalsJobs().eval;
-  assert.equal([...evalsYml().matchAll(/EVAL_TOKEN_BUDGET:/g)].length, 1);
+  assert.equal([...evalsYml().matchAll(/EVAL_TOKEN_BUDGET:/g)].length, 2, 'the eval job and the autofix model job: the two that call a provider');
+  assert.match(evalsJobs()['autofix-model'], /^          EVAL_TOKEN_BUDGET: \$\{\{ github\.event_name != 'schedule' && vars\.EVAL_TOKEN_BUDGET \|\| '' \}\}$/m);
   assert.match(job, /^          EVAL_TOKEN_BUDGET: \$\{\{ github\.event_name != 'schedule' && vars\.EVAL_TOKEN_BUDGET \|\| '' \}\}$/m);
   assert.match(job, /REPEATS: \$\{\{ inputs\.repeats \|\| '3' \}\}/);
   assert.doesNotMatch(job, /REPEATS:[^\n]*schedule/, 'no lower repeats on schedule (consistency gate)');

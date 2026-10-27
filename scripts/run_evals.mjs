@@ -209,6 +209,18 @@ export async function buildScoringLLM(replayFile) {
   return { llmFor: createReplayLLM(recorded.results), model: recorded.meta.model ?? 'unknown', temperature: recorded.meta.temperature, recorded };
 }
 
+// A scoring replay is instant: the published latency must be the model phase's. Durations of the runs and latencies of
+// their calls come back from the recording (a run whose calls do not line up with the recording keeps its own).
+export function restoreRecordedTiming(results, recordedResults) {
+  const byKey = new Map(recordedResults.map((r) => [`${r.case_id}#${r.repeat}`, r]));
+  return results.map((r) => {
+    const rec = byKey.get(`${r.case_id}#${r.repeat}`);
+    if (!rec || typeof rec.duration_ms !== 'number') return r;
+    const aligned = Array.isArray(rec.calls) && rec.calls.length === r.calls.length;
+    return { ...r, duration_ms: rec.duration_ms, calls: aligned ? r.calls.map((c, i) => ({ ...c, latency_ms: rec.calls[i].latency_ms ?? c.latency_ms })) : r.calls };
+  });
+}
+
 async function main() {
   const opts = parseCliArgs(process.argv.slice(2));
   const { suite: registered } = opts;
@@ -245,11 +257,12 @@ async function main() {
     const { llmFor, model, temperature, recorded: replayed } = await (opts.graderResultsFile ? buildScoringLLM(opts.replay) : buildLLM(suite, opts.replay));
     if (replayed) opts.repeats = resolveReplayRepeats(replayed.meta, opts);
 
-    const results = await runSuite({
+    const scored = await runSuite({
       suite, cases, llmFor, repeats: opts.repeats, concurrency: opts.concurrency,
       onResult: (r) => process.stderr.write(`${r.error ? '!' : Object.values(r.scores).every((v) => v == null || v === 1) ? '.' : 'x'}`),
     });
     process.stderr.write('\n');
+    const results = opts.graderResultsFile ? restoreRecordedTiming(scored, replayed.results) : scored;
 
     if (replayed) {
       const ran = new Set(results.map((r) => `${r.case_id}#${r.repeat}`));

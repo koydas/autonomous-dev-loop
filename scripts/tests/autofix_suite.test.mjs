@@ -11,7 +11,7 @@ import { autofixSuite, autofixPromptConfig, SUITES } from '../lib/eval_suites.mj
 import { loadAutofixCases } from '../lib/autofix_dataset.mjs';
 import { gradeModelResults } from '../lib/autofix_eval_grading.mjs';
 import { createReplayLLM, runSuite, summarize } from '../lib/eval_harness.mjs';
-import { parseCliArgs, withGraderResults, buildLLM, buildScoringLLM, recordModelPhase } from '../run_evals.mjs';
+import { parseCliArgs, withGraderResults, buildLLM, buildScoringLLM, recordModelPhase, restoreRecordedTiming } from '../run_evals.mjs';
 import { PIPELINE_ROOT } from '../lib/roots.mjs';
 
 function withEnv(vars, fn) {
@@ -260,4 +260,24 @@ test('recordModelPhase fails the job on a provider quota, like a scored run', as
     process.exitCode = origExit;
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test('restoreRecordedTiming gives a replayed run the durations and call latencies of the recording', () => {
+  const recorded = [
+    { case_id: 'a', repeat: 0, duration_ms: 60000, calls: [{ latency_ms: 59000 }, { latency_ms: null }] },
+    { case_id: 'b', repeat: 0, duration_ms: 1200, calls: [{ latency_ms: 1100 }] },
+    { case_id: 'c', repeat: 0, calls: [{ latency_ms: 5 }] },
+  ];
+  const replayed = [
+    { case_id: 'a', repeat: 0, duration_ms: 3, calls: [{ raw: 'x', latency_ms: 0 }, { raw: 'y', latency_ms: 0 }] },
+    { case_id: 'b', repeat: 0, duration_ms: 2, calls: [{ raw: 'x', latency_ms: 0 }, { raw: 'extra', latency_ms: 0 }] },
+    { case_id: 'c', repeat: 0, duration_ms: 4, calls: [{ raw: 'x', latency_ms: 0 }] },
+    { case_id: 'd', repeat: 0, duration_ms: 5, calls: [] },
+  ];
+  const [a, b, c, d] = restoreRecordedTiming(replayed, recorded);
+  assert.deepEqual([a.duration_ms, a.calls.map((x) => x.latency_ms)], [60000, [59000, 0]], 'a null recorded latency keeps the replayed one');
+  assert.deepEqual(a.calls.map((x) => x.raw), ['x', 'y'], 'only timing comes back');
+  assert.deepEqual([b.duration_ms, b.calls.map((x) => x.latency_ms)], [1200, [0, 0]], 'calls that do not line up keep their own latency');
+  assert.equal(c.duration_ms, 4, 'a recording without a duration changes nothing');
+  assert.equal(d.duration_ms, 5, 'a run absent from the recording changes nothing');
 });
