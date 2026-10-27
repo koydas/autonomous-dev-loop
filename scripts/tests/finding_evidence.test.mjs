@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  LINE_WINDOW, MAX_EVIDENCE_PER_FINDING, MAX_FINDINGS_CHECKED, MIN_QUOTE_CHARS, assessFindings, evidenceCounts, formatEvidenceCheck, formatUnprovenNote, impactLookup, parseEvidence, quoteIsAt,
+  LINE_WINDOW, MAX_EVIDENCE_PER_FINDING, MAX_FINDINGS_CHECKED, MIN_QUOTE_CHARS, FINDING_STATUSES, assessFindings, diffHunkRanges, substantiateFindings, evidenceCounts, formatEvidenceCheck, formatUnprovenNote, impactLookup, parseEvidence, quoteIsAt,
 } from '../lib/finding_evidence.mjs';
 
 const CHECKOUT = ['import { applyDiscount } from "./pricing.mjs";', '', 'export function total(cart) {', '  return applyDiscount(cart.subtotal, cart.rate);', '}', ''].join('\n');
@@ -62,7 +62,7 @@ test('assessFindings: a finding about outside code is verified, unverified or un
     ['low', true, 'none', false],
   ]);
   assert.deepEqual([a.blocking, a.outside, a.verified, a.unverified, a.unproven], [4, 4, 1, 1, 2]);
-  assert.deepEqual(evidenceCounts(a), { findings: 5, blocking: 4, outside: 4, verified: 1, unverified: 1, unproven: 2 });
+  assert.deepEqual(evidenceCounts(a), { findings: 5, blocking: 4, outside: 4, verified: 1, supported: 0, unverified: 1, refuted: 0, unproven: 2 });
 });
 
 test('assessFindings: a finding in the diff, or citing no file, needs no proof; a lookup that fails proves nothing', () => {
@@ -89,24 +89,80 @@ test('assessFindings checks at most MAX_FINDINGS_CHECKED findings', () => {
   assert.equal(assessFindings({ review: review(...many), diffFiles: ['other.mjs'], lookup }).findings.length, MAX_FINDINGS_CHECKED);
 });
 
-test('formatEvidenceCheck lists the outside findings and their evidence; formatUnprovenNote says why the review is withheld', () => {
-  const a = assessFindings({
+const DIFF = 'diff --git a/src/pricing.mjs b/src/pricing.mjs\n--- a/src/pricing.mjs\n+++ b/src/pricing.mjs\n@@ -1,3 +1,3 @@\n-export function applyDiscount(price, rate) {\n+export function applyDiscount(price, rate, currency) {\n   return price * rate;\n }\n';
+
+test('formatEvidenceCheck lists every blocking finding with its status; formatUnprovenNote says why the review is withheld', () => {
+  const a = substantiateFindings({
     review: review(
       finding('High', 'src/checkout.mjs', 'Evidence: src/checkout.mjs:4 "return applyDiscount(cart.subtotal, cart.rate);"'),
       finding('High', 'docs/pricing.md', ''),
       finding('Medium', 'src/pricing.mjs', ''),
+      finding('High', 'src/checkout.mjs', 'Evidence: src/checkout.mjs:4 "return applyDiscount(cart.subtotal, cart.rate, cart.currency);"'),
+      finding('Low', 'src/pricing.mjs', ''),
     ),
-    diffFiles: ['src/pricing.mjs'],
+    rawDiff: DIFF,
     lookup,
   });
   const section = formatEvidenceCheck(a);
   assert.match(section, /### 🔎 Evidence Check/);
   assert.match(section, /- ✅ verified — \[high\] `src\/checkout\.mjs` \(outside the diff\): `src\/checkout\.mjs:4` found/);
-  assert.match(section, /- ⚠️ unproven — \[high\] `docs\/pricing\.md` \(outside the diff\): no evidence quoted/);
-  assert.doesNotMatch(section, /src\/pricing\.mjs/, 'a finding in the diff is not listed');
-  assert.match(formatUnprovenNote({ unproven: 2 }), /every blocking finding above \(2\) concerns code outside the diff/);
+  assert.match(section, /- ⚠️ unverified — \[high\] `docs\/pricing\.md` \(outside the diff\): no evidence quoted/);
+  assert.match(section, /- ✔️ supported — \[medium\] `src\/pricing\.mjs`\n/);
+  assert.match(section, /- ❌ refuted — \[high\] `src\/checkout\.mjs` \(outside the diff\): `src\/checkout\.mjs:4` not found/);
+  assert.equal(section.match(/src\/pricing\.mjs/g).length, 1, 'a Low finding in the diff is not listed');
+  assert.match(formatUnprovenNote({ unproven: 2 }), /every blocking finding above \(2\) is unsubstantiated/);
   assert.equal(formatEvidenceCheck({ findings: [] }), '');
   assert.equal(formatEvidenceCheck(undefined), '');
+});
+
+test('diffHunkRanges: old and new ranges per file under both paths; a file with no hunk has none', () => {
+  const rename = 'diff --git a/old.mjs b/new.mjs\nsimilarity index 100%\nrename from old.mjs\nrename to new.mjs\n';
+  const ranges = diffHunkRanges(`${DIFF}${rename}diff --git a/x.mjs b/x.mjs\n--- a/x.mjs\n+++ b/x.mjs\n@@ -10 +10,0 @@\n-gone\n`);
+  assert.deepEqual(ranges.get('src/pricing.mjs'), [[1, 3], [1, 3]]);
+  assert.deepEqual([ranges.get('old.mjs'), ranges.get('new.mjs')], [[], []]);
+  assert.deepEqual(ranges.get('x.mjs'), [[10, 10], [10, 10]], 'a single-line hunk and an empty new side still cover their line');
+  assert.equal(diffHunkRanges('').size, 0);
+  assert.equal(diffHunkRanges(undefined).size, 0);
+});
+
+test('substantiateFindings: verified, supported, refuted and unverified, and which of them are unproven', () => {
+  const at = (sev, file, lines, rest = '') => `- [${sev}] Title — File: ${file} Lines: ${lines} Root cause: it breaks. ${rest} Fix: change it.`;
+  const a = substantiateFindings({
+    review: review(
+      at('High', 'src/pricing.mjs', '2'),
+      at('High', 'src/pricing.mjs', '2', 'Evidence: src/pricing.mjs:2 "this text is not in the file at all"'),
+      at('High', 'src/pricing.mjs', '400'),
+      at('Medium', 'docs/pricing.md', '3', 'Evidence: docs/pricing.md:3 "Discounts are always rounded to cents."'),
+      at('Medium', 'docs/pricing.md', '3', 'Evidence: docs/pricing.md:3 "Discounts are never rounded to cents."'),
+      at('Medium', 'docs/missing.md', '3', 'Evidence: docs/missing.md:3 "some text that cannot be read"'),
+      at('Medium', 'docs/pricing.md', '3'),
+      at('Low', 'docs/pricing.md', '3'),
+    ),
+    rawDiff: DIFF,
+    lookup,
+  });
+  assert.deepEqual(a.findings.map((f) => [f.severity, f.status, f.unproven]), [
+    ['high', 'supported', false],
+    ['high', 'supported', false],
+    ['high', 'unverified', true],
+    ['medium', 'verified', false],
+    ['medium', 'refuted', true],
+    ['medium', 'unverified', true],
+    ['medium', 'unverified', true],
+    ['low', 'unverified', false],
+  ]);
+  assert.deepEqual([a.verified, a.supported, a.unverified, a.refuted, a.unproven, a.blocking, a.outside], [1, 2, 4, 1, 4, 7, 5]);
+  assert.deepEqual(FINDING_STATUSES, ['verified', 'supported', 'unverified', 'refuted']);
+});
+
+test('substantiateFindings: a finding with no file is unverified, a file with no hunk is located, no diff header judges nothing', () => {
+  const noFile = '- [High] Title — Root cause: it breaks somewhere. Fix: change it.';
+  const rename = 'diff --git a/old.mjs b/new.mjs\nsimilarity index 100%\nrename from old.mjs\nrename to new.mjs\n';
+  const f = (rawDiff, text) => substantiateFindings({ review: review(text), rawDiff, lookup }).findings[0];
+  assert.deepEqual([f(DIFF, noFile).status, f(DIFF, noFile).unproven], ['unverified', true]);
+  assert.equal(f(rename, '- [High] Title — File: new.mjs Lines: 90 Root cause: x. Fix: y.').status, 'supported');
+  for (const rawDiff of ['', undefined, 'not a diff']) assert.deepEqual([f(rawDiff, noFile).status, f(rawDiff, noFile).unproven], ['supported', false], String(rawDiff));
+  assert.equal(f(DIFF, finding('High', 'pricing.mjs', '')).status, 'supported', 'a path suffix names the file');
 });
 
 test('formatEvidenceCheck flattens model text: no backtick, control character or long paths get through', () => {
