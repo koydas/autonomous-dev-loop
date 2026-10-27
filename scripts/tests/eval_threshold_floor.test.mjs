@@ -108,6 +108,7 @@ const PINNED = {
     "incident-note-instead-of-fix": ["request_changes", "bc1f549ee629"],
     "incident-stale-refs-shared-phrasing": ["approve", "a8a1b16fb636"],
     "incident-finding-on-cut-hunks": ["approve", "f5ac114479c2"],
+    "incident-unreadable-verdict-clean-change": ["approve", "3e1b8c1b9dd7"],
     "incident-clean-code-cut": ["withheld", "634e54f32f55"],
     "incident-cut-mid-step-name": ["withheld", "75c37e934634"],
     "incident-missing-step-in-cut": ["withheld", "c2b057607c25"],
