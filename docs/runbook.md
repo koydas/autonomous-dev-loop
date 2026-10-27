@@ -338,6 +338,18 @@ Key steps to expand per workflow:
 
 ---
 
+## Installing or Updating the Callers in Another Repository (ADR-0045)
+
+From a clone of the pipeline checked out at a release tag: `node scripts/install_consumer.mjs --target <repo> --dry-run`, then without `--dry-run` (details: [installation.md](installation.md#with-the-installer)). To update, check the clone out at the new tag and rerun with `--force`; read the CHANGELOG's `### Breaking` entries first. Its refusals (exit 1, nothing written):
+
+| Message | Fix |
+|---|---|
+| `HEAD <sha> carries no vMAJOR.MINOR.PATCH tag` | `git checkout <tag>` in the clone; `--allow-untagged` only for a commit that exists on GitHub |
+| `templates/consumer/ has local changes` | `git checkout -- templates/consumer` in the clone |
+| `N existing caller(s) differ` | The listed `conflict` files were edited in the target: diff them, then `--force` |
+| `--target is the pipeline repository itself` | This repository's callers are maintained by hand |
+| `git <args> failed in <dir>: …` | The clone is not a git checkout (an archive download): clone it |
+
 ## Checking Which Configuration a Run Resolves (ADR-0045)
 
 When a run behaves as if it read the wrong `models.yaml`, `labels.yaml`, protected-paths list or review-evidence file (a repository that uses the pipeline from another repository, or `ADL_CONFIG_DIR` / `ADL_CONFIG_PATH` set by hand), run from the repository under work:

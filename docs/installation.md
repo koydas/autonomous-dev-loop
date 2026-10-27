@@ -20,6 +20,21 @@ ADR-0045. A repository installs the pipeline with five caller workflows and its 
 
 ## Install
 
+### With the installer
+
+From a clone of the pipeline checked out at a release tag:
+
+```bash
+git clone https://github.com/koydas/autonomous-dev-loop adl
+git -C adl checkout "$(git -C adl tag -l 'v*' --sort=-v:refname | head -n1)"
+node adl/scripts/install_consumer.mjs --target path/to/your-repo --dry-run   # shows what it would write
+node adl/scripts/install_consumer.mjs --target path/to/your-repo
+```
+
+It writes the six callers and the label setup into `.github/workflows/`, each pinned to the clone's `HEAD` with the tag as version comment, and puts your default branch where the templates name `main` (read from `origin/HEAD` of the target, or `--default-branch <name>`, else `main`). It refuses an untagged `HEAD`, local changes to `templates/consumer/`, and an existing caller that differs from what it would write (`--force` overwrites it; an identical one is left as is). `--allow-untagged` pins any commit with the comment `untagged`, for trying an unreleased commit: that commit must exist on GitHub. Then do steps 3, 4 (run **ADL Setup Labels**), 5 and 6 below, and add the secrets.
+
+### By hand
+
 1. **Pick a release** and its commit: `git ls-remote https://github.com/koydas/autonomous-dev-loop 'refs/tags/v*'` (an annotated tag lists the tag object, then the commit as `<tag>^{}`: use the commit).
 2. **Copy the callers.** `templates/consumer/{validate-issue,code-generation,reset-auto-fix,pr-review,auto-fix-pr,conflicts-fix}.yml` into `.github/workflows/`, keeping the file names (the callers look each other up by name: `codegen_workflow_file`, `autofix_workflow_file`). In each, replace `<PIPELINE_SHA>` with the 40-character commit and `<PIPELINE_VERSION>` with the tag (a comment: it lets a bot bump the line). In `pr-review.yml`, replace `!main` with your default branch.
 3. **Add the configuration** you need in `.autonomous-dev-loop/` (below). None is mandatory.
@@ -68,7 +83,19 @@ Inside `adl-pr-review.yml` the `evidence` job, which runs your pull request's co
 
 ## Updating
 
-Change the SHA (and the version comment) in the six callers and the label setup, in one pull request. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment. Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
+Change the SHA (and the version comment) in the six callers and the label setup, in one pull request: check the clone out at the new tag and rerun the installer with `--force` (it lists which callers change). Callers you edited are overwritten; diff before committing. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment, once releases are published as tags. Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
+
+For Dependabot:
+
+```yaml
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+```
 
 ## Security rules that hold for every installation
 
