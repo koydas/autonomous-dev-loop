@@ -23,10 +23,11 @@ Not breaking: prompt changes, default model changes, fixes, new optional inputs 
 
 ## Releasing
 
-1. Compare with the last release: `git show v<previous>:docs/workflow-interface.json > /tmp/base.json && node scripts/workflow_interface.mjs --base /tmp/base.json`. Any line means a new major version.
+1. Compare with the last release (skip for the first one, `v0.1.0`: there is no snapshot to compare with): `git show v<previous>:docs/workflow-interface.json > /tmp/base.json && node scripts/workflow_interface.mjs --base /tmp/base.json`. Any line means a new major version.
 2. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - <date>`, put what callers must do under `### Breaking`, and open a fresh empty `## [Unreleased]`.
 3. Tag the commit of `main` with an annotated tag `vX.Y.Z` and push the tag. Do not create or move a floating tag (`v1`): the installation guide tells callers to pin commits, and a floating tag defeats it.
 4. Publish the CHANGELOG section as the release notes, with the commit SHA callers should pin.
+5. Check the installer against the tag: `git checkout vX.Y.Z && node scripts/install_consumer.mjs --target "$(mktemp -d)" --dry-run` lists the callers with the new pin.
 
 ## Rules
 
