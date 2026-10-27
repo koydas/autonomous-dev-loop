@@ -23,8 +23,8 @@ import { loadPrompt } from './prompts.mjs';
 import { detectProvider, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './config.mjs';
 import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from './review_prompt.mjs';
 import { resolveReviewDecision } from './review_decision.mjs';
-import { collectGuardrailFindings, findTestCountDrops, parseDiffChanges, withGuardrailIssues } from './guardrail_review.mjs';
-import { assessFindings, evidenceCounts, impactLookup } from './finding_evidence.mjs';
+import { collectGuardrailFindings, findTestCountDrops, withGuardrailIssues } from './guardrail_review.mjs';
+import { substantiateFindings, evidenceCounts, impactLookup } from './finding_evidence.mjs';
 import { MIN_CRITICAL_POINTS } from './adversarial_review.mjs';
 import { analyzeFindings } from './review_findings.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
@@ -281,7 +281,7 @@ export const reviewSuite = {
     // RV-03: the guardrail checks that need only the diff (a test case removed); the file-based ones need the PR tree.
     const guardrails = collectGuardrailFindings([findTestCountDrops(input.diff, { mentionText: `${input.title}\n${input.body || '(no description provided)'}` })]);
     // RV-04a: proof for the findings about code outside the diff; with no tree, the lines of the case's Impact analysis.
-    const findingAssessment = assessFindings({ review: cleanReview, diffFiles: parseDiffChanges(input.diff).flatMap((f) => [f.after, f.before]), lookup: impactLookup({ symbols: [...(input.impact?.symbols ?? []), ...(input.doc_mentions?.terms ?? [])] }) });
+    const findingAssessment = substantiateFindings({ review: cleanReview, rawDiff: input.diff, lookup: impactLookup({ symbols: [...(input.impact?.symbols ?? []), ...(input.doc_mentions?.terms ?? [])] }) });
     const { verdict, reason, withheldFor, adversarial } = resolveReviewDecision({
       llmApproved: llmVerdict === 'APPROVED',
       cleanReview,

@@ -13,6 +13,7 @@ import { writeCheckpoint, readCheckpoint } from './lib/checkpoint.mjs';
 import { appendMetric, estimateTokens } from './lib/metrics.mjs';
 import { guardrailErrorFor, guardrailRules } from './lib/static_verifier.mjs';
 import { resolveBudgetRatios, fitAutofixBudget, listChangedFiles, buildAutofixContext, parseAutofixResponse, findAutofixViolations } from './lib/autofix_core.mjs';
+import { stripUnsubstantiated } from './lib/review_findings.mjs';
 import { parseReviewMarker, decideAutofixRun, hasNoProposedChanges, isCommitSha, findReviewComment } from './lib/review_marker.mjs';
 import { randomUUID } from 'node:crypto';
 import { isSelfTarget } from './lib/roots.mjs';
@@ -300,7 +301,8 @@ if (reviewId) {
 
 if (!feedbackParts.length) {
   if (latestReviewCommentBody) {
-    feedbackParts.push(latestReviewCommentBody);
+    // RV-05: the findings the review could not substantiate are in a section of their own, which the fixer is not sent.
+    feedbackParts.push(stripUnsubstantiated(latestReviewCommentBody));
     log('Using latest automated review comment as feedback fallback', { prNumber });
   }
 }

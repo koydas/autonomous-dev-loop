@@ -417,13 +417,15 @@ const reviewText = ({ verdict, issues = [], summary = 'Changes X.', analysis = t
 // For an evidence case the LLM verdict differs from the final one (WITHHELD comes from an approval).
 // A reviewer cites the files of the diff (a finding about outside code needs quoted evidence, RV-04a).
 const firstDiffFile = (c) => parseDiffChanges(c.input.diff)[0]?.after ?? 'x';
+// A finding points at lines of the diff (RV-05): the first line of the first hunk.
+const firstHunkLine = (c) => c.input.diff.match(/^@@ -\d+(?:,\d+)? \+(\d+)/m)?.[1] ?? '1';
 const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
   ? reviewText({
     verdict: 'REQUEST_CHANGES',
     summary: ['Changes X.', ...(c.expected.must_note ?? []).map((n) => `Note: ${n.split('|')[0]}.`)].join('\n'),
     issues: c.expected.findings
       ? c.expected.findings.map((f) => `[${f.severity[0].toUpperCase()}${f.severity.slice(1)}] ${f.match?.split('|')[0] ?? 'defect'} — File: ${f.path} Lines: ${f.lines?.[0] ?? 'unknown'} Root cause: r Fix: f`)
-      : (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: ${firstDiffFile(c)} Lines: 1 Root cause: r Fix: f`),
+      : (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: ${firstDiffFile(c)} Lines: ${firstHunkLine(c)} Root cause: r Fix: f`),
   })
   : reviewText({ verdict: 'APPROVED', issues: (c.expected.must_advise ?? []).map((a) => `[Low] ${a.split('|')[0]}: x — File: x Lines: 1`) }));
 
@@ -1528,6 +1530,15 @@ test('reviewSuite.run renders doc_mentions and checks a finding about a document
   const without = await runReview({ ...input, doc_mentions: undefined }, finding(`Evidence: docs/guide.md:3 "${doc}" `));
   assert.equal(without.output.verdict, 'WITHHELD', 'without the lines, the same quote is not found');
   assert.doesNotMatch(without.request.prompt, /## Documents that mention/);
+});
+
+// RV-05: a finding that points at lines the diff does not show is unverified, whatever file it names.
+test('reviewSuite.run withholds a REQUEST_CHANGES whose only blocking finding points at lines the diff does not show, and keeps one that points at the diff', async () => {
+  const at = (lines) => reviewText({ verdict: 'REQUEST_CHANGES', issues: [`[High] The constant changed — File: src/a.js Lines: ${lines} Root cause: r. Fix: f.`] });
+  const far = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, at('400-410'));
+  assert.deepEqual([far.output.verdict, far.output.withheld_for, far.output.evidence_check.unverified, far.output.evidence_check.supported], ['WITHHELD', 'unproven_findings', 1, 0]);
+  const near = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, at('1'));
+  assert.deepEqual([near.output.verdict, near.output.evidence_check.supported, near.output.evidence_check.unproven], ['REQUEST_CHANGES', 1, 0]);
 });
 
 test('liveCallArgs: only the suite config fields + options, pinned to the primary', () => {
