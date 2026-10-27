@@ -274,7 +274,7 @@ export const reviewSuite = {
       throw new Error(`${testCase.id}: requires_cut but not cut on ${detectProvider('review')}: set review_eval_cut_${detectProvider('review')}_max_input_tokens or _max_diff_chars in config/models.yaml`);
     }
     const { cleanReview, verdict: llmVerdict } = parseReviewVerdict(await llm({ prompt: userPrompt, systemPrompt: system }));
-    // Production fails closed on a missing verdict line; the eval counts it as an errored run instead,
+    // Production withholds a review with no verdict line (ADR-0064); the eval counts it as an errored run instead,
     // so a format regression shows in error_rate rather than inflating request_changes recall.
     if (!llmVerdict) throw new Error('No verdict line in the review (expected APPROVED or REQUEST_CHANGES)');
     // The same resolution as pr_review.mjs (evidence, cut code, adversarial protocol): the scored verdict is the published one.

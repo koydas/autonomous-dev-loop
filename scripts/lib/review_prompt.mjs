@@ -274,7 +274,7 @@ export function buildReviewPrompt({ systemPrompt, userPromptTemplate, rawDiff, p
  * Extracts the model's verdict from a raw review. `<think>` blocks are stripped first.
  * The heading may come back bold (`**🚀 Verdict**`) instead of `### 🚀 Verdict`: closing `**`
  * after the word is allowed. `verdict` is null when no verdict line is found; pr_review.mjs then
- * fails closed (not approved).
+ * withholds the review (ADR-0064): neither an approval nor a request for changes.
  * @returns {{ cleanReview: string, verdict: 'APPROVED' | 'REQUEST_CHANGES' | null }}
  */
 export function parseReviewVerdict(rawReview) {
