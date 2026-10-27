@@ -86,7 +86,7 @@ test('resolveReviewDecision: guardrailOverride is set only when a guardrail find
 
 test('resolveReviewDecision: the unproven-findings reason counts the findings', () => {
   const d = resolveReviewDecision({ ...base, llmApproved: false, cleanReview: review('', '- [High] bug — File: z.mjs Lines: 1'), findingAssessment: { blocking: 3, unproven: 3 } });
-  assert.match(d.reason, /^3 blocking finding\(s\), all about code outside the diff without verified evidence$/);
+  assert.match(d.reason, /^3 blocking finding\(s\), none verified or supported by the diff$/);
   assert.equal(d.guardrailOverride, false);
 });
 

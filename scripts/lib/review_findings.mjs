@@ -52,6 +52,48 @@ export function parseFindings(issuesText) {
   });
 }
 
+export const UNSUBSTANTIATED_HEADING = '### 🔎 Unsubstantiated Findings';
+const VERDICT_HEADING = /^### .*Verdict\b/m;
+
+/**
+ * Moves findings out of a review's Issues Found section into a section of their own (RV-05, ADR-0063), so that what
+ * the auto-fixer is sent holds only the findings the tool could substantiate. `texts` are the findings' own texts, as
+ * `parseFindings` returns them: one that is not found verbatim stays where it is. The section goes before the verdict.
+ * @param {string} review
+ * @param {string[]} texts
+ */
+export function moveUnsubstantiated(review, texts) {
+  let rest = String(review ?? '');
+  const moved = [];
+  for (const raw of texts) {
+    const text = String(raw ?? '').trimEnd();
+    const at = text ? rest.indexOf(text) : -1;
+    if (at === -1) continue;
+    moved.push(text);
+    rest = `${rest.slice(0, at).replace(/\n+$/, '\n')}${rest.slice(at + text.length).replace(/^\n/, '')}`;
+  }
+  if (moved.length === 0) return String(review ?? '');
+  const section = [
+    UNSUBSTANTIATED_HEADING,
+    '_Not requests: the tool could not substantiate these (outside the diff without a quote the PR tree holds, or lines the diff does not show). Auto-fix does not receive this section; a human reads it._',
+    '',
+    ...moved,
+    '',
+  ].join('\n');
+  const verdictAt = rest.search(VERDICT_HEADING);
+  return verdictAt === -1 ? `${rest.trimEnd()}\n\n${section}` : `${rest.slice(0, verdictAt)}${section}\n${rest.slice(verdictAt)}`;
+}
+
+/** Removes the Unsubstantiated Findings section from a review comment: the auto-fixer is not sent it. */
+export function stripUnsubstantiated(body) {
+  const text = String(body ?? '');
+  const from = text.indexOf(UNSUBSTANTIATED_HEADING);
+  if (from === -1) return text;
+  const after = text.slice(from + UNSUBSTANTIATED_HEADING.length);
+  const next = after.search(/\n(?:### |<!-- )/);
+  return `${text.slice(0, from)}${next === -1 ? '' : after.slice(next + 1)}`;
+}
+
 /** A path names a file when equal, or when one is a `/`-suffix of the other (`utils.mjs` for `scripts/utils.mjs`). */
 export function pathMatches(a, b) {
   const x = clean(String(a));

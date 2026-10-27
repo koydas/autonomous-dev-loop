@@ -189,7 +189,7 @@ The reviewer otherwise sees only the diff, so a changed export whose callers wer
 The "review only the diff" rule keeps findings grounded, but it hides a defect class: a caller, a test or a document the diff does not touch. The prompt now lets a finding concern such code when it **quotes it**: `Evidence: path:line "exact text"`, copied from the Impact analysis block or, since RV-04b, the Documents block (`scripts/lib/finding_evidence.mjs`, deterministic, no LLM).
 
 - **Outside** = the finding cites files and none is in the diff (renames count both sides; a finding with no file, or a diff with no `diff --git` header, is judged as before). An outside finding is **verified** when every quote is written in the PR-tree file within 5 lines of the line given (whitespace and quote marks ignored, quotes of 12+ characters, read whole even if they hold quote marks, and at least one in a file the finding cites; the PR tree is read through the safe reader, so a symlink, a large file or a path outside the tree proves nothing).
-- **Unproven** = a High or Medium outside finding without verified evidence. It stays in the comment, in an `### 🔎 Evidence Check` section (`✅ verified` / `⚠️ unproven`).
+- **Unproven** = a High or Medium finding that is neither verified nor, since RV-05, supported by the diff (see Finding statuses below). It stays in the comment, in an `### 🔎 Evidence Check` section (`✅ verified` / `✔️ supported` / `⚠️ unverified` / `❌ refuted`).
 - **Decision:** a REQUEST_CHANGES whose blocking findings are **all** unproven becomes **WITHHELD** (`withheld_for: unproven_findings`, label `review-withheld`, no auto-fix: it cannot edit what it is not shown), the same way as a review whose findings cite only cut code (ADR-0038). One proven or in-the-diff blocking finding, a failing check or a guardrail finding keeps its REQUEST_CHANGES. An approval is never changed.
 - **Limits:** the quote proves the text exists, not that the finding is right; a PR can plant text for the model to quote, so a verified outside finding is a lead a human still merges on. Events: `review.finding_evidence` (counts only), `review.finding_evidence_error`.
 
@@ -201,6 +201,19 @@ The Impact analysis lists callers and tests, so a document that the change makes
 - **Documents searched:** `docs/**/*.md`, `.claude/skills/**/*.md`, `AGENTS.md` and the root `README.md`, outside the diff, never `CHANGELOG.md`, never a Superseded or Deprecated ADR (they quote the old rule on purpose); ADRs after the other documents. Same listing and safe reader as the Impact analysis (ADR-0023): no symlink, no file over 1 MiB. Bounds: 500 documents, 25 M characters, 4 lines per term (3 when 20+ documents mention it, reported as too generic).
 - **Prompt:** a `## Documents that mention what this diff changes` block after the Impact analysis, fenced and labelled data. It is the same optional block as the Impact analysis (kept or dropped with it, after the related ADRs): 4,000 characters without a token budget, 1,200 on Groq. A finding about one of these documents quotes it with `Evidence: path:line "exact text"` like any outside finding, and is checked the same way: in production the document is read from the PR tree.
 - **Events:** `review.doc_mentions` (counts only: `terms`, `refs`, `docs`, `included`, `scanned`, `truncated`); a listing error logs `review.doc_mentions_error` and the review runs without the block. Never changes the verdict by itself.
+
+### Finding statuses (RV-05, ADR-0063)
+
+ADR-0061 made a finding about outside code prove itself; every other finding still requested changes and went to the auto-fixer whatever lines it named. `substantiateFindings` (`finding_evidence.mjs`, deterministic, no LLM) now gives **every** finding a status:
+
+| Status | Meaning |
+|---|---|
+| **verified** | every quote of its `Evidence:` field is written in the PR tree near the line given (ADR-0061) |
+| **supported** | it cites a file of the diff and its lines, if given, fall in a hunk of that file (old or new side, ±5 lines); a file with no hunk counts as located; with no `diff --git` header nothing is judged |
+| **refuted** | not located in the diff, and a quote it gives is not in a file that was read |
+| **unverified** | not located in the diff: outside it without a checked quote, no file, or lines the diff does not show |
+
+A High or Medium finding that is neither verified nor supported is **unproven**. A REQUEST_CHANGES whose blocking findings are all unproven is WITHHELD (`unproven_findings`, as in RV-04a); one substantiated finding, a failing check or a guardrail finding keeps it. When changes are requested, the unproven findings move from `### ⚠️ Issues Found` to a `### 🔎 Unsubstantiated Findings` section (a human reads it) that `auto_fix_pr.mjs` strips from the review comment it uses as feedback. The Evidence Check section lists every blocking finding with its status. Escalation is unchanged: no proposed change or a rejected patch → `needs-human`, three attempts, the circuit breaker.
 
 ### Guardrail findings (RV-03, ADR-0060)
 

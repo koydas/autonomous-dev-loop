@@ -108,7 +108,7 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `review.error`     | error  | —             | `error`                                                  |
 | `review.stale_refs_error` | warn | — | `error` — file listing or read failed; the review continues without stale references (ADR-0035) |
 | `review.related_adrs_error` | warn | — | `error` — file listing or ADR read failed; the review continues without related ADRs (ADR-0036) |
-| `review.finding_evidence` | info | — | `prNumber`, `findings`, `blocking`, `outside` (cite no file of the diff), `verified`, `unverified` (a quote not found in the PR tree), `unproven` (blocking and outside without verified evidence). Counts only; emitted when a finding is outside the diff or quotes evidence (RV-04a) |
+| `review.finding_evidence` | info | — | `prNumber`, `findings`, `blocking`, `outside` (cite no file of the diff), `verified` (quotes found in the PR tree), `supported` (points at lines of the diff), `unverified` (not located and not proven), `refuted` (a quote not in a file that was read), `unproven` (blocking and neither verified nor supported). Counts only; emitted when the review has a finding (RV-04a, RV-05) |
 | `review.finding_evidence_error` | warn | — | `error` — the findings could not be assessed; they are judged as before (RV-04a) |
 | `review.guardrail_error` | warn | — | `error` — the guardrail checks failed or overran their 60 s deadline (`guardrail checks timed out`); the review continues without them (RV-03) |
 | `review.guardrail_findings` | info | — | `prNumber`, `findings` (count, including those not listed), `rules` (rule ids among `test_count_drop`, `exported_signature`, `module_system`, `unresolved_import`). No path, title or reason (RV-03) |

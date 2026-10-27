@@ -26,9 +26,10 @@ import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, formatWithheldNote } from './lib/review_evidence.mjs';
 import { formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
 import { resolveReviewDecision, withholdUnreadableVerdict, formatUnreadableVerdictNote } from './lib/review_decision.mjs';
-import { formatGuardrailSection, guardrailSignature, parseDiffChanges } from './lib/guardrail_review.mjs';
+import { formatGuardrailSection, guardrailSignature } from './lib/guardrail_review.mjs';
 import { runGuardrailChecks } from './lib/guardrail_runner.mjs';
-import { assessFindings, evidenceCounts, formatEvidenceCheck, formatUnprovenNote } from './lib/finding_evidence.mjs';
+import { substantiateFindings, evidenceCounts, formatEvidenceCheck, formatUnprovenNote } from './lib/finding_evidence.mjs';
+import { moveUnsubstantiated } from './lib/review_findings.mjs';
 import { summarizeExternalReview } from './lib/external_review.mjs';
 import { failureSignature, nextStreak, isBreakerOpen, formatEscalationNote } from './lib/circuit_breaker.mjs';
 
@@ -459,13 +460,13 @@ obsLog({ stage: 'review', event: 'review.llm_response', level: 'info', meta: { o
 // check failed or a guardrail finding was raised.
 const { cleanReview, verdict: llmVerdict } = parseReviewVerdict(rawReview);
 const llmApproved = llmVerdict === 'APPROVED';
-// RV-04a: a finding about code outside the diff must quote it; the quotes are looked up in the PR tree (no LLM). A
-// failure to assess leaves the findings as they were.
+// RV-04a / RV-05: every finding gets a status, no LLM: verified (its quotes are in the PR tree), supported (it points at
+// lines of the diff), unverified or refuted. A failure to assess leaves the findings as they were.
 let findingAssessment = null;
 try {
-  findingAssessment = assessFindings({
+  findingAssessment = substantiateFindings({
     review: cleanReview,
-    diffFiles: parseDiffChanges(rawDiff).flatMap((f) => [f.after, f.before]),
+    rawDiff,
     lookup: (p) => {
       try {
         return repoFiles.readFile(p);
@@ -474,7 +475,7 @@ try {
       }
     },
   });
-  if (findingAssessment.outside > 0 || findingAssessment.verified + findingAssessment.unverified > 0) {
+  if (findingAssessment.findings.length > 0) {
     obsLog({ stage: 'review', event: 'review.finding_evidence', level: 'info', meta: { prNumber, ...evidenceCounts(findingAssessment) } });
   }
 } catch (err) {
@@ -509,7 +510,11 @@ const isApproved = verdict === 'APPROVE';
 const isWithheld = verdict === 'WITHHELD';
 const reviewEvent = isApproved ? 'APPROVE' : isWithheld ? 'COMMENT' : 'REQUEST_CHANGES';
 
-const reviewText = cleanReview.includes(HEADING) ? cleanReview : `${HEADING}\n\n${cleanReview}`;
+// RV-05: when changes are requested, the findings the tool could not substantiate leave the Issues Found section for one
+// of their own, which the auto-fixer is not sent (auto_fix_pr.mjs).
+const unsubstantiatedTexts = verdict === 'REQUEST_CHANGES' && findingAssessment ? findingAssessment.findings.filter((f) => f.unproven).map((f) => f.text) : [];
+const shownReview = moveUnsubstantiated(cleanReview, unsubstantiatedTexts);
+const reviewText = shownReview.includes(HEADING) ? shownReview : `${HEADING}\n\n${shownReview}`;
 // ADR-0035 / ADR-0037: stale references and prompt budget impact are informational; they never change the verdict above.
 const guardrailSection = formatGuardrailSection(guardrails, { overridden: guardrailOverride });
 const evidenceSection = formatEvidenceSection(evidence, { overridden: evidenceOverride }) + formatEvidenceCheck(findingAssessment) + formatStaleRefsSection(staleRefs) + formatPromptBudgetSection(promptBudget)
@@ -546,7 +551,7 @@ const shortReviewBody = isApproved
         : withheldForProtocol
           ? 'Approval withheld: the adversarial analysis is incomplete. See the review comment for details.'
           : withheldForUnproven
-            ? 'Changes not requested: every blocking finding concerns code outside the diff without verified evidence. See the review comment for details.'
+            ? 'Changes not requested: every blocking finding is unsubstantiated (outside the diff without verified evidence, or lines the diff does not show). See the review comment for details.'
             : withheldForUnreadable
               ? 'Changes not requested: the review has no readable verdict line. See the review comment for details.'
               : 'Approval withheld: the tool evidence is unverified. See the review comment for details.')

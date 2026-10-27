@@ -12,9 +12,10 @@ import { analyzeAdversarial, enforceAdversarialProtocol } from './adversarial_re
  * `stages` keeps each intermediate decision so callers can tell which stage withheld.
  * A guardrail finding (RV-03, ADR-0060) is a deterministic defect: it turns an APPROVE or a WITHHELD into
  * REQUEST_CHANGES, like a failing check (`guardrailOverride`).
- * `findingAssessment` (RV-04a, ADR-0061, finding_evidence.mjs): a REQUEST_CHANGES whose blocking findings all concern
- * code outside the diff without verified evidence is WITHHELD (`unproven_findings`): a human decides, auto-fix does not
- * run. A failing check or a guardrail finding keeps its REQUEST_CHANGES.
+ * `findingAssessment` (RV-04a, ADR-0061, RV-05, ADR-0063, finding_evidence.mjs): a REQUEST_CHANGES whose blocking findings
+ * are all unproven (neither verified by a quote in the PR tree nor supported by lines of the diff) is WITHHELD
+ * (`unproven_findings`): a human decides, auto-fix does not run. A failing check or a guardrail finding keeps its
+ * REQUEST_CHANGES.
  * @returns {{ verdict: 'APPROVE' | 'REQUEST_CHANGES' | 'WITHHELD', reason: string | null, withheldFor: 'evidence' | 'unreviewed_code' | 'unseen_findings' | 'protocol' | 'unproven_findings' | null, guardrailOverride: boolean, adversarial: ReturnType<typeof analyzeAdversarial>, stages: { evidence: object, code: object } }}
  */
 export function resolveReviewDecision({ llmApproved, cleanReview, evidence, evidenceRequired, unreviewedCodeFiles = [], shownFiles = [], guardrailFindings = [], findingAssessment = null }) {
@@ -29,7 +30,7 @@ export function resolveReviewDecision({ llmApproved, cleanReview, evidence, evid
   const unprovenOnly = Boolean(findingAssessment) && findingAssessment.blocking > 0 && findingAssessment.unproven === findingAssessment.blocking;
   const unprovenWithheld = unprovenOnly && afterGuardrails.verdict === 'REQUEST_CHANGES' && evidence.failing.length === 0 && guardrailFindings.length === 0;
   const { verdict, reason } = unprovenWithheld
-    ? { verdict: 'WITHHELD', reason: `${findingAssessment.unproven} blocking finding(s), all about code outside the diff without verified evidence` }
+    ? { verdict: 'WITHHELD', reason: `${findingAssessment.unproven} blocking finding(s), none verified or supported by the diff` }
     : afterGuardrails;
   const withheldFor = unprovenWithheld ? 'unproven_findings'
     : verdict !== 'WITHHELD' ? null
