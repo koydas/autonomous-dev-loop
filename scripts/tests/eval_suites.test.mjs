@@ -1369,6 +1369,14 @@ function entries(body) {
   return out;
 }
 
+// The config field a call value is derived from by `const <value> = <config binding> ?? <number>;` (auto-fix:
+// `maxOutputBudget = llmMaxTokens ?? 4096`), else null. Nothing computed beyond that default is accepted.
+function derivedFrom(src, value, configBinding) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(value)) return null;
+  const m = src.match(new RegExp(`\\bconst\\s+${value.replace(/\$/g, '\\$')}\\s*=\\s*([A-Za-z_$][\\w$]*)\\s*\\?\\?\\s*\\d+\\s*;`));
+  return m ? configBinding.get(m[1]) ?? null : null;
+}
+
 // Production call: { stage, configKeys, options } from the stage's loadLLMConfig destructuring and its
 // single callLLM({ … }) literal. A value that is neither a config binding, a call input nor a literal fails.
 async function productionCall(file) {
@@ -1383,7 +1391,7 @@ async function productionCall(file) {
   for (const [key, value] of entries(stripComments(balanced(src, calls[0].index + calls[0][0].length - 1)))) {
     if (key === 'stage') call.stage = JSON.parse(value.replace(/'/g, '"'));
     else if (callInputs.has(key)) continue;
-    else if (configBinding.get(value) === key) call.configKeys.push(key);
+    else if (configBinding.get(value) === key || derivedFrom(src, value, configBinding) === key) call.configKeys.push(key);
     else {
       // Literal option (null, boolean, number, string, { type: 'json_object' }).
       const json = value.replace(/'/g, '"').replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":');
@@ -1393,7 +1401,7 @@ async function productionCall(file) {
   return { ...call, configStage: destructure[2] };
 }
 
-const PRODUCTION_CALL_SITES = { validation: 'scripts/validate_issue.mjs', review: 'scripts/pr_review.mjs' };
+const PRODUCTION_CALL_SITES = { validation: 'scripts/validate_issue.mjs', review: 'scripts/pr_review.mjs', autofix: 'scripts/auto_fix_pr.mjs' };
 
 test('every suite mirrors its production stage call site: same config fields, same literal callLLM options', async () => {
   assert.deepEqual(Object.keys(PRODUCTION_CALL_SITES).sort(), Object.keys(SUITES).sort(), 'a new suite needs its production call site here');
@@ -1423,6 +1431,23 @@ test('parity parser: a responseFormat drift or an extra config field is caught',
     assert.notDeepEqual([...reviewSuite.llmCall.configKeys].sort(), prod.configKeys.sort());
     await fs.writeFile(file, "const { model } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, model, responseFormat: pick() });\n");
     await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /responseFormat: pick\(\) is not a config field nor a literal/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('parity parser: a value derived as `<config field> ?? <number>` counts as that field; any other computed value fails', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'parity-'));
+  const file = path.join(tmp, 'stage.mjs');
+  try {
+    const head = "const { model, maxTokens: llmMaxTokens } = loadLLMConfig('autofix');\n";
+    await fs.writeFile(file, `${head}const maxOutputBudget = llmMaxTokens ?? 4096;\nawait callLLM({ stage: 'autofix', prompt, model, maxTokens: maxOutputBudget });\n`);
+    assert.deepEqual((await productionCall(path.relative(REPO_ROOT, file))).configKeys, ['model', 'maxTokens']);
+    // Derived from another field, or by another computation: not mirrored by configKeys, so rejected.
+    await fs.writeFile(file, `${head}const maxOutputBudget = llmMaxTokens * 2;\nawait callLLM({ stage: 'autofix', prompt, model, maxTokens: maxOutputBudget });\n`);
+    await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /maxTokens: maxOutputBudget is not a config field nor a literal/);
+    await fs.writeFile(file, `${head}const maxOutputBudget = model ?? 4096;\nawait callLLM({ stage: 'autofix', prompt, model, maxTokens: maxOutputBudget });\n`);
+    await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /maxTokens: maxOutputBudget is not a config field nor a literal/);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

@@ -411,7 +411,8 @@ test('parseCliArgs requires exactly one site source and known suites', () => {
   assert.throws(() => parseCliArgs([]), /exactly one of --site-url or --site-dir/);
   assert.throws(() => parseCliArgs(['--site-url', 'u', '--site-dir', 'd']), /exactly one/);
   assert.throws(() => parseCliArgs(['--site-dir', 'd', '--suite', 'nope']), /Unknown suite "nope"/);
-  assert.deepEqual(parseCliArgs(['--site-url', 'u']).suites.map((s) => s.name), ['validation', 'review']);
+  assert.deepEqual(parseCliArgs(['--site-url', 'u']).suites.map((s) => s.name), ['validation', 'review'], 'a two-phase suite is not replayed from the dashboard');
+  assert.throws(() => parseCliArgs(['--site-dir', 'd', '--suite', 'autofix']), /"autofix" is two-phase/);
   const one = parseCliArgs(['--site-dir', 'd', '--suite', 'review']);
   assert.deepEqual([one.siteDir, one.siteUrl, one.suites.map((s) => s.name)], ['d', undefined, ['review']]);
 });

@@ -95,3 +95,26 @@ export function indexGraderResults(graderResults) {
   }
   return Object.fromEntries(graderResults.results.map((r) => [`${r.case_id}#${r.repeat}`, r]));
 }
+
+/**
+ * The model phase's output with the grader job's verdict for the same run, as the suite's scorers read it
+ * (`output.grader`). Fails closed: a run without a verdict, a verdict the grader could not produce (`ERROR`) and a
+ * verdict for a case the golden set does not know are errored runs, never a pass or a plain fail. A run that was
+ * not graded because its answer was no patch (`NO_PATCH`) is a normal outcome and keeps `grader: { graded: false }`.
+ */
+export function attachVerdict(output, index, { caseId, repeat }) {
+  const key = `${caseId}#${repeat}`;
+  const verdict = index[key];
+  if (!verdict) throw new Error(`grader results: no verdict for ${key}`);
+  // The score job rebuilds the output from the recorded model answer: a verdict for another outcome means the two jobs
+  // did not see the same run (config drift between them), and a score over that would be a score of nothing.
+  if ((output.status === AUTOFIX_STATUS.PATCH) !== (verdict.graded === true)) {
+    throw new Error(`grader results: ${key} is ${output.status} here but ${verdict.graded ? 'was graded as a patch' : `was not graded (${verdict.reason})`}`);
+  }
+  if (verdict.graded === false) {
+    if (verdict.reason !== NOT_GRADED.noPatch) throw new Error(`grader results: ${key} was not graded (${verdict.reason})`);
+    return { ...output, grader: { graded: false, reason: verdict.reason } };
+  }
+  if (verdict.outcome === 'ERROR') throw new Error(`grader results: ${key} could not be graded (${verdict.failure ?? 'ERROR'})`);
+  return { ...output, grader: { graded: true, outcome: verdict.outcome, failure: verdict.failure, path: verdict.path, checks: verdict.checks } };
+}

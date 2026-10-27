@@ -28,7 +28,8 @@ export const ALLOWED_REPEATS = [1, 3];
 // PR is refused rather than measured with code it does not contain.
 export const REFUSED_PREFIXES = ['scripts/', 'config/'];
 export const PROMPTS_PREFIX = 'prompts/';
-// Prompt file name prefix → eval suite (eval_suites.mjs).
+// Prompt file name prefix → eval suite (eval_suites.mjs). Not autofix: a two-phase suite needs the grader job, which this
+// workflow does not have, so a PR's auto-fix prompts are listed as unmeasured.
 export const SUITE_PROMPT_PREFIXES = { validation: 'prompts/validation-', review: 'prompts/pr-review-' };
 export const MAX_PROMPT_BYTES = 64 * 1024;
 export const REPORT_MARKER = '<!-- adl-pr-evals -->';

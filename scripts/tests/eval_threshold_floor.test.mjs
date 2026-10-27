@@ -36,12 +36,24 @@ const FLOOR = {
       error_rate: { max: 0.05 },
     },
   },
+  // EV-03 (ADR-0052): no gate before a baseline over several runs; the set is pinned from the start.
+  autofix: { cases: 6, thresholds: {} },
 };
 
 // Every pinned case must still exist with the same label and the same input (sha256 of
 // JSON.stringify(input), first 12 hex). Adding cases needs no edit here; relabelling, removing or
 // rewriting a case does, so it shows in the diff (ADR-0031 §4: a separate PR, rationale in its body).
+// For a case with a fixture (autofix) the pin also covers the SHA-256 of its fixture tree and of its grader tree: the
+// dataset pins them itself, so rewriting a tree and its digest together would otherwise go unseen.
 const PINNED = {
+  autofix: {
+    "fix-unknown-id-lookup": ["patch", "97d0b0b1e08a"],
+    "fix-page-offset": ["patch", "88dc018778e5"],
+    "fix-unawaited-map": ["patch", "fb7e8fa66143"],
+    "fix-code-leave-protected-docs": ["patch", "2b5d87856627"],
+    "refuse-protected-docs-only": ["no_changes", "ce707af2e295"],
+    "refuse-withheld-large-file": ["no_changes", "a35ed6c69961"],
+  },
   validation: {
     "valid-api-endpoint": ["valid", "89c07874b986"],
     "valid-pure-function": ["valid", "a36a94bf638a"],
@@ -122,6 +134,7 @@ const PINNED = {
 // Cases tagged known-gap, id → input hash. Only a case that was never gated (never in PINNED) can be listed:
 // removing the tag moves it to PINNED, and a pinned case can never come back here.
 const KNOWN_GAP = {
+  autofix: {},
   validation: {},
   review: {
     // PR #194 incident, expected missed on Groq: the #199 provider comparison case.
@@ -142,6 +155,7 @@ const readCases = (path) => readFileSync(resolve(ROOT, path), 'utf8').split('\n'
 // not a rewrite of the case.
 const canonical = (v) => (Array.isArray(v) ? v.map(canonical)
   : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])])) : v);
+const pinOf = (c) => (c.fixture ? { input: c.input, fixture: c.fixture.sha256, grader: c.grader?.sha256 ?? null } : c.input);
 const inputHash = (input) => createHash('sha256').update(JSON.stringify(canonical(input))).digest('hex').slice(0, 12);
 
 const isKnownGap = (c) => (c.tags ?? []).includes(KNOWN_GAP_TAG);
@@ -153,7 +167,7 @@ function knownGapViolations({ cases, pinned, knownGap }) {
     if (isKnownGap(c)) {
       if (pinned[c.id]) out.push(`${c.id}: a pinned (gated) case cannot be tagged ${KNOWN_GAP_TAG}`);
       else if (!knownGap[c.id]) out.push(`${c.id}: tagged ${KNOWN_GAP_TAG} but not listed in KNOWN_GAP`);
-      else if (knownGap[c.id] !== inputHash(c.input)) out.push(`${c.id}: known-gap case input was rewritten`);
+      else if (knownGap[c.id] !== inputHash(pinOf(c))) out.push(`${c.id}: known-gap case input was rewritten`);
     } else if (!pinned[c.id]) {
       out.push(`${c.id}: gated case not pinned${knownGap[c.id] ? ' (its known-gap tag was removed: move it from KNOWN_GAP to PINNED)' : ''}`);
     }
@@ -221,7 +235,7 @@ for (const [name, floor] of Object.entries(FLOOR)) {
       const c = byId.get(id);
       assert.ok(c, `${name}: pinned case ${id} was removed`);
       assert.equal(suite.expectedLabel(c.expected), label, `${name}: pinned case ${id} was relabelled`);
-      assert.equal(inputHash(c.input), hash, `${name}: pinned case ${id} input was rewritten`);
+      assert.equal(inputHash(pinOf(c)), hash, `${name}: pinned case ${id} input${c.fixture ? ', fixture or grader' : ''} was rewritten`);
     }
   });
 }
@@ -229,7 +243,7 @@ for (const [name, floor] of Object.entries(FLOOR)) {
 // ADR-0031: a prompt fitted to the eval's own cases greens the gate the way a loosened threshold
 // does. No prompt of a suite may share a run of CONTAMINATION_N words with any of its cases' inputs:
 // prompt examples must come from another domain than the dataset.
-const SUITE_PROMPTS = { validation: 'validation-', review: 'pr-review-' };
+const SUITE_PROMPTS = { validation: 'validation-', review: 'pr-review-', autofix: 'auto-fix-' };
 const CONTAMINATION_N = 5;
 const words = (text) => text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
 const shingles = (text) => {

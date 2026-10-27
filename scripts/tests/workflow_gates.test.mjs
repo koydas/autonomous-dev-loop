@@ -498,7 +498,7 @@ test('evals.yml keeps write access out of the eval job and publishes from the de
   assert.match(text, /^permissions:\n  contents: read$/m);
   assert.match(evalJob, /persist-credentials: false/);
   assert.doesNotMatch(evalJob, /contents: write|git push/);
-  assert.match(publishJob, /needs: eval/);
+  assert.match(publishJob, /needs: \[eval, autofix-score\]/);
   assert.match(publishJob, /pages: write/);
   assert.match(publishJob, /id-token: write/);
   assert.doesNotMatch(publishJob, /contents: write|pull-requests: write/);
@@ -524,29 +524,38 @@ const evalsJobs = () => Object.fromEntries(jobsOf(evalsYml()).map((j) => [j.name
 // production) holds one suite × 3 repeats, not two in a row (run 38271632735).
 const evalsCrons = () => [...evalsYml().matchAll(/^\s+- cron: '([^']+)'(?: #.*)?$/gm)].map((m) => m[1]);
 const evalsCronSuites = () => {
-  const map = evalsJobs().eval.match(/fromJSON\('(\{[^']+\})'\)\[github\.event\.schedule\]/);
-  assert.ok(map, 'matrix: a JSON map from cron string to suite, indexed by github.event.schedule');
+  const map = evalsJobs().plan.match(/fromJSON\('(\{[^']+\})'\)\[github\.event\.schedule\]/);
+  assert.ok(map, 'plan: a JSON map from cron string to suite, indexed by github.event.schedule');
   return JSON.parse(map[1]);
 };
 
-test('evals.yml runs each suite weekly, early morning UTC, off the hour, on days at least 48 h apart', () => {
+// Suites measured on Anthropic: they draw nothing from the Groq daily quota, so the 48 h spacing below does not apply
+// to them. The exemption is tied to the pin in evals.yml (autofix runs `AI_PROVIDER_AUTOFIX: anthropic`, and `plan`
+// refuses it on Groq), tested further down.
+const ANTHROPIC_SUITES = ['autofix'];
+
+test('evals.yml runs each suite weekly, early morning UTC, off the hour, the Groq suites on days at least 48 h apart', () => {
   const crons = evalsCrons();
   assert.ok(crons.length >= 2);
-  const days = [];
+  const cronSuites = evalsCronSuites();
+  const groqDays = [];
   for (const cron of crons) {
     const [minute, hour, dom, month, dow] = cron.split(' ');
     assert.ok(Number(minute) % 15 !== 0, `${cron}: minute ${minute} must not be round (GitHub delays :00 schedules)`);
     assert.ok(Number(hour) >= 5 && Number(hour) <= 7, `${cron}: hour ${hour} must be about 06:00 UTC`);
     assert.deepEqual([dom, month], ['*', '*'], `${cron}: weekly only`);
     assert.match(dow, /^[0-6]$/, `${cron}: one day of the week`);
-    days.push(Number(dow));
+    if (!ANTHROPIC_SUITES.includes(cronSuites[cron])) groqDays.push(Number(dow));
   }
+  assert.equal(new Set(crons).size, crons.length);
   // A delayed schedule (hours, run 38271632735) must still start on a TPD the previous suite no longer holds.
-  const sorted = [...days].sort((a, b) => a - b);
+  const sorted = [...groqDays].sort((a, b) => a - b);
+  assert.ok(sorted.length >= 2);
   sorted.forEach((d, i) => {
     const next = i + 1 < sorted.length ? sorted[i + 1] : sorted[0] + 7;
     assert.ok(next - d >= 2, `suite days ${d} and ${next % 7} are less than 48 h apart`);
   });
+  // Two crons on one day (an Anthropic suite next to a Groq one) are two runs of one concurrency group: the second queues.
   assert.match(evalsYml(), /^on:\n  schedule:\n[\s\S]*?\n  workflow_dispatch:\n/m);
 });
 
@@ -572,8 +581,10 @@ test('evals.yml never starts an empty history nor restores a backup on schedule'
 test('evals.yml schedule runs every registered suite once a week, one suite per cron, each under its own run_id', async () => {
   const { SUITES } = await import('../lib/eval_suites.mjs');
   const job = evalsJobs().eval;
-  assert.match(job, /suite: \$\{\{ fromJSON\(format\('\["\{0\}"\]', github\.event_name == 'schedule' && fromJSON\('[^']+'\)\[github\.event\.schedule\] \|\| inputs\.suite\)\) \}\}/,
-    'matrix: the cron\'s suite on schedule, the chosen one on dispatch');
+  assert.match(evalsJobs().plan, /SUITE: \$\{\{ github\.event_name == 'schedule' && fromJSON\('[^']+'\)\[github\.event\.schedule\] \|\| inputs\.suite \}\}/,
+    'plan: the cron\'s suite on schedule, the chosen one on dispatch');
+  assert.match(job, /suite: \$\{\{ fromJSON\(format\('\["\{0\}"\]', needs\.plan\.outputs\.suite\)\) \}\}/, 'matrix: the suite of plan');
+  assert.match(job, /needs: plan\n    if: \$\{\{ needs\.plan\.outputs\.suite != 'autofix' \}\}/, 'autofix has its own three jobs');
   const cronSuites = evalsCronSuites();
   // Every cron is mapped (an unmapped one would run an empty suite), every suite has exactly one cron.
   assert.deepEqual(Object.keys(cronSuites).sort(), [...evalsCrons()].sort());
@@ -586,6 +597,71 @@ test('evals.yml schedule runs every registered suite once a week, one suite per 
   assert.match(job, /name: run-trace-\$\{\{ github\.run_id \}\}-\$\{\{ matrix\.suite \}\}\n/);
   // Every suite, worst case, within the per-suite job timeout.
   assert.ok(Number(job.match(/^    timeout-minutes: (\d+)$/m)[1]) >= 90);
+});
+
+// EV-03 (ADR-0052): the model's patches are run against hidden tests. The job that runs them holds no secret and
+// writes nothing; the job that holds the API key never runs them. These are the properties that make that safe.
+const withoutComments = (text) => text.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+const autofixJob = (name) => withoutComments(evalsJobs()[name]);
+
+test('evals.yml autofix: three jobs, model -> grade -> score, each only after the previous succeeded', () => {
+  const [model, grade, score] = ['autofix-model', 'autofix-grade', 'autofix-score'].map(autofixJob);
+  for (const job of [model, grade, score]) assert.ok(job, 'job missing');
+  assert.match(model, /needs: plan\n    if: \$\{\{ needs\.plan\.outputs\.suite == 'autofix' \}\}/);
+  assert.match(grade, /needs: autofix-model\n    if: \$\{\{ needs\.autofix-model\.result == 'success' \}\}/);
+  assert.match(score, /needs: \[autofix-model, autofix-grade\]\n    if: \$\{\{ needs\.autofix-model\.result == 'success' && needs\.autofix-grade\.result == 'success' \}\}/);
+  assert.match(model, /node scripts\/run_evals\.mjs --suite autofix --phase model --repeats "\$REPEATS" --out-dir evals\/model-results/);
+  assert.match(grade, /node scripts\/grade_autofix_eval\.mjs --results "\$MODEL_RESULTS" --out evals\/grader-results\.json/);
+  assert.match(score, /--suite autofix[\s\S]*--replay "evals\/inputs\/model\/autofix-\$\{GITHUB_RUN_ID\}-autofix\.json"[\s\S]*--grader-results evals\/inputs\/grader\/grader-results\.json/);
+  // The artifacts they hand on are keyed by the run, and the recording is downloaded by name (never a pattern that could match another run's).
+  assert.match(model, /name: autofix-model-\$\{\{ github\.run_id \}\}\n/);
+  assert.match(grade, /name: autofix-model-\$\{\{ github\.run_id \}\}\n\s+path: evals\/model-results/);
+  assert.match(grade, /name: autofix-grader-\$\{\{ github\.run_id \}\}\n/);
+  assert.match(score, /name: autofix-grader-\$\{\{ github\.run_id \}\}\n\s+path: evals\/inputs\/grader/);
+  // One results artifact, like the other suites: the publish job downloads eval-results-<run>-*.
+  assert.match(score, /name: eval-results-\$\{\{ github\.run_id \}\}-autofix\n/);
+  assert.match(score, /EVAL_RUN_ID: \$\{\{ github\.run_id \}\}-autofix/);
+});
+
+test('evals.yml autofix-grade runs the model\'s code with no secret, no variable, no write permission and no credential on disk', () => {
+  const grade = autofixJob('autofix-grade');
+  assert.doesNotMatch(grade, /secrets\.|vars\.|github\.token|GITHUB_TOKEN|ANTHROPIC|GROQ|AI_PROVIDER/, 'nothing a provider or the API could use');
+  assert.match(grade, /\n    permissions:\n      contents: read\n/);
+  assert.doesNotMatch(grade, /: write|id-token|pages:|actions:/, 'a token that reads contents only');
+  assert.match(grade, /persist-credentials: false/);
+  assert.doesNotMatch(grade, /git (push|add|commit)\b|gh (pr|api)\b/);
+  // The env it does set is the run id and the recording path: nothing from an event or an input.
+  const env = [...grade.matchAll(/^\s+(\w+): (.*)$/gm)].filter(([, k]) => k === k.toUpperCase()).map(([, k]) => k).sort();
+  assert.deepEqual(env, ['GITHUB_RUN_ID', 'MODEL_RESULTS']);
+  assert.doesNotMatch(grade, /inputs\./, 'no dispatch input reaches the job that runs patches');
+});
+
+test('evals.yml autofix-model holds the API key but never runs a patch; autofix-score and publish hold none', () => {
+  const model = autofixJob('autofix-model');
+  const score = autofixJob('autofix-score');
+  assert.match(model, /ANTHROPIC_API_KEY: \$\{\{ secrets\.ANTHROPIC_API_KEY \}\}/);
+  assert.doesNotMatch(model, /GROQ_API_KEY/, 'Anthropic only: no key for a provider it does not call');
+  assert.doesNotMatch(model, /grade_autofix_eval|evaluatePatch|node --test|evals\/graders/, 'the job with the key never runs the hidden tests');
+  assert.match(model, /^          AI_PROVIDER: anthropic$/m);
+  assert.match(model, /^          AI_PROVIDER_AUTOFIX: anthropic$/m);
+  assert.match(model, /persist-credentials: false/);
+  assert.doesNotMatch(score, /secrets\./, 'scoring is a replay: no provider call, no key');
+  assert.match(score, /persist-credentials: false/);
+  assert.doesNotMatch(autofixJob('publish'), /autofix-model|autofix-grader|secrets\./, 'publish reads the scored results only');
+  // The only secrets of the autofix jobs: the model job\'s key.
+  const secrets = [...evalsYml().matchAll(/secrets\.(\w+)/g)].map((m) => m[1]);
+  assert.deepEqual([...new Set(secrets)].sort(), ['ANTHROPIC_API_KEY', 'GROQ_API_KEY']);
+});
+
+test('evals.yml plan refuses autofix on Groq, and the Anthropic exemption of the 48 h rule is the pin', async () => {
+  const plan = withoutComments(evalsJobs().plan);
+  assert.match(plan, /PROVIDER: \$\{\{ github\.event_name == 'schedule' && 'repo-variable' \|\| inputs\.provider \}\}/);
+  assert.match(plan, /if \[ "\$SUITE" = "autofix" \] && \[ "\$PROVIDER" = "groq" \]; then[\s\S]*?exit 1/);
+  assert.match(plan, /echo "suite=\$SUITE" >> "\$GITHUB_OUTPUT"/);
+  for (const suite of ANTHROPIC_SUITES) {
+    assert.equal(suite, 'autofix', 'an exempted suite needs its own pin in the workflow (and in this test)');
+    assert.match(autofixJob('autofix-model'), /AI_PROVIDER_AUTOFIX: anthropic/);
+  }
 });
 
 // The pre-flight estimate (tokensPerRunEst × runs) ignores Groq's prompt cache: any budget under the
@@ -602,7 +678,7 @@ test('evals.yml publishes every suite of the run in one Pages deploy', () => {
   const publish = evalsJobs().publish;
   assert.match(publish, /pattern: eval-results-\$\{\{ github\.run_id \}\}-\*\n\s+merge-multiple: true\n/);
   assert.equal([...publish.matchAll(/uses: actions\/deploy-pages@/g)].length, 1);
-  assert.match(publish, /needs: eval\n/);
+  assert.match(publish, /needs: \[eval, autofix-score\]\n/);
   assert.match(publish, /^    timeout-minutes: \d+$/m);
 });
 
@@ -621,8 +697,10 @@ test('evals.yml provider input: a choice of the providers, defaulting to the rep
 test('evals.yml passes the provider input as AI_PROVIDER to the eval step only, never on schedule', () => {
   const text = evalsYml();
   const expr = "AI_PROVIDER: ${{ github.event_name != 'schedule' && inputs.provider != 'repo-variable' && inputs.provider || vars.AI_PROVIDER }}";
-  assert.equal([...text.matchAll(/^\s+AI_PROVIDER:/gm)].length, 1, 'one AI_PROVIDER, on the eval step');
-  assert.equal([...text.matchAll(/inputs\.provider\b/g)].length, 5, 'inputs.provider: the AI_PROVIDER(_<STAGE>) expressions and MODEL_CHANGE_FAILS only');
+  // The eval step takes the input; the autofix model and score jobs pin Anthropic with a literal (see the autofix tests).
+  assert.equal([...text.matchAll(/^\s+AI_PROVIDER:/gm)].length, 3, 'AI_PROVIDER: the eval step and the two autofix jobs that rebuild its prompt');
+  assert.deepEqual([...text.matchAll(/^\s+AI_PROVIDER: (anthropic)$/gm)].length, 2);
+  assert.equal([...text.matchAll(/inputs\.provider\b/g)].length, 6, 'inputs.provider: the AI_PROVIDER(_<STAGE>) expressions, MODEL_CHANGE_FAILS and the plan job (it refuses autofix on Groq)');
   const step = evalsJobs().eval.split(/\n(?=      - )/).find((st) => st.includes('- name: Run eval suite'));
   assert.ok(step.includes(expr));
   assert.doesNotMatch(evalsJobs().publish, /AI_PROVIDER/);
@@ -673,12 +751,15 @@ test('evals.yml passes the Anthropic overrides to the eval step only, never on s
   const step = evalsJobs().eval.split(/\n(?=      - )/).find((st) => st.includes('- name: Run eval suite'));
   assert.ok(step.includes("          EVAL_ANTHROPIC_MODEL: ${{ github.event_name != 'schedule' && inputs.anthropic_model || '' }}\n"));
   assert.ok(step.includes("          EVAL_ANTHROPIC_EFFORT: ${{ github.event_name != 'schedule' && inputs.anthropic_effort != 'models-yaml' && inputs.anthropic_effort || '' }}\n"));
-  assert.equal([...text.matchAll(/^\s+EVAL_ANTHROPIC_(MODEL|EFFORT):/gm)].length, 2, 'set once, on the eval step');
+  assert.equal([...text.matchAll(/^\s+EVAL_ANTHROPIC_(MODEL|EFFORT):/gm)].length, 4, 'set on the eval step and on the autofix model job (the only jobs that call a provider)');
+  const modelStep = evalsJobs()['autofix-model'];
+  assert.ok(modelStep.includes("          EVAL_ANTHROPIC_MODEL: ${{ github.event_name != 'schedule' && inputs.anthropic_model || '' }}\n"));
+  assert.ok(modelStep.includes("          EVAL_ANTHROPIC_EFFORT: ${{ github.event_name != 'schedule' && inputs.anthropic_effort != 'models-yaml' && inputs.anthropic_effort || '' }}\n"));
   // The repository variables stay what production reads; the run input goes through EVAL_ANTHROPIC_*.
   assert.ok(step.includes('          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}\n'));
   assert.ok(step.includes('          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}\n'));
-  assert.equal([...text.matchAll(/inputs\.anthropic_model\b/g)].length, 2, 'the eval step and MODEL_CHANGE_FAILS only');
-  assert.equal([...text.matchAll(/inputs\.anthropic_effort\b/g)].length, 3, 'the eval step and MODEL_CHANGE_FAILS only');
+  assert.equal([...text.matchAll(/inputs\.anthropic_model\b/g)].length, 4, 'the eval step, the autofix model and score jobs and MODEL_CHANGE_FAILS only');
+  assert.equal([...text.matchAll(/inputs\.anthropic_effort\b/g)].length, 5, 'the eval step, the autofix model job and MODEL_CHANGE_FAILS only');
   assert.doesNotMatch(evalsJobs().publish, /EVAL_ANTHROPIC|ANTHROPIC_MODEL:/);
 });
 
@@ -983,7 +1064,8 @@ test('evals.yml publish rebuilds the pipeline views from the metrics branch, nev
 
 test('pipeline_health EVAL_CRONS mirror the evals.yml crons and their suites', async () => {
   const { EVAL_CRONS } = await import('../lib/pipeline_health.mjs');
-  const cronSuites = evalsCronSuites();
+  // The token chart is the Groq daily quota: the Anthropic suites have no cron there.
+  const cronSuites = Object.fromEntries(Object.entries(evalsCronSuites()).filter(([, suite]) => !ANTHROPIC_SUITES.includes(suite)));
   assert.deepEqual(Object.fromEntries(EVAL_CRONS.map((c) => [c.cron, c.suite])), cronSuites);
   for (const c of EVAL_CRONS) assert.equal(Number(c.cron.split(' ')[4]), c.weekday);
 });
