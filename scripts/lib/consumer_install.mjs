@@ -66,7 +66,8 @@ export function renderTemplate(name, text, pin) {
     .replaceAll('<PIPELINE_SHA>', pin.sha)
     .replaceAll('<PIPELINE_VERSION>', pin.version)
     .replace(/^(\s+branches: \["\*\*", ")!main("\]\r?)$/m, `$1!${pin.defaultBranch}$2`)
-    .replace(/^(\s+branches: \[)main(\]\r?)$/m, `$1${pin.defaultBranch}$2`);
+    // Quoted: a branch named 123, null or true would otherwise be a YAML number, null or boolean.
+    .replace(/^(\s+branches: \[)main(\]\r?)$/m, `$1"${pin.defaultBranch}"$2`);
   const left = out.split('\n').find((line) => line.includes('<PIPELINE_'));
   if (left) throw new Error(`${name}: placeholder left after rendering: ${left.trim()}`);
   return out;

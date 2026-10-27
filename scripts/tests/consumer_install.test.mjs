@@ -93,10 +93,18 @@ test('renderTemplate: the default branch replaces main in pr-review.yml and conf
   const review = renderTemplate('pr-review.yml', fs.readFileSync(path.join(TEMPLATES, 'pr-review.yml'), 'utf8'), pin);
   assert.match(review, /\n    branches: \["\*\*", "!trunk"\]\n/);
   const conflicts = renderTemplate('conflicts-fix.yml', fs.readFileSync(path.join(TEMPLATES, 'conflicts-fix.yml'), 'utf8'), pin);
-  assert.match(conflicts, /\n    branches: \[trunk\]\n/);
+  assert.match(conflicts, /\n    branches: \["trunk"\]\n/);
   for (const name of shipped.filter((n) => !['pr-review.yml', 'conflicts-fix.yml'].includes(n))) {
     const text = fs.readFileSync(path.join(TEMPLATES, name), 'utf8');
     assert.equal(renderTemplate(name, text, pin), renderTemplate(name, text, PIN), `${name}: no branch to replace`);
+  }
+});
+
+test('renderTemplate: a branch name YAML would read as a number, null or boolean stays a string', () => {
+  const text = fs.readFileSync(path.join(TEMPLATES, 'conflicts-fix.yml'), 'utf8');
+  for (const b of ['123', 'null', 'true', 'on', '1.0', 'yes']) {
+    const out = renderTemplate('conflicts-fix.yml', text, { ...PIN, defaultBranch: b });
+    assert.ok(out.includes(`\n    branches: ["${b}"]\n`), b);
   }
 });
 
