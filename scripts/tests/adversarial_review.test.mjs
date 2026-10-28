@@ -185,3 +185,19 @@ test('verifyAxes: a name must stand alone in the diff, not be a piece of a longe
   assert.deepEqual(verifyAxes(line('none: `RATED` is the only name that changes in this diff'), diff), { verified: ['robustness'], count: 1 });
   assert.deepEqual(verifyAxes(line('none: `a.b(c)` is read with regex chars like [x] and (y) in this line'), 'x\n+a.b(c)\n'), { verified: ['robustness'], count: 1 }, 'regex characters are escaped');
 });
+
+test('verifyAxes: for a file name or a path a dot or a dash goes on with the name; an identifier may be followed by a dot', () => {
+  const diffOf = (file, body = '+x') => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n${body}\n`;
+  const count = (text, diff) => verifyAxes(review(`- **Robustness** — ${text}`), diff).count;
+  const untouched = 'none: `a.js` is not touched by this change here';
+  // The name continues: another extension after it, another name before or after it.
+  for (const file of ['src/a.js.map', 'src/x.a.js', 'src/my-a.js', 'src/a.js-old']) assert.equal(count(untouched, diffOf(file)), 0, file);
+  assert.equal(count('none: src/a.js is not touched by this change here', diffOf('src/a.js.map')), 0, 'a path, followed by another extension');
+  assert.equal(count('none: src/a.js.map is only a generated file in this change', diffOf('src/a.js.map')), 1, 'the whole name');
+  // The name stands alone: end of a sentence, an import path, the basename of a path.
+  assert.equal(count('none: `a.js` is the only file changed by this diff.', diffOf('src/a.js')), 1);
+  assert.equal(count('none: `a.js` is the only file changed by this diff', diffOf('src/b.mjs', "+import x from './a.js';")), 1);
+  // An identifier is not a file name: a property access after it is fine, a longer identifier is not.
+  assert.equal(count('none: `RATE` is the only name changed by this diff', diffOf('src/b.mjs', '+const v = RATE.value;')), 1);
+  assert.equal(count('none: `RATE` is the only name changed by this diff', diffOf('src/b.mjs', '+RATED = 2')), 0);
+});

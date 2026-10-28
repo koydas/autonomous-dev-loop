@@ -78,9 +78,16 @@ export function analyzeAdversarial(review) {
 const CANDIDATES = [/`([^`\n]{4,})`/g, /[\w.-]+(?:\/[\w.-]+)+/g, /[\w-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b/g, /\b[a-z]+[A-Z][A-Za-z0-9]{2,}\b/g, /\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b/g];
 const MIN_CANDIDATE_CHARS = 4;
 
-// The candidate must stand alone in the diff: `a.js` is not found inside `data.json`, `RATE` not inside `RATED`.
+// The candidate must stand alone in the diff, not be a piece of a longer name: `RATE` is not found inside `RATED`, and a
+// file name or path (a candidate with a `.` or a `/`) is not found inside `data.json`, `x.a.js`, `my-a.js`, `a.js.map` or
+// `a.js-old`: for those, a `.` or a `-` goes on with the name. An identifier may be followed by a `.` (`RATE.value`).
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const standsAlone = (candidate, diff) => new RegExp(`(?<![\\w$])${escapeRegExp(candidate)}(?![\\w$])`).test(diff);
+const standsAlone = (candidate, diff) => {
+  const fileLike = /[./]/.test(candidate);
+  const before = fileLike ? '(?<![\\w$.-])' : '(?<![\\w$])';
+  const after = fileLike ? '(?![\\w$-]|\\.[\\w$])' : '(?![\\w$])';
+  return new RegExp(`${before}${escapeRegExp(candidate)}${after}`).test(diff);
+};
 
 function namesSomethingIn(rawLine, diff) {
   for (const re of CANDIDATES) {
