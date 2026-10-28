@@ -106,7 +106,7 @@ Any PR that adds a new exported function to `scripts/lib/` must include tests fo
 
 ## Changelog fragments
 
-PRs that change release-relevant files add `changes/<issue-number>.md` containing exactly one `### Added`, `### Changed`, `### Fixed`, or `### Removed` heading and at least one `- ` bullet. A PR without release notes may include the literal `No-Changelog: true` line in its body. Regular PRs must not edit root `CHANGELOG.md`; only the release operator assembles and rolls over that file, using `node scripts/assemble_changelog.mjs` and the procedure in `docs/releasing.md`.
+PRs that change release-relevant files add `changes/<issue-number>-<slug>.md` containing exactly one `### Added`, `### Changed`, `### Fixed`, or `### Removed` heading and at least one `- ` bullet. A PR without release notes may include the literal `No-Changelog: true` line in its body. Regular PRs must not edit root `CHANGELOG.md`; only the release operator assembles and rolls over that file, using `node scripts/assemble_changelog.mjs` and the procedure in `docs/releasing.md`.
 
 ## Workflow Rules _(pipeline only)_
 
