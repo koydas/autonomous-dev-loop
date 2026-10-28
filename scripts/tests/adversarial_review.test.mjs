@@ -201,3 +201,21 @@ test('verifyAxes: for a file name or a path a dot or a dash goes on with the nam
   assert.equal(count('none: `RATE` is the only name changed by this diff', diffOf('src/b.mjs', '+const v = RATE.value;')), 1);
   assert.equal(count('none: `RATE` is the only name changed by this diff', diffOf('src/b.mjs', '+RATED = 2')), 0);
 });
+
+test('verifyAxes: a name written in the review is looked up whole, never as a piece of it', () => {
+  const diffOf = (file, body = '+x') => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1 @@\n${body}\n`;
+  const count = (text, diff) => verifyAxes(review(`- **Robustness** — ${text}`), diff).count;
+  const notPart = (name) => `none: ${name} is not part of this change at all here`;
+  // The review cites a longer name than the diff holds: `a.js` must not be cut out of it, nor `my_file` out of `my_file.mjs.map`.
+  assert.equal(count(notPart('src/a.js.map'), diffOf('src/a.js')), 0, 'a path with another extension');
+  assert.equal(count(notPart('a.js-old'), diffOf('src/a.js')), 0, 'a file name followed by a dash');
+  assert.equal(count(notPart('`a.js.map`'), diffOf('src/a.js')), 0, 'the same in a code span');
+  assert.equal(count(notPart('x.a.js'), diffOf('src/a.js')), 0, 'a name that starts with another one');
+  assert.equal(count(notPart('my_file.mjs.map'), diffOf('src/my_file.mjs')), 0, 'an identifier inside a file name');
+  // The name as written is in the diff: with a sentence dot, a :line suffix, as a property chain or in a code span.
+  assert.equal(count('none: the only file is src/a.js.', diffOf('src/a.js')), 1);
+  assert.equal(count('none: src/a.js:12 only holds the changed literal here', diffOf('src/a.js')), 1);
+  assert.equal(count('none: `RATE.value` is read once in the changed line', diffOf('src/b.mjs', '+const v = RATE.value;')), 1);
+  assert.equal(count('none: `parseConfig()` callers are unchanged by this diff', diffOf('src/b.mjs', '+parseConfig(x)')), 1);
+  assert.equal(count('none: review_max_input_tokens is the only name here', diffOf('src/b.mjs', '+review_max_input_tokens: 1')), 1);
+});

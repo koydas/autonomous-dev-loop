@@ -74,9 +74,23 @@ export function analyzeAdversarial(review) {
 }
 
 // Things a line can name that a string search can look for in the diff: `code` spans, paths and file names, and
-// identifiers written in camelCase or snake_case. Plain words ("empty", "return") name nothing.
-const CANDIDATES = [/`([^`\n]{4,})`/g, /[\w.-]+(?:\/[\w.-]+)+/g, /[\w-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b/g, /\b[a-z]+[A-Z][A-Za-z0-9]{2,}\b/g, /\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b/g];
+// identifiers written in camelCase or snake_case. Plain words ("empty", "return") name nothing. A name is taken whole,
+// as written: a run of name characters (`[\w$.-]` and `/`), never a piece of it, so `src/a.js.map` is looked up as
+// `src/a.js.map` and not as `a.js`, and `my_file.mjs.map` not as `my_file`.
+const NAME_TOKEN = /[\w$.-]+(?:\/[\w$.-]+)*/g;
+const FILE_LIKE = /\/|\.[A-Za-z][A-Za-z0-9]{0,5}$/;
+const IDENTIFIER = /^(?:[a-z]+[A-Z][A-Za-z0-9]{2,}|[A-Za-z0-9]+_[A-Za-z0-9_]+)$/;
 const MIN_CANDIDATE_CHARS = 4;
+
+function candidatesOf(rawLine) {
+  const found = [];
+  for (const m of rawLine.matchAll(/`([^`\n]{4,})`/g)) found.push(m[1]);
+  for (const m of rawLine.matchAll(NAME_TOKEN)) {
+    const token = m[0].replace(/^[.-]+|[.-]+$/g, '');
+    if (FILE_LIKE.test(token) || IDENTIFIER.test(token)) found.push(token);
+  }
+  return found.map((c) => c.replace(/^[.,;:()]+|[.,;:()]+$/g, '')).filter((c) => c.length >= MIN_CANDIDATE_CHARS);
+}
 
 // The candidate must stand alone in the diff, not be a piece of a longer name: `RATE` is not found inside `RATED`, and a
 // file name or path (a candidate with a `.` or a `/`) is not found inside `data.json`, `x.a.js`, `my-a.js`, `a.js.map` or
@@ -89,15 +103,7 @@ const standsAlone = (candidate, diff) => {
   return new RegExp(`${before}${escapeRegExp(candidate)}${after}`).test(diff);
 };
 
-function namesSomethingIn(rawLine, diff) {
-  for (const re of CANDIDATES) {
-    for (const m of rawLine.matchAll(re)) {
-      const candidate = (m[1] ?? m[0]).replace(/^[.,;:()]+|[.,;:()]+$/g, '');
-      if (candidate.length >= MIN_CANDIDATE_CHARS && standsAlone(candidate, diff)) return true;
-    }
-  }
-  return false;
-}
+const namesSomethingIn = (rawLine, diff) => candidatesOf(rawLine).some((candidate) => standsAlone(candidate, diff));
 
 /**
  * Axes whose line is verified (ADR-0065, shadow): the line is a real statement (not a placeholder, not a label) and names
