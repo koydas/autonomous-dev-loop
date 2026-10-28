@@ -1,7 +1,7 @@
-// System overview, the dashboard home (ADR-0043 amendment 2026-10-24): one phone screen — status, then
-// flows, cost and quality over the last 7 days, then who waits on a person. Every row opens its page and
-// every chip a filtered view. The windowed indicators and charts (7 / 14 / 30 days, pipeline_kpis.mjs) are
-// overviewTrends(), on the Metrics page. Pure.
+// System overview, the dashboard home (ADR-0043 amendments 2026-10-24 and 2026-10-28): status, then the
+// four 7-day indicators, the pipeline as five stages, the eval gates, then who waits on a person — one content
+// at every width, laid out by CSS. Every card opens its page. The windowed indicators and charts (7 / 14 / 30
+// days, pipeline_kpis.mjs) are overviewTrends(), on the Metrics page. Pure.
 import { escapeHtml as e, headlineScore } from './eval_site.mjs';
 import { costAmount, costBasis, formatUsd } from './llm_cost.mjs';
 import { DEFINITIONS, WINDOWS, RUN_CLASSES } from './pipeline_kpis.mjs';
@@ -185,7 +185,7 @@ ${definitionsPanel()}
 </section>${RANGE_SCRIPT}`;
 }
 
-// The glance: a change is shown only against a populated previous window (MIN_BASE runs or verdicts): a
+// The home: a change is shown only against a populated previous window (MIN_BASE runs or verdicts): a
 // percentage on a handful of runs is noise (e.g. +3283 % after a quiet week).
 const GLANCE_DAYS = 7;
 const MIN_BASE = 10;
@@ -199,52 +199,12 @@ export function shortAmount(sum) {
 }
 const chip = (href, tone, text, title = '') => `<a class="g-chip tone-${tone}" href="${e(href)}"${title ? ` title="${e(title)}"` : ''}>${toneMark(tone)}<span>${text}</span></a>`;
 const row = (id, href, label, value, sub, chips) => `<section class="g-row" id="g-${id}"><a class="g-head" href="${e(href)}"><span class="g-label">${e(label)}</span><strong class="g-value">${value}</strong>${sub ? `<span class="g-sub">${sub}</span>` : ''}<span class="chevron" aria-hidden="true">›</span></a>${chips ? `<div class="g-chips">${chips}</div>` : ''}</section>`;
-const change = (c) => (c.arrow ? ` <span class="kpi-delta tone-${c.tone}">${e(c.arrow)} ${e(c.text.replace(/ vs prior .*$/, ''))}</span>` : '');
 
 // The work items a `flows.html?period=N` link shows: the same reference (latest recorded run end) and the same
 // rule (last activity within N days of it) as the Pipelines period filter, so a chip's count is its list's length.
 export function periodItems(ctx, days) {
   const ref = Math.max(0, ...(ctx.traces ?? []).flatMap((t) => (t.runs ?? []).map((r) => r.completed_at ?? r.started_at ?? 0)));
   return (ctx.journeys ?? []).filter((j) => ref - (Number(j.last_activity) || 0) <= days * 86400000);
-}
-
-// Chips count work items by their latest recorded state, with the predicate of the Pipelines filter they open
-// (data-state tokens: the state, plus `attention`). The bar above them splits the runs by class and links nowhere:
-// a run class is not an item state (a REQUEST_CHANGES run is adverse; its item is changes_requested, not attention).
-const ITEM_CHIPS = [
-  ['attention', (j) => j.attention, 'need a person', 'Last recorded state: failed, escalated, approval withheld or rejected'],
-  ['changes_requested', (j) => j.state === 'changes_requested', 'changes requested', 'Last recorded state: review requested changes'],
-  ['approved', (j) => j.state === 'approved', 'approved', 'Last recorded state: approved by review'],
-  ['merged', (j) => j.state === 'merged', 'merged', 'Merge journaled (item.closed); Pipelines also re-checks GitHub live'],
-];
-
-function flowsRow(w, ctx, root, hasWithheld) {
-  if (w.empty) return row('flows', `${root}flows.html`, `Flows · ${GLANCE_DAYS} d`, '—', 'No pipeline run recorded yet', '');
-  const c = w.current, p = w.previous;
-  const rate = c.verdicts ? `approve ${e(pct(c.approve_rate))}${p.verdicts >= MIN_BASE ? change(delta(c.approve_rate, p.approve_rate, { better: 'up', points: true })) : ''}` : 'no review verdict';
-  const items = periodItems(ctx, GLANCE_DAYS);
-  const flows = (state) => `${root}flows.html?state=${state}&period=${GLANCE_DAYS}`;
-  const failed = items.some((j) => j.state === 'failed');
-  // Approval first: on a phone the chips scroll sideways and the first ones are the ones seen.
-  const chips = [
-    chip(hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, c.approve_rate == null ? 'unknown' : c.approve_rate < 0.5 ? 'warn' : 'good', rate, 'APPROVE ÷ recorded review verdicts'),
-    ...ITEM_CHIPS.map(([state, match, label, title]) => {
-      const n = items.filter(match).length;
-      if (!n && state !== 'attention') return '';
-      const tone = state === 'attention' ? (n ? (failed ? 'bad' : 'warn') : 'good') : state === 'changes_requested' ? 'warn' : 'good';
-      return chip(flows(state), tone, `${e(n)} ${label}`, title);
-    }),
-  ].join('');
-  return row('flows', `${root}flows.html?period=${GLANCE_DAYS}`, `Flows · ${GLANCE_DAYS} d`, `${e(c.runs)} run${c.runs === 1 ? '' : 's'}`, segments(c), chips);
-}
-
-function costRow(w, root) {
-  if (w.empty || !w.current.cost.calls) return row('cost', `${root}health.html#cost`, `Cost · ${GLANCE_DAYS} d`, '—', 'No LLM call in the window', '');
-  const c = w.current.cost, p = w.previous.cost;
-  const moved = comparableCost(c) && comparableCost(p) && w.previous.runs >= MIN_BASE ? change(delta(c.usd, p.usd, { better: 'down', zeroBase: true })) : '';
-  const perItem = w.items.length ? ` · ${e(shortAmount({ ...c, usd: c.usd / w.items.length }))} / item` : '';
-  const chips = w.stages.map((s) => chip(`${root}health.html#cost`, 'neutral', `${e(s.stage)} ${e(shortAmount(s))}`, `${s.calls} call(s), list price`)).join('');
-  return row('cost', `${root}health.html#cost`, `Cost · ${GLANCE_DAYS} d`, `${e(shortAmount(c))}${moved}`, `list price${perItem}`, chips);
 }
 
 // The trend of a suite: its headline score against the previous run on the same dataset, else none.
@@ -254,20 +214,6 @@ function suiteTrend(runs) {
   const a = headlineScore(last)?.value, b = headlineScore(prev)?.value;
   if (typeof a !== 'number' || typeof b !== 'number' || a === b) return '';
   return a > b ? ' ↑' : ' ↓';
-}
-
-function qualityRow(suites, root) {
-  const evals = `${root}evals.html`;
-  if (!suites.length) return row('quality', evals, 'Quality · evals', '—', 'No eval run published', '');
-  const passing = suites.filter(([, s]) => s.runs[0].passed).length;
-  const chips = suites.map(([name, s]) => {
-    const run = s.runs[0];
-    const h = headlineScore(run);
-    const score = typeof h?.value === 'number' ? `${Math.round(h.value * 100)} %` : '—';
-    return chip(`${evals}#suite-${encodeURIComponent(name)}`, run.passed ? 'good' : 'bad', `${e(String(name).replace(/_/g, ' '))} ${e(score)}${suiteTrend(s.runs)}`, `${h?.name ?? 'no score'} · gate ${run.passed ? 'passed' : `failed: ${(run.failures ?? []).join(', ')}`} · ${String(run.ts ?? '').slice(0, 10)}`);
-  }).join('');
-  const latest = suites.map(([, s]) => s.runs[0].ts).filter(Boolean).sort().at(-1);
-  return row('quality', evals, 'Quality · evals', `${e(passing)} / ${e(suites.length)} gates`, latest ? `last run ${e(String(latest).slice(0, 10))}` : '', chips);
 }
 
 // No severity on the waiting row either: waiting here is the gate working (waitingPanel).
@@ -288,9 +234,8 @@ function statusLine(d, root) {
 }
 
 // ---------------------------------------------------------------------------
-// Wide screens (ADR-0043 amendment 2026-10-28): the same home as a cockpit — a hero, the four 7-day
-// indicators, the pipeline as five stages with their daily activity, and the eval gates. A phone keeps the
-// rows above; CSS shows one or the other, the status line and Waiting on you are shared.
+// The cockpit (ADR-0043 amendment 2026-10-28): a hero, the four 7-day indicators, the pipeline as five
+// stages with their daily activity, and the eval gates. Same content on a phone, stacked (CSS).
 // ---------------------------------------------------------------------------
 
 const svg = (body, cls = '') => `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -367,19 +312,13 @@ function cockpit(ctx, root, suites, evalRoot, hasWithheld) {
  * `suites` the scorecard suites with runs (`[name, { runs }]`, latest first).
  */
 export function consoleOverview(ctx, root = '', { suites = [] } = {}) {
-  const { diagnosis: d, windows } = ctx;
-  const w = windows[GLANCE_DAYS];
+  const { diagnosis: d } = ctx;
   const hasWithheld = d.findings.some((f) => f.id === 'review-withheld');
   const evalRoot = root.replace(/pipeline\/$/, '');
   return `<section class="console glance" aria-label="System overview">
 <h1>System overview</h1>
 ${hero()}
 ${statusLine(d, root)}
-<div class="g-phone">
-${flowsRow(w, ctx, root, hasWithheld)}
-${costRow(w, root)}
-${qualityRow(suites, evalRoot)}
-</div>
 ${cockpit(ctx, root, suites, evalRoot, hasWithheld)}
 ${waitingRow(ctx.waiting ?? [], root)}
 <p class="g-foot"><a href="${root}health.html#trends">Trends, 14 / 30 days and definitions →</a></p>
@@ -399,9 +338,7 @@ const RANGE_SCRIPT = `<script>
 </script>`;
 
 export const OVERVIEW_STYLE = `
-.glance { max-width:720px; }
-/* One phone screen (375 × ~630 CSS px, iPhone 13 mini): the h1 is for screen readers, every row is one head line,
-   one detail line and one line of chips that scrolls sideways instead of wrapping. */
+/* The h1 is for screen readers; the hero names the page. */
 .glance h1 { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 .g-status.status-banner { margin:0 0 8px; padding:8px 10px; gap:8px; border-left-width:5px; color:var(--ink); text-decoration:none; flex-wrap:nowrap; }
 .g-status .tone-mark { width:24px; height:24px; font-size:13px; flex:none; }
@@ -421,16 +358,9 @@ export const OVERVIEW_STYLE = `
 .g-chip.g-more { --tone:var(--muted); }
 .g-foot { margin:2px 0 0; font-size:12px; }
 @media(max-width:600px) { main:has(> .glance) { padding-top:10px; } }
-/* Wide screens (ADR-0043 amendment 2026-10-28): the cockpit replaces the phone rows; status and Waiting on you stay. */
-.home-hero, .cockpit { display:none; }
-@media(min-width:761px) {
-  .glance { max-width:none; }
-  .g-phone { display:none; }
-  .home-hero { display:flex; } .cockpit { display:block; }
-}
 .glance { --st-issue:#7aa7ff; --st-code:#22c55e; --st-review:#a78bfa; --st-fix:#8b5cf6; --st-merge:#2dd4bf; }
 :root[data-theme="light"] .glance { --st-issue:#2f5fe0; --st-code:#16a34a; --st-review:#7c3aed; --st-fix:#6d28d9; --st-merge:#0d9488; }
-.home-hero { position:relative; overflow:hidden; justify-content:space-between; align-items:center; gap:24px; flex-wrap:wrap; margin:0 0 14px; padding:22px 26px; border:1px solid var(--border); border-radius:var(--radius); background:radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--accent) 30%, transparent) 1px, transparent 1.5px) 0 0 / 14px 14px, linear-gradient(120deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface) 55%); }
+.home-hero { position:relative; overflow:hidden; display:flex; justify-content:space-between; align-items:center; gap:24px; flex-wrap:wrap; margin:0 0 14px; padding:22px 26px; border:1px solid var(--border); border-radius:var(--radius); background:radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--accent) 30%, transparent) 1px, transparent 1.5px) 0 0 / 14px 14px, linear-gradient(120deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface) 55%); }
 .home-hero::before { content:''; position:absolute; inset:0; background:linear-gradient(90deg, transparent 0, var(--surface) 38%); pointer-events:none; }
 .home-hero > * { position:relative; }
 .hero-brand { display:flex; align-items:center; gap:16px; }
@@ -477,7 +407,32 @@ export const OVERVIEW_STYLE = `
 .q-name { grid-area:name; font-size:13px; color:var(--ink-2); text-transform:capitalize; } .q-value { grid-area:value; color:var(--tone); font-variant-numeric:tabular-nums; }
 .q-bar { grid-area:bar; height:8px; border-radius:4px; background:var(--grid); overflow:hidden; } .q-bar span { display:block; height:100%; border-radius:4px; background:var(--tone); }
 .q-list small { grid-area:note; font-size:11px; color:var(--muted); }
-@media(max-width:1250px) and (min-width:761px) { .cockpit-grid { grid-template-columns:1fr; } .q-list { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); column-gap:24px; } }
+@media(max-width:1250px) { .cockpit-grid { grid-template-columns:1fr; } .q-list { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); column-gap:24px; } }
+/* Phone (ADR-0043 amendment 2026-10-28): the same content stacked — a compact hero, the indicators two by two
+   with their notes, the stages as a vertical pipeline (value right, daily bars beside the note), the gates. */
+@media(max-width:760px) {
+  .home-hero { padding:14px 16px; gap:10px; margin-bottom:8px; }
+  .hero-brand { gap:12px; } .hero-logo { width:40px; height:40px; border-radius:11px; } .hero-logo svg { width:24px; height:24px; }
+  .hero-title { font-size:22px; } .hero-flow { margin-top:5px; font-size:9px; letter-spacing:1px; white-space:nowrap; }
+  .hero-tag { display:none; }
+  .stage-strip { flex-direction:column; gap:0; padding:8px; overflow:visible; }
+  .stage-card { display:grid; grid-template-columns:minmax(0,1fr) auto; grid-template-areas:'head value' 'note bars'; align-items:center; gap:6px 12px; min-width:0; padding:10px 12px; }
+  .stage-head { grid-area:head; } .stage-value { grid-area:value; justify-self:end; flex-direction:column; align-items:flex-end; gap:2px; margin:0; }
+  .stage-value strong { font-size:24px; } .stage-value span { font-size:11px; text-align:right; }
+  .stage-note { grid-area:note; min-height:0; } .day-bars { grid-area:bars; width:96px; height:24px; margin:0; }
+  .stage-arrow { transform:rotate(90deg); margin:2px 0; } .stage-arrow svg { width:14px; height:14px; }
+  .q-list { grid-template-columns:1fr; }
+}
+@media(max-width:600px) {
+  .cockpit .kpi-grid4 { margin:8px 0; }
+  .cockpit .kpi2 { padding:12px; gap:6px; }
+  .cockpit .kpi2 .kpi-value { font-size:24px; }
+  .cockpit .kpi2 .kpi-label { font-size:11.5px; }
+  .cockpit .kpi2 .spark { height:36px; }
+  .cockpit .kpi2 .kpi-note { display:block; font-size:10.5px; line-height:1.35; }
+  .cockpit-grid { gap:8px; margin-bottom:8px; }
+  .quality-panel { padding:12px; }
+}
 .head-tools { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .range-select { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
 .status-badge { display:flex; align-items:center; gap:10px; padding:9px 14px; border:1px solid var(--tone); border-radius:10px; background:color-mix(in srgb, var(--tone) 12%, var(--surface)); color:var(--ink); text-decoration:none; }
