@@ -5,7 +5,7 @@ import { consoleContext, statusBanner } from '../lib/console_views.mjs';
 import { consoleOverview, overviewTrends, kpiRow, delta, sparkline, durationChart, providerList, activeProblems, shortAmount } from '../lib/console_overview.mjs';
 import { DEFINITIONS } from '../lib/pipeline_kpis.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
-import { makeRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
+import { makeRecord, makeClosingRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
 
 const T = Date.parse('2026-10-16T10:00:00Z');
 const modelOf = (records) => buildPipelineModel({ records: asFiles(records), traces: indexesOf(records) });
@@ -17,28 +17,34 @@ const withheld = (runId, t, pr = 50, from = 'APPROVE') => makeRecord({ runId, st
   { event: 'review.verdict', meta: { verdict: 'WITHHELD', withheld_from: from, unreviewed_code_files: 5, prNumber: pr } },
 ] });
 
-test('overview: one screen — status, flows, cost, quality, waiting — each row and chip a drill-down; trends on Metrics', () => {
+test('overview: status, indicators, stages, gates, waiting — one content at every width, each card a drill-down; trends on Metrics', () => {
   const ctx = consoleContext(modelOf([withheld('800', T), withheld('801', T + 60000, 51), withheld('802', T + 120000, 52, 'REQUEST_CHANGES')]));
   const html = consoleOverview(ctx, 'pipeline/');
   assert.match(html, /<h1>System overview<\/h1>/);
   // The status names the most severe active problem and opens its card.
   assert.match(html, /<a class="g-status status-banner tone-warn" href="pipeline\/diagnostics\.html#review-withheld">.*Running with issues.*\d+ problem\(s\) · /s);
-  // Rows in a fixed order, each opening its page.
-  const order = ['g-flows', 'g-cost', 'g-quality', 'g-waiting'].map((id) => html.indexOf(`id="${id}"`));
-  assert.deepEqual([...order].sort((a, b) => a - b), order);
-  assert.ok(order.every((i) => i > 0));
-  assert.match(html, /id="g-flows"><a class="g-head" href="pipeline\/flows\.html\?period=7">.*3 runs/s);
-  // Chips filter the drill-down page; the approval chip goes to the withheld finding that explains it.
-  // Chips count work items by latest state, as the Pipelines filter they open does (3 withheld PRs → 3 need a person).
-  assert.match(html, /href="pipeline\/flows\.html\?state=attention&amp;period=7"[^>]*>.*3 need a person/);
-  assert.doesNotMatch(html, /adverse<\/span>|state=failed/, 'no run-class count behind an item filter');
-  assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld"[^>]*>.*approve 0 %/);
-  assert.match(html, /id="g-cost"><a class="g-head" href="pipeline\/health\.html#cost">.*list price/s);
-  assert.match(html, /id="g-quality"><a class="g-head" href="evals\.html">.*No eval run published/s, 'quality links resolve from the site root');
+  // Blocks in a fixed order (amendment 2026-10-28): hero, status, the four 7-day indicators, five stages, the eval
+  // gates, Waiting on you. The phone lays out the same blocks (CSS): no second set of rows.
+  const order = ['class="home-hero"', 'class="g-status', 'class="cockpit"', 'data-kpi="executions"', 'data-kpi="approve_rate"', 'data-kpi="run_duration"', 'data-kpi="llm_cost"', 'class="stage-strip', 'class="quality-panel', 'id="g-waiting"'].map((m) => html.indexOf(m));
+  assert.ok(order.every((i, k) => i > 0 && (k === 0 || i > order[k - 1])), String(order));
+  assert.doesNotMatch(html, /g-phone|id="g-(flows|cost|quality)"/, 'no phone-only rows');
+  assert.equal(html.match(/id="g-waiting"/g).length, 1);
+  // Cards open their page; the approval card goes to the withheld finding that explains it.
+  assert.match(html, /<a class="kpi2 tone-neutral" href="pipeline\/index\.html#executions" data-kpi="executions">/);
+  assert.match(html, /href="pipeline\/diagnostics\.html#review-withheld" data-kpi="approve_rate">.*0 of 3 verdicts · 3 withheld/s);
+  assert.match(html, /href="pipeline\/health\.html#cost" data-kpi="llm_cost"/);
+  assert.doesNotMatch(html, /state=failed/, 'no run-class count behind an item filter');
   assert.match(html, /id="g-waiting"><a class="g-head" href="pipeline\/flows\.html#waiting">/);
   assert.match(html, /<a href="pipeline\/health\.html#trends">Trends, 14 \/ 30 days and definitions →<\/a>/);
-  // What the home no longer carries: windows, charts, problem cards, recent pipelines, definitions.
-  assert.doesNotMatch(html, /data-window=|data-kpi=|Issues requiring attention|Recent pipelines|id="def-/);
+  // What the home does not carry: windows, charts, problem cards, recent pipelines, definitions.
+  assert.doesNotMatch(html, /data-window=|Issues requiring attention|Recent pipelines|id="def-/);
+  for (const [n, name, href] of [[1, 'Issue', 'pipeline/flows.html?kind=issue&amp;period=7'], [2, 'Code', 'pipeline/health.html#funnel'], [3, 'Review', 'pipeline/diagnostics.html#review-withheld'], [4, 'Auto-fix', 'pipeline/health.html#autofix'], [5, 'Merge', 'pipeline/flows.html?state=merged&amp;period=7']]) {
+    assert.match(html, new RegExp(`<a class="stage-card st-[a-z]+" href="${href.replace(/[?.]/g, '\\$&')}">.*?<strong>${n}\\. ${name}</strong>`), name);
+  }
+  assert.match(html, /<strong>0 %<\/strong><span>approval rate<\/span><\/span><span class="stage-note">0 of 3 verdicts/);
+  assert.match(html, /<strong>0<\/strong><span>merged<\/span>/);
+  assert.match(html, /class="quality-panel panel"[^>]*>.*<a href="evals\.html">Evals →<\/a>.*No eval run published/s, 'quality links resolve from the site root');
+  assert.match(html, /data-kpi="executions">.*?<strong class="kpi-value">3<\/strong><\/span>/s, 'no change on an empty previous window');
   // The trends block (Metrics): one block per window, indicators linked to what explains them, definitions.
   const trends = overviewTrends(ctx, 'pipeline/');
   assert.match(trends, /<div data-window="7">/);
@@ -62,7 +68,8 @@ test('overview on an empty model: no data is said, nothing looks healthy', () =>
   const ctx = consoleContext(buildPipelineModel({}));
   const html = consoleOverview(ctx, '');
   assert.match(html, /<a class="g-status status-banner tone-unknown"[^>]*>.*No data.*no pipeline run recorded yet/s);
-  assert.match(html, /id="g-flows">.*No pipeline run recorded yet/s);
+  assert.match(html, /class="cockpit"><div class="panel"><p>No pipeline run recorded yet: no indicator to compute/);
+  assert.doesNotMatch(html, /data-kpi=|stage-strip/, 'no indicator nor stage without a run');
   assert.match(html, /id="g-waiting">.*<strong class="g-value">0<\/strong>/s);
   assert.doesNotMatch(html, /tone-good/);
   const trends = overviewTrends(ctx, '');
@@ -109,7 +116,7 @@ test('indicators: change against the previous window, sparklines, providers; ok 
   const failed = consoleContext(modelOf([makeRecord({ runId: '830', start: T, outcome: 'failed' })]));
   assert.match(statusBanner(failed.diagnosis, failed.overview, ''), /Attention needed: 1 critical problem/);
   assert.match(consoleOverview(failed, ''), /class="g-status status-banner tone-bad"[^>]*>.*Attention needed.*1 problem\(s\) · /s);
-  assert.match(consoleOverview(failed, ''), /id="g-flows">.*class="g-chip tone-bad" href="flows\.html\?state=attention&amp;period=7"[^>]*>.*1 need a person/s);
+  assert.match(consoleOverview(failed, ''), /<a class="kpi2 tone-bad" href="index\.html#executions" data-kpi="executions">.*1 failed/s);
 });
 
 
@@ -166,7 +173,7 @@ test('problems named on the home: only active warning / critical findings; resol
   assert.match(none, /href="diagnostics\.html">.*No problem detected.*by the rules — not proof of health/s);
 });
 
-test('cost and quality rows: short amounts, per-stage and per-suite chips, a change only on a populated base', () => {
+test('cost card and quality panel: short amounts, per-suite rows, a change only on a populated base', () => {
   const sum = (o) => ({ usd: 0, calls: 0, measured: 0, estimated: 0, free: 0, unpriced: 0, ...o });
   assert.equal(shortAmount(sum({})), '—');
   assert.equal(shortAmount(sum({ calls: 2, free: 2 })), 'free tier');
@@ -182,35 +189,77 @@ test('cost and quality rows: short amounts, per-stage and per-suite chips, a cha
   const w = ctx.windows[7];
   const priced = { ...w, current: { ...w.current, cost: sum({ calls: 3, measured: 3, usd: 1.5 }) }, previous: { ...w.previous, runs: 2, cost: sum({ calls: 1, measured: 1, usd: 0.01 }) }, stages: [{ stage: 'review', ...sum({ calls: 2, measured: 2, usd: 1.2 }) }, { stage: 'autofix', ...sum({ calls: 1, measured: 1, usd: 0.3 }) }] };
   const small = consoleOverview({ ...ctx, windows: { ...ctx.windows, 7: priced } }, '');
-  assert.match(small, /id="g-cost">.*<strong class="g-value">\$1\.50<\/strong>/s, 'no +14900 % on a 2-run base');
-  assert.match(small, /href="health\.html#cost"[^>]*>.*review \$1\.20.*autofix \$0\.30/s);
+  assert.match(small, /data-kpi="llm_cost">.*<strong class="kpi-value">\$1\.50<\/strong><\/span>/s, 'no +14900 % on a 2-run base');
+  assert.doesNotMatch(small, /review \$1\.20/, 'the cost per stage is on Metrics → cost, not on the home');
   const big = consoleOverview({ ...ctx, windows: { ...ctx.windows, 7: { ...priced, previous: { ...priced.previous, runs: 10, cost: sum({ calls: 9, measured: 9, usd: 3 }) } } } }, '');
-  assert.match(big, /<strong class="g-value">\$1\.50 <span class="kpi-delta tone-good">↓ -50 %<\/span><\/strong>/);
-  // Quality: one chip per suite — headline score, gate, trend on the same dataset — opening its panel on evals.html.
+  assert.match(big, /<strong class="kpi-value">\$1\.50<\/strong><span class="kpi-delta tone-good">↓ -50 % vs prior 7 d<\/span>/);
+  // Quality: one row per suite — headline score, gate, trend on the same dataset — opening its panel on evals.html.
   const r = (id, ts, score, passed, dataset = 'd1', failures = []) => ({ run_id: id, ts, model: 'm', dataset_sha256: dataset, scores: { verdict_match: score }, passed, failures, n_cases: 4, repeats: 1 });
   const suites = [['review', { runs: [r('r2', '2026-10-20T00:00:00Z', 0.87, true), r('r1', '2026-10-18T00:00:00Z', 0.8, true)] }], ['validation', { runs: [r('v2', '2026-10-21T00:00:00Z', 0.6, false, 'd2', ['verdict_match']), r('v1', '2026-10-19T00:00:00Z', 0.9, true, 'd1')] }]];
   const q = consoleOverview(ctx, 'pipeline/', { suites });
-  assert.match(q, /id="g-quality"><a class="g-head" href="evals\.html">.*1 \/ 2 gates.*last run 2026-10-21/s);
-  assert.match(q, /class="g-chip tone-good" href="evals\.html#suite-review"[^>]*>.*review 87 % ↑/s);
-  assert.match(q, /class="g-chip tone-bad" href="evals\.html#suite-validation" title="verdict_match · gate failed: verdict_match · 2026-10-21">.*validation 60 %<\/span>/s, 'a changed dataset shows no trend');
+  assert.match(q, /class="quality-panel panel"[^>]*>.*<a href="evals\.html">1 \/ 2 gates →<\/a>/s);
+  assert.match(q, /<a class="tone-good" href="evals\.html#suite-review"><span class="q-name">review<\/span><strong class="q-value">87 % ↑<\/strong>/);
+  assert.match(q, /<a class="tone-bad" href="evals\.html#suite-validation"><span class="q-name">validation<\/span><strong class="q-value">60 %<\/strong>.*gate failed · 2026-10-21/, 'a changed dataset shows no trend');
 });
 
-test('flow chips: each count is the number of rows its Pipelines filter shows (PR #286 review)', async () => {
+test('merge card: its count is the number of rows its Pipelines filter shows (PR #286 review)', async () => {
   const { flowDashboard } = await import('../lib/flow_dashboard.mjs');
   const { periodItems } = await import('../lib/console_overview.mjs');
   const verdict = (runId, t, pr, v) => makeRecord({ runId, start: t, prNumber: pr, events: [{ event: 'review.verdict', meta: { verdict: v, prNumber: pr } }] });
-  // A REQUEST_CHANGES run is adverse, but its item is changes_requested — not attention; an old item is outside the period.
-  const model = modelOf([verdict('880', T, 60, 'REQUEST_CHANGES'), verdict('881', T + 1000, 61, 'APPROVE'), verdict('882', T + 2000, 62, 'WITHHELD'), verdict('883', T - 20 * 86400000, 63, 'WITHHELD')]);
+  const merge = (runId, t, pr) => makeRecord({ runId, start: t, prNumber: pr, events: [{ event: 'item.closed', meta: { merged: true } }] });
+  // Two merged PRs, one inside the period and one 20 days old; other states are not merges.
+  const model = modelOf([verdict('880', T, 60, 'REQUEST_CHANGES'), verdict('881', T + 1000, 61, 'APPROVE'), merge('882', T + 2000, 61), verdict('883', T - 20 * 86400000, 63, 'APPROVE'), merge('884', T - 20 * 86400000 + 1000, 63), verdict('885', T + 3000, 62, 'WITHHELD')]);
   const ctx = consoleContext(model);
   const html = consoleOverview(ctx, '');
   const page = flowDashboard(model);
   const ref = Number(/data-ref="(\d+)"/.exec(page)[1]);
   const rows = [...page.matchAll(/data-state="([^"]*)"[^>]*data-last="(\d*)"/g)].map((m) => ({ tokens: m[1].split(' '), last: Number(m[2]) || 0 }));
-  for (const state of ['attention', 'changes_requested', 'approved']) {
-    const listed = rows.filter((r) => r.tokens.includes(state) && ref - r.last <= 7 * 86400000).length;
-    assert.match(html, new RegExp(`href="flows\\.html\\?state=${state}&amp;period=7"[^>]*>.*?<span>${listed} `, 's'), `${state}: chip = ${listed} rows`);
-  }
+  const listed = rows.filter((r) => r.tokens.includes('merged') && ref - r.last <= 7 * 86400000).length;
+  assert.equal(listed, 1, 'fixture: one merge in the period');
+  assert.match(html, new RegExp(`href="flows\\.html\\?state=merged&amp;period=7">.*?<strong>${listed}</strong><span>merged</span>`, 's'));
   assert.equal(periodItems(ctx, 7).length, 3, 'the 20-day-old item is outside the period');
-  assert.match(html, /1 changes requested/);
   assert.equal(periodItems({}, 7).length, 0);
+  // A merge journaled after the latest execution (PR #320 review): counted and drawn, on the count's reference.
+  const late = consoleContext(modelOf([verdict('890', T, 70, 'APPROVE'), makeClosingRecord({ runId: '891', start: T + 4 * 86400000, prNumber: 70, meta: { merged: true } })]));
+  const lateHtml = consoleOverview(late, '');
+  assert.match(lateHtml, /<strong>1<\/strong><span>merged<\/span>/);
+  assert.match(lateHtml, /aria-label="Merges per day: 0, 0, 0, 0, 0, 0, 1"/);
+});
+
+test('home cockpit: eval gates, a change only on a populated base, 2-decimal cost, daily bars', async () => {
+  const { qualityPanel, dayBars, stageStrip } = await import('../lib/console_overview.mjs');
+  const r = (id, ts, score, passed, dataset = 'd1') => ({ run_id: id, ts, model: 'm', dataset_sha256: dataset, scores: { verdict_match: score }, passed, failures: passed ? [] : ['verdict_match'], n_cases: 4, repeats: 1 });
+  const q = qualityPanel([['review', { runs: [r('r2', '2026-10-20T00:00:00Z', 0.87, true), r('r1', '2026-10-18T00:00:00Z', 0.8, true)] }], ['validation', { runs: [r('v1', '2026-10-21T00:00:00Z', 0.6, false)] }]], '');
+  assert.match(q, /<a href="evals\.html">1 \/ 2 gates →<\/a>/);
+  assert.match(q, /<a class="tone-good" href="evals\.html#suite-review">.*<strong class="q-value">87 % ↑<\/strong><span class="q-bar"><span style="width:87\.0%"><\/span><\/span><small>verdict_match · gate passed · 2026-10-20/);
+  assert.match(q, /<a class="tone-bad" href="evals\.html#suite-validation">.*gate failed/);
+  assert.match(qualityPanel([['x', { runs: [{ run_id: 'x', passed: true, scores: {} }] }]], ''), /<strong class="q-value">—<\/strong>.*width:0\.0%.*no score/, 'no headline score: no value invented');
+  // Bars: scaled to the maximum, a zero day drawn as a baseline, values readable.
+  const bars = dayBars([0, 2, 4], 'Merges');
+  assert.match(bars, /aria-label="Merges per day: 0, 2, 4"/);
+  assert.equal(bars.match(/class="zero"/g).length, 1);
+  assert.match(bars, /height="32\.0"/);
+  assert.equal(dayBars([0, 0], 'x').match(/class="zero"/g).length, 2, 'an all-zero series is flat');
+  // A previous window under MIN_BASE runs shows no change on the home; the cost has 2 decimals there.
+  const sum = (o) => ({ calls: 0, measured: 0, estimated: 0, free: 0, unpriced: 0, usd: 0, ...o });
+  const slice = (runs, usd) => ({ runs, failed: 0, adverse: 0, progressed: runs, neutral: 0, verdicts: runs, approve: runs, withheld: 0, request_changes: 0, approve_rate: 1, duration: { n: runs, mean: 1000, p95: 1000 }, cost: sum({ calls: runs, measured: runs, usd }) });
+  const act = Object.fromEntries(['issue_validation', 'code_gen', 'pr_prepare', 'review', 'autofix'].map((k) => [k, { decisions: 0, good: 0, by_key: {}, prs: 0, per_day: Array(7).fill(0), good_per_day: Array(7).fill(0) }]));
+  const w = (prevRuns) => ({ days: 7, empty: false, from: T, to: T + 7 * 86400000, current: slice(12, 1.23456), previous: slice(prevRuns, 2), series: Array(7).fill({ verdicts: 0, approve_rate: null, avg_ms: null, usd: null }), providers: [], stages: [], activity: act, items: [] });
+  const ctx = consoleContext(buildPipelineModel({}));
+  const home = (win) => consoleOverview({ ...ctx, windows: { ...ctx.windows, 7: win } }, '');
+  assert.doesNotMatch(home(w(9)).slice(home(w(9)).indexOf('class="cockpit"')), /vs prior 7 d/, '9 runs: no change shown');
+  const big = home(w(10));
+  assert.match(big, /data-kpi="executions">.*\+20 % vs prior 7 d/s);
+  assert.match(big, /data-kpi="llm_cost">.*<strong class="kpi-value">\$1\.23<\/strong>.*-38 % vs prior 7 d/s);
+  // Stages with no decision say so, and render no healthy tone.
+  const strip = stageStrip(w(10), ctx, '', false);
+  assert.match(strip, /No validation in the window/);
+  assert.match(strip, /No auto-fix in the window/);
+  assert.match(strip, /href="health\.html#reviews"/, 'no withheld finding: the review card opens the reviews section');
+  assert.doesNotMatch(strip, /tone-/);
+  // Merge: the merged items of the Pipelines period filter, per day of their journaled closing (unknown date: no bar).
+  const at = T + 6.5 * 86400000;
+  const merges = stageStrip(w(10), { traces: [{ runs: [{ completed_at: at }] }], journeys: [{ state: 'merged', last_activity: at, closing: { ts: at } }, { state: 'merged', last_activity: at, closing: { ts: null } }, { state: 'approved', last_activity: at }] }, '', false);
+  assert.match(merges, /<strong>2<\/strong><span>merged<\/span>/);
+  assert.match(merges, /aria-label="Merges per day: 0, 0, 0, 0, 0, 0, 1"/);
 });
