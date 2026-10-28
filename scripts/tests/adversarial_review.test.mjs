@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ADVERSARIAL_AXES, MIN_CRITICAL_POINTS, analyzeAdversarial, enforceAdversarialProtocol, formatProtocolNote,
+  ADVERSARIAL_AXES, MIN_CRITICAL_POINTS, analyzeAdversarial, enforceAdversarialProtocol, formatProtocolNote, verifyAxes,
 } from '../lib/adversarial_review.mjs';
 
 const review = (analysis, verdict = 'APPROVED') => `### ✅ Summary\nSmall change.\n\n### 🔬 Adversarial Analysis\n${analysis}\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\n${verdict}`;
@@ -124,4 +124,54 @@ test('blockingFindingAxes ignores the continuation lines of a Low finding, and o
   ].join('\n');
   assert.deepEqual(blockingFindingAxes(review), ['robustness']);
   assert.deepEqual(blockingFindingAxes('### Issues Found\n- [Medium] x — File: a.mjs\n  continued Axis: side_effects'), ['side_effects'], 'a High / Medium continuation still counts');
+});
+
+const DIFF = 'diff --git a/config/models.yaml b/config/models.yaml\n--- a/config/models.yaml\n+++ b/config/models.yaml\n@@ -3,2 +3,4 @@\n-# old note\n+# New note about review_max_input_tokens\n+# and parseConfig() callers\n';
+
+test('verifyAxes (ADR-0065, shadow): an axis line is verified when it names something that is in the diff', () => {
+  const v = verifyAxes(review([
+    '- **Robustness** — none: `config/models.yaml` lines 3-5 are comments, no key or value changed',
+    '- **Side effects** — config/models.yaml:4 the note quotes review_max_input_tokens, a dated claim that can go stale',
+    '- **Type integrity** — none, checked the return shape',
+    '- **Issue fit** — none: the issue asks for parseConfig() callers to be documented and the diff does',
+  ].join('\n')), DIFF);
+  assert.deepEqual(v, { verified: ['robustness', 'side_effects', 'issue_fit'], count: 3 });
+});
+
+test('verifyAxes: a label, a placeholder, a plain-word line and a name that is not in the diff verify nothing', () => {
+  const lines = [
+    '- **Robustness** — <risk file:line, or none + what you checked>',
+    '- **Side effects** — none',
+    '- **Type integrity** — nothing found in the empty and boundary cases that were checked',
+    '- **Issue fit** — none: other.mjs:9 is untouched and `unrelatedSymbol` is not used here',
+  ].join('\n');
+  assert.deepEqual(verifyAxes(review(lines), DIFF), { verified: [], count: 0 });
+});
+
+test('verifyAxes: any one line of an axis may verify it, a missing section or an empty diff verifies nothing, input may be null', () => {
+  const two = review('- **Robustness** — none, checked the null case\n- **Robustness** — config/models.yaml:3 only comment lines changed here');
+  assert.deepEqual(verifyAxes(two, DIFF), { verified: ['robustness'], count: 1 });
+  assert.deepEqual(verifyAxes('### ✅ Summary\nNo analysis here.', DIFF), { verified: [], count: 0 });
+  assert.deepEqual(verifyAxes(two, ''), { verified: [], count: 0 });
+  assert.deepEqual(verifyAxes(null, undefined), { verified: [], count: 0 });
+});
+
+test('verifyAxes reads names through markup and a :line suffix, and keeps the axis order', () => {
+  const v = verifyAxes(review([
+    '- **Issue fit** — none: **`parseConfig()`** callers are described in the new note',
+    '- **Robustness** — none: config/models.yaml:3-4 holds only comment lines',
+    '- **Side effects** — none: `config/models.yaml:4` is a comment, nothing reads it',
+  ].join('\n')), DIFF);
+  assert.deepEqual(v.verified, ['robustness', 'side_effects', 'issue_fit']);
+});
+
+test('verifyAxes: a template placeholder is not a statement, even when it holds a name from the diff', () => {
+  assert.deepEqual(verifyAxes(review('- **Robustness** — <`config/models.yaml:3` or none + what you checked>'), DIFF), { verified: [], count: 0 });
+  assert.deepEqual(verifyAxes(review('- **Robustness** — `config/models.yaml:3` or none + what you checked'), DIFF), { verified: ['robustness'], count: 1 });
+});
+
+test('analyzeAdversarial is unchanged by the shared axis parser: the same counts on the same reviews', () => {
+  const a = analyzeAdversarial(review(FULL));
+  assert.deepEqual([a.present, a.criticalPoints, a.atRisk], [true, 2, ['robustness', 'side_effects']]);
+  assert.deepEqual(analyzeAdversarial('### Summary\nnone').axes.map((x) => x.covered), [false, false, false, false]);
 });

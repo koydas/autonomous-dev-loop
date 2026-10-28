@@ -25,7 +25,7 @@ import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from '.
 import { resolveReviewDecision } from './review_decision.mjs';
 import { collectGuardrailFindings, findTestCountDrops, withGuardrailIssues } from './guardrail_review.mjs';
 import { substantiateFindings, evidenceCounts, impactLookup } from './finding_evidence.mjs';
-import { MIN_CRITICAL_POINTS } from './adversarial_review.mjs';
+import { MIN_CRITICAL_POINTS, verifyAxes } from './adversarial_review.mjs';
 import { analyzeFindings } from './review_findings.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths } from './review_evidence.mjs';
@@ -293,7 +293,7 @@ export const reviewSuite = {
       findingAssessment,
     });
     const scoredReview = withGuardrailIssues(cleanReview, guardrails);
-    return { verdict, llm_verdict: llmVerdict, reason, withheld_for: withheldFor, adversarial_protocol_met: adversarial.criticalPoints >= MIN_CRITICAL_POINTS, adversarial_points: adversarial.criticalPoints, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, guardrail_findings: guardrails.findings.map((f) => ({ rule: f.rule, path: f.path })), evidence_check: evidenceCounts(findingAssessment), review: scoredReview, finding_analysis: summarizeFindingAnalysis(findingAnalysis(testCase?.expected, scoredReview)) };
+    return { verdict, llm_verdict: llmVerdict, reason, withheld_for: withheldFor, adversarial_protocol_met: adversarial.criticalPoints >= MIN_CRITICAL_POINTS, adversarial_points: adversarial.criticalPoints, adversarial_verified_axes: verifyAxes(cleanReview, input.diff).count, evidence_state: evidence.state, diff_truncated: diffTruncated, body_truncated: bodyTruncated, unreviewed_code_files: unreviewedCodeFiles, guardrail_findings: guardrails.findings.map((f) => ({ rule: f.rule, path: f.path })), evidence_check: evidenceCounts(findingAssessment), review: scoredReview, finding_analysis: summarizeFindingAnalysis(findingAnalysis(testCase?.expected, scoredReview)) };
   },
 
   scorers: {

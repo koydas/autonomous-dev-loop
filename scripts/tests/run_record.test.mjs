@@ -834,3 +834,9 @@ test('countRedactedStrings counts removed or rewritten string leaves as a multis
   assert.equal(countRedactedStrings('s', null), 1);
   assert.equal(countRedactedStrings([{ key: 'adl.error', value: { stringValue: 'x' } }], []), 1, 'an attribute name is not counted');
 });
+
+test('review.verdict publishes verified_axes (ADR-0065, shadow) as a count, like adversarial_points', () => {
+  const verdict = ev('review.verdict', { prNumber: 5, verdict: 'APPROVE', adversarial_points: 2, adversarial_axes: ['robustness', 'side_effects'], verified_axes: 3, review_text: 'the model said this' });
+  const record = redactTrace(trace({ events: [verdict] }), { env: ENV });
+  assert.deepEqual(record.events[0].meta, { prNumber: 5, verdict: 'APPROVE', adversarial_points: 2, adversarial_axes: ['robustness', 'side_effects'], verified_axes: 3 });
+});

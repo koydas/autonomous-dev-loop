@@ -25,15 +25,10 @@ const PLACEHOLDER = /^<[^<>]*>\.?$/;
 // Shorter than this is a label, not an observation.
 const MIN_RISK_CHARS = 12;
 
-/**
- * Parses the "Adversarial Analysis" section of a review.
- * `criticalPoints`: axes (each counted once) whose line states a risk. `axes`: per axis, whether it was covered
- * and whether it states a risk. `present`: the section exists. A risk is an observation, never a finding: the
- * Issues Found rules alone decide REQUEST_CHANGES.
- * @returns {{ present: boolean, criticalPoints: number, axes: { id: string, covered: boolean, risk: boolean }[], atRisk: string[] }}
- */
-export function analyzeAdversarial(review) {
-  const state = new Map(ADVERSARIAL_AXES.map((a) => [a.id, { id: a.id, covered: false, risk: false }]));
+// The lines of the Adversarial Analysis section that belong to an axis: `{ id, text }`, text without markup. One parse
+// for analyzeAdversarial and verifyAxes, so the two never disagree on which line counts.
+function parseAxisLines(review) {
+  const lines = [];
   let present = false;
   let inSection = false;
   for (const line of String(review ?? '').split('\n')) {
@@ -51,14 +46,65 @@ export function analyzeAdversarial(review) {
     if (!match) continue;
     const axis = ADVERSARIAL_AXES.find((a) => a.pattern.test(match[1].trim()));
     if (!axis) continue;
-    const text = match[2].replace(/[*_`]/g, '').trim();
-    const entry = state.get(axis.id);
+    lines.push({ id: axis.id, text: match[2].replace(/[*_`]/g, '').trim(), raw: match[2] });
+  }
+  return { present, lines };
+}
+
+const isRiskText = (text) => text.length >= MIN_RISK_CHARS && !NO_RISK.test(text) && !PLACEHOLDER.test(text);
+
+/**
+ * Parses the "Adversarial Analysis" section of a review.
+ * `criticalPoints`: axes (each counted once) whose line states a risk. `axes`: per axis, whether it was covered
+ * and whether it states a risk. `present`: the section exists. A risk is an observation, never a finding: the
+ * Issues Found rules alone decide REQUEST_CHANGES.
+ * @returns {{ present: boolean, criticalPoints: number, axes: { id: string, covered: boolean, risk: boolean }[], atRisk: string[] }}
+ */
+export function analyzeAdversarial(review) {
+  const state = new Map(ADVERSARIAL_AXES.map((a) => [a.id, { id: a.id, covered: false, risk: false }]));
+  const { present, lines } = parseAxisLines(review);
+  for (const { id, text } of lines) {
+    const entry = state.get(id);
     entry.covered = true;
-    entry.risk ||= text.length >= MIN_RISK_CHARS && !NO_RISK.test(text) && !PLACEHOLDER.test(text);
+    entry.risk ||= isRiskText(text);
   }
   const axes = [...state.values()];
   const atRisk = axes.filter((a) => a.risk).map((a) => a.id);
   return { present, criticalPoints: atRisk.length, axes, atRisk };
+}
+
+// Things a line can name that a string search can look for in the diff: `code` spans, paths and file names, and
+// identifiers written in camelCase or snake_case. Plain words ("empty", "return") name nothing.
+const CANDIDATES = [/`([^`\n]{4,})`/g, /[\w.-]+(?:\/[\w.-]+)+/g, /[\w-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b/g, /\b[a-z]+[A-Z][A-Za-z0-9]{2,}\b/g, /\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b/g];
+const MIN_CANDIDATE_CHARS = 4;
+
+function namesSomethingIn(rawLine, diff) {
+  for (const re of CANDIDATES) {
+    for (const m of rawLine.matchAll(re)) {
+      const candidate = (m[1] ?? m[0]).replace(/^[.,;:()]+|[.,;:()]+$/g, '');
+      if (candidate.length >= MIN_CANDIDATE_CHARS && diff.includes(candidate)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Axes whose line is verified (ADR-0065, shadow): the line is a real statement (not a placeholder, not a label) and names
+ * something that is in the diff, a risk with its `file:line` or a `none` with what was looked at. Journaled by
+ * pr_review.mjs as `verified_axes` and published by the `review` suite; it gates nothing until ADR-0065 is accepted.
+ * A string search, no LLM: it is a floor on specificity, not proof that the check was done.
+ * @param {string} review
+ * @param {string} rawDiff
+ * @returns {{ verified: string[], count: number }} closed axis ids, in axis order
+ */
+export function verifyAxes(review, rawDiff) {
+  const diff = String(rawDiff ?? '');
+  const found = new Set();
+  for (const { id, text, raw } of parseAxisLines(review).lines) {
+    if (text.length >= MIN_RISK_CHARS && !PLACEHOLDER.test(text) && namesSomethingIn(raw, diff)) found.add(id);
+  }
+  const verified = ADVERSARIAL_AXES.map((a) => a.id).filter((id) => found.has(id));
+  return { verified, count: verified.length };
 }
 
 const ISSUES_HEADING = /^\s*(?:#{1,3}\s|\*\*)[^\n]*issues found/i;

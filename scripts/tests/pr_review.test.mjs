@@ -2348,6 +2348,18 @@ test('pr_review withholds an APPROVED review that names a single risk, and appro
   assert.match(approved.result.stderr, /"adversarial_points":2,"adversarial_axes":\["robustness","side_effects"\]/);
 });
 
+test('pr_review journals how many axis lines name something in the diff, and the gate is still the count of risks (ADR-0065, shadow)', async () => {
+  const diffText = 'diff --git a/src/pricing.mjs b/src/pricing.mjs\n--- a/src/pricing.mjs\n+++ b/src/pricing.mjs\n@@ -1,1 +1,1 @@\n-export const RATE = 1;\n+export const RATE = 2;\n';
+  const analysis = (a, b) => `### 🔬 Adversarial Analysis\n- **Robustness** — ${a}\n- **Side effects** — ${b}\n- **Type integrity** — none, checked the return shape\n- **Issue fit** — none: \`RATE\` in src/pricing.mjs is the only constant the issue names\n\nVerdict: APPROVED`;
+  const named = await runDedup({ handlerOptions: { diffText, analysis: false, groqContent: analysis('src/pricing.mjs:1 a caller that caches RATE keeps the old value', 'src/pricing.mjs:1 RATE is read at import time') } });
+  assert.equal(JSON.parse(reviewPost(named.requests).body).event, 'APPROVE');
+  assert.match(named.result.stderr, /"adversarial_points":2,"adversarial_axes":\["robustness","side_effects"\],"verified_axes":3/);
+  // Two risks that name nothing in the diff: still approved, as ADR-0049 gates, and verified_axes says it was not verified.
+  const vague = await runDedup({ handlerOptions: { diffText, analysis: false, groqContent: analysis('other.mjs:9 an empty value is not handled', 'other.mjs:2 callers are not in the diff') } });
+  assert.equal(JSON.parse(reviewPost(vague.requests).body).event, 'APPROVE');
+  assert.match(vague.result.stderr, /"adversarial_points":2,"adversarial_axes":\["robustness","side_effects"\],"verified_axes":1/);
+});
+
 test('pr_review does not require the analysis to request changes', async () => {
   const { result, requests } = await runDedup({ handlerOptions: { analysis: false, groqContent: '- [High] boom — File: foo.js Lines: 1\n\nVerdict: REQUEST_CHANGES' } });
   assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);

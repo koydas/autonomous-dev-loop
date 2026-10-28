@@ -1544,6 +1544,16 @@ test('reviewSuite.run withholds a REQUEST_CHANGES whose only blocking finding po
   assert.deepEqual([near.output.verdict, near.output.evidence_check.supported, near.output.evidence_check.unproven], ['REQUEST_CHANGES', 1, 0]);
 });
 
+// ADR-0065 (shadow): the suite publishes how many axis lines name something in the case's diff, so a live run gives the data the switch needs; it gates nothing.
+test('reviewSuite.run publishes adversarial_verified_axes without changing the verdict', async () => {
+  const analysis = (lines) => ['### 🔬 Adversarial Analysis', ...lines, ''];
+  const text = (lines) => ['### 🏷️ Change Classification', 'Type: feature | Tests expected: yes — code', '', '### ✅ Summary', 'x', '', ...analysis(lines), '### ⚠️ Issues Found', 'None.', '', '### 🚀 Verdict', 'APPROVED'].join('\n');
+  const vague = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, text(['- **Robustness** — x.js:1 an empty value is not handled', '- **Side effects** — x.js:1 callers are not in the diff', '- **Type integrity** — none, checked the return shape', '- **Issue fit** — none, the diff matches the issue']));
+  assert.deepEqual([vague.output.verdict, vague.output.adversarial_points, vague.output.adversarial_verified_axes], ['APPROVE', 2, 0]);
+  const named = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, text(['- **Robustness** — src/a.js:1 an empty value is not handled', '- **Side effects** — src/a.js:1 callers are not in the diff', '- **Type integrity** — none: src/a.js changes a number literal, no type moves', '- **Issue fit** — none, the diff matches the issue']));
+  assert.deepEqual([named.output.verdict, named.output.adversarial_points, named.output.adversarial_verified_axes], ['APPROVE', 2, 3]);
+});
+
 test('liveCallArgs: only the suite config fields + options, pinned to the primary', () => {
   const config = { provider: 'groq', apiKey: 'k', model: 'm', apiUrl: 'u', temperature: 0.6, maxTokens: 1024, maxInputTokens: 6300, diffRatio: undefined, feedbackRatio: undefined, reasoningEffort: 'low' };
   assert.deepEqual(liveCallArgs(reviewSuite, config, { prompt: 'p', systemPrompt: 's' }), {
