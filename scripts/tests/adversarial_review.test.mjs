@@ -175,3 +175,13 @@ test('analyzeAdversarial is unchanged by the shared axis parser: the same counts
   assert.deepEqual([a.present, a.criticalPoints, a.atRisk], [true, 2, ['robustness', 'side_effects']]);
   assert.deepEqual(analyzeAdversarial('### Summary\nnone').axes.map((x) => x.covered), [false, false, false, false]);
 });
+
+test('verifyAxes: a name must stand alone in the diff, not be a piece of a longer name', () => {
+  const diff = 'diff --git a/src/data.json b/src/data.json\n--- a/src/data.json\n+++ b/src/data.json\n@@ -1 +1 @@\n-RATED = 1\n+RATED = 2\n';
+  const line = (text) => review(`- **Robustness** — ${text}`);
+  assert.deepEqual(verifyAxes(line('none: `a.js` is not touched by this change at all'), diff), { verified: [], count: 0 }, 'a.js inside data.json');
+  assert.deepEqual(verifyAxes(line('none: `RATE` is not touched by this change at all'), diff), { verified: [], count: 0 }, 'RATE inside RATED');
+  assert.deepEqual(verifyAxes(line('none: src/data.json holds only the value that changes here'), diff), { verified: ['robustness'], count: 1 });
+  assert.deepEqual(verifyAxes(line('none: `RATED` is the only name that changes in this diff'), diff), { verified: ['robustness'], count: 1 });
+  assert.deepEqual(verifyAxes(line('none: `a.b(c)` is read with regex chars like [x] and (y) in this line'), 'x\n+a.b(c)\n'), { verified: ['robustness'], count: 1 }, 'regex characters are escaped');
+});

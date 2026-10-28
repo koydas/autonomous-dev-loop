@@ -78,11 +78,15 @@ export function analyzeAdversarial(review) {
 const CANDIDATES = [/`([^`\n]{4,})`/g, /[\w.-]+(?:\/[\w.-]+)+/g, /[\w-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b/g, /\b[a-z]+[A-Z][A-Za-z0-9]{2,}\b/g, /\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b/g];
 const MIN_CANDIDATE_CHARS = 4;
 
+// The candidate must stand alone in the diff: `a.js` is not found inside `data.json`, `RATE` not inside `RATED`.
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const standsAlone = (candidate, diff) => new RegExp(`(?<![\\w$])${escapeRegExp(candidate)}(?![\\w$])`).test(diff);
+
 function namesSomethingIn(rawLine, diff) {
   for (const re of CANDIDATES) {
     for (const m of rawLine.matchAll(re)) {
       const candidate = (m[1] ?? m[0]).replace(/^[.,;:()]+|[.,;:()]+$/g, '');
-      if (candidate.length >= MIN_CANDIDATE_CHARS && diff.includes(candidate)) return true;
+      if (candidate.length >= MIN_CANDIDATE_CHARS && standsAlone(candidate, diff)) return true;
     }
   }
   return false;
