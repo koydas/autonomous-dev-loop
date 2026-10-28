@@ -67,7 +67,7 @@ graph LR
 
 Full setup, permissions, per-stage model keys and the end-to-end test: [docs/code-generation.md](docs/code-generation.md). Failure triage: [docs/runbook.md](docs/runbook.md).
 
-**In another repository:** five caller workflows pinned to a commit of this one, plus an optional configuration directory, written by `scripts/install_consumer.mjs` from a release checkout: [docs/installation.md](docs/installation.md). Versioning and what breaks a caller: [docs/releasing.md](docs/releasing.md).
+**In another repository:** six caller workflows and a label setup pinned to a commit of this one, plus an optional configuration directory, installed from the browser by the **ADL Install** workflow (nothing local) or by `scripts/install_consumer.mjs` from a release checkout: [docs/installation.md](docs/installation.md). Versioning and what breaks a caller: [docs/releasing.md](docs/releasing.md).
 
 ### Code map
 

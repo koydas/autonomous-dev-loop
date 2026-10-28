@@ -1,6 +1,6 @@
 # Installing the Pipeline in Another Repository
 
-ADR-0045. A repository installs the pipeline with five caller workflows and its own configuration directory. The scripts, prompts and default configuration are not copied: each run fetches them at the commit the callers pin, and an update is one new SHA.
+ADR-0045. A repository installs the pipeline with six caller workflows and its own configuration directory. The scripts, prompts and default configuration are not copied: each run fetches them at the commit the callers pin, and an update is one new SHA.
 
 ## How it fits together
 
@@ -20,7 +20,19 @@ ADR-0045. A repository installs the pipeline with five caller workflows and its 
 
 ## Install
 
-### With the installer
+### From the browser (nothing to install locally)
+
+Everything happens on github.com; git and Node run on the Actions runner only.
+
+1. In your repository, **Add file → Create new file** `.github/workflows/install.yml` and paste the content of [`templates/consumer/install.yml`](../templates/consumer/install.yml) unchanged (no placeholder: the version is chosen when it runs). If your organization has a public `.github` repository, publishing it there as a workflow template turns this step into one click in **Actions → New workflow**.
+2. Create a fine-grained token on this repository with **Contents**, **Pull requests** and **Workflows**: read and write. Workflows is required: the workflow token cannot write files under `.github/workflows/`.
+3. **Settings → Secrets and variables → Actions**: add it as `AI_PR_TOKEN`, plus `GROQ_API_KEY` or `ANTHROPIC_API_KEY`.
+4. **Actions → ADL Install → Run workflow** with `version` = a release tag (`v0.1.0`). `dry_run` lists what would change in the log and does nothing else.
+5. The run clones the pipeline at that tag, runs `scripts/install_consumer.mjs` (below) with `--force` and your default branch, creates the labels, and opens a pull request `adl/install-<version>` with the callers pinned to the commit of the tag. Review it and merge it.
+
+A tag is only read at run time; what the callers pin is the commit SHA, visible in the pull request.
+
+### From a clone
 
 From a clone of the pipeline checked out at a release tag:
 
@@ -31,7 +43,7 @@ node adl/scripts/install_consumer.mjs --target path/to/your-repo --dry-run   # s
 node adl/scripts/install_consumer.mjs --target path/to/your-repo
 ```
 
-It writes the six callers and the label setup into `.github/workflows/`, each pinned to the clone's `HEAD` with the tag as version comment, and puts your default branch where the templates name `main` (read from `origin/HEAD` of the target, or `--default-branch <name>`, else `main`). It refuses an untagged `HEAD`, local changes to `templates/consumer/`, and an existing caller that differs from what it would write (`--force` overwrites it; an identical one is left as is). `--allow-untagged` pins any commit with the comment `untagged`, for trying an unreleased commit: that commit must exist on GitHub. Then do steps 3, 4 (run **ADL Setup Labels**), 5 and 6 below, and add the secrets.
+It writes the six callers, the label setup and `install.yml` into `.github/workflows/`, each pinned to the clone's `HEAD` with the tag as version comment, and puts your default branch where the templates name `main` (read from `origin/HEAD` of the target, or `--default-branch <name>`, else `main`). It refuses an untagged `HEAD`, local changes to `templates/consumer/`, and an existing caller that differs from what it would write (`--force` overwrites it; an identical one is left as is). `--allow-untagged` pins any commit with the comment `untagged`, for trying an unreleased commit: that commit must exist on GitHub. Then do steps 3, 4 (run **ADL Setup Labels**), 5 and 6 below, and add the secrets.
 
 ### By hand
 
@@ -83,7 +95,7 @@ Inside `adl-pr-review.yml` the `evidence` job, which runs your pull request's co
 
 ## Updating
 
-Change the SHA (and the version comment) in the six callers and the label setup, in one pull request: check the clone out at the new tag and rerun the installer with `--force` (it lists which callers change). Callers you edited are overwritten; diff before committing. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment, once releases are published as tags. Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
+Change the SHA (and the version comment) in the six callers and the label setup, in one pull request: run **ADL Install** with the new tag (it opens that pull request), or check a clone out at the new tag and rerun the installer with `--force` (it lists which callers change). Callers you edited are overwritten; diff before committing. A bot that handles GitHub Actions references (Dependabot, Renovate) can propose it from the version comment, once releases are published as tags. Read the [CHANGELOG](../CHANGELOG.md) first: a `### Breaking` entry says what to change in your callers (a new input, a wider permission, a renamed label). Rolling back is the previous SHA.
 
 For Dependabot:
 
