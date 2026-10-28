@@ -1,0 +1,119 @@
+name: ADL Install
+
+# Installs or updates the autonomous-dev-loop pipeline (docs/installation.md of koydas/autonomous-dev-loop) with
+# nothing on your machine: create this one file from the GitHub web editor, add the secrets, run it from the
+# Actions tab with a release tag. It opens a pull request with the callers pinned to that release's commit and
+# creates the labels; you review and merge the pull request. Nothing to replace in this file.
+#
+# AI_PR_TOKEN is required here: the workflow token cannot write files under .github/workflows/. A fine-grained
+# token on this repository with Contents, Pull requests and Workflows: read and write.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag of the pipeline to install (vMAJOR.MINOR.PATCH)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Only list what would change: no pull request, no labels'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Reads this repository and its configuration; the pull request itself is written with AI_PR_TOKEN.
+      contents: read
+      # Label creation only.
+      issues: write
+    env:
+      ADL_PIPELINE_REPOSITORY: koydas/autonomous-dev-loop
+      ADL_CONFIG_PATH: .autonomous-dev-loop
+    steps:
+      - name: Check inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          HAS_PR_TOKEN: ${{ secrets.AI_PR_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version: expected vMAJOR.MINOR.PATCH, got \"$VERSION\""
+            exit 1
+          fi
+          if [ "${GITHUB_REPOSITORY,,}" = "${ADL_PIPELINE_REPOSITORY,,}" ]; then
+            echo "::error::The pipeline repository maintains its own callers by hand"
+            exit 1
+          fi
+          if [ "$DRY_RUN" != "true" ] && [ "$HAS_PR_TOKEN" != "true" ]; then
+            echo "::error::AI_PR_TOKEN is not set: the workflow token cannot write .github/workflows/ (see the header of this file)"
+            exit 1
+          fi
+
+      - name: Checkout repository (default branch)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: target
+          persist-credentials: false
+
+      # A clone, not actions/checkout: the installer pins the commit the tag points to and reads the tag from it.
+      - name: Clone the pipeline at the release
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git clone --quiet --depth 1 --branch "$VERSION" "https://github.com/$ADL_PIPELINE_REPOSITORY" .adl-pipeline
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Write the callers
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        # --force: the pull request is where a changed caller is reviewed.
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            node .adl-pipeline/scripts/install_consumer.mjs --target target --default-branch "$DEFAULT_BRANCH" --force --dry-run
+          else
+            node .adl-pipeline/scripts/install_consumer.mjs --target target --default-branch "$DEFAULT_BRANCH" --force
+          fi
+
+      - name: Create the labels
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ADL_CONFIG_DIR: ${{ github.workspace }}/target/.autonomous-dev-loop
+        run: node .adl-pipeline/scripts/ensure_labels.mjs
+
+      - name: Open the pull request
+        if: ${{ !inputs.dry_run }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.AI_PR_TOKEN }}
+          path: target
+          branch: adl/install-${{ inputs.version }}
+          base: ${{ github.event.repository.default_branch }}
+          commit-message: "chore(adl): install autonomous-dev-loop ${{ inputs.version }}"
+          title: "chore(adl): install autonomous-dev-loop ${{ inputs.version }}"
+          body: |
+            Callers of [autonomous-dev-loop](https://github.com/koydas/autonomous-dev-loop) pinned to the commit of `${{ inputs.version }}`, written by **ADL Install**. Read the CHANGELOG of that release for `### Breaking` entries before merging; a caller you edited by hand shows up in this diff.
+          add-paths: |
+            .github/workflows/*.yml
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true

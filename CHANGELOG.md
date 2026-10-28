@@ -7,6 +7,8 @@ Entries are grouped by date. Add new entries under `[Unreleased]`.
 
 ## [Unreleased]
 
+- **Install from the browser, nothing local** (ADR-0045). New caller template `templates/consumer/install.yml` (**ADL Install**, `workflow_dispatch`): pasted once from the GitHub web editor, run from the Actions tab with a release tag. It checks the tag is `vMAJOR.MINOR.PATCH` and `AI_PR_TOKEN` is set (the workflow token cannot write `.github/workflows/`), clones the pipeline at the tag, runs `scripts/install_consumer.mjs --force` with the repository's default branch, creates the labels and opens a pull request `adl/install-<version>` with the callers pinned to the tag's commit. `dry_run` only lists the changes. No placeholder in the file; job scopes `contents: read`, `issues: write`; no LLM secret. The installer now also writes `install.yml`, so an update refreshes it. Tests in `workflow_gates.test.mjs` (step order, version check, token check, flags, no expression in run scripts). Docs: `installation.md` (browser path first), `runbook.md` (its failures), `code-generation.md`, README.
+
 ## [0.1.0] - 2026-10-27
 
 First tagged release: the first commit other repositories can pin by tag (`docs/installation.md`, `scripts/install_consumer.mjs`). No `### Breaking` section: there is no earlier release to break.

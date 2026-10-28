@@ -410,7 +410,7 @@ Every job that runs a script first gets, in this order:
 
 ### Installing in another repository
 
-Setup requirements for a repository other than this one (prerequisites, the six callers, the `.autonomous-dev-loop/` configuration directory, updating) are in [installation.md](installation.md); releases and breaking changes in [releasing.md](releasing.md). Labels are created once with the `setup-labels.yml` template (**ADL Setup Labels**, `workflow_dispatch`, `contents: read` + `issues: write`), which runs `scripts/ensure_labels.mjs`: idempotent, `--update` converges color and description, `--dry-run` writes nothing. A run uploads its trace as `run-trace-<run_id>`.
+Setup requirements for a repository other than this one (prerequisites, the six callers, the `.autonomous-dev-loop/` configuration directory, updating) are in [installation.md](installation.md) (from the browser: the `install.yml` template, **ADL Install**, opens the pull request with the callers); releases and breaking changes in [releasing.md](releasing.md). Labels are created once with the `setup-labels.yml` template (**ADL Setup Labels**, `workflow_dispatch`, `contents: read` + `issues: write`), which runs `scripts/ensure_labels.mjs`: idempotent, `--update` converges color and description, `--dry-run` writes nothing. A run uploads its trace as `run-trace-<run_id>`.
 
 ## Observability
 
