@@ -5,7 +5,7 @@ import { consoleContext, statusBanner } from '../lib/console_views.mjs';
 import { consoleOverview, overviewTrends, kpiRow, delta, sparkline, durationChart, providerList, activeProblems, shortAmount } from '../lib/console_overview.mjs';
 import { DEFINITIONS } from '../lib/pipeline_kpis.mjs';
 import { buildPipelineModel } from '../lib/pipeline_model.mjs';
-import { makeRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
+import { makeRecord, makeClosingRecord, asFiles, indexesOf, HOSTILE, RAW_MARKERS } from './fixtures/pipeline/records.mjs';
 
 const T = Date.parse('2026-10-16T10:00:00Z');
 const modelOf = (records) => buildPipelineModel({ records: asFiles(records), traces: indexesOf(records) });
@@ -219,6 +219,11 @@ test('merge card: its count is the number of rows its Pipelines filter shows (PR
   assert.match(html, new RegExp(`href="flows\\.html\\?state=merged&amp;period=7">.*?<strong>${listed}</strong><span>merged</span>`, 's'));
   assert.equal(periodItems(ctx, 7).length, 3, 'the 20-day-old item is outside the period');
   assert.equal(periodItems({}, 7).length, 0);
+  // A merge journaled after the latest execution (PR #320 review): counted and drawn, on the count's reference.
+  const late = consoleContext(modelOf([verdict('890', T, 70, 'APPROVE'), makeClosingRecord({ runId: '891', start: T + 4 * 86400000, prNumber: 70, meta: { merged: true } })]));
+  const lateHtml = consoleOverview(late, '');
+  assert.match(lateHtml, /<strong>1<\/strong><span>merged<\/span>/);
+  assert.match(lateHtml, /aria-label="Merges per day: 0, 0, 0, 0, 0, 0, 1"/);
 });
 
 test('home cockpit: eval gates, a change only on a populated base, 2-decimal cost, daily bars', async () => {

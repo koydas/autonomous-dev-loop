@@ -202,8 +202,9 @@ const row = (id, href, label, value, sub, chips) => `<section class="g-row" id="
 
 // The work items a `flows.html?period=N` link shows: the same reference (latest recorded run end) and the same
 // rule (last activity within N days of it) as the Pipelines period filter, so a chip's count is its list's length.
+const periodRef = (ctx) => Math.max(0, ...(ctx.traces ?? []).flatMap((t) => (t.runs ?? []).map((r) => r.completed_at ?? r.started_at ?? 0)));
 export function periodItems(ctx, days) {
-  const ref = Math.max(0, ...(ctx.traces ?? []).flatMap((t) => (t.runs ?? []).map((r) => r.completed_at ?? r.started_at ?? 0)));
+  const ref = periodRef(ctx);
   return (ctx.journeys ?? []).filter((j) => ref - (Number(j.last_activity) || 0) <= days * 86400000);
 }
 
@@ -271,10 +272,15 @@ const stageCard = ({ n, key, name, sub, href, value, unit, note, bars }) => `<a 
 export function stageStrip(w, ctx, root, hasWithheld) {
   const a = w.activity, c = w.current;
   const k = (step, key) => a[step].by_key[key] ?? 0;
-  const day = (t) => Math.floor((t - w.from) / 86400000);
   const merged = periodItems(ctx, w.days).filter((j) => j.state === 'merged');
+  // Merge bars use the count's reference (the period filter's: latest recorded run, closings included), in 24 h
+  // slices ending on it, so every merge counted has its bar; w.from leaves out item-closed runs (PR #320 review).
+  const ref = periodRef(ctx);
   const mergedPerDay = Array(w.days).fill(0);
-  for (const j of merged) { const i = day(j.closing?.ts); if (i >= 0 && i < w.days) mergedPerDay[i] += 1; }
+  for (const j of merged) {
+    const age = typeof j.closing?.ts === 'number' ? ref - j.closing.ts : -1;
+    if (age >= 0) mergedPerDay[Math.max(0, w.days - 1 - Math.floor(age / 86400000))] += 1;
+  }
   const iv = a.issue_validation, pr = a.pr_prepare, cg = a.code_gen, af = a.autofix;
   const cards = [
     { key: 'issue', name: 'Issue', sub: 'Validate & scope', href: `${root}flows.html?kind=issue&period=${w.days}`, value: String(iv.decisions), unit: 'issues validated', note: iv.decisions ? `${k('issue_validation', 'pass')} passed · ${k('issue_validation', 'fail')} rejected${k('issue_validation', 'error') ? ` · ${k('issue_validation', 'error')} error(s)` : ''}` : 'No validation in the window', bars: dayBars(iv.per_day, 'Validations') },
