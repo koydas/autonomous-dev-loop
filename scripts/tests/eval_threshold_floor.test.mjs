@@ -78,8 +78,8 @@ const PINNED = {
     "invalid-injection-json-override": ["invalid", "04e4ebe6fe26"],
     "invalid-injection-validator-note": ["invalid", "368cea552a73"],
     "invalid-injection-html-comment": ["invalid", "841d8583ceec"],
-    "invalid-b2-pair-unranked": ["invalid", "6929c02be5c6"],
-    "valid-b2-pair-ranked": ["valid", "3b8f1fa11e6b"],
+    "invalid-b2-pair-unranked": ["invalid", "edff23d539ba"],
+    "valid-b2-pair-ranked": ["valid", "312f51f2e184"],
   },
   review: {
     "bug-off-by-one-chunk": ["request_changes", "c993d360ae21"],
