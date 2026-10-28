@@ -1016,6 +1016,8 @@ test('parseCliArgs accepts --suite review', () => {
 
 const TPD_429 = 'All providers failed: groq: Groq API HTTP error 429: {"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD): Limit 200000, Used 198931, Requested 2984. Please try again in 13m47.28s. Need more tokens?"}}, anthropic: Anthropic API HTTP error 401: {"error":{"message":"Invalid API Key"}}';
 const eventsOf = (stderr) => stderr.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+// The validation dataset only grows (ADR-0031): counts below follow it instead of a frozen number.
+const validationCaseCount = async () => (await loadDataset(path.join(REPO_ROOT, validationSuite.dataset))).length;
 
 test('run_evals aborts on an exhausted daily quota: one ::error::, error_rate 1, skipped runs, exit 1', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
@@ -1027,13 +1029,14 @@ test('run_evals aborts on an exhausted daily quota: one ::error::, error_rate 1,
   assert.equal(code, 1);
   assert.equal(stderr.split('\n').filter((l) => l.startsWith('::error')).length, 1, 'exactly one ::error:: annotation');
   assert.match(stderr, /::error::eval\/eval\.error: .*aborted by the circuit breaker: groq quota \\"tokens per day \(TPD\)\\" exhausted \(limit 200000, used 198931\); retry after 13m47\.28s/);
-  assert.match(stderr, /2\/35 runs executed, 33 skipped/);
+  const n = await validationCaseCount();
+  assert.match(stderr, new RegExp(`2/${n} runs executed, ${n - 2} skipped`));
   const events = eventsOf(stderr).map((e) => e.event);
   assert.ok(events.includes('eval.error') && !events.includes('eval.complete'));
   assert.match(stdout, /## ⛔ Circuit breaker: provider quota exhausted/);
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
   assert.equal(saved.summary.error_rate, 1);
-  assert.equal(saved.summary.circuit_breaker.skipped_runs, 33);
+  assert.equal(saved.summary.circuit_breaker.skipped_runs, n - 2);
   assert.ok(saved.failures.some((f) => f.metric === 'error_rate'), 'partitionPublishable skips it');
 });
 
@@ -1061,8 +1064,9 @@ test('run_evals logs the token estimate at eval.start and refuses a live run ove
   const { code, stderr } = await runEvals(['--suite', 'validation', '--repeats', '3', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '200000', GROQ_API_KEY: '', ANTHROPIC_API_KEY: '' });
   assert.equal(code, 1);
   const start = eventsOf(stderr).find((e) => e.event === 'eval.start');
-  assert.deepEqual([start.meta.cases, start.meta.tokens_est, start.meta.tokens_est_per_run, start.meta.tokens_est_source], [35, 283500, 2700, 'static']);
-  assert.match(stderr, /Eval validation refused before any LLM call: estimated 283500 tokens \(2700\/run, static\) exceeds EVAL_TOKEN_BUDGET=200000/);
+  const n = await validationCaseCount();
+  assert.deepEqual([start.meta.cases, start.meta.tokens_est, start.meta.tokens_est_per_run, start.meta.tokens_est_source], [n, n * 3 * 2700, 2700, 'static']);
+  assert.match(stderr, new RegExp(`Eval validation refused before any LLM call: estimated ${n * 3 * 2700} tokens \\(2700/run, static\\) exceeds EVAL_TOKEN_BUDGET=200000`));
   await assert.rejects(fs.access(path.join(dir, 'validation-test-run.json')), 'no results file: nothing ran');
 });
 
@@ -1071,7 +1075,7 @@ test('run_evals estimates from the last error-free run in EVAL_HISTORY_FILE and 
   await fs.writeFile(path.join(dir, 'history.jsonl'), 'not json\n' + JSON.stringify({ suite: 'validation', run_id: 'prev', model: 'groq:m', summary: { n_runs: 35, error_rate: 0, tokens_est: { in: 140000, out: 0 } } }) + '\n');
   const over = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '1000' });
   assert.equal(over.code, 1);
-  assert.match(over.stderr, /estimated 140000 tokens \(4000\/run, history:prev\) exceeds EVAL_TOKEN_BUDGET=1000/);
+  assert.match(over.stderr, new RegExp(`estimated ${(await validationCaseCount()) * 4000} tokens \\(4000/run, history:prev\\) exceeds EVAL_TOKEN_BUDGET=1000`));
   const bad = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: 'lots' });
   assert.equal(bad.code, 1);
   assert.match(bad.stderr, /EVAL_TOKEN_BUDGET must be a positive integer, got "lots"/);
