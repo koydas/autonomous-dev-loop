@@ -19,7 +19,7 @@ import { findDeterministicBlock } from '../lib/generation_blocked.mjs';
 
 // ADR-0044: what this repository protects beyond the floor. Dropping one of these from
 // config/protected-paths.yaml (or deleting the file) must fail here, not pass silently.
-const THIS_REPO_ENTRIES = ['scripts/', 'config/', 'prompts/', 'checkpoints/', 'metrics/', 'observability/', 'docs/', 'README.md', '.claude/', 'AGENTS.md', 'CLAUDE.md'];
+const THIS_REPO_ENTRIES = ['scripts/', 'config/', 'prompts/', 'checkpoints/', 'metrics/', 'observability/', 'docs/', 'README.md', '.claude/', 'AGENTS.md', 'CLAUDE.md', 'evals/fixtures/', 'evals/graders/'];
 
 const entryFor = (list, target) => list.find((entry) => entryMatches(entry, target.toLowerCase())) ?? null;
 
@@ -209,6 +209,17 @@ test('this repository rejects writes to agent rules and hooks, at any depth for 
   }
   // Directory entries are root-level only: a nested .claude/ is not covered, and similar names are not matched.
   for (const target of ['src/claude.mjs', 'claude-notes.md', 'src/.claude/x.json']) {
+    assert.equal(protectedPathEntry(target), null, `${target} must stay writable`);
+  }
+});
+
+// ADR-0052 amendment: the autofix suite scores a patch with tests the model never sees, pinned with their fixture.
+test('this repository rejects writes to eval fixtures and graders, not to the rest of evals/', () => {
+  for (const target of ['evals/fixtures/autofix/fix-page-offset/src/page.mjs', 'evals/graders/autofix/fix-page-offset/test/hidden.check.mjs', 'evals/graders/autofix/fix-page-offset/reference.json', 'EVALS/Graders/x.json']) {
+    assert.ok(protectedPathEntry(target), `${target} must be protected`);
+  }
+  // Only the two trees: datasets are extended by a PR that fixes an incident, and similar names are not matched.
+  for (const target of ['evals/datasets/autofix.jsonl', 'evals/fixtures-notes.md', 'evals/graders.md', 'src/evals/fixtures/x.mjs']) {
     assert.equal(protectedPathEntry(target), null, `${target} must stay writable`);
   }
 });

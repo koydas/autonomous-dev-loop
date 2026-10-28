@@ -24,8 +24,8 @@ import { loadPrompt } from './prompts.mjs';
 import { detectProvider, GROQ_MODEL_DEFAULTS, loadProviderConfig, reviewMaxDiffChars } from './config.mjs';
 import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from './review_prompt.mjs';
 import { resolveReviewDecision } from './review_decision.mjs';
-import { collectGuardrailFindings, findTestCountDrops, parseDiffChanges, withGuardrailIssues } from './guardrail_review.mjs';
-import { assessFindings, evidenceCounts, impactLookup } from './finding_evidence.mjs';
+import { collectGuardrailFindings, findTestCountDrops, withGuardrailIssues } from './guardrail_review.mjs';
+import { substantiateFindings, evidenceCounts, impactLookup } from './finding_evidence.mjs';
 import { MIN_CRITICAL_POINTS } from './adversarial_review.mjs';
 import { analyzeFindings } from './review_findings.mjs';
 import { formatDependencyManifestContext } from './dependency_manifest.mjs';
@@ -277,14 +277,14 @@ export const reviewSuite = {
       throw new Error(`${testCase.id}: requires_cut but not cut on ${detectProvider('review')}: set review_eval_cut_${detectProvider('review')}_max_input_tokens or _max_diff_chars in config/models.yaml`);
     }
     const { cleanReview, verdict: llmVerdict } = parseReviewVerdict(await llm({ prompt: userPrompt, systemPrompt: system }));
-    // Production fails closed on a missing verdict line; the eval counts it as an errored run instead,
+    // Production withholds a review with no verdict line (ADR-0064); the eval counts it as an errored run instead,
     // so a format regression shows in error_rate rather than inflating request_changes recall.
     if (!llmVerdict) throw new Error('No verdict line in the review (expected APPROVED or REQUEST_CHANGES)');
     // The same resolution as pr_review.mjs (evidence, cut code, adversarial protocol): the scored verdict is the published one.
     // RV-03: the guardrail checks that need only the diff (a test case removed); the file-based ones need the PR tree.
     const guardrails = collectGuardrailFindings([findTestCountDrops(input.diff, { mentionText: `${input.title}\n${input.body || '(no description provided)'}` })]);
     // RV-04a: proof for the findings about code outside the diff; with no tree, the lines of the case's Impact analysis.
-    const findingAssessment = assessFindings({ review: cleanReview, diffFiles: parseDiffChanges(input.diff).flatMap((f) => [f.after, f.before]), lookup: impactLookup({ symbols: [...(input.impact?.symbols ?? []), ...(input.doc_mentions?.terms ?? [])] }) });
+    const findingAssessment = substantiateFindings({ review: cleanReview, rawDiff: input.diff, lookup: impactLookup({ symbols: [...(input.impact?.symbols ?? []), ...(input.doc_mentions?.terms ?? [])] }) });
     const { verdict, reason, withheldFor, adversarial } = resolveReviewDecision({
       llmApproved: llmVerdict === 'APPROVED',
       cleanReview,

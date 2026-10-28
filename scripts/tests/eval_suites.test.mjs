@@ -417,13 +417,15 @@ const reviewText = ({ verdict, issues = [], summary = 'Changes X.', analysis = t
 // For an evidence case the LLM verdict differs from the final one (WITHHELD comes from an approval).
 // A reviewer cites the files of the diff (a finding about outside code needs quoted evidence, RV-04a).
 const firstDiffFile = (c) => parseDiffChanges(c.input.diff)[0]?.after ?? 'x';
+// A finding points at lines of the diff (RV-05): the first line of the first hunk.
+const firstHunkLine = (c) => c.input.diff.match(/^@@ -\d+(?:,\d+)? \+(\d+)/m)?.[1] ?? '1';
 const oracleReview = (c) => (c.expected.verdict === 'REQUEST_CHANGES'
   ? reviewText({
     verdict: 'REQUEST_CHANGES',
     summary: ['Changes X.', ...(c.expected.must_note ?? []).map((n) => `Note: ${n.split('|')[0]}.`)].join('\n'),
     issues: c.expected.findings
       ? c.expected.findings.map((f) => `[${f.severity[0].toUpperCase()}${f.severity.slice(1)}] ${f.match?.split('|')[0] ?? 'defect'} — File: ${f.path} Lines: ${f.lines?.[0] ?? 'unknown'} Root cause: r Fix: f`)
-      : (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: ${firstDiffFile(c)} Lines: 1 Root cause: r Fix: f`),
+      : (c.expected.must_flag ?? ['bug']).map((f) => `[High] ${f.split('|')[0]} — File: ${firstDiffFile(c)} Lines: ${firstHunkLine(c)} Root cause: r Fix: f`),
   })
   : reviewText({ verdict: 'APPROVED', issues: (c.expected.must_advise ?? []).map((a) => `[Low] ${a.split('|')[0]}: x — File: x Lines: 1`) }));
 
@@ -927,6 +929,8 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.equal(byId['incident-clean-code-cut'].label, 'withheld');
   assert.equal(byId['incident-note-instead-of-fix'].scores.flags_issue, 1);
   assert.equal(byId['incident-stale-refs-shared-phrasing'].scores.no_false_alarm, 1);
+  // PR #311: a clean change whose review is readable and approved (the format regression it came from is an errored run).
+  assert.deepEqual([byId['incident-unreadable-verdict-clean-change'].label, byId['incident-unreadable-verdict-clean-change'].scores.no_false_alarm], ['approve', 1]);
   assert.equal(byId['incident-toctou-untested-claim'].label, 'approve');
   // #219: the recorded false REQUEST_CHANGES cite only code files the cut hid, so the verdict is withheld
   // (ADR-0038 amendment); the High / Medium finding itself still counts as a false alarm.
@@ -942,10 +946,10 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   }
   assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 40 cases run, 35 gated: the five known-gap cases are counted only in summary.known_gap.
+  // 41 cases run, 36 gated: the five known-gap cases are counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [40, 0.0286, 0.9143, 0.8667, 0.7895],
+    [41, 0.0278, 0.9167, 0.8667, 0.8],
   );
   // Finding level (RV-01): the four incident cases that list their defects are known-gap, so the gated metrics
   // above are unchanged and the finding metrics live in summary.known_gap. Recorded answers: a miss (approved), a
@@ -971,10 +975,11 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   const gap = summary.known_gap.scores;
   assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [5, 0.5833, 0.8889, 0.5]);
   assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
-  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9375, 0.8667]);
+  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9375, 0.875]);
   // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
   const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push', 'impact-caller-misses-new-parameter']; // RV-01 / RV-02, known-gap
-  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id)));
+  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these.
+  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && r.case_id !== 'incident-unreadable-verdict-clean-change'));
   assert.deepEqual(
     [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
     [30, 0.0345, 0.8966, 0.8667, 0.7143],
@@ -1553,6 +1558,15 @@ test('reviewSuite.run renders doc_mentions and checks a finding about a document
   const without = await runReview({ ...input, doc_mentions: undefined }, finding(`Evidence: docs/guide.md:3 "${doc}" `));
   assert.equal(without.output.verdict, 'WITHHELD', 'without the lines, the same quote is not found');
   assert.doesNotMatch(without.request.prompt, /## Documents that mention/);
+});
+
+// RV-05: a finding that points at lines the diff does not show is unverified, whatever file it names.
+test('reviewSuite.run withholds a REQUEST_CHANGES whose only blocking finding points at lines the diff does not show, and keeps one that points at the diff', async () => {
+  const at = (lines) => reviewText({ verdict: 'REQUEST_CHANGES', issues: [`[High] The constant changed — File: src/a.js Lines: ${lines} Root cause: r. Fix: f.`] });
+  const far = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, at('400-410'));
+  assert.deepEqual([far.output.verdict, far.output.withheld_for, far.output.evidence_check.unverified, far.output.evidence_check.supported], ['WITHHELD', 'unproven_findings', 1, 0]);
+  const near = await runReview({ title: 'T', body: 'B', diff: SMALL_DIFF }, at('1'));
+  assert.deepEqual([near.output.verdict, near.output.evidence_check.supported, near.output.evidence_check.unproven], ['REQUEST_CHANGES', 1, 0]);
 });
 
 test('liveCallArgs: only the suite config fields + options, pinned to the primary', () => {

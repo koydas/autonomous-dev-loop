@@ -23,7 +23,7 @@ These instructions apply to the entire repository.
 
 Default Groq models (all stages): `openai/gpt-oss-120b` (ADR-0025). See `config/models.yaml` for per-stage overrides.
 Anthropic model, effort and `max_tokens` are per stage, in the `anthropic_*` keys of `config/models.yaml` (ADR-0032; provisional until a stage's evals pass on that model). Read the file, not this page, for the current values. No temperature is sent to Anthropic: Opus 4.7+ / 5.x reject sampling parameters.
-Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; For auto-fix, Anthropic models are budgeted at 200 000 tokens: `MODEL_CONTEXT_WINDOW` in `scripts/lib/autofix_core.mjs` lists only the 4.x ids, so the 5.x ids use its 200 000 fallback. `config/models.yaml` states a 1M window for them; that figure is not used by any code. Raising the auto-fix assumption means adding the 5.x ids to the map with a verified window. On the Groq free tier the binding limit is 8 000 TPM per request, not the context window (ADR-0025). `scripts/lib/autofix_core.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
+Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; for auto-fix, Anthropic models are budgeted at 200 000 tokens: `MODEL_CONTEXT_WINDOW` in `scripts/lib/autofix_core.mjs` lists only the 4.x ids, so the 5.x ids use its 200 000 fallback. `config/models.yaml` states a 1M window for them; that figure is not used by any code. Raising the auto-fix assumption means adding the 5.x ids to the map with a verified window. On the Groq free tier the binding limit is 8 000 TPM per request, not the context window (ADR-0025). `scripts/lib/autofix_core.mjs` maps known models in `MODEL_CONTEXT_WINDOW` — add new models there when switching.
 
 **Token budget (auto-fix stage):** `autofix_max_input_tokens` in `config/models.yaml` sets a hard ceiling on the input budget sent to the LLM, independently of the model's context window. The value is in `config/models.yaml` — tuned to keep the total request (system + input + output) under the 8,000 TPM free-tier limit of `openai/gpt-oss-120b` (ADR-0025). Increase or remove this cap when using Groq Dev Tier or Anthropic. See [ADR-0017](docs/adr/0017-configurable-token-budget.md).
 
@@ -33,7 +33,7 @@ Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; For au
 - `prompts/` stage prompts (their hard guardrails are hand-copied from this file and enforced in `scripts/lib/static_verifier.mjs`: change both together); `config/` models, labels, protected paths, coverage gates; `evals/` datasets and graders.
 - `docs/adr/` numbered ADRs; `.github/workflows/` orchestration (`adl-*.yml` are the reusable workflows consumers depend on); `.claude/` skills and the test-gate hook.
 - The pipeline never reads this file at run time: it governs interactive agents and the external reviewer. Pipeline behavior changes in code and prompts.
-- The pipeline cannot write `scripts/`, `config/`, `prompts/`, `docs/`, `.github/` (ADR-0021, `config/protected-paths.yaml`): those changes are made by hand or by an interactive agent.
+- The pipeline cannot write `scripts/`, `config/`, `prompts/`, `docs/`, `.github/`, `evals/fixtures/`, `evals/graders/` (ADR-0021, `config/protected-paths.yaml`): those changes are made by hand or by an interactive agent.
 - `npm run lint` needs `bash`; `npm test` runs `scripts/tests/*.test.mjs` flat, no subdirectories.
 
 ## Engineering Rules
@@ -94,7 +94,7 @@ Minimum required path coverage for automation modules, enforced by code review. 
 | Module | Coverage | Invariant to cover |
 |---|---|---|
 | `pr_review.mjs` — verdict → review event and labels (ADR-0026) | 100% of verdicts | `APPROVE`, `REQUEST_CHANGES`, `WITHHELD` each yield their event and labels; `review-withheld` is cleared by the next `APPROVE` / `REQUEST_CHANGES` |
-| `pr_review.mjs` — verdict parsing | 100% of accepted forms | every documented verdict form; placeholder or missing verdict → `REQUEST_CHANGES` |
+| `pr_review.mjs` — verdict parsing | 100% of accepted forms | every documented verdict form; placeholder or missing verdict → `WITHHELD` (`unreadable_verdict`, ADR-0064), `REQUEST_CHANGES` only with a failing check or a guardrail finding |
 | `scripts/lib/review_marker.mjs` — per-SHA dedup (ADR-0028) | 100% of branches | `decideReviewRun` / `decideAutofixRun` outcomes, marker parse and trust rules, and the `pr_review.mjs` / `auto_fix_pr.mjs` skip paths (no LLM call, no mutation) |
 | `scripts/lib/prompts.mjs` — `loadPrompt`, `interpolatePrompt` | 100% of branches | missing file and empty file raise explicit errors with the path; unknown placeholders stay unchanged |
 | Entrypoint startup validation (`auto_fix_pr.mjs`, `pr_review.mjs`) | 100% of failure paths | missing payload fields give path-oriented errors (e.g. `pull_request.number`) |

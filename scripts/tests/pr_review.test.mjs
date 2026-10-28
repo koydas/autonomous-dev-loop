@@ -10,6 +10,7 @@ import http from 'node:http';
 import { parseNestedYaml, parseFlatYaml } from '../lib/yaml.mjs';
 import { buildAutomationGateContext } from '../lib/coverage_checker.mjs';
 import { failureSignature } from '../lib/circuit_breaker.mjs';
+import { stripUnsubstantiated } from '../lib/review_findings.mjs';
 
 const SCRIPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT_DIR = path.join(SCRIPTS_DIR, '..');
@@ -471,7 +472,7 @@ test('pr_review submits REQUEST_CHANGES event when verdict is REQUEST_CHANGES', 
   }
 });
 
-test('pr_review defaults to REQUEST_CHANGES when verdict is absent from LLM response', async () => {
+test('pr_review withholds, and does not request changes, when the verdict is absent from the LLM response', async () => {
   const server = await startMockServer(
     makeHandler({ groqContent: 'No verdict line in this response.' }),
   );
@@ -483,10 +484,34 @@ test('pr_review defaults to REQUEST_CHANGES when verdict is absent from LLM resp
       (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
     );
     assert.ok(review, 'expected POST to reviews endpoint');
-    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.match(JSON.parse(review.body).body, /Changes not requested: the review has no readable verdict line/);
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld'], 'no changes-requested label: auto-fix does not start');
+    const comment = JSON.parse(server.requests.find((r) => r.method === 'POST' && r.url.includes('/comments')).body).body;
+    assert.match(comment, /\*\*Changes not requested\*\* — the review has no readable verdict line/);
+    assert.match(result.stderr, /"event":"review.verdict"[^\n]*"verdict":"WITHHELD"[^\n]*"withheld_from":"REQUEST_CHANGES"[^\n]*"withheld_for":"unreadable_verdict"/);
+    assert.match(comment, /verdict=WITHHELD -->$/);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
+  }
+});
+
+test('pr_review keeps REQUEST_CHANGES for an unreadable verdict when a check failed', async () => {
+  const server = await startMockServer(makeHandler({ groqContent: 'No verdict line in this response.' }));
+  const eventFile = await writeEventFile();
+  const evidenceFile = await writeEvidenceFile([EVIDENCE_FAIL]);
+  try {
+    const result = await runPrReview(server.address().port, eventFile, { REVIEW_EVIDENCE_PATH: evidenceFile });
+    assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+    const review = server.requests.find((r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url));
+    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.ok(reviewLabelCalls(server).added.includes('changes-requested'));
+    assert.doesNotMatch(result.stderr, /unreadable_verdict/);
+  } finally {
+    server.close();
+    await fs.unlink(eventFile).catch(() => {});
+    await fs.unlink(evidenceFile).catch(() => {});
   }
 });
 
@@ -586,7 +611,7 @@ test('pr_review detects APPROVE when verdict uses single asterisk (*APPROVED*)',
   }
 });
 
-test('pr_review defaults to REQUEST_CHANGES when verdict line echoes template placeholder', async () => {
+test('pr_review withholds when verdict line echoes template placeholder', async () => {
   const groqContent = '### 🚀 Verdict\n(APPROVED | REQUEST_CHANGES)';
   const server = await startMockServer(makeHandler({ groqContent }));
   const eventFile = await writeEventFile();
@@ -597,7 +622,8 @@ test('pr_review defaults to REQUEST_CHANGES when verdict line echoes template pl
       (r) => r.method === 'POST' && /\/pulls\/\d+\/reviews$/.test(r.url),
     );
     assert.ok(review, 'expected POST to reviews endpoint');
-    assert.equal(JSON.parse(review.body).event, 'REQUEST_CHANGES');
+    assert.equal(JSON.parse(review.body).event, 'COMMENT');
+    assert.deepEqual(reviewLabelCalls(server).added, ['review-withheld']);
   } finally {
     server.close();
     await fs.unlink(eventFile).catch(() => {});
@@ -1326,7 +1352,7 @@ test('pr_review reviews again when the marker names an older head', async () => 
   assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
   assert.equal(llmCalls(requests), 1);
   const patch = requests.find((r) => r.method === 'PATCH' && r.url.endsWith(`/issues/comments/${COMMENT_ID}`));
-  assert.match(JSON.parse(patch.body).body, new RegExp(`sha=${HEAD_SHA} verdict=REQUEST_CHANGES -->$`));
+  assert.match(JSON.parse(patch.body).body, new RegExp(`sha=${HEAD_SHA} verdict=WITHHELD -->$`), 'the default answer has no verdict line');
 });
 
 test('pr_review re-reviews an already reviewed head on a manual workflow re-run', async () => {
@@ -1497,7 +1523,7 @@ test('pr_review (Anthropic) past anthropic_review_max_diff_chars: boundary cut w
 });
 
 // #219: a REQUEST_CHANGES whose every finding cites only code the cut hid is withheld, not sent to auto-fix.
-const unseenFinding = (file) => `### ⚠️ Issues Found\n- **High** Broken workflow syntax — File: \`${file}\` Lines: 280-281 Root cause: stray \`- n\`. Fix: remove it.\n\n### 🚀 Verdict\nREQUEST_CHANGES`;
+const unseenFinding = (file, lines = '280-281') => `### ⚠️ Issues Found\n- **High** Broken workflow syntax — File: \`${file}\` Lines: ${lines} Root cause: stray \`- n\`. Fix: remove it.\n\n### 🚀 Verdict\nREQUEST_CHANGES`;
 
 test('pr_review (Groq) withholds a REQUEST_CHANGES whose findings cite only code cut from the diff (#219)', async () => {
   const server = await startMockServer(makeHandler({ diffText: bigDiff(60000), groqContent: unseenFinding('src/big.js') }));
@@ -1544,7 +1570,7 @@ test('pr_review (Groq) keeps a REQUEST_CHANGES on a cut diff when a check failed
 
 test('pr_review (Groq) keeps a REQUEST_CHANGES on a cut diff when a finding cites a file that was shown (#219)', async () => {
   const shown = 'diff --git a/src/small.js b/src/small.js\n--- a/src/small.js\n+++ b/src/small.js\n@@ -1 +1 @@\n-a\n+b\n';
-  const server = await startMockServer(makeHandler({ diffText: shown + bigDiff(60000), groqContent: unseenFinding('src/small.js') }));
+  const server = await startMockServer(makeHandler({ diffText: shown + bigDiff(60000), groqContent: unseenFinding('src/small.js', '1') }));
   const eventFile = await writeEventFile();
   try {
     const result = await runPrReviewOnGroq(server.address().port, eventFile);
@@ -2086,21 +2112,42 @@ test('pr_review withholds a REQUEST_CHANGES whose only blocking finding is about
     const { result, review, comment, labels } = await runEvidenceReview(outsideFinding(evidence));
     assert.equal(result.code, 0, `${name}: expected exit 0, stderr: ${result.stderr}`);
     assert.equal(review.event, 'COMMENT', name);
-    assert.match(review.body, /Changes not requested: every blocking finding concerns code outside the diff without verified evidence/, name);
-    assert.match(comment, /⚠️ unproven — \[high\] `src\/checkout\.mjs` \(outside the diff\)/, name);
-    assert.match(comment, /Changes not requested\*\* — every blocking finding above \(1\) concerns code outside the diff/, name);
+    assert.match(review.body, /Changes not requested: every blocking finding is unsubstantiated/, name);
+    assert.match(comment, new RegExp(`${name === 'a quote that is not there' ? '❌ refuted' : '⚠️ unverified'} — \\[high\\] \`src\\/checkout\\.mjs\` \\(outside the diff\\)`), name);
+    assert.match(comment, /Changes not requested\*\* — every blocking finding above \(1\) is unsubstantiated/, name);
     assert.deepEqual(labels.added, ['review-withheld'], name);
     assert.match(result.stderr, /"event":"review.verdict"[^\n]*"withheld_from":"REQUEST_CHANGES"[^\n]*"withheld_for":"unproven_findings"/, name);
   }
 });
 
-test('pr_review requests changes when an unproven outside finding comes with a blocking finding in the diff', async () => {
+test('pr_review requests changes on the supported finding and sets the unsubstantiated one aside, out of what auto-fix reads', async () => {
   const mixed = '### ⚠️ Issues Found\n- [High] The new parameter is unused — File: `src/pricing.mjs` Lines: 1 Root cause: currency is never read. Fix: use it.\n- [High] The caller still passes two arguments — File: `src/checkout.mjs` Lines: 4 Root cause: x. Fix: y.\n\n### 🚀 Verdict\nREQUEST_CHANGES';
   const { result, review, comment } = await runEvidenceReview(mixed);
   assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
   assert.equal(review.event, 'REQUEST_CHANGES');
-  assert.match(comment, /⚠️ unproven — \[high\] `src\/checkout\.mjs`/);
-  assert.doesNotMatch(comment, /pricing\.mjs`[^\n]*outside the diff/, 'the finding in the diff is not listed');
+  assert.match(comment, /✔️ supported — \[high\] `src\/pricing\.mjs`\n/);
+  assert.match(comment, /⚠️ unverified — \[high\] `src\/checkout\.mjs` \(outside the diff\): no evidence quoted/);
+  const issues = comment.slice(comment.indexOf('### ⚠️ Issues Found'), comment.indexOf('### 🔎 Unsubstantiated Findings'));
+  assert.match(issues, /The new parameter is unused/);
+  assert.doesNotMatch(issues, /The caller still passes two arguments/);
+  assert.match(comment, /### 🔎 Unsubstantiated Findings[\s\S]*The caller still passes two arguments[\s\S]*### 🚀 Verdict/);
+  const fed = stripUnsubstantiated(comment);
+  assert.match(fed, /The new parameter is unused/);
+  assert.doesNotMatch(fed, /The caller still passes two arguments|Unsubstantiated Findings/);
+  assert.match(fed, /### 🚀 Verdict/);
+});
+
+test('pr_review withholds a REQUEST_CHANGES whose only blocking finding points at lines the diff does not show', async () => {
+  const lines = (n) => `### ⚠️ Issues Found\n- [High] The discount is never rounded — File: \`src/pricing.mjs\` Lines: ${n} Root cause: x. Fix: y.\n\n### 🚀 Verdict\nREQUEST_CHANGES`;
+  const far = await runEvidenceReview(lines('300-310'));
+  assert.equal(far.result.code, 0, `expected exit 0, stderr: ${far.result.stderr}`);
+  assert.equal(far.review.event, 'COMMENT');
+  assert.match(far.comment, /⚠️ unverified — \[high\] `src\/pricing\.mjs`: no evidence quoted/);
+  assert.match(far.result.stderr, /"event":"review.verdict"[^\n]*"withheld_for":"unproven_findings"/);
+  const near = await runEvidenceReview(lines('4-6'));
+  assert.equal(near.review.event, 'REQUEST_CHANGES', 'lines within a hunk, give or take the tolerance, are supported');
+  const evt = near.result.stderr.split('\n').filter((l) => l.includes('"event":"review.finding_evidence"')).map((l) => JSON.parse(l));
+  assert.deepEqual([evt[0].meta.supported, evt[0].meta.unverified, evt[0].meta.refuted, evt[0].meta.unproven], [1, 0, 0, 0]);
 });
 
 // RV-04b: the documents outside the diff that name what it changes are shown to the reviewer and are quotable evidence.
@@ -2147,7 +2194,7 @@ test('pr_review withholds a finding about a document whose quote the PR tree doe
   const { result, review, comment } = await runDocReview(docFinding('Evidence: docs/pricing.md:3 "`applyDiscount(price, rate, currency)` takes three arguments." '));
   assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
   assert.equal(review.event, 'COMMENT');
-  assert.match(comment, /⚠️ unproven — \[high\] `docs\/pricing\.md` \(outside the diff\)/);
+  assert.match(comment, /❌ refuted — \[high\] `docs\/pricing\.md` \(outside the diff\)/);
 });
 
 // F22 (2026-10-19 audit): no PR-tree file over PR_TREE_MAX_BYTES (1 MiB) is read. An oversized doc is

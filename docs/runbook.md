@@ -217,7 +217,8 @@ git show "origin/metrics:<record_path>" | jq '.otlp.resourceSpans[0].scopeSpans[
 | `🧪 Tool Evidence` says *missing* | The default branch has no `config/review-evidence.yaml` or no evidence runner yet (expected: evidence is opt-in and read from the default branch, the job logs `skipped: "no config"` or fails to find the script), the `evidence` job crashed (invalid config, see `review_evidence.error` in its log), or the artifact upload/download failed — review ran without evidence |
 | A check reports `ERROR (exit 127)` or `(exit 126)` | The command could not be executed: typo, binary not installed in the evidence job, or quotes/inline comment in `config/review-evidence.yaml` — fix the config; never forces `REQUEST_CHANGES` |
 | `🧪 Tool Evidence` says passing results are *not authoritative* | The PR modifies `package.json`, `pr-review.yml` or `adl-pr-review.yml`, which still control what the evidence job runs — review those changes manually before trusting the PASS rows |
-| The review is `review-withheld` with `withheld_for: unproven_findings` and an `### 🔎 Evidence Check` section | Every blocking finding concerns code outside the diff and quotes nothing the PR tree holds (no `Evidence:` or a quote not found near its line): the claim is unproven, so changes are not requested and auto-fix does not run. Read the finding: if it is right, request the change yourself; if the model misquoted, re-run the review. The quote can be checked in the PR tree at the line given |
+| The review is `review-withheld` with `withheld_for: unreadable_verdict` and a note "the review has no readable verdict line" | The model answered without `### 🚀 Verdict` followed by `APPROVED` or `REQUEST_CHANGES` (another layout, a verdict at the top, a truncated answer), so the comment cannot be read as an approval or a request (ADR-0064). Nothing failed and auto-fix did not run: read the comment (it may well say APPROVED) and merge or request changes yourself, or push to review again. Repeated on several PRs, the model is drifting from the prompt's layout: look at the `review.llm_response` size and the raw answer. A failing check or a guardrail finding still requests changes, whatever the layout |
+| The review is `review-withheld` with `withheld_for: unproven_findings` and an `### 🔎 Evidence Check` section | Every blocking finding is unsubstantiated (ADR-0061, ADR-0063): it concerns code outside the diff and quotes nothing the PR tree holds (`⚠️ unverified`, or `❌ refuted` when a quote is not where it says), or it points at lines the diff does not show. Changes are not requested and auto-fix does not run. Read the finding: if it is right, request the change yourself; if the model misquoted or miscounted lines, re-run the review. A requested-changes review may also carry a `### 🔎 Unsubstantiated Findings` section: those findings are not sent to auto-fix, only the rest of the review is |
 | The review is REQUEST_CHANGES with `guardrail_override: true` and a `🛡️ Guardrail Findings` section although the model approved | A hard guardrail is broken in code (rule and file are listed). Fix it, or name the removed test / the changed function in the PR description when that is the request (the check re-runs on the next push). A wrong finding (e.g. a test case counted as removed) is a bug of `guardrail_review.mjs`: add the diff as a unit test. `review.guardrail_error` means the check was skipped, not passed (`guardrail checks timed out`: a PR file made the parser overrun its 60 s deadline; the review is unaffected otherwise) |
 | The review has no `## Impact analysis` block, or the log shows `review.impact_error` | The block only exists when the diff edits a JS/TS export and the PR tree references it from outside the diff (`review.impact_context` carries the counts). It is the first context dropped after the related ADRs when the prompt does not fit (`included: false`), and a listing or read error skips it without failing the review. Not a verdict input |
 | The review has no `## Documents that mention what this diff changes` block, or the log shows `review.doc_mentions_error` | The block only exists when a document outside the diff names an export or file the diff changes, renames or removes (`review.doc_mentions` carries the counts). It is part of the Impact analysis's optional block: dropped with it when the prompt does not fit (`included: false`), and a listing or read error skips it without failing the review. A finding about a document must quote it (`Evidence:`), else the review is withheld (`unproven_findings`). Not a verdict input |
@@ -352,6 +353,28 @@ The model job's recording (`autofix-model-<run_id>`, 90-day default retention) a
 - **Commit and push fixes** — commit push to PR branch
 
 ---
+
+## Installing or Updating the Callers in Another Repository (ADR-0045)
+
+From a clone of the pipeline checked out at a release tag: `node scripts/install_consumer.mjs --target <repo> --dry-run`, then without `--dry-run` (details: [installation.md](installation.md#from-a-clone)). To update, check the clone out at the new tag and rerun with `--force`; read the CHANGELOG's `### Breaking` entries first. Its refusals (exit 1, nothing written):
+
+| Message | Fix |
+|---|---|
+| `HEAD <sha> carries no vMAJOR.MINOR.PATCH tag` | `git checkout <tag>` in the clone; `--allow-untagged` only for a commit that exists on GitHub |
+| `templates/consumer/ has local changes` | `git checkout -- templates/consumer` in the clone |
+| `N existing caller(s) differ` | The listed `conflict` files were edited in the target: diff them, then `--force` |
+| `--target is the pipeline repository itself` | This repository's callers are maintained by hand |
+| `git <args> failed in <dir>: …` | The clone is not a git checkout (an archive download): clone it |
+
+**ADL Install** (`install.yml`, from the browser) runs the same installer on the runner. Its own failures, in the `Check inputs` step unless stated:
+
+| Message | Fix |
+|---|---|
+| `version: expected vMAJOR.MINOR.PATCH` | Rerun with a release tag (`v0.1.0`), not a branch or a SHA |
+| `AI_PR_TOKEN is not set` | Add the secret (Contents, Pull requests, Workflows: read and write); `dry_run` works without it |
+| `The pipeline repository maintains its own callers by hand` | Not for this repository |
+| `Remote branch v… not found` (`Clone the pipeline at the release`) | The tag does not exist: list them at `https://github.com/koydas/autonomous-dev-loop/tags` |
+| `refusing to allow a … to create or update workflow` (`Open the pull request`) | The token lacks **Workflows: write** |
 
 ## Checking Which Configuration a Run Resolves (ADR-0045)
 
