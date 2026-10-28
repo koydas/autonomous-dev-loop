@@ -68,7 +68,7 @@ const ICON = {
 const icon = (k) => `<span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg></span>`;
 
 function kpi({ id, ic, href, value, change, note, visual, tone = 'neutral' }) {
-  return `<a class="kpi2 tone-${tone}" href="${e(href)}" data-kpi="${id}">${icon(ic)}<span class="kpi-body"><span class="kpi-label">${e(DEFINITIONS[id].label)}</span><span class="kpi-row"><strong class="kpi-value">${e(value)}</strong><span class="kpi-delta tone-${change.tone}">${e(change.arrow)} ${e(change.text)}</span></span></span>${visual}<span class="kpi-note">${note}</span></a>`;
+  return `<a class="kpi2 tone-${tone}" href="${e(href)}" data-kpi="${id}">${icon(ic)}<span class="kpi-body"><span class="kpi-label">${e(DEFINITIONS[id].label)}</span><span class="kpi-row"><strong class="kpi-value">${e(value)}</strong>${change ? `<span class="kpi-delta tone-${change.tone}">${e(change.arrow)} ${e(change.text)}</span>` : ''}</span></span>${visual}<span class="kpi-note">${note}</span></a>`;
 }
 
 const CLASS_TONE = { failed: 'bad', adverse: 'warn', progressed: 'good', neutral: 'unknown' };
@@ -83,16 +83,21 @@ function segments(c) {
 // A cost is comparable only when every call is priced or free: an unpriced call makes the sum a lower bound.
 const comparableCost = (sum) => sum.calls > 0 && !sum.unpriced;
 
-/** The four indicators of one window. root: path to pipeline/. */
-export function kpiRow(w, root, hasWithheld) {
+/**
+ * The four indicators of one window. root: path to pipeline/. `minBase`: a change is shown only when the
+ * previous window holds at least that many runs (verdicts for the approval rate), as on the home; `amount`
+ * formats the cost (the home's has 2 decimals).
+ */
+export function kpiRow(w, root, hasWithheld, { minBase = 0, amount = costAmount } = {}) {
   const c = w.current, p = w.previous;
   const prevRuns = p.runs || null;
   const has = (s) => s.verdicts > 0;
+  const gate = (base, change) => (base >= minBase ? change : null);
   const cards = [
-    kpi({ id: 'executions', ic: 'runs', href: `${root}index.html#executions`, value: String(c.runs), change: delta(c.runs, prevRuns, { days: w.days }), visual: segments(c), note: `<span class="tone-good">${e(c.progressed)} moved forward</span> · <span class="tone-warn">${e(c.adverse)} adverse</span> · <span class="tone-bad">${e(c.failed)} failed</span> · ${e(c.neutral)} no decision`, tone: c.failed ? 'bad' : 'neutral' }),
-    kpi({ id: 'approve_rate', ic: 'rate', href: hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, value: pct(c.approve_rate), change: delta(c.approve_rate, has(p) ? p.approve_rate : null, { better: 'up', points: true, days: w.days }), visual: sparkline(w.series.map((s) => s.approve_rate), { tone: 'good', label: 'Approval rate per day' }), note: c.verdicts ? `${e(c.approve)} of ${e(c.verdicts)} verdicts · ${e(c.withheld)} withheld · ${e(c.request_changes)} changes requested` : 'No verdict recorded in the window', tone: c.approve_rate == null ? 'unknown' : c.approve_rate < 0.5 ? 'warn' : 'good' }),
-    kpi({ id: 'run_duration', ic: 'time', href: `${root}health.html#performance`, value: duration(c.duration.mean), change: delta(c.duration.mean, p.duration.mean, { better: 'down', days: w.days }), visual: sparkline(w.series.map((s) => s.avg_ms), { tone: 'accent', label: 'Average run duration per day' }), note: c.duration.n ? `p95 ${e(duration(c.duration.p95))} · ${e(c.duration.n)} run(s)` : 'No timed run in the window', tone: 'neutral' }),
-    kpi({ id: 'llm_cost', ic: 'cost', href: `${root}health.html#cost`, value: costAmount(c.cost), change: comparableCost(c.cost) && comparableCost(p.cost) ? delta(c.cost.usd, p.cost.usd, { better: 'down', days: w.days, zeroBase: p.cost.calls > 0 }) : { text: c.cost.unpriced || p.cost.unpriced ? 'no change: unpriced calls make a side incomplete' : `no prior ${w.days} d data`, tone: 'unknown', arrow: '' }, visual: sparkline(w.series.map((s) => s.usd), { tone: 'info', label: 'LLM cost per day' }), note: c.cost.calls ? `${e(c.cost.calls)} call(s) · ${e(costBasis(c.cost) ?? (c.cost.free === c.cost.calls ? 'free tier only' : 'no priced call'))}${c.cost.unpriced ? ` · ${e(c.cost.unpriced)} unpriced, not counted` : ''} · list price` : 'No LLM call in the window', tone: 'neutral' }),
+    kpi({ id: 'executions', ic: 'runs', href: `${root}index.html#executions`, value: String(c.runs), change: gate(p.runs, delta(c.runs, prevRuns, { days: w.days })), visual: segments(c), note: `<span class="tone-good">${e(c.progressed)} moved forward</span> · <span class="tone-warn">${e(c.adverse)} adverse</span> · <span class="tone-bad">${e(c.failed)} failed</span> · ${e(c.neutral)} no decision`, tone: c.failed ? 'bad' : 'neutral' }),
+    kpi({ id: 'approve_rate', ic: 'rate', href: hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, value: pct(c.approve_rate), change: gate(p.verdicts, delta(c.approve_rate, has(p) ? p.approve_rate : null, { better: 'up', points: true, days: w.days })), visual: sparkline(w.series.map((s) => s.approve_rate), { tone: 'good', label: 'Approval rate per day' }), note: c.verdicts ? `${e(c.approve)} of ${e(c.verdicts)} verdicts · ${e(c.withheld)} withheld · ${e(c.request_changes)} changes requested` : 'No verdict recorded in the window', tone: c.approve_rate == null ? 'unknown' : c.approve_rate < 0.5 ? 'warn' : 'good' }),
+    kpi({ id: 'run_duration', ic: 'time', href: `${root}health.html#performance`, value: duration(c.duration.mean), change: gate(p.runs, delta(c.duration.mean, p.duration.mean, { better: 'down', days: w.days })), visual: sparkline(w.series.map((s) => s.avg_ms), { tone: 'accent', label: 'Average run duration per day' }), note: c.duration.n ? `p95 ${e(duration(c.duration.p95))} · ${e(c.duration.n)} run(s)` : 'No timed run in the window', tone: 'neutral' }),
+    kpi({ id: 'llm_cost', ic: 'cost', href: `${root}health.html#cost`, value: amount(c.cost), change: gate(p.runs, comparableCost(c.cost) && comparableCost(p.cost) ? delta(c.cost.usd, p.cost.usd, { better: 'down', days: w.days, zeroBase: p.cost.calls > 0 }) : { text: c.cost.unpriced || p.cost.unpriced ? 'no change: unpriced calls make a side incomplete' : `no prior ${w.days} d data`, tone: 'unknown', arrow: '' }), visual: sparkline(w.series.map((s) => s.usd), { tone: 'info', label: 'LLM cost per day' }), note: c.cost.calls ? `${e(c.cost.calls)} call(s) · ${e(costBasis(c.cost) ?? (c.cost.free === c.cost.calls ? 'free tier only' : 'no priced call'))}${c.cost.unpriced ? ` · ${e(c.cost.unpriced)} unpriced, not counted` : ''} · list price` : 'No LLM call in the window', tone: 'neutral' }),
   ];
   return `<div class="kpi-grid4">${cards.join('')}</div>`;
 }
@@ -282,6 +287,81 @@ function statusLine(d, root) {
   return `<a class="g-status status-banner tone-${tone}" href="${root}diagnostics.html${top ? `#${e(top.id)}` : ''}">${toneMark(tone)}<span><strong>${e(title)}</strong><small>${detail}</small></span><span class="chevron" aria-hidden="true">›</span></a>`;
 }
 
+// ---------------------------------------------------------------------------
+// Wide screens (ADR-0043 amendment 2026-10-28): the same home as a cockpit — a hero, the four 7-day
+// indicators, the pipeline as five stages with their daily activity, and the eval gates. A phone keeps the
+// rows above; CSS shows one or the other, the status line and Waiting on you are shared.
+// ---------------------------------------------------------------------------
+
+const svg = (body, cls = '') => `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const STAGE_ICON = {
+  issue: '<path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4M10 12h5M10 16h5"/>',
+  code: '<path d="m9 8-4 4 4 4M15 8l4 4-4 4M13 6l-2 12"/>',
+  review: '<path d="M4 5h16v11H9l-5 4z"/><path d="m9 10.5 2 2 4-4"/>',
+  fix: '<path d="M15 4a5 5 0 0 0-4.6 6.9L4 17.3 6.7 20l6.4-6.4A5 5 0 0 0 20 9l-3 1-2-2 1-3z"/>',
+  merge: '<circle cx="7" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><circle cx="17" cy="12" r="2"/><path d="M7 7v10M7 7c0 4 4 5 8 5"/>',
+};
+const SHIELD = '<path d="M12 3 5 6v6c0 4 3 7.5 7 9 4-1.5 7-5 7-9V6z"/><path d="m9 12 2 2 4-4"/>';
+const LOGO = '<path d="M12 2.5 20.5 7.5v9L12 21.5 3.5 16.5v-9z"/><path d="M8.5 9.5 12 12l3.5-2.5M12 12v4.5"/>';
+
+/** Bars of a daily series (one per day, scaled to its maximum); an all-zero series is a flat baseline. */
+export function dayBars(values, label) {
+  const W = 140, H = 34, gap = 3;
+  const max = Math.max(0, ...values);
+  const bw = (W - gap * (values.length - 1)) / Math.max(1, values.length);
+  const bars = values.map((v, i) => {
+    const h = max ? Math.max(2, (v / max) * (H - 2)) : 2;
+    return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(H - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5"${v ? '' : ' class="zero"'}/>`;
+  }).join('');
+  return `<svg class="day-bars" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${e(`${label} per day: ${values.join(', ')}`)}">${bars}</svg>`;
+}
+
+function hero() {
+  return `<div class="home-hero" aria-hidden="true"><div class="hero-brand"><span class="hero-logo">${svg(LOGO)}</span><div><p class="hero-title">Autonomous <span>Dev Loop</span></p><p class="hero-flow">Issue → Code → Review → Auto-fix → Merge</p></div></div><div class="hero-tag"><span class="hero-rule"></span><p>An evaluation-driven agentic SDLC</p><p>Build · Validate · Improve · Repeat</p></div></div>`;
+}
+
+const stageCard = ({ n, key, name, sub, href, value, unit, note, bars }) => `<a class="stage-card st-${key}" href="${e(href)}"><span class="stage-head"><span class="stage-icon">${svg(STAGE_ICON[key])}</span><strong>${n}. ${e(name)}</strong><small>${e(sub)}</small></span><span class="stage-value"><strong>${e(value)}</strong><span>${e(unit)}</span></span><span class="stage-note">${e(note)}</span>${bars}</a>`;
+
+/** The five stages of the 7-day window: what each step decided, per day (definition `stage_flow`). */
+export function stageStrip(w, ctx, root, hasWithheld) {
+  const a = w.activity, c = w.current;
+  const k = (step, key) => a[step].by_key[key] ?? 0;
+  const day = (t) => Math.floor((t - w.from) / 86400000);
+  const merged = periodItems(ctx, w.days).filter((j) => j.state === 'merged');
+  const mergedPerDay = Array(w.days).fill(0);
+  for (const j of merged) { const i = day(j.closing?.ts); if (i >= 0 && i < w.days) mergedPerDay[i] += 1; }
+  const iv = a.issue_validation, pr = a.pr_prepare, cg = a.code_gen, af = a.autofix;
+  const cards = [
+    { key: 'issue', name: 'Issue', sub: 'Validate & scope', href: `${root}flows.html?kind=issue&period=${w.days}`, value: String(iv.decisions), unit: 'issues validated', note: iv.decisions ? `${k('issue_validation', 'pass')} passed · ${k('issue_validation', 'fail')} rejected${k('issue_validation', 'error') ? ` · ${k('issue_validation', 'error')} error(s)` : ''}` : 'No validation in the window', bars: dayBars(iv.per_day, 'Validations') },
+    { key: 'code', name: 'Code', sub: 'Implement (AI)', href: `${root}health.html#funnel`, value: String(pr.good), unit: 'PRs prepared', note: `${cg.good} patch(es) generated${cg.decisions - cg.good ? ` · ${cg.decisions - cg.good} blocked or skipped` : ''}`, bars: dayBars(pr.good_per_day, 'PRs prepared') },
+    { key: 'review', name: 'Review', sub: 'AI + human', href: hasWithheld ? `${root}diagnostics.html#review-withheld` : `${root}health.html#reviews`, value: pct(c.approve_rate), unit: 'approval rate', note: c.verdicts ? `${c.approve} of ${c.verdicts} verdicts` : 'No verdict in the window', bars: dayBars(w.series.map((s) => s.verdicts), 'Review verdicts') },
+    { key: 'fix', name: 'Auto-fix', sub: 'Up to 3 attempts', href: `${root}health.html#autofix`, value: String(af.prs), unit: 'PRs auto-fixed', note: af.decisions ? `${af.good} fix(es) pushed · ${af.decisions - af.good} without a push` : 'No auto-fix in the window', bars: dayBars(af.good_per_day, 'Fixes pushed') },
+    { key: 'merge', name: 'Merge', sub: 'Human approval', href: `${root}flows.html?state=merged&period=${w.days}`, value: String(merged.length), unit: 'merged', note: 'Journaled merges (item.closed)', bars: dayBars(mergedPerDay, 'Merges') },
+  ];
+  const arrow = `<span class="stage-arrow" aria-hidden="true">${svg('<path d="M4 12h15m-5-5 5 5-5 5"/>')}</span>`;
+  return `<section class="stage-strip panel" aria-label="Pipeline stages, last ${w.days} days">${cards.map((card, i) => stageCard({ n: i + 1, ...card })).join(arrow)}</section>`;
+}
+
+/** The eval gates: per suite its headline score, a bar, the gate and the trend on the same dataset. */
+export function qualityPanel(suites, evalRoot) {
+  const evals = `${evalRoot}evals.html`;
+  const passing = suites.filter(([, s]) => s.runs[0].passed).length;
+  const rows = suites.map(([name, s]) => {
+    const run = s.runs[0];
+    const h = headlineScore(run);
+    const v = typeof h?.value === 'number' ? h.value : null;
+    const tone = run.passed ? 'good' : 'bad';
+    return `<li><a class="tone-${tone}" href="${evals}#suite-${encodeURIComponent(name)}"><span class="q-name">${e(String(name).replace(/_/g, ' '))}</span><strong class="q-value">${v == null ? '—' : `${Math.round(v * 100)} %`}${e(suiteTrend(s.runs))}</strong><span class="q-bar"><span style="width:${((v ?? 0) * 100).toFixed(1)}%"></span></span><small>${e(h?.name ?? 'no score')} · gate ${run.passed ? 'passed' : 'failed'} · ${e(String(run.ts ?? '').slice(0, 10))}</small></a></li>`;
+  }).join('');
+  return `<section class="quality-panel panel" aria-label="Quality and reliability"><h3><span class="q-shield">${svg(SHIELD)}</span>Quality &amp; reliability<a href="${evals}">${suites.length ? `${e(passing)} / ${e(suites.length)} gates` : 'Evals'} →</a></h3>${rows ? `<ul class="q-list">${rows}</ul>` : '<p class="muted">No eval run published.</p>'}</section>`;
+}
+
+function cockpit(ctx, root, suites, evalRoot, hasWithheld) {
+  const w = ctx.windows[GLANCE_DAYS];
+  const head = w.empty ? '<div class="panel"><p>No pipeline run recorded yet: no indicator to compute.</p></div>' : kpiRow(w, root, hasWithheld, { minBase: MIN_BASE, amount: shortAmount });
+  return `<div class="cockpit">${head}<div class="cockpit-grid">${w.empty ? '' : stageStrip(w, ctx, root, hasWithheld)}${qualityPanel(suites, evalRoot)}</div></div>`;
+}
+
 /**
  * The home: `ctx` from consoleContext(), `root` the path to pipeline/ ('pipeline/' on the home page),
  * `suites` the scorecard suites with runs (`[name, { runs }]`, latest first).
@@ -293,10 +373,14 @@ export function consoleOverview(ctx, root = '', { suites = [] } = {}) {
   const evalRoot = root.replace(/pipeline\/$/, '');
   return `<section class="console glance" aria-label="System overview">
 <h1>System overview</h1>
+${hero()}
 ${statusLine(d, root)}
+<div class="g-phone">
 ${flowsRow(w, ctx, root, hasWithheld)}
 ${costRow(w, root)}
 ${qualityRow(suites, evalRoot)}
+</div>
+${cockpit(ctx, root, suites, evalRoot, hasWithheld)}
 ${waitingRow(ctx.waiting ?? [], root)}
 <p class="g-foot"><a href="${root}health.html#trends">Trends, 14 / 30 days and definitions →</a></p>
 </section>`;
@@ -337,6 +421,63 @@ export const OVERVIEW_STYLE = `
 .g-chip.g-more { --tone:var(--muted); }
 .g-foot { margin:2px 0 0; font-size:12px; }
 @media(max-width:600px) { main:has(> .glance) { padding-top:10px; } }
+/* Wide screens (ADR-0043 amendment 2026-10-28): the cockpit replaces the phone rows; status and Waiting on you stay. */
+.home-hero, .cockpit { display:none; }
+@media(min-width:761px) {
+  .glance { max-width:none; }
+  .g-phone { display:none; }
+  .home-hero { display:flex; } .cockpit { display:block; }
+}
+.glance { --st-issue:#7aa7ff; --st-code:#22c55e; --st-review:#a78bfa; --st-fix:#8b5cf6; --st-merge:#2dd4bf; }
+:root[data-theme="light"] .glance { --st-issue:#2f5fe0; --st-code:#16a34a; --st-review:#7c3aed; --st-fix:#6d28d9; --st-merge:#0d9488; }
+.home-hero { position:relative; overflow:hidden; justify-content:space-between; align-items:center; gap:24px; flex-wrap:wrap; margin:0 0 14px; padding:22px 26px; border:1px solid var(--border); border-radius:var(--radius); background:radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--accent) 30%, transparent) 1px, transparent 1.5px) 0 0 / 14px 14px, linear-gradient(120deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface) 55%); }
+.home-hero::before { content:''; position:absolute; inset:0; background:linear-gradient(90deg, transparent 0, var(--surface) 38%); pointer-events:none; }
+.home-hero > * { position:relative; }
+.hero-brand { display:flex; align-items:center; gap:16px; }
+.hero-logo { display:grid; place-items:center; width:52px; height:52px; border-radius:14px; color:var(--accent); background:var(--accent-soft); border:1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+.hero-logo svg { width:30px; height:30px; }
+.hero-title { margin:0; font-size:clamp(24px,2.6vw,34px); font-weight:800; letter-spacing:-.8px; line-height:1.1; color:var(--ink); }
+.hero-title span { background:linear-gradient(90deg, var(--link), var(--accent)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.hero-flow { margin:8px 0 0; font-size:11.5px; font-weight:650; letter-spacing:3.2px; text-transform:uppercase; color:var(--ink-2); }
+.hero-tag { display:grid; gap:6px; justify-items:end; text-align:right; }
+.hero-tag p { margin:0; font-size:11px; font-weight:650; letter-spacing:3px; text-transform:uppercase; color:var(--ink-2); }
+.hero-tag p + p { color:var(--muted); }
+.hero-rule { width:min(260px,22vw); height:1px; background:linear-gradient(90deg, transparent, var(--accent)); position:relative; }
+.hero-rule::after { content:''; position:absolute; right:-3px; top:-3px; width:7px; height:7px; border-radius:50%; background:var(--good); box-shadow:0 0 8px var(--good); }
+.cockpit .kpi-grid4 { margin:14px 0; }
+.cockpit .kpi2 { padding:18px; background:linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 60%, var(--surface)), var(--surface)); }
+.cockpit .kpi-icon { width:46px; height:46px; border-radius:12px; } .cockpit .kpi-icon svg { width:22px; height:22px; }
+.cockpit .kpi2 .kpi-value { font-size:34px; }
+.cockpit .kpi2 .spark { height:56px; }
+.cockpit [data-kpi="llm_cost"] .kpi-icon { background:color-mix(in srgb, var(--link) 16%, transparent); color:var(--link); }
+.cockpit [data-kpi="llm_cost"] .spark { --tone:var(--link); }
+.cockpit-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(250px,300px); gap:14px; align-items:stretch; margin:0 0 14px; }
+.cockpit-grid > .panel { margin:0; }
+.cockpit-grid > .quality-panel:only-child { grid-column:1 / -1; }
+.stage-strip { display:flex; align-items:stretch; gap:4px; padding:12px; overflow-x:auto; }
+.stage-card { flex:1 1 0; min-width:132px; display:flex; flex-direction:column; gap:8px; padding:14px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); color:var(--ink); text-decoration:none; --tone:var(--accent); }
+.stage-card:hover { border-color:var(--tone); }
+.st-issue { --tone:var(--st-issue); } .st-code { --tone:var(--st-code); } .st-review { --tone:var(--st-review); } .st-fix { --tone:var(--st-fix); } .st-merge { --tone:var(--st-merge); }
+.stage-head { display:grid; grid-template-columns:auto 1fr; grid-template-areas:'icon name' 'icon sub'; align-items:center; column-gap:10px; min-width:0; }
+.stage-head .stage-icon { grid-area:icon; }
+.stage-head strong { grid-area:name; font-size:14px; white-space:nowrap; } .stage-head small { grid-area:sub; font-size:11.5px; color:var(--muted); }
+.stage-icon { flex:none; display:grid; place-items:center; width:36px; height:36px; border-radius:10px; color:var(--tone); background:color-mix(in srgb, var(--tone) 15%, transparent); }
+.stage-icon svg { width:19px; height:19px; }
+.stage-value { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-top:4px; }
+.stage-value strong { font-size:30px; font-weight:750; letter-spacing:-.8px; line-height:1; font-variant-numeric:tabular-nums; }
+.stage-value span { font-size:12px; color:var(--ink-2); }
+.stage-note { font-size:11.5px; color:var(--muted); min-height:2.6em; }
+.day-bars { width:100%; height:34px; display:block; margin-top:auto; } .day-bars rect { fill:var(--tone); } .day-bars rect.zero { fill:var(--grid); }
+.stage-arrow { flex:none; align-self:center; color:var(--muted); } .stage-arrow svg { width:18px; height:18px; display:block; }
+.quality-panel h3 { display:flex; flex-wrap:nowrap; justify-content:flex-start; align-items:center; gap:10px; margin:0 0 14px; white-space:nowrap; }
+.quality-panel h3 a { margin-left:auto; font-size:12px; font-weight:600; }
+.q-shield { display:grid; place-items:center; width:30px; height:30px; border-radius:9px; color:var(--good); background:var(--good-bg); } .q-shield svg { width:18px; height:18px; }
+.q-list { list-style:none; margin:0; padding:0; display:grid; gap:14px; }
+.q-list a { display:grid; grid-template-columns:1fr auto; grid-template-areas:'name value' 'bar bar' 'note note'; gap:5px 10px; color:var(--ink); text-decoration:none; }
+.q-name { grid-area:name; font-size:13px; color:var(--ink-2); text-transform:capitalize; } .q-value { grid-area:value; color:var(--tone); font-variant-numeric:tabular-nums; }
+.q-bar { grid-area:bar; height:8px; border-radius:4px; background:var(--grid); overflow:hidden; } .q-bar span { display:block; height:100%; border-radius:4px; background:var(--tone); }
+.q-list small { grid-area:note; font-size:11px; color:var(--muted); }
+@media(max-width:1250px) and (min-width:761px) { .cockpit-grid { grid-template-columns:1fr; } .q-list { grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); column-gap:24px; } }
 .head-tools { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .range-select { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
 .status-badge { display:flex; align-items:center; gap:10px; padding:9px 14px; border:1px solid var(--tone); border-radius:10px; background:color-mix(in srgb, var(--tone) 12%, var(--surface)); color:var(--ink); text-decoration:none; }

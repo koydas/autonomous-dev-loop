@@ -4,7 +4,7 @@
 // without a population is null and the page says so.
 import { sumCosts, pipelineStage } from './llm_cost.mjs';
 import { percentile } from './pipeline_health.mjs';
-import { attemptOf, isLifecycleRun, STATES } from './pipeline_journey.mjs';
+import { attemptOf, isLifecycleRun, stepDecision, STATES } from './pipeline_journey.mjs';
 
 export const TREND_DAYS = 14;
 const DAY_MS = 86400000;
@@ -30,6 +30,7 @@ export const DEFINITIONS = Object.freeze({
   executions: { label: 'Pipeline executions', source: RECORDS, method: 'Runs started in the window, by class: moved forward, adverse decision, failed, skip / no decision; the change is against the same number of days just before', period: 'The selected window (7, 14 or 30 days) ending on the latest recorded run', population: 'Runs with a start time', limits: 'A run in progress is not recorded yet, so there is no running count.' },
   run_duration: { label: 'Average run duration', source: RECORDS, method: 'Mean of run durations (start → end of the workflow job record) in the window; p95 by nearest rank', period: 'The selected window', population: 'Runs with both timestamps', limits: 'Job time only: queueing before the job and waiting between runs are not included (see lead time).' },
   providers: { label: 'LLM providers', source: RECORDS + ', `llm_call` spans', method: 'Calls and list-price cost per provider in the window; shares of the window total', period: 'The selected window', population: 'Recorded LLM calls', limits: 'Groq free-tier calls cost $0: their share of cost is 0 while their share of calls can be large.' },
+  stage_flow: { label: 'Pipeline stages', source: RECORDS + ', the decision event of each step (`pipeline_journey.mjs` `stepDecision`)', method: 'Per step, the runs of the window that recorded its decision, per UTC day: Issue = validations (passed / rejected), Code = PRs opened or updated by PR preparation (patches generated beside it), Review = the approval rate of the verdicts, Auto-fix = PRs with a fix pushed, Merge = work items whose latest recorded state is merged (the Pipelines filter it opens)', period: 'The last 7 days ending on the latest recorded run', population: 'Runs with a start time and a decision of that step; for Merge, work items active in the period', limits: 'A run counts once per step (its last decision). Merges are journaled only since item-closed.yml exists; an earlier merge is not counted.' },
   trend: { label: 'Runs per day', source: RECORDS, method: 'Runs per UTC day by class (failed, adverse decision, moved forward, skipped / no decision), last 14 days ending on the latest recorded run; the 7-day comparison sets the latest 7 days against the 7 before', period: '14 days ending on the latest recorded run (not the build time)', population: 'Runs with a start time', limits: 'Small daily counts: a rate on a few runs is noisy; n is shown next to every rate.' },
 });
 
@@ -178,6 +179,35 @@ export function stageCosts(runs) {
     .sort((a, b) => b.usd - a.usd || b.calls - a.calls || a.stage.localeCompare(b.stage));
 }
 
+// Steps whose decisions the home's stage strip counts (Merge comes from the journeys, not from a step).
+export const FLOW_STEPS = Object.freeze(['issue_validation', 'code_gen', 'pr_prepare', 'review', 'autofix']);
+
+/**
+ * Decisions per step of the runs started in [from, from + days): `{ [step]: { decisions, good, by_key,
+ * prs, per_day, good_per_day } }`. A run counts once per step (its last decision); `good` is a decision that
+ * moved the item forward, `prs` the distinct PRs of those runs. A run outside the window is left out.
+ */
+export function stageActivity(runs, from, days) {
+  return Object.fromEntries(FLOW_STEPS.map((step) => {
+    const per_day = Array(days).fill(0), good_per_day = Array(days).fill(0);
+    const by_key = {};
+    const prs = new Set();
+    let decisions = 0, good = 0;
+    for (const run of runs) {
+      const i = Math.floor((run.started_at - from) / DAY_MS);
+      if (!(i >= 0 && i < days)) continue;
+      const d = stepDecision(run, step);
+      if (!d) continue;
+      decisions += 1; per_day[i] += 1;
+      by_key[d.key] = (by_key[d.key] ?? 0) + 1;
+      if (d.tone !== 'good') continue;
+      good += 1; good_per_day[i] += 1;
+      if (Number.isSafeInteger(run.pr_number) && run.pr_number > 0) prs.add(run.pr_number);
+    }
+    return [step, { decisions, good, by_key, prs: prs.size, per_day, good_per_day }];
+  }));
+}
+
 /**
  * The overview of one window: `days` days ending on the latest recorded run's UTC day, the same length
  * before it as the comparison (`previous`, whose `runs` is 0 when nothing was recorded then — no delta is
@@ -185,7 +215,7 @@ export function stageCosts(runs) {
  */
 export function computeWindow({ model, journeys = [], days = 7 } = {}) {
   const runs = (model?.runs ?? []).filter((r) => r.started_at != null && !isLifecycleRun(r));
-  if (!runs.length) return { days, empty: true, current: null, previous: null, series: [], providers: [], stages: [], items: [] };
+  if (!runs.length) return { days, empty: true, current: null, previous: null, series: [], providers: [], stages: [], activity: null, items: [] };
   const end = Date.parse(`${day(Math.max(...runs.map((r) => r.started_at)))}T00:00:00Z`) + DAY_MS;
   const from = end - days * DAY_MS;
   const current = slice(runs, from, end);
@@ -201,6 +231,7 @@ export function computeWindow({ model, journeys = [], days = 7 } = {}) {
     series,
     providers: providerBreakdown(current.selected),
     stages: stageCosts(current.selected),
+    activity: stageActivity(current.selected, from, days),
     items: journeys.filter((j) => j.last_activity != null && j.last_activity >= from),
   };
 }

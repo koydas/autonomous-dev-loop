@@ -89,6 +89,18 @@ The home had grown to about 5,800 px at 375 px wide (nine screens on an iPhone 1
 
 Consequences. The home reads the scorecard as well as the metrics branch, like `status.json`; both are left out of the "eval half unchanged" check of a pipeline-only build, as `index.html` and `findings.json` already were. The fit in one screen is held by structure (four rows, one line of chips that scrolls sideways) and checked by hand in Chromium at 375 × 629; there is no browser in the test suite.
 
+## Amendment (2026-10-28): the home on a wide screen is a cockpit
+
+**Context.** The 2026-10-24 home fits a phone and leaves a desktop browser mostly empty: four rows 720 px wide, the indicators one click away on Metrics. The owner asked for the home to look like a cockpit (hero, indicator cards, the pipeline as stages, the quality gates) on the screen it is mostly read on.
+
+**Decision.**
+- **One home, two layouts, chosen by width (CSS, 760 px, the breakpoint of the rest of the console).** Up to 760 px nothing changes: the rows of the 2026-10-24 amendment, one phone screen. Above it the rows are hidden and the cockpit is shown: a hero (name, the five steps, the tag line; decorative, `aria-hidden`), the four 7-day indicators of Metrics (`kpiRow`), five stage cards and the eval gates panel. The status line and Waiting on you are shared by both layouts, rendered once.
+- **Stage cards say what each step decided, never a funnel.** Issue = validations (passed / rejected), Code = PRs prepared (patches generated beside it), Review = approval rate of the verdicts, Auto-fix = PRs with a fix pushed, Merge = work items whose latest recorded state is merged — the list `flows.html?state=merged&period=7` opens, so its count is that list's length (rule of the 2026-10-24 amendment). One bar per UTC day of the window. Counts come from each step's decision event (`stepDecision`, `stageActivity()` in `pipeline_kpis.mjs`, definition `stage_flow`), a run counted once per step. The steps are counted independently: a stage is not the previous one's population, so no conversion rate is drawn between them.
+- **Same rules as the rows.** A change only on a previous window of ≥ 10 runs (verdicts for the approval rate); amounts with 2 decimals; a stage with no decision says so, it is not a 0 that looks healthy; each card opens its page (Pipelines filtered, Metrics → funnel / reviews / auto-fix, Diagnostics → withheld when that finding is active, Evals → suite).
+- **Quality panel**: one row per published suite, its headline score as a bar, the gate (passed / failed sets the tone) and the date; the score of the suite, not invented labels such as "tests passing".
+
+**Consequences.** The home HTML carries both layouts (the hidden one is `display:none`, out of the accessibility tree). The phone fit is unchanged and still checked by hand at 375 × 629; the cockpit was checked by hand in Chromium at 1024, 1440 and 1680 px in both themes. `consoleOverview()` keeps its signature; `kpiRow()` gains optional `minBase` and `amount`; the window gains `activity`.
+
 ## Amendment (2026-10-25): external review churn is an observation
 
 **Context.** The loop's own review counts its cycles (`review_cycles`); the external reviewer (Codex) answers every push on its own, and `review_cycles` does not see it. Over the 250 PRs read on 2026-10-24, 19 PRs held 57 % of the 320 external threads, 70 % of them on one file. `external_review` on the approved `pr` record (`metrics/runs.jsonl`) holds the counts, but Diagnostics reads the published run records, not that file.

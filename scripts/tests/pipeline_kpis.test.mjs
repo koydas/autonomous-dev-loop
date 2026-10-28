@@ -111,13 +111,46 @@ test('windows: the latest N days against the N before, per-day series, providers
   assert.deepEqual(w.stages.map((s) => [s.stage, s.calls, s.free]), [['review', 2, 1]], 'cost per stage of the window');
   assert.ok(!('selected' in w.current), 'no run list in the published window');
   assert.deepEqual(Object.keys(computeWindows({ model, journeys })).map(Number), WINDOWS);
-  assert.deepEqual(computeWindow({ model: { runs: [run('x', { t: null })] } }), { days: 7, empty: true, current: null, previous: null, series: [], providers: [], stages: [], items: [] });
+  assert.deepEqual(computeWindow({ model: { runs: [run('x', { t: null })] } }), { days: 7, empty: true, current: null, previous: null, series: [], providers: [], stages: [], activity: null, items: [] });
   assert.equal(computeWindow().empty, true);
   // Providers: no call → empty; unknown provider kept; no priced call → shares null.
   assert.deepEqual(providerBreakdown([]), []);
   const unpriced = providerBreakdown([run('u', { llm: [{ model: 'x' }] })]);
   assert.deepEqual([unpriced[0].provider, unpriced[0].usd_share, unpriced[0].call_share], ['unknown', null, 1]);
   for (const id of ['executions', 'run_duration', 'providers']) assert.ok(DEFINITIONS[id].limits);
+});
+
+test('stage activity: one decision per run and step, per day; outside the window, no decision and no PR left out', async () => {
+  const { stageActivity, computeWindow, FLOW_STEPS } = await import('../lib/pipeline_kpis.mjs');
+  const from = T - 6 * DAY;
+  const runs = [
+    run('v1', { stage: 'issue_validation', t: T, pr: null, events: [{ event: 'issue_validation.pass' }] }),
+    run('v2', { stage: 'issue_validation', t: T - DAY, pr: null, events: [{ event: 'issue_validation.fail', meta: { score: 2 } }] }),
+    run('v3', { stage: 'issue_validation', t: T, pr: null, events: [{ event: 'issue_validation.fail', level: 'error', meta: { error: 'x' } }] }),
+    run('p1', { stage: 'pr_prepare', t: T, pr: null, events: [{ event: 'workflow.pr_operation', meta: { operation: 'created', prNumber: 4 } }] }),
+    run('c1', { stage: 'code_gen', t: T, pr: null, events: [{ event: 'code_gen.complete' }] }),
+    run('c2', { stage: 'code_gen', t: T, pr: null, events: [{ event: 'code_gen.skipped', meta: { reason: 'blocked' } }] }),
+    // Two pushes on PR 9 (one PR), one on PR 10, one run without a push; the last decision of a run counts once.
+    run('a1', { stage: 'autofix', t: T, events: [{ event: 'autofix.push' }] }),
+    run('a2', { stage: 'autofix', t: T - 2 * DAY, events: [{ event: 'autofix.skipped', meta: { reason: 'no_changes' } }, { event: 'autofix.push' }] }),
+    run('a3', { stage: 'autofix', t: T, pr: 10, events: [{ event: 'autofix.push' }] }),
+    run('a4', { stage: 'autofix', t: T, events: [{ event: 'autofix.max_attempts_reached' }] }),
+    run('a5', { stage: 'autofix', t: T, pr: null, events: [{ event: 'autofix.push' }] }),
+    run('old', { stage: 'autofix', t: from - DAY, events: [{ event: 'autofix.push' }] }),
+    run('none', { stage: 'autofix', t: T }),
+  ];
+  const a = stageActivity(runs, from, 7);
+  assert.deepEqual(Object.keys(a), [...FLOW_STEPS]);
+  assert.deepEqual(a.issue_validation, { decisions: 3, good: 1, by_key: { pass: 1, fail: 1, error: 1 }, prs: 0, per_day: [0, 0, 0, 0, 0, 1, 2], good_per_day: [0, 0, 0, 0, 0, 0, 1] });
+  assert.deepEqual([a.pr_prepare.decisions, a.pr_prepare.good], [1, 1]);
+  assert.deepEqual([a.code_gen.decisions, a.code_gen.good, a.code_gen.by_key.blocked], [2, 1, 1]);
+  assert.deepEqual([a.autofix.decisions, a.autofix.good, a.autofix.prs], [5, 4, 2], 'PR 9 twice is one PR; a push without a PR number counts no PR');
+  assert.deepEqual(a.autofix.good_per_day, [0, 0, 0, 0, 1, 0, 3]);
+  assert.deepEqual(a.review, { decisions: 0, good: 0, by_key: {}, prs: 0, per_day: Array(7).fill(0), good_per_day: Array(7).fill(0) });
+  assert.deepEqual(stageActivity([], from, 3).autofix.per_day, [0, 0, 0]);
+  // computeWindow carries it for the window's runs.
+  assert.equal(computeWindow({ model: { runs }, days: 7 }).activity.autofix.good, 4);
+  assert.ok(DEFINITIONS.stage_flow.limits);
 });
 
 test('journey aggregates cover the retained window only: an index older than the loaded months is left out (PR #242 review)', () => {
