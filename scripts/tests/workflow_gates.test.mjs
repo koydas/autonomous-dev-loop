@@ -1385,8 +1385,8 @@ function callerSkeleton(text) {
     .replace(/\n    with:\n(?: {6}.+\n?)+/, '\n');
 }
 
-test('templates/consumer holds one caller per pipeline workflow and the label setup, nothing else', () => {
-  assert.deepEqual(readdirSync(TEMPLATES_DIR).sort(), [...CALLERS, 'setup-labels.yml'].sort());
+test('templates/consumer holds one caller per pipeline workflow, the label setup and the installer, nothing else', () => {
+  assert.deepEqual(readdirSync(TEMPLATES_DIR).sort(), [...CALLERS, 'setup-labels.yml', 'install.yml'].sort());
 });
 
 test('each caller template pins the body of its workflow in one line, SHA and version to fill in (the only pin)', () => {
@@ -1404,7 +1404,7 @@ test('each caller template pins the body of its workflow in one line, SHA and ve
 });
 
 test('the caller templates never pass pipeline_ref or pipeline_repository, use secrets: inherit or trigger on pull_request_target', () => {
-  for (const name of [...CALLERS, 'setup-labels.yml']) {
+  for (const name of [...CALLERS, 'setup-labels.yml', 'install.yml']) {
     const text = template(name);
     assert.doesNotMatch(text, /^\s+pull_request_target:/m, `${name}: pull_request_target`);
     assert.doesNotMatch(text, /secrets:\s*inherit/, `${name}: secrets: inherit`);
@@ -1452,6 +1452,38 @@ test('setup-labels.yml runs the pinned label installer with a token that reads c
   assert.ok(!/secrets\.(?!GITHUB_TOKEN)/.test(text), 'only the workflow token');
   assert.match(text, /GITHUB_RUN_ID: \$\{\{ github\.run_id \}\}/, 'the tracer needs the run id');
   assert.match(text, /- name: Upload run trace\n\s+if: always\(\)\n\s+uses: actions\/upload-artifact@v4\n\s+with:\n\s+name: run-trace-\$\{\{ github\.run_id \}\}\n\s+path: \.\/observability\/traces\/\$\{\{ github\.run_id \}\}\.json\n/);
+  for (const { body } of runScripts(text)) assert.doesNotMatch(body, /\$\{\{/, 'no expression inside a run script: inputs reach it through env');
+});
+
+// install.yml (ADR-0045 amendment): installs from the Actions tab with nothing local. The version is an input,
+// validated before use; the callers are pinned by the installer to the commit of the tag; the pull request is the gate.
+test('install.yml: dispatch only, version checked before use, tag cloned, installer then labels then a pull request', () => {
+  const text = template('install.yml');
+  assert.match(text, /^on:\n  workflow_dispatch:\n    inputs:\n      version:\n/m);
+  assert.doesNotMatch(text, /<PIPELINE_/, 'nothing to replace: the version is a run input');
+  assert.deepEqual(jobScopes(jobsOf(text)[0].text), { contents: 'read', issues: 'write' });
+  const steps = [...text.matchAll(/\n      - (?:name: (.+)|uses: (\S+))/g)].map((m) => m[1] ?? m[2]);
+  assert.deepEqual(steps, [
+    'Check inputs',
+    'Checkout repository (default branch)',
+    'Clone the pipeline at the release',
+    'actions/setup-node@v4',
+    'Write the callers',
+    'Create the labels',
+    'Open the pull request',
+    'Upload run trace',
+  ]);
+  assert.match(text, /\[\[ "\$VERSION" =~ \^v\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]/, 'semver checked in the first step');
+  assert.match(text, /HAS_PR_TOKEN: \$\{\{ secrets\.AI_PR_TOKEN != '' \}\}/, 'a missing PAT fails before any work');
+  assert.match(text, /git clone --quiet --depth 1 --branch "\$VERSION" "https:\/\/github\.com\/\$ADL_PIPELINE_REPOSITORY" \.adl-pipeline/);
+  assert.match(text, /node \.adl-pipeline\/scripts\/install_consumer\.mjs --target target --default-branch "\$DEFAULT_BRANCH" --force --dry-run\n/);
+  assert.match(text, /node \.adl-pipeline\/scripts\/install_consumer\.mjs --target target --default-branch "\$DEFAULT_BRANCH" --force\n/);
+  assert.match(text, /- name: Create the labels\n\s+if: \$\{\{ !inputs\.dry_run \}\}\n/);
+  assert.match(text, /- name: Open the pull request\n\s+if: \$\{\{ !inputs\.dry_run \}\}\n\s+uses: peter-evans\/create-pull-request@v6\n\s+with:\n\s+token: \$\{\{ secrets\.AI_PR_TOKEN \}\}\n\s+path: target\n/);
+  assert.match(text, /add-paths: \|\n\s+\.github\/workflows\/\*\.yml\n/, 'only the callers reach the pull request');
+  assert.doesNotMatch(text, /secrets\.(?!GITHUB_TOKEN|AI_PR_TOKEN)/, 'no LLM key: nothing here calls a model');
+  assert.ok(readFileSync(resolve(ROOT, 'scripts/install_consumer.mjs'), 'utf8').includes("'--force'") || readFileSync(resolve(ROOT, 'scripts/lib/consumer_install.mjs'), 'utf8').includes("'--force'"), 'the flag exists');
+  assert.match(text, /GITHUB_RUN_ID: \$\{\{ github\.run_id \}\}/, 'the tracer needs the run id');
   for (const { body } of runScripts(text)) assert.doesNotMatch(body, /\$\{\{/, 'no expression inside a run script: inputs reach it through env');
 });
 

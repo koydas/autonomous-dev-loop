@@ -341,7 +341,7 @@ Key steps to expand per workflow:
 
 ## Installing or Updating the Callers in Another Repository (ADR-0045)
 
-From a clone of the pipeline checked out at a release tag: `node scripts/install_consumer.mjs --target <repo> --dry-run`, then without `--dry-run` (details: [installation.md](installation.md#with-the-installer)). To update, check the clone out at the new tag and rerun with `--force`; read the CHANGELOG's `### Breaking` entries first. Its refusals (exit 1, nothing written):
+From a clone of the pipeline checked out at a release tag: `node scripts/install_consumer.mjs --target <repo> --dry-run`, then without `--dry-run` (details: [installation.md](installation.md#from-a-clone)). To update, check the clone out at the new tag and rerun with `--force`; read the CHANGELOG's `### Breaking` entries first. Its refusals (exit 1, nothing written):
 
 | Message | Fix |
 |---|---|
@@ -350,6 +350,16 @@ From a clone of the pipeline checked out at a release tag: `node scripts/install
 | `N existing caller(s) differ` | The listed `conflict` files were edited in the target: diff them, then `--force` |
 | `--target is the pipeline repository itself` | This repository's callers are maintained by hand |
 | `git <args> failed in <dir>: …` | The clone is not a git checkout (an archive download): clone it |
+
+**ADL Install** (`install.yml`, from the browser) runs the same installer on the runner. Its own failures, in the `Check inputs` step unless stated:
+
+| Message | Fix |
+|---|---|
+| `version: expected vMAJOR.MINOR.PATCH` | Rerun with a release tag (`v0.1.0`), not a branch or a SHA |
+| `AI_PR_TOKEN is not set` | Add the secret (Contents, Pull requests, Workflows: read and write); `dry_run` works without it |
+| `The pipeline repository maintains its own callers by hand` | Not for this repository |
+| `Remote branch v… not found` (`Clone the pipeline at the release`) | The tag does not exist: list them at `https://github.com/koydas/autonomous-dev-loop/tags` |
+| `refusing to allow a … to create or update workflow` (`Open the pull request`) | The token lacks **Workflows: write** |
 
 ## Checking Which Configuration a Run Resolves (ADR-0045)
 
