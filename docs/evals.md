@@ -16,6 +16,17 @@ npm run eval -- --suite review --repeats 3              # PR review stage, ≈ 1
 npm run eval -- --suite validation --replay evals/results/validation-<runId>.json
 ```
 
+### Case diagnostics (repeat stability)
+
+`consistency` says how many cases flipped, not which, nor whether a stable case is stable on the wrong verdict. The case report keeps the two apart, from a results file alone (no LLM call, same file → same bytes):
+
+```bash
+npm run eval:cases -- evals/results/validation-<runId>.json          # cases with a wrong repeat, a flip or a blocker-code change
+npm run eval:cases -- evals/results/validation-<runId>.json --all    # every case; --json for the report object
+```
+
+Per case: each repeat's verdict (`error` for an errored run) with the B1–B4 codes of its blockers (`unknown` for a blocker without one), the expected verdict and, when the run's `meta.dataset` file is present (or `--dataset <jsonl>`), the expected codes; then wrong repeats, verdict flips and blocker-code changes. **`inconsistent`**: the repeats disagree (a prompt or sampling problem); **`consistently_wrong`**: they agree on the wrong verdict (a rule problem, which more stability cannot fix); **`stable`**: they agree on the expected verdict. Sorted by wrong repeats, then flips, then code changes. A live run with `--repeats > 1` prints the same table (non-stable cases only) at the end of its report. The results JSON is unchanged: the report is derived on demand.
+
 CI: **Actions → Evals → Run workflow** (`workflow_dispatch`), plus a [weekly run](#weekly-run) of every suite. The report is on the run's summary page, results and trace are uploaded as artifacts, and, on the default branch, the run is added to the [eval dashboard](#dashboard) on GitHub Pages (`publish` input, on by default).
 
 Δ on the dashboard only compares runs on the same dataset content: each run records the dataset's `sha256`, and when it changes the dashboard shows "dataset changed" instead of a Δ, so a label fix never reads as a model improvement.

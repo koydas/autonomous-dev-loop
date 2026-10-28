@@ -19,6 +19,7 @@
 import fs from 'node:fs/promises';
 import { estimateTokens } from './metrics.mjs';
 import { withSpan } from './observability.mjs';
+import { buildCaseReport, formatCaseReport } from './eval_case_report.mjs';
 
 // ---------------------------------------------------------------------------
 // Dataset
@@ -483,5 +484,7 @@ export function formatReport({ suite, summary, failures, results, meta = {} }) {
     }
     lines.push('');
   }
+  // With repeats, which cases flip and which are wrong every time (#325): the same table as eval_case_report.mjs.
+  if (results.some((r) => r.repeat > 0)) lines.push(formatCaseReport(buildCaseReport(results)));
   return lines.join('\n');
 }
