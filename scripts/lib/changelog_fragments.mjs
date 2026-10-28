@@ -2,8 +2,7 @@
  * Deterministic changelog fragments. Pure render/validate operations.
  * Only the release operator writes the root changelog.
  */
-export const FRAGMENT_NAME = /^changes\/([1-9]\d*)\.md$/;
-const CATEGORIES = new Set(['Added', 'Changed', 'Fixed', 'Removed']);
+export const FRAGMENT_NAME = /^changes\/([1-9]\d*)-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$/;
 const HEADER = '## [Unreleased]';
 const LEGACY = '### Legacy (pre-fragments)';
 
@@ -24,7 +23,7 @@ export function validateFragment(path, content) {
 export function validateFragments(fragments) {
   return Object.entries(fragments).map(([path, content]) => ({
     path, number: Number(FRAGMENT_NAME.exec(path)?.[1]), content: validateFragment(path, content),
-  })).sort((a, b) => a.number - b.number);
+  })).sort((a, b) => a.number - b.number || a.path.localeCompare(b.path, 'en'));
 }
 
 export function assembleChangelog(changelog, fragments) {
