@@ -230,3 +230,4 @@
 {"type":"issue","run_id":"40754803124-1","issue_number":323,"verdict":"APPROVE","score":88,"started_at":"2026-10-28T19:30:10.863Z","ended_at":"2026-10-28T19:30:20.631Z","duration_ms":9764,"input_tokens_est":3640,"output_tokens_est":655}
 {"type":"issue","run_id":"40754831776-1","issue_number":324,"verdict":"MANUAL","score":65,"started_at":"2026-10-28T19:30:09.165Z","ended_at":"2026-10-28T19:30:23.366Z","duration_ms":14197,"input_tokens_est":3684,"output_tokens_est":1050}
 {"type":"issue","run_id":"40754864554-1","issue_number":325,"verdict":"APPROVE","score":95,"started_at":"2026-10-28T19:30:26.503Z","ended_at":"2026-10-28T19:30:38.734Z","duration_ms":12227,"input_tokens_est":3656,"output_tokens_est":762}
+{"type":"codegen_skip","run_id":"40754918718-1-codegen-skip","issue_number":"323","reason":"blocked","source":"denylist","ts":"2026-10-28T19:30:59.368Z"}
