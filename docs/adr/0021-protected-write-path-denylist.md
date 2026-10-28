@@ -86,3 +86,7 @@ Consequences:
 ## Amendment (2026-10-25): conflict resolution writes into `CHANGELOG.md` and `docs/adr/` through a named allowlist
 
 [ADR-0059](./0059-auto-conflicts-fix.md) (conflicts-fix) lets the model resolve the **conflict hunks** of `CHANGELOG.md`, `docs/adr/README.md` and `docs/adr/NNNN-*.md`, the only protected paths where two PRs routinely conflict on structure (an appended entry, an ADR number taken twice). The allowlist is named and pinned (`planFile`, `scripts/lib/conflicts.mjs`), not a general exception: the other protected paths of this ADR stay L3 there (an escalation to `needs-human`), the model returns hunks and never whole files, each hunk is post-checked (every entry of both sides kept, nothing invented), and the ADR number is renumbered by code. The content the base brings in through the merge commit is not an AI write.
+
+## Amendment (2026-10-28): eval fixtures and graders are protected (ADR-0052)
+
+The `autofix` suite scores a patch by running tests the model never saw, on a fixture pinned by SHA-256. A patch that could edit a hidden test, a fixture or a `reference.json` would choose its own grade, and the digests in `evals/datasets/autofix.jsonl` would not stop it (the dataset is writable). `config/protected-paths.yaml` adds `evals/fixtures/` and `evals/graders/` (directory entries, prefix match). `evals/datasets/` stays writable: a dataset case is added by the PR that fixes an incident (AGENTS.md, Eval Gates), made by a human or an interactive agent like every change under `scripts/`.
