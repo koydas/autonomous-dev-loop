@@ -575,7 +575,9 @@ test('plan_pr_evals.mjs end to end: plan then apply', async () => {
 test('every registered eval suite has a prompt prefix, and every prefix names a registered suite', async () => {
   const { SUITES } = await import('../lib/eval_suites.mjs');
   const { SUITE_PROMPT_PREFIXES } = await import('../lib/pr_evals.mjs');
-  assert.deepEqual(Object.keys(SUITE_PROMPT_PREFIXES).sort(), Object.keys(SUITES).sort());
+  // A two-phase suite (autofix) needs the grader job: its prompts are unmeasured here.
+  assert.deepEqual(Object.keys(SUITE_PROMPT_PREFIXES).sort(), Object.keys(SUITES).filter((name) => !SUITES[name].twoPhase).sort());
+  assert.deepEqual(suitesForPrompts(['prompts/auto-fix-system.md']), { suites: [], unmeasured: ['prompts/auto-fix-system.md'] });
   for (const prefix of Object.values(SUITE_PROMPT_PREFIXES)) {
     assert.ok(fs.readdirSync(path.join(REPO_ROOT, 'prompts')).some((f) => `prompts/${f}`.startsWith(prefix)), `no prompt matches ${prefix}`);
   }

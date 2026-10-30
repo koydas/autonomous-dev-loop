@@ -340,6 +340,16 @@ test('formatReport lists metrics, threshold failures and failing cases', async (
   assert.match(report, /\| b \| 1 \| no \|  \| parse failed \|/);
 });
 
+test('formatReport adds the case diagnostics when the run has repeats, never with one repeat (#325)', async () => {
+  const cases = parseDataset('{"id":"a","input":{"q":"no"},"expected":{"answer":"yes"}}\n{"id":"b","input":{"q":"boom"},"expected":{"answer":"no"}}');
+  const repeated = await runSuite({ suite: echoSuite, cases, repeats: 2, llmFor: () => async ({ prompt }) => prompt });
+  const report = formatReport({ suite: 'echo', summary: summarize(repeated), failures: [], results: repeated });
+  assert.match(report, /## Case diagnostics/);
+  assert.match(report, /\| a \| consistently_wrong \| yes \| no ✗ — \| no ✗ — \| 2\/2 \| 0 \| 0 \|/);
+  const once = await runSuite({ suite: echoSuite, cases, llmFor: () => async ({ prompt }) => prompt });
+  assert.doesNotMatch(formatReport({ suite: 'echo', summary: summarize(once), failures: [], results: once }), /Case diagnostics/);
+});
+
 test('formatReport shows the known-gap block apart from the gated metrics, only when the run has one (ADR-0031 §7)', async () => {
   const cases = parseDataset('{"id":"a","input":{"q":"yes"},"expected":{"answer":"yes"}}\n{"id":"g","tags":["known-gap"],"input":{"q":"no"},"expected":{"answer":"yes"}}');
   const results = await runSuite({ suite: echoSuite, cases, llmFor: () => async ({ prompt }) => prompt });

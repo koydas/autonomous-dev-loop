@@ -827,6 +827,26 @@ test('review dataset: untested-claim cases reject every variant the positive cas
   }
 });
 
+test('review dataset: the PR #282 case is a comment-only edit of config/models.yaml, every mapping kept (#284)', async () => {
+  const [c] = (await loadReviewCases()).filter((x) => x.id === 'incident-comment-only-config-withheld');
+  assert.ok(c, 'incident-comment-only-config-withheld is missing');
+  assert.deepEqual([c.source, c.expected, 'requires_cut' in c], ['PR #282', { verdict: 'APPROVE', must_not_flag: ['syntax|parse|yaml error'] }, false]);
+  for (const tag of ['approve', 'clean', 'incident', 'config']) assert.ok(c.tags.includes(tag), tag);
+  const lines = c.input.diff.split('\n');
+  assert.deepEqual(lines.filter((l) => l.startsWith('diff --git ')), ['diff --git a/config/models.yaml b/config/models.yaml']);
+  assert.equal(lines.filter((l) => l.startsWith('@@')).length, 1);
+  const body = lines.slice(lines.findIndex((l) => l.startsWith('@@')) + 1).filter(Boolean);
+  const removed = body.filter((l) => l.startsWith('-'));
+  const added = body.filter((l) => l.startsWith('+'));
+  assert.deepEqual([removed.length, added.length], [2, 4]);
+  for (const l of [...removed, ...added]) assert.ok(l.slice(1).trim().startsWith('#'), `not a comment: ${l}`);
+  // Every YAML mapping is unchanged context, as it reads in the real file.
+  const config = (await fs.readFile(path.join(REPO_ROOT, 'config', 'models.yaml'), 'utf8')).split('\n');
+  const mappings = body.filter((l) => l.startsWith(' ') && !l.slice(1).trim().startsWith('#') && l.trim());
+  assert.ok(mappings.some((l) => l.startsWith(' anthropic_validation:')), 'anthropic_validation is not in the context');
+  for (const l of mappings) assert.ok(config.includes(l.slice(1)), `context line not in config/models.yaml: ${l}`);
+});
+
 test('advisory and no_spurious_flag leave the existing scorers unchanged on the same outputs (#199)', () => {
   const { flags_issue, no_false_alarm } = reviewSuite.scorers;
   const review = reviewText({ verdict: 'APPROVED', issues: ['[Low] Untested claim: x'] });
@@ -932,6 +952,9 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   // PR #311: a clean change whose review is readable and approved (the format regression it came from is an errored run).
   assert.deepEqual([byId['incident-unreadable-verdict-clean-change'].label, byId['incident-unreadable-verdict-clean-change'].scores.no_false_alarm], ['approve', 1]);
   assert.equal(byId['incident-toctou-untested-claim'].label, 'approve');
+  // PR #282 (known-gap): the recorded approval of a comment-only change names one risk axis, so the protocol withholds it (ADR-0049).
+  assert.deepEqual([byId['incident-comment-only-config-withheld'].output.llm_verdict, byId['incident-comment-only-config-withheld'].label, byId['incident-comment-only-config-withheld'].scores.no_spurious_flag], ['APPROVED', 'withheld', 1]);
+  assert.match(byId['incident-comment-only-config-withheld'].output.reason, /^adversarial protocol not met \(1 of 2 critical points listed\)/);
   // #219: the recorded false REQUEST_CHANGES cite only code files the cut hid, so the verdict is withheld
   // (ADR-0038 amendment); the High / Medium finding itself still counts as a false alarm.
   for (const id of ['incident-cut-mid-step-name', 'incident-missing-step-in-cut']) {
@@ -946,10 +969,10 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   }
   assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 41 cases run, 36 gated: the five known-gap cases are counted only in summary.known_gap.
+  // 42 cases run, 36 gated: the six known-gap cases are counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [41, 0.0278, 0.9167, 0.8667, 0.8],
+    [42, 0.0278, 0.9167, 0.8667, 0.8],
   );
   // Finding level (RV-01): the four incident cases that list their defects are known-gap, so the gated metrics
   // above are unchanged and the finding metrics live in summary.known_gap. Recorded answers: a miss (approved), a
@@ -973,13 +996,13 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.equal(byId['bug-off-by-one-chunk'].output.finding_analysis, undefined, 'a case without expected.findings has no analysis');
   assert.equal(byId['bug-off-by-one-chunk'].scores.finding_recall, null);
   const gap = summary.known_gap.scores;
-  assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [5, 0.5833, 0.8889, 0.5]);
+  assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [6, 0.5833, 0.8889, 0.5]);
   assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
   assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9375, 0.875]);
   // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
   const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push', 'impact-caller-misses-new-parameter']; // RV-01 / RV-02, known-gap
-  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these.
-  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && r.case_id !== 'incident-unreadable-verdict-clean-change'));
+  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these; PR #282's is newer still (known-gap).
+  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && !['incident-unreadable-verdict-clean-change', 'incident-comment-only-config-withheld'].includes(r.case_id)));
   assert.deepEqual(
     [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
     [30, 0.0345, 0.8966, 0.8667, 0.7143],
@@ -988,8 +1011,8 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.deepEqual([before.scores.advisory.n, before.scores.no_spurious_flag.n], [0, 0]);
   assert.deepEqual(
     [summary.known_gap.n_cases, summary.known_gap.error_rate, summary.known_gap.scores.verdict_match.mean, summary.known_gap.per_class.request_changes.recall],
-    // The #194 case is missed, as on Groq; of the three RV-01 cases left (the fourth is solved in code, RV-03) the recorded answers reject two and approve one; the RV-02 case is rejected.
-    [5, 0, 0.6, 0.6],
+    // The #194 case is missed, as on Groq; of the three RV-01 cases left (the fourth is solved in code, RV-03) the recorded answers reject two and approve one; the RV-02 case is rejected; the #282 case is withheld.
+    [6, 0, 0.5, 0.6],
   );
 });
 
@@ -1016,6 +1039,8 @@ test('parseCliArgs accepts --suite review', () => {
 
 const TPD_429 = 'All providers failed: groq: Groq API HTTP error 429: {"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD): Limit 200000, Used 198931, Requested 2984. Please try again in 13m47.28s. Need more tokens?"}}, anthropic: Anthropic API HTTP error 401: {"error":{"message":"Invalid API Key"}}';
 const eventsOf = (stderr) => stderr.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+// The validation dataset only grows (ADR-0031): counts below follow it instead of a frozen number.
+const validationCaseCount = async () => (await loadDataset(path.join(REPO_ROOT, validationSuite.dataset))).length;
 
 test('run_evals aborts on an exhausted daily quota: one ::error::, error_rate 1, skipped runs, exit 1', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'run-evals-'));
@@ -1027,13 +1052,14 @@ test('run_evals aborts on an exhausted daily quota: one ::error::, error_rate 1,
   assert.equal(code, 1);
   assert.equal(stderr.split('\n').filter((l) => l.startsWith('::error')).length, 1, 'exactly one ::error:: annotation');
   assert.match(stderr, /::error::eval\/eval\.error: .*aborted by the circuit breaker: groq quota \\"tokens per day \(TPD\)\\" exhausted \(limit 200000, used 198931\); retry after 13m47\.28s/);
-  assert.match(stderr, /2\/35 runs executed, 33 skipped/);
+  const n = await validationCaseCount();
+  assert.match(stderr, new RegExp(`2/${n} runs executed, ${n - 2} skipped`));
   const events = eventsOf(stderr).map((e) => e.event);
   assert.ok(events.includes('eval.error') && !events.includes('eval.complete'));
   assert.match(stdout, /## ⛔ Circuit breaker: provider quota exhausted/);
   const saved = JSON.parse(await fs.readFile(path.join(dir, 'validation-test-run.json'), 'utf8'));
   assert.equal(saved.summary.error_rate, 1);
-  assert.equal(saved.summary.circuit_breaker.skipped_runs, 33);
+  assert.equal(saved.summary.circuit_breaker.skipped_runs, n - 2);
   assert.ok(saved.failures.some((f) => f.metric === 'error_rate'), 'partitionPublishable skips it');
 });
 
@@ -1061,8 +1087,9 @@ test('run_evals logs the token estimate at eval.start and refuses a live run ove
   const { code, stderr } = await runEvals(['--suite', 'validation', '--repeats', '3', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '200000', GROQ_API_KEY: '', ANTHROPIC_API_KEY: '' });
   assert.equal(code, 1);
   const start = eventsOf(stderr).find((e) => e.event === 'eval.start');
-  assert.deepEqual([start.meta.cases, start.meta.tokens_est, start.meta.tokens_est_per_run, start.meta.tokens_est_source], [35, 283500, 2700, 'static']);
-  assert.match(stderr, /Eval validation refused before any LLM call: estimated 283500 tokens \(2700\/run, static\) exceeds EVAL_TOKEN_BUDGET=200000/);
+  const n = await validationCaseCount();
+  assert.deepEqual([start.meta.cases, start.meta.tokens_est, start.meta.tokens_est_per_run, start.meta.tokens_est_source], [n, n * 3 * 2700, 2700, 'static']);
+  assert.match(stderr, new RegExp(`Eval validation refused before any LLM call: estimated ${n * 3 * 2700} tokens \\(2700/run, static\\) exceeds EVAL_TOKEN_BUDGET=200000`));
   await assert.rejects(fs.access(path.join(dir, 'validation-test-run.json')), 'no results file: nothing ran');
 });
 
@@ -1071,7 +1098,7 @@ test('run_evals estimates from the last error-free run in EVAL_HISTORY_FILE and 
   await fs.writeFile(path.join(dir, 'history.jsonl'), 'not json\n' + JSON.stringify({ suite: 'validation', run_id: 'prev', model: 'groq:m', summary: { n_runs: 35, error_rate: 0, tokens_est: { in: 140000, out: 0 } } }) + '\n');
   const over = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: '1000' });
   assert.equal(over.code, 1);
-  assert.match(over.stderr, /estimated 140000 tokens \(4000\/run, history:prev\) exceeds EVAL_TOKEN_BUDGET=1000/);
+  assert.match(over.stderr, new RegExp(`estimated ${(await validationCaseCount()) * 4000} tokens \\(4000/run, history:prev\\) exceeds EVAL_TOKEN_BUDGET=1000`));
   const bad = await runEvals(['--suite', 'validation', '--out-dir', dir], dir, { EVAL_TOKEN_BUDGET: 'lots' });
   assert.equal(bad.code, 1);
   assert.match(bad.stderr, /EVAL_TOKEN_BUDGET must be a positive integer, got "lots"/);
@@ -1374,6 +1401,14 @@ function entries(body) {
   return out;
 }
 
+// The config field a call value is derived from by `const <value> = <config binding> ?? <number>;` (auto-fix:
+// `maxOutputBudget = llmMaxTokens ?? 4096`), else null. Nothing computed beyond that default is accepted.
+function derivedFrom(src, value, configBinding) {
+  if (!/^[A-Za-z_$][\w$]*$/.test(value)) return null;
+  const m = src.match(new RegExp(`\\bconst\\s+${value.replace(/\$/g, '\\$')}\\s*=\\s*([A-Za-z_$][\\w$]*)\\s*\\?\\?\\s*\\d+\\s*;`));
+  return m ? configBinding.get(m[1]) ?? null : null;
+}
+
 // Production call: { stage, configKeys, options } from the stage's loadLLMConfig destructuring and its
 // single callLLM({ … }) literal. A value that is neither a config binding, a call input nor a literal fails.
 async function productionCall(file) {
@@ -1388,7 +1423,7 @@ async function productionCall(file) {
   for (const [key, value] of entries(stripComments(balanced(src, calls[0].index + calls[0][0].length - 1)))) {
     if (key === 'stage') call.stage = JSON.parse(value.replace(/'/g, '"'));
     else if (callInputs.has(key)) continue;
-    else if (configBinding.get(value) === key) call.configKeys.push(key);
+    else if (configBinding.get(value) === key || derivedFrom(src, value, configBinding) === key) call.configKeys.push(key);
     else {
       // Literal option (null, boolean, number, string, { type: 'json_object' }).
       const json = value.replace(/'/g, '"').replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":');
@@ -1398,7 +1433,7 @@ async function productionCall(file) {
   return { ...call, configStage: destructure[2] };
 }
 
-const PRODUCTION_CALL_SITES = { validation: 'scripts/validate_issue.mjs', review: 'scripts/pr_review.mjs' };
+const PRODUCTION_CALL_SITES = { validation: 'scripts/validate_issue.mjs', review: 'scripts/pr_review.mjs', autofix: 'scripts/auto_fix_pr.mjs' };
 
 test('every suite mirrors its production stage call site: same config fields, same literal callLLM options', async () => {
   assert.deepEqual(Object.keys(PRODUCTION_CALL_SITES).sort(), Object.keys(SUITES).sort(), 'a new suite needs its production call site here');
@@ -1428,6 +1463,23 @@ test('parity parser: a responseFormat drift or an extra config field is caught',
     assert.notDeepEqual([...reviewSuite.llmCall.configKeys].sort(), prod.configKeys.sort());
     await fs.writeFile(file, "const { model } = loadLLMConfig('review');\nawait callLLM({ stage: 'review', prompt, model, responseFormat: pick() });\n");
     await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /responseFormat: pick\(\) is not a config field nor a literal/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('parity parser: a value derived as `<config field> ?? <number>` counts as that field; any other computed value fails', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'parity-'));
+  const file = path.join(tmp, 'stage.mjs');
+  try {
+    const head = "const { model, maxTokens: llmMaxTokens } = loadLLMConfig('autofix');\n";
+    await fs.writeFile(file, `${head}const maxOutputBudget = llmMaxTokens ?? 4096;\nawait callLLM({ stage: 'autofix', prompt, model, maxTokens: maxOutputBudget });\n`);
+    assert.deepEqual((await productionCall(path.relative(REPO_ROOT, file))).configKeys, ['model', 'maxTokens']);
+    // Derived from another field, or by another computation: not mirrored by configKeys, so rejected.
+    await fs.writeFile(file, `${head}const maxOutputBudget = llmMaxTokens * 2;\nawait callLLM({ stage: 'autofix', prompt, model, maxTokens: maxOutputBudget });\n`);
+    await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /maxTokens: maxOutputBudget is not a config field nor a literal/);
+    await fs.writeFile(file, `${head}const maxOutputBudget = model ?? 4096;\nawait callLLM({ stage: 'autofix', prompt, model, maxTokens: maxOutputBudget });\n`);
+    await assert.rejects(productionCall(path.relative(REPO_ROOT, file)), /maxTokens: maxOutputBudget is not a config field nor a literal/);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

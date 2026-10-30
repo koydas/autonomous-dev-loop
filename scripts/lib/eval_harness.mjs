@@ -2,7 +2,7 @@
  * Eval harness — runs a suite over a dataset and turns outcomes into metrics.
  *
  * A suite is a plain object (see eval_suites.mjs):
- *   { name, stage, dataset, run(input, { llm, testCase }), scorers, label?, expectedLabel?, thresholds? }
+ *   { name, stage, dataset, run(input, { llm, testCase, repeat }), scorers, label?, expectedLabel?, thresholds? }
  * `testCase` is the whole dataset entry, for case-level fields outside the pinned `input` (review: `requires_cut`).
  *
  * A scorer is (expected, output, { error, calls }) → number in [0,1] | boolean | null (not applicable).
@@ -19,6 +19,7 @@
 import fs from 'node:fs/promises';
 import { estimateTokens } from './metrics.mjs';
 import { withSpan } from './observability.mjs';
+import { buildCaseReport, formatCaseReport } from './eval_case_report.mjs';
 
 // ---------------------------------------------------------------------------
 // Dataset
@@ -225,7 +226,7 @@ async function runOne(suite, testCase, repeat, llmFor, now, onQuota = () => {}) 
   let output = null;
   let error = null;
   try {
-    output = await suite.run(testCase.input, { llm, testCase });
+    output = await suite.run(testCase.input, { llm, testCase, repeat });
   } catch (err) {
     error = err.message;
   }
@@ -483,5 +484,7 @@ export function formatReport({ suite, summary, failures, results, meta = {} }) {
     }
     lines.push('');
   }
+  // With repeats, which cases flip and which are wrong every time (#325): the same table as eval_case_report.mjs.
+  if (results.some((r) => r.repeat > 0)) lines.push(formatCaseReport(buildCaseReport(results)));
   return lines.join('\n');
 }

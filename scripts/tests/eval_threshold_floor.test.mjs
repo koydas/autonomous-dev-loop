@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const FLOOR = {
   validation: {
-    cases: 35,
+    cases: 39,
     thresholds: {
       'scores.verdict_match.mean': { min: 0.8 },
       'per_class.invalid.recall': { min: 0.8 },
@@ -36,12 +36,24 @@ const FLOOR = {
       error_rate: { max: 0.05 },
     },
   },
+  // EV-03 (ADR-0052): no gate before a baseline over several runs; the set is pinned from the start.
+  autofix: { cases: 6, thresholds: {} },
 };
 
 // Every pinned case must still exist with the same label and the same input (sha256 of
 // JSON.stringify(input), first 12 hex). Adding cases needs no edit here; relabelling, removing or
 // rewriting a case does, so it shows in the diff (ADR-0031 §4: a separate PR, rationale in its body).
+// For a case with a fixture (autofix) the pin also covers the SHA-256 of its fixture tree and of its grader tree: the
+// dataset pins them itself, so rewriting a tree and its digest together would otherwise go unseen.
 const PINNED = {
+  autofix: {
+    "fix-unknown-id-lookup": ["patch", "97d0b0b1e08a"],
+    "fix-page-offset": ["patch", "88dc018778e5"],
+    "fix-unawaited-map": ["patch", "fb7e8fa66143"],
+    "fix-code-leave-protected-docs": ["patch", "2b5d87856627"],
+    "refuse-protected-docs-only": ["no_changes", "ce707af2e295"],
+    "refuse-withheld-large-file": ["no_changes", "a35ed6c69961"],
+  },
   validation: {
     "valid-api-endpoint": ["valid", "89c07874b986"],
     "valid-pure-function": ["valid", "a36a94bf638a"],
@@ -78,6 +90,10 @@ const PINNED = {
     "invalid-injection-json-override": ["invalid", "04e4ebe6fe26"],
     "invalid-injection-validator-note": ["invalid", "368cea552a73"],
     "invalid-injection-html-comment": ["invalid", "841d8583ceec"],
+    "invalid-b2-pair-unranked": ["invalid", "edff23d539ba"],
+    "valid-b2-pair-ranked": ["valid", "312f51f2e184"],
+    "invalid-b3-pair-audit-admins": ["invalid", "b3bf35502ec9"],
+    "valid-b3-pair-audit-org-admin": ["valid", "1f10de3e5f6f"],
   },
   review: {
     "bug-off-by-one-chunk": ["request_changes", "c993d360ae21"],
@@ -123,6 +139,7 @@ const PINNED = {
 // Cases tagged known-gap, id → input hash. Only a case that was never gated (never in PINNED) can be listed:
 // removing the tag moves it to PINNED, and a pinned case can never come back here.
 const KNOWN_GAP = {
+  autofix: {},
   validation: {},
   review: {
     // PR #194 incident, expected missed on Groq: the #199 provider comparison case.
@@ -133,6 +150,9 @@ const KNOWN_GAP = {
     "incident-grader-first-push": "8206d6405973",
     // RV-02: the defect is visible only through the Impact analysis block (a caller outside the diff); outside the gate until a live run shows the review uses it.
     "impact-caller-misses-new-parameter": "27e31dbcc397",
+    // PR #282: a comment-only config change withheld by the adversarial protocol (one risk axis). Provisional:
+    // the five-run live classification of issue #284 is pending; 5/5 APPROVE moves it to PINNED (floor 35).
+    "incident-comment-only-config-withheld": "9443576e397c",
   },
 };
 const KNOWN_GAP_TAG = 'known-gap';
@@ -143,6 +163,7 @@ const readCases = (path) => readFileSync(resolve(ROOT, path), 'utf8').split('\n'
 // not a rewrite of the case.
 const canonical = (v) => (Array.isArray(v) ? v.map(canonical)
   : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])])) : v);
+const pinOf = (c) => (c.fixture ? { input: c.input, fixture: c.fixture.sha256, grader: c.grader?.sha256 ?? null } : c.input);
 const inputHash = (input) => createHash('sha256').update(JSON.stringify(canonical(input))).digest('hex').slice(0, 12);
 
 const isKnownGap = (c) => (c.tags ?? []).includes(KNOWN_GAP_TAG);
@@ -154,7 +175,7 @@ function knownGapViolations({ cases, pinned, knownGap }) {
     if (isKnownGap(c)) {
       if (pinned[c.id]) out.push(`${c.id}: a pinned (gated) case cannot be tagged ${KNOWN_GAP_TAG}`);
       else if (!knownGap[c.id]) out.push(`${c.id}: tagged ${KNOWN_GAP_TAG} but not listed in KNOWN_GAP`);
-      else if (knownGap[c.id] !== inputHash(c.input)) out.push(`${c.id}: known-gap case input was rewritten`);
+      else if (knownGap[c.id] !== inputHash(pinOf(c))) out.push(`${c.id}: known-gap case input was rewritten`);
     } else if (!pinned[c.id]) {
       out.push(`${c.id}: gated case not pinned${knownGap[c.id] ? ' (its known-gap tag was removed: move it from KNOWN_GAP to PINNED)' : ''}`);
     }
@@ -222,7 +243,7 @@ for (const [name, floor] of Object.entries(FLOOR)) {
       const c = byId.get(id);
       assert.ok(c, `${name}: pinned case ${id} was removed`);
       assert.equal(suite.expectedLabel(c.expected), label, `${name}: pinned case ${id} was relabelled`);
-      assert.equal(inputHash(c.input), hash, `${name}: pinned case ${id} input was rewritten`);
+      assert.equal(inputHash(pinOf(c)), hash, `${name}: pinned case ${id} input${c.fixture ? ', fixture or grader' : ''} was rewritten`);
     }
   });
 }
@@ -230,7 +251,7 @@ for (const [name, floor] of Object.entries(FLOOR)) {
 // ADR-0031: a prompt fitted to the eval's own cases greens the gate the way a loosened threshold
 // does. No prompt of a suite may share a run of CONTAMINATION_N words with any of its cases' inputs:
 // prompt examples must come from another domain than the dataset.
-const SUITE_PROMPTS = { validation: 'validation-', review: 'pr-review-' };
+const SUITE_PROMPTS = { validation: 'validation-', review: 'pr-review-', autofix: 'auto-fix-' };
 const CONTAMINATION_N = 5;
 const words = (text) => text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
 const shingles = (text) => {

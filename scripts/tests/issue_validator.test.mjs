@@ -167,6 +167,19 @@ describe('parseGroqResponse', () => {
     assert.equal(parseGroqResponse(raw2).score, 0);
   });
 
+  test('a key with stray whitespace is the same key; a missing key still fails (#325)', () => {
+    // claude-haiku-5-5, eval run 40774614011: the answer was complete, one key read " warnings".
+    const raw = '{"blockers": ["B2: x"], " warnings": ["w"], "score ": 40, "valid": false, "suggested_ac": ["a", "b", "c"]}';
+    const result = parseGroqResponse(raw);
+    assert.deepEqual([result.valid, result.score, result.blockers, result.warnings], [false, 40, ['B2: x'], ['w']]);
+    assert.throws(() => parseGroqResponse('{"blockers": [], "score": 80, "valid": true, "warning": []}'), /missing "warnings" array/);
+  });
+
+  test('prose inside the JSON object is still invalid JSON, never repaired (#325)', () => {
+    // Same run: a "Note: …" line between two keys. Dropping it would guess at what the model meant.
+    assert.throws(() => parseGroqResponse('{"blockers": ["B1: x"]\n\nNote: the issue is vague.\n, "warnings": [], "score": 10, "valid": false}'), /invalid JSON/);
+  });
+
   test('rounds score to integer', () => {
     const raw = makeRawResponse({ score: 74.7 });
     assert.equal(parseGroqResponse(raw).score, 75);
