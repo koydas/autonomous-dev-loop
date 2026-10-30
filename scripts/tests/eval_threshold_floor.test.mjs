@@ -135,6 +135,9 @@ const KNOWN_GAP = {
     "incident-grader-first-push": "8206d6405973",
     // RV-02: the defect is visible only through the Impact analysis block (a caller outside the diff); outside the gate until a live run shows the review uses it.
     "impact-caller-misses-new-parameter": "27e31dbcc397",
+    // PR #282: a comment-only config change withheld by the adversarial protocol (one risk axis). Provisional:
+    // the five-run live classification of issue #284 is pending; 5/5 APPROVE moves it to PINNED (floor 35).
+    "incident-comment-only-config-withheld": "9443576e397c",
   },
 };
 const KNOWN_GAP_TAG = 'known-gap';
