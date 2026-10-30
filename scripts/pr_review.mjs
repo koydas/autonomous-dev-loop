@@ -24,7 +24,7 @@ import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudge
 import { modelsFromContent, loadReviewGuidelines } from './lib/layered_config.mjs';
 import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths, formatEvidenceSection, formatWithheldNote } from './lib/review_evidence.mjs';
-import { formatProtocolNote, blockingFindingAxes } from './lib/adversarial_review.mjs';
+import { formatProtocolNote, blockingFindingAxes, verifyAxes } from './lib/adversarial_review.mjs';
 import { resolveReviewDecision, withholdUnreadableVerdict, formatUnreadableVerdictNote } from './lib/review_decision.mjs';
 import { formatGuardrailSection, guardrailSignature } from './lib/guardrail_review.mjs';
 import { runGuardrailChecks } from './lib/guardrail_runner.mjs';
@@ -711,9 +711,10 @@ obsLog({
   duration_ms: reviewDurationMs,
   // withheld_from: the verdict the unseen-code backstop turned into WITHHELD (ADR-0038, #219), else null.
   // adversarial_points / adversarial_axes (ADR-0049): the closed axis ids that named a risk, never the model's text.
+  // verified_axes (ADR-0065, shadow): how many of the four axis lines name something in the diff; a count, gates nothing yet.
   // withheld_for: 'protocol' when the adversarial protocol, not the evidence or the cut, withheld the approval; 'unproven_findings' (RV-04a);
   // 'unreadable_verdict' when the review had no readable verdict line.
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, guardrail_override: guardrailOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings || withheldForUnproven || withheldForUnreadable ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : withheldForUnproven ? 'unproven_findings' : withheldForUnreadable ? 'unreadable_verdict' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, blocking_axes: blockingAxes, streak },
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, guardrail_override: guardrailOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings || withheldForUnproven || withheldForUnreadable ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : withheldForUnproven ? 'unproven_findings' : withheldForUnreadable ? 'unreadable_verdict' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, verified_axes: verifyAxes(cleanReview, rawDiff).count, blocking_axes: blockingAxes, streak },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');

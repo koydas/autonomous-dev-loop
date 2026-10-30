@@ -25,15 +25,10 @@ const PLACEHOLDER = /^<[^<>]*>\.?$/;
 // Shorter than this is a label, not an observation.
 const MIN_RISK_CHARS = 12;
 
-/**
- * Parses the "Adversarial Analysis" section of a review.
- * `criticalPoints`: axes (each counted once) whose line states a risk. `axes`: per axis, whether it was covered
- * and whether it states a risk. `present`: the section exists. A risk is an observation, never a finding: the
- * Issues Found rules alone decide REQUEST_CHANGES.
- * @returns {{ present: boolean, criticalPoints: number, axes: { id: string, covered: boolean, risk: boolean }[], atRisk: string[] }}
- */
-export function analyzeAdversarial(review) {
-  const state = new Map(ADVERSARIAL_AXES.map((a) => [a.id, { id: a.id, covered: false, risk: false }]));
+// The lines of the Adversarial Analysis section that belong to an axis: `{ id, text }`, text without markup. One parse
+// for analyzeAdversarial and verifyAxes, so the two never disagree on which line counts.
+function parseAxisLines(review) {
+  const lines = [];
   let present = false;
   let inSection = false;
   for (const line of String(review ?? '').split('\n')) {
@@ -51,14 +46,82 @@ export function analyzeAdversarial(review) {
     if (!match) continue;
     const axis = ADVERSARIAL_AXES.find((a) => a.pattern.test(match[1].trim()));
     if (!axis) continue;
-    const text = match[2].replace(/[*_`]/g, '').trim();
-    const entry = state.get(axis.id);
+    lines.push({ id: axis.id, text: match[2].replace(/[*_`]/g, '').trim(), raw: match[2] });
+  }
+  return { present, lines };
+}
+
+const isRiskText = (text) => text.length >= MIN_RISK_CHARS && !NO_RISK.test(text) && !PLACEHOLDER.test(text);
+
+/**
+ * Parses the "Adversarial Analysis" section of a review.
+ * `criticalPoints`: axes (each counted once) whose line states a risk. `axes`: per axis, whether it was covered
+ * and whether it states a risk. `present`: the section exists. A risk is an observation, never a finding: the
+ * Issues Found rules alone decide REQUEST_CHANGES.
+ * @returns {{ present: boolean, criticalPoints: number, axes: { id: string, covered: boolean, risk: boolean }[], atRisk: string[] }}
+ */
+export function analyzeAdversarial(review) {
+  const state = new Map(ADVERSARIAL_AXES.map((a) => [a.id, { id: a.id, covered: false, risk: false }]));
+  const { present, lines } = parseAxisLines(review);
+  for (const { id, text } of lines) {
+    const entry = state.get(id);
     entry.covered = true;
-    entry.risk ||= text.length >= MIN_RISK_CHARS && !NO_RISK.test(text) && !PLACEHOLDER.test(text);
+    entry.risk ||= isRiskText(text);
   }
   const axes = [...state.values()];
   const atRisk = axes.filter((a) => a.risk).map((a) => a.id);
   return { present, criticalPoints: atRisk.length, axes, atRisk };
+}
+
+// Things a line can name that a string search can look for in the diff: `code` spans, paths and file names, and
+// identifiers written in camelCase or snake_case. Plain words ("empty", "return") name nothing. A name is taken whole,
+// as written: a run of name characters (`[\w$.-]` and `/`), never a piece of it, so `src/a.js.map` is looked up as
+// `src/a.js.map` and not as `a.js`, and `my_file.mjs.map` not as `my_file`.
+const NAME_TOKEN = /[\w$.-]+(?:\/[\w$.-]+)*/g;
+const FILE_LIKE = /\/|\.[A-Za-z][A-Za-z0-9]{0,5}$/;
+const IDENTIFIER = /^(?:[a-z]+[A-Z][A-Za-z0-9]{2,}|[A-Za-z0-9]+_[A-Za-z0-9_]+)$/;
+const MIN_CANDIDATE_CHARS = 4;
+
+function candidatesOf(rawLine) {
+  const found = [];
+  for (const m of rawLine.matchAll(/`([^`\n]{4,})`/g)) found.push(m[1]);
+  for (const m of rawLine.matchAll(NAME_TOKEN)) {
+    const token = m[0].replace(/^[.-]+|[.-]+$/g, '');
+    if (FILE_LIKE.test(token) || IDENTIFIER.test(token)) found.push(token);
+  }
+  return found.map((c) => c.replace(/^[.,;:()]+|[.,;:()]+$/g, '')).filter((c) => c.length >= MIN_CANDIDATE_CHARS);
+}
+
+// The candidate must stand alone in the diff, not be a piece of a longer name: `RATE` is not found inside `RATED`, and a
+// file name or path (a candidate with a `.` or a `/`) is not found inside `data.json`, `x.a.js`, `my-a.js`, `a.js.map` or
+// `a.js-old`: for those, a `.` or a `-` goes on with the name. An identifier may be followed by a `.` (`RATE.value`).
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const standsAlone = (candidate, diff) => {
+  const fileLike = /[./]/.test(candidate);
+  const before = fileLike ? '(?<![\\w$.-])' : '(?<![\\w$])';
+  const after = fileLike ? '(?![\\w$-]|\\.[\\w$])' : '(?![\\w$])';
+  return new RegExp(`${before}${escapeRegExp(candidate)}${after}`).test(diff);
+};
+
+const namesSomethingIn = (rawLine, diff) => candidatesOf(rawLine).some((candidate) => standsAlone(candidate, diff));
+
+/**
+ * Axes whose line is verified (ADR-0065, shadow): the line is a real statement (not a placeholder, not a label) and names
+ * something that is in the diff, a risk with its `file:line` or a `none` with what was looked at. Journaled by
+ * pr_review.mjs as `verified_axes` and published by the `review` suite; it gates nothing until ADR-0065 is accepted.
+ * A string search, no LLM: it is a floor on specificity, not proof that the check was done.
+ * @param {string} review
+ * @param {string} rawDiff
+ * @returns {{ verified: string[], count: number }} closed axis ids, in axis order
+ */
+export function verifyAxes(review, rawDiff) {
+  const diff = String(rawDiff ?? '');
+  const found = new Set();
+  for (const { id, text, raw } of parseAxisLines(review).lines) {
+    if (text.length >= MIN_RISK_CHARS && !PLACEHOLDER.test(text) && namesSomethingIn(raw, diff)) found.add(id);
+  }
+  const verified = ADVERSARIAL_AXES.map((a) => a.id).filter((id) => found.has(id));
+  return { verified, count: verified.length };
 }
 
 const ISSUES_HEADING = /^\s*(?:#{1,3}\s|\*\*)[^\n]*issues found/i;

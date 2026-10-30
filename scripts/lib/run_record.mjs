@@ -52,7 +52,7 @@ export const EVENT_META_ALLOWLIST = Object.freeze({
   'review.llm_request': [...ID, 'model', 'input_tokens_est'],
   'review.llm_response': [...ID, 'output_tokens_est'],
   // ADR-0049 / ADR-0050: adversarial_axes are the closed axis ids that named a risk (never the model's text); streak counts consecutive identical failures.
-  'review.verdict': [...ID, 'verdict', 'evidence_state', 'evidence_override', 'guardrail_override', 'unreviewed_code_files', 'withheld_from', 'withheld_for', 'adversarial_points', 'adversarial_axes', 'blocking_axes', 'streak'],
+  'review.verdict': [...ID, 'verdict', 'evidence_state', 'evidence_override', 'guardrail_override', 'unreviewed_code_files', 'withheld_from', 'withheld_for', 'adversarial_points', 'adversarial_axes', 'verified_axes', 'blocking_axes', 'streak'],
   // ADR-0051: lessons.loaded lists catalog ids (rule:/axis: signals), never text from a record.
   'lessons.loaded': ['stage', 'count', 'ids'],
   'lessons.unavailable': ['stage', 'reason', 'status'],
