@@ -8,6 +8,7 @@ import {
   NOT_GRADED,
   gradeModelResults,
   indexGraderResults,
+  attachVerdict,
 } from '../lib/autofix_eval_grading.mjs';
 import { loadAutofixCases } from '../lib/autofix_dataset.mjs';
 import { AUTOFIX_STATUS } from '../lib/autofix_eval_adapter.mjs';
@@ -142,5 +143,38 @@ test('indexGraderResults: runs by case and repeat; any other file is refused', (
   assert.equal(indexGraderResults(file)['a#2'].outcome, 'PASS');
   for (const bad of [null, {}, { ...file, schema_version: 2 }, { ...file, suite: 'review' }, { ...file, results: {} }]) {
     assert.throws(() => indexGraderResults(bad), /grader results: expected schema_version 1 for suite autofix with a "results" array/);
+  }
+});
+
+const graded = (extra = {}) => ({ case_id: 'c', repeat: 0, graded: true, outcome: 'PASS', failure: null, path: null, checks: [{ name: 'hidden_tests', status: 'passed', exit_code: 0 }], ...extra });
+const notGraded = (reason) => ({ case_id: 'c', repeat: 0, graded: false, reason });
+const indexOf = (...results) => indexGraderResults({ schema_version: GRADER_RESULTS_SCHEMA_VERSION, suite: 'autofix', results });
+const at = { caseId: 'c', repeat: 0 };
+
+test('attachVerdict joins a verdict to the output of the same run, keeping the model output intact', () => {
+  const output = { status: AUTOFIX_STATUS.PATCH, changes: [{ targetPath: 'a.mjs', content: 'x' }] };
+  const joined = attachVerdict(output, indexOf(graded({ outcome: 'FAIL', failure: F.hiddenTests, path: 'a.mjs' })), at);
+  assert.deepEqual(joined.grader, { graded: true, outcome: 'FAIL', failure: F.hiddenTests, path: 'a.mjs', checks: [{ name: 'hidden_tests', status: 'passed', exit_code: 0 }] });
+  assert.equal(joined.status, AUTOFIX_STATUS.PATCH);
+  assert.equal('grader' in output, false, 'the input is not mutated');
+});
+
+test('attachVerdict: a refusal is normally not graded', () => {
+  const joined = attachVerdict({ status: AUTOFIX_STATUS.NO_CHANGES }, indexOf(notGraded(NOT_GRADED.noPatch)), at);
+  assert.deepEqual(joined.grader, { graded: false, reason: NOT_GRADED.noPatch });
+});
+
+test('attachVerdict fails closed: no verdict, a grader error, another reason than no patch, a different outcome on each side', () => {
+  const patch = { status: AUTOFIX_STATUS.PATCH };
+  assert.throws(() => attachVerdict(patch, indexOf(), at), /no verdict for c#0/);
+  assert.throws(() => attachVerdict(patch, indexOf(graded({ outcome: 'ERROR', failure: F.graderError })), at), /c#0 could not be graded \(GRADER_ERROR\)/);
+  assert.throws(() => attachVerdict(patch, indexOf(graded({ outcome: 'ERROR', failure: null })), at), /could not be graded \(ERROR\)/);
+  // The score job rebuilt another outcome than the one the grader saw.
+  assert.throws(() => attachVerdict({ status: AUTOFIX_STATUS.NO_CHANGES }, indexOf(graded()), at), /is NO_CHANGES here but was graded as a patch/);
+  assert.throws(() => attachVerdict(patch, indexOf(notGraded(NOT_GRADED.noPatch)), at), /is PATCH here but was not graded \(NO_PATCH\)/);
+  assert.throws(() => attachVerdict(patch, indexOf(notGraded(NOT_GRADED.noGrader)), at), /was not graded \(NO_GRADER\)/);
+  // Not graded for a reason other than "no patch" while the output is no patch either: still not a normal outcome.
+  for (const reason of [NOT_GRADED.runErrored, NOT_GRADED.unknownCase, NOT_GRADED.noGrader]) {
+    assert.throws(() => attachVerdict({ status: AUTOFIX_STATUS.NO_CHANGES }, indexOf(notGraded(reason)), at), new RegExp(`was not graded \\(${reason}\\)`));
   }
 });

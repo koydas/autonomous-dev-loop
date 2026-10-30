@@ -11,6 +11,11 @@ name: Evals
 # suite per scheduled run: one suite × 3 fills most of the Groq free-tier 200k TPD, two in a row do
 # not fit (run 38271632735). On `schedule` every input is empty: the defaults below are explicit
 # (publish on, init_site off, no restore, no rebaseline); workflow_gates.test.mjs pins them.
+#
+# autofix (EV-03, ADR-0052) is measured in three jobs instead of one, because the patches the model writes are run
+# against hidden tests: autofix-model (the API key, no test run) -> autofix-grade (runs the model's code, no secret,
+# contents: read) -> autofix-score (no secret, scores the recording with the verdicts). Its results join the other
+# suites' in the one publish job below. It runs on Anthropic, so it shares no Groq quota with the other two crons.
 on:
   schedule:
     # 06:23 UTC, off the hour (GitHub delays :00 schedules). One cron per suite, 48 h apart so a
@@ -18,16 +23,18 @@ on:
     # maps each cron string to its suite.
     - cron: '23 6 * * 1' # validation, ≈ 18 min
     - cron: '23 6 * * 3' # review, ≈ 35-40 min
+    - cron: '47 6 * * 3' # autofix, Anthropic: queues behind review (the workflow concurrency group), shares no Groq quota
   workflow_dispatch:
     inputs:
       suite:
-        description: Eval suite (see scripts/lib/eval_suites.mjs). review ≈ 11 min per repeat on the Groq free tier
+        description: Eval suite (see scripts/lib/eval_suites.mjs). review ≈ 11 min per repeat on the Groq free tier; autofix runs on Anthropic in three jobs
         type: choice
         required: true
         default: validation
         options:
           - validation
           - review
+          - autofix
       repeats:
         description: Runs per case (>1 measures consistency)
         required: true
@@ -100,7 +107,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The suite of this run, once: the cron's on schedule, the chosen one on dispatch. The jobs below read it, so the
+  # cron map lives here only. An unmapped cron yields an empty suite: the eval job runs and run_evals.mjs fails.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      suite: ${{ steps.pick.outputs.suite }}
+    steps:
+      - name: Pick the suite
+        id: pick
+        env:
+          SUITE: ${{ github.event_name == 'schedule' && fromJSON('{"23 6 * * 1":"validation","23 6 * * 3":"review","47 6 * * 3":"autofix"}')[github.event.schedule] || inputs.suite }}
+          PROVIDER: ${{ github.event_name == 'schedule' && 'repo-variable' || inputs.provider }}
+        run: |
+          if [ "$SUITE" = "autofix" ] && [ "$PROVIDER" = "groq" ]; then
+            echo "::error::autofix is measured on Anthropic (its model job holds no Groq key): choose provider repo-variable or anthropic"
+            exit 1
+          fi
+          echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
+
   eval:
+    needs: plan
+    if: ${{ needs.plan.outputs.suite != 'autofix' }}
     runs-on: ubuntu-latest
     # cases x repeats calls share the 8K TPM with every other pipeline run: slow, never failing.
     # One call may wait 20 retries x 60 s; the rest of the run fits the remaining time (ADR-0028).
@@ -112,9 +141,9 @@ jobs:
       max-parallel: 1
       fail-fast: false
       matrix:
-        # schedule: the cron's suite; the crons cover the registry once (scripts/lib/eval_suites.mjs,
-        # checked by workflow_gates.test.mjs). An unmapped cron yields an empty suite: run_evals.mjs fails.
-        suite: ${{ fromJSON(format('["{0}"]', github.event_name == 'schedule' && fromJSON('{"23 6 * * 1":"validation","23 6 * * 3":"review"}')[github.event.schedule] || inputs.suite)) }}
+        # The suite of `plan` (the cron's on schedule, the chosen one on dispatch); the crons cover the registry once
+        # (scripts/lib/eval_suites.mjs, checked by workflow_gates.test.mjs).
+        suite: ${{ fromJSON(format('["{0}"]', needs.plan.outputs.suite)) }}
     steps:
       # The eval step handles LLM output and API keys: no push credential on disk.
       - uses: actions/checkout@v4
@@ -188,6 +217,180 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
+  # autofix, job 1 of 3: calls the provider and records what the model answered. It holds the API key and never runs
+  # a patch: the recording is data for the next job, and nothing is scored or published from it.
+  autofix-model:
+    needs: plan
+    if: ${{ needs.plan.outputs.suite == 'autofix' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run the model phase
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          EVAL_RUN_ID: ${{ github.run_id }}-autofix
+          REPEATS: ${{ inputs.repeats || '3' }}
+          LLM_MAX_RETRY_WAIT_MS: '60000'
+          # Optional pre-flight cap, as on the eval job: a manual run honours it, the weekly one never does.
+          EVAL_TOKEN_BUDGET: ${{ github.event_name != 'schedule' && vars.EVAL_TOKEN_BUDGET || '' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+          ANTHROPIC_EFFORT: ${{ vars.ANTHROPIC_EFFORT }}
+          AI_PROVIDER: anthropic
+          AI_PROVIDER_AUTOFIX: anthropic
+          EVAL_ANTHROPIC_MODEL: ${{ github.event_name != 'schedule' && inputs.anthropic_model || '' }}
+          EVAL_ANTHROPIC_EFFORT: ${{ github.event_name != 'schedule' && inputs.anthropic_effort != 'models-yaml' && inputs.anthropic_effort || '' }}
+        run: node scripts/run_evals.mjs --suite autofix --phase model --repeats "$REPEATS" --out-dir evals/model-results
+
+      - name: Upload the model recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autofix-model-${{ github.run_id }}
+          path: evals/model-results/
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-autofix-model
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+  # autofix, job 2 of 3: the only job that runs code the model wrote (the hidden tests, in child `node --test`
+  # processes on a copy of the pinned fixture). It holds no secret and no write permission: no repository secret or
+  # variable in its environment, a token that reads contents only, no push credential on disk.
+  # grade_autofix_eval.mjs cannot reach a provider either (its import closure is tested). Whatever the model wrote is
+  # data in a JSON file until here.
+  autofix-grade:
+    needs: autofix-model
+    if: ${{ needs.autofix-model.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download the model recording
+        uses: actions/download-artifact@v4
+        with:
+          name: autofix-model-${{ github.run_id }}
+          path: evals/model-results
+
+      - name: Grade the patches
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          MODEL_RESULTS: evals/model-results/autofix-${{ github.run_id }}-autofix.json
+        run: node scripts/grade_autofix_eval.mjs --results "$MODEL_RESULTS" --out evals/grader-results.json
+
+      - name: Upload the verdicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autofix-grader-${{ github.run_id }}
+          path: evals/grader-results.json
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-autofix-grade
+          # grade_autofix_eval.mjs names its trace <run_id>-eval-grader (it shares the run id with the model job's trace).
+          path: ./observability/traces/${{ github.run_id }}-eval-grader.json
+          if-no-files-found: ignore
+          overwrite: true
+
+  # autofix, job 3 of 3: the recording scored with the verdicts (run_evals --replay --grader-results): no provider
+  # call, no secret. Writes the same artifact as the other suites, which the publish job below picks up.
+  autofix-score:
+    needs: [autofix-model, autofix-grade]
+    if: ${{ needs.autofix-model.result == 'success' && needs.autofix-grade.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download the model recording
+        uses: actions/download-artifact@v4
+        with:
+          name: autofix-model-${{ github.run_id }}
+          path: evals/inputs/model
+
+      - name: Download the verdicts
+        uses: actions/download-artifact@v4
+        with:
+          name: autofix-grader-${{ github.run_id }}
+          path: evals/inputs/grader
+
+      - name: Score the run
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          EVAL_RUN_ID: ${{ github.run_id }}-autofix
+          # A replayed run rebuilds its prompt from the config (the answer is the recorded one): the provider and model
+          # of the model job, so the rebuilt run is the one the grader saw.
+          ANTHROPIC_MODEL: ${{ github.event_name != 'schedule' && inputs.anthropic_model || vars.ANTHROPIC_MODEL }}
+          AI_PROVIDER: anthropic
+          AI_PROVIDER_AUTOFIX: anthropic
+        run: |
+          node scripts/run_evals.mjs --suite autofix \
+            --replay "evals/inputs/model/autofix-${GITHUB_RUN_ID}-autofix.json" \
+            --grader-results evals/inputs/grader/grader-results.json
+
+      - name: Report run vs published baseline
+        if: always()
+        continue-on-error: true
+        env:
+          EVAL_SITE_URL: ${{ vars.EVAL_SITE_URL || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+        run: |
+          shopt -s nullglob
+          files=(evals/results/*.json)
+          if [ ${#files[@]} -eq 0 ]; then echo "No results file to report"; exit 0; fi
+          node scripts/build_eval_site.mjs --report --site-url "$EVAL_SITE_URL" "${files[@]}"
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.run_id }}-autofix
+          path: |
+            evals/results/
+            evals/history.jsonl
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Upload run trace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-trace-${{ github.run_id }}-autofix
+          path: ./observability/traces/${{ github.run_id }}.json
+          if-no-files-found: ignore
+          overwrite: true
+
+
   # Separate job: the Pages deploy credential never shares a runner with the eval step's
   # API keys or LLM output. Runs even when a threshold failed (the run is shown with a ❌
   # gate); runs that failed on error_rate (provider outage) are left out. The deployed site
@@ -195,7 +398,7 @@ jobs:
   # from it and aborts on any error other than a first-deploy 404, so a transient failure
   # never deploys a site without history.
   publish:
-    needs: eval
+    needs: [eval, autofix-score]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.publish) && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

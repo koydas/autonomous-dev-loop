@@ -225,7 +225,7 @@ Emitted by `run_evals.mjs` (ADR-0027).
 | Event           | Level | `duration_ms` | Key `meta` fields |
 |-----------------|-------|---------------|-------------------|
 | `eval.start`    | info  | —             | `suite`, `repeats`, `replay`; once the dataset is loaded also `cases`, `tokens_est`, `tokens_est_per_run`, `tokens_est_source` |
-| `eval.complete` | info  | ✓             | `suite`, `passed`, `resultsFile` |
+| `eval.complete` | info  | ✓             | `suite`, `passed`, `resultsFile`; `phase: "model"` instead of `passed` for the model phase of a two-phase suite (`--phase model`: recorded, not scored) |
 | `eval.error`    | error | ✓             | `error`; on a circuit-breaker abort also `reason: "provider_quota"`, the breaker fields and `resultsFile` |
 
 ### `eval_grader`

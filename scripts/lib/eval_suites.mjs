@@ -5,13 +5,14 @@
  *   name           — registry key, used in report and history
  *   stage          — loadLLMConfig() stage the live LLM is bound to
  *   dataset        — JSONL path, one { id, tags?, input, expected } per line
- *   run            — (input, { llm, testCase }) → output; throwing counts as an errored run (testCase: the whole entry)
+ *   run            — (input, { llm, testCase, repeat }) → output; throwing counts as an errored run (testCase: the whole entry)
  *   scorers        — { name: (expected, output, { error, calls }) → 0..1 | boolean | null }
  *   label          — output → class label (confusion matrix, consistency)
  *   expectedLabel  — expected → class label
  *   thresholds     — { "<summary dot.path>": { min?, max? } }, exit code 1 when one fails
  *   tokensPerRunEst — provider tokens (in + out) one case × repeat costs; pre-flight estimate and
  *                     EVAL_TOKEN_BUDGET when no error-free run of the suite is in EVAL_HISTORY_FILE
+ *   twoPhase       — true when a job without secrets must grade the output before it can be scored (autofix, ADR-0052)
  *   llmCall        — the callLLM call of the production stage, mirrored by the live eval LLM:
  *                    configKeys (loadLLMConfig fields it forwards) + options (literal call options, e.g.
  *                    responseFormat). eval_suites.test.mjs checks it against the stage's call site.
@@ -20,7 +21,7 @@
 import path from 'node:path';
 import { validateIssue, VALIDATION_SYSTEM_PROMPT } from './issue_validator.mjs';
 import { loadPrompt } from './prompts.mjs';
-import { detectProvider, GROQ_MODEL_DEFAULTS, reviewMaxDiffChars } from './config.mjs';
+import { detectProvider, GROQ_MODEL_DEFAULTS, loadProviderConfig, reviewMaxDiffChars } from './config.mjs';
 import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from './review_prompt.mjs';
 import { resolveReviewDecision } from './review_decision.mjs';
 import { collectGuardrailFindings, findTestCountDrops, withGuardrailIssues } from './guardrail_review.mjs';
@@ -31,6 +32,8 @@ import { formatDependencyManifestContext } from './dependency_manifest.mjs';
 import { parseEvidence, assessEvidence, findTouchedEvidencePaths } from './review_evidence.mjs';
 import { formatStaleRefsContext } from './stale_refs.mjs';
 import { formatPromptBudgetContext } from './prompt_budget.mjs';
+import { runAutofixModelPhase } from './autofix_eval_adapter.mjs';
+import { fixtureRoot, validateAutofixCase } from './autofix_dataset.mjs';
 
 const verdict = (valid) => (valid ? 'valid' : 'invalid');
 
@@ -358,7 +361,80 @@ export const reviewSuite = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// autofix — the auto-fix stage on a golden set of mini pull requests (EV-03, ADR-0052)
+// ---------------------------------------------------------------------------
+
+// The fields of loadLLMConfig('autofix') that shape the prompt (budget, window), without the API key: a replay has
+// none. loadProviderConfig requires one, so it gets a placeholder for the duration of this synchronous call; the
+// placeholder is never returned, sent or kept.
+export function autofixPromptConfig() {
+  const provider = detectProvider('autofix');
+  const keyVar = provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'GROQ_API_KEY';
+  const hadKey = Boolean(process.env[keyVar]);
+  if (!hadKey) process.env[keyVar] = 'no-key-needed-to-build-a-prompt';
+  try {
+    const { provider: p, model, maxTokens, maxInputTokens, diffRatio, feedbackRatio } = loadProviderConfig(provider, 'autofix');
+    return { provider: p, model, maxTokens, maxInputTokens, diffRatio, feedbackRatio };
+  } finally {
+    if (!hadKey) delete process.env[keyVar];
+  }
+}
+
+// A refusal names every path it must (a protected or withheld file), in the model's own words.
+const namesAllPaths = (expected, output) => expected.must_name.every((p) => String(output.blocked_reason ?? '').toLowerCase().includes(p.toLowerCase()));
+
+// Whether the answer is the right one for its case. A patch case: the graded patch passed the hidden tests. A refusal
+// case: `changes: []` that names the paths. Anything the grader job could not judge is an errored run (attachVerdict),
+// so it never reaches here as a pass.
+const resolved = (expected, output) => {
+  if (output == null) return false;
+  if (expected.status === 'PATCH') return output.status === 'PATCH' && output.grader?.outcome === 'PASS';
+  return output.status === 'NO_CHANGES' && namesAllPaths(expected, output);
+};
+
+export const autofixSuite = {
+  name: 'autofix',
+  stage: 'autofix',
+  dataset: 'evals/datasets/autofix.jsonl',
+  // Measured in two jobs (run_evals --phase model, then --replay with --grader-results): see run_evals.mjs.
+  twoPhase: true,
+  // Anthropic (the suite is pinned to it, evals.yml): ≈ 1.5k tokens of prompt + fixture and up to a few k of output
+  // and thinking per call, measured on no run yet (docs/evals.md). Not a Groq TPD matter.
+  tokensPerRunEst: 6000,
+  // scripts/auto_fix_pr.mjs: the answer is JSON the stage parses itself (responseFormat null). `maxTokens` is
+  // `llmMaxTokens ?? 4096` there, a computed value: eval_suites.test.mjs accepts it as the config field.
+  llmCall: {
+    configKeys: ['apiKey', 'model', 'apiUrl', 'temperature', 'maxTokens', 'reasoningEffort'],
+    options: { responseFormat: null },
+  },
+
+  // The model phase only (the adapter never writes): the verdict of the grader job joins the output afterwards
+  // (autofix_eval_grading.attachVerdict), because the hidden tests run in a job that holds no secret.
+  async run(input, { llm, testCase }) {
+    validateAutofixCase(testCase);
+    return runAutofixModelPhase({ input, root: fixtureRoot(testCase), llm, config: autofixPromptConfig() });
+  },
+
+  scorers: {
+    // The headline: the answer is right for its case (patch passes the hidden tests / refusal names the paths).
+    resolved: (expected, output) => resolved(expected, output),
+    // Patch cases only: the patch survived every guard and passes the hidden tests.
+    patch_passes: (expected, output) => (expected.status === 'PATCH' ? resolved(expected, output) : null),
+    // Refusal cases only: `changes: []`, and the reason names the protected or withheld paths.
+    refusal_correct: (expected, output) => (expected.status === 'NO_CHANGES' ? resolved(expected, output) : null),
+  },
+
+  // patch = a patch the write guard let through; every other status applies nothing.
+  label: (output) => (output.status === 'PATCH' ? 'patch' : 'no_changes'),
+  expectedLabel: (expected) => expected.status.toLowerCase(),
+
+  // No thresholds yet: ADR-0031 gates are set from a baseline over several runs, and only ever tighten.
+  thresholds: {},
+};
+
 export const SUITES = {
   [validationSuite.name]: validationSuite,
   [reviewSuite.name]: reviewSuite,
+  [autofixSuite.name]: autofixSuite,
 };

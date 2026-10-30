@@ -1,7 +1,7 @@
 # ADR-0052: Executable evals: model call, grader and scoring run in three jobs with one-way data flow
 
 - **Date:** 2026-10-23
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-27, with the `autofix` suite, EV-03)
 
 ## Context
 
@@ -37,4 +37,16 @@ ADR-0031 forbids loosening a gate to pass, so a grader that the patch itself can
 - ⚠️ Three jobs and two artifacts per run: more wall time and moving parts than the current single job; the schedule budget (Groq TPD, one suite per scheduled run) is unchanged and must be re-measured per suite.
 - ⚠️ No per-PR signal for `generation` and `autofix` until the dedicated runner exists; PRs that change their prompts are measured by a manual dispatch from the default branch, or after merge.
 - ⚠️ "No network where the runner allows it" is a best effort on hosted runners. The residual risk is bounded by points 2 and 3 (our dataset, our model call, no secrets in the job) and must be restated if third-party output is ever evaluated.
-- ⚠️ Nothing is implemented by this ADR; EV-02 and EV-03 depend on it and carry the workflow, the artifact schema and the tamper tests.
+- ⚠️ Implemented for `autofix` (EV-03, see Implementation); `generation` (EV-02) still depends on it and carries its own adapter, dataset and thresholds.
+
+## Implementation (2026-10-27, EV-03)
+
+Accepted with the first suite that uses it. What shipped, and where it differs from the text above:
+
+- **Jobs.** `autofix-model`, `autofix-grade`, `autofix-score` in `evals.yml`, chosen by a `plan` job (the cron's suite, or the dispatch input); the existing `eval` job runs every other suite and skips `autofix`. `autofix-grade` runs only after `autofix-model` succeeded, `autofix-score` only after both. Workflow-level `permissions: contents: read`, plus an explicit `contents: read` on the grader job, and `persist-credentials: false` on every checkout. Pinned by `workflow_gates.test.mjs`: the grader job has no `secrets.`, `vars.`, token, provider variable or `inputs.`; the model job is the only one with the API key and never references the grader; `publish` reads the scored results only.
+- **Artifacts.** The model job uploads its results file (`autofix-model-<run_id>`, not `model-output.json`): one entry per case × repeat with the stage's artifact (`schema_version`, `status`, `changes`, …) and the recorded raw call. The grader job uploads `grader-results.json` (`autofix-grader-<run_id>`): one verdict per run, closed codes only. Point 1's `grader-result.json` is this file.
+- **Scoring.** `eval-score` is a replay (`run_evals.mjs --replay … --grader-results …`) rather than a second reader of two artifacts: the output is rebuilt from the recorded answer by the same adapter, then the run's verdict is attached (`attachVerdict`), so the result has the existing shape and `publish`, the history, the baseline and ADR-0031 are unchanged. A verdict that does not match the rebuilt outcome, a missing verdict and a grader `ERROR` are errored runs.
+- **Pins.** The case carries the SHA-256 of its fixture and grader trees (point 4); `dataset_sha256` in the run metadata covers them, and `eval_threshold_floor.test.mjs` pins them next to each case's id, label and input. Fixture and grader digests are not separate metadata fields.
+- **Limits of the grader job.** The child environment is an allowlist (`PATH`, `HOME`, `TMPDIR`, `CI`, `NODE_ENV`, `LANG`), each command has a timeout and an output bound, and each runs in a fresh copy. There is **no network restriction and no CPU or memory limit** on the hosted runner (the best effort mentioned in Consequences did not go further than the absence of secrets); point 3 still bounds the exposure: our dataset, our model call, schedule and dispatch from the default branch only, nothing to steal in the job.
+- **No per-PR signal.** `eval-replay.yml` and `pr-evals.yml` skip two-phase suites (a published run cannot be scored without its verdicts; the PR eval has no grader job): a PR that changes the auto-fix prompts is listed as unmeasured and measured by a manual dispatch.
+- **Provider.** `autofix` is pinned to Anthropic (model job and score job; `plan` refuses a Groq dispatch), so it shares no Groq quota with the other suites; the 48 h spacing of the crons applies to the Groq suites.

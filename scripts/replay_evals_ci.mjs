@@ -32,8 +32,12 @@ export function parseCliArgs(argv) {
     },
   });
   if (!values['site-url'] === !values['site-dir']) throw new Error('Pass exactly one of --site-url or --site-dir');
-  const names = values.suite ?? Object.keys(SUITES);
-  for (const n of names) if (!SUITES[n]) throw new Error(`Unknown suite "${n}", one of: ${Object.keys(SUITES).join(', ')}`);
+  // A two-phase suite (autofix) needs the grader job's verdicts to be scored: a published run cannot be replayed on
+  // its own, its replay is the score job of evals.yml.
+  const replayable = Object.keys(SUITES).filter((n) => !SUITES[n].twoPhase);
+  const names = values.suite ?? replayable;
+  for (const n of names) if (!SUITES[n]) throw new Error(`Unknown suite "${n}", one of: ${replayable.join(', ')}`);
+  for (const n of names) if (SUITES[n].twoPhase) throw new Error(`Suite "${n}" is two-phase: its replay needs the grader results (run_evals.mjs --replay --grader-results), not the dashboard history`);
   return { siteUrl: values['site-url'], siteDir: values['site-dir'], suites: names.map((n) => SUITES[n]) };
 }
 
