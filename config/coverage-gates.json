@@ -16,6 +16,7 @@
     "scripts/lib/eval_scorecard.mjs",
     "scripts/lib/eval_site.mjs",
     "scripts/lib/eval_suites.mjs",
+    "scripts/lib/eval_case_report.mjs",
     "scripts/lib/review_prompt.mjs",
     "scripts/lib/eval_replay_ci.mjs",
     "scripts/lib/pr_evals.mjs",

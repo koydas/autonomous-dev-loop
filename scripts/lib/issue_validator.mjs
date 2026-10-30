@@ -48,6 +48,9 @@ export function parseGroqResponse(rawText) {
   } catch (err) {
     throw new Error('Groq response contained invalid JSON', { cause: err });
   }
+  // A key with stray whitespace (`" warnings"`, seen on claude-haiku-5-5 in eval run 40774614011, #325) is the
+  // same key: the answer is complete, only the key's spelling drifted. Values are left untouched.
+  parsed = Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key.trim(), value]));
 
   if (typeof parsed.valid !== 'boolean') throw new Error('Response missing "valid" boolean');
   if (typeof parsed.score !== 'number') throw new Error('Response missing "score" number');
