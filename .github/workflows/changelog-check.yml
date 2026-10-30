@@ -2,6 +2,8 @@ name: Changelog Check
 
 on:
   pull_request:
+    # edited: the PR body carries the No-Changelog: true exemption the gate reads.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read

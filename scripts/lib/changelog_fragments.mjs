@@ -26,6 +26,27 @@ export function validateFragments(fragments) {
   })).sort((a, b) => a.number - b.number || a.path.localeCompare(b.path, 'en'));
 }
 
+// Fragment notes live between the markers. Text before or after them is operator-owned
+// (legacy notes, a manual ### Breaking section) and survives every assembly.
+const START = '<!-- generated changelog fragments -->';
+const END = '<!-- end generated changelog fragments -->';
+
+function splitUnreleased(existing, notes) {
+  const at = existing.indexOf(START);
+  if (at < 0) {
+    const legacy = existing.trim();
+    return { before: !legacy || legacy.includes(LEGACY) ? legacy : LEGACY + '\n\n' + legacy, after: '' };
+  }
+  const rest = existing.slice(at + START.length);
+  const end = rest.indexOf(END);
+  if (end < 0) throw new Error('CHANGELOG.md: missing ' + END + '; notes after ' + START + ' would be lost');
+  const rendered = new Set(notes.split('\n').map(x => x.trim()));
+  const foreign = rest.slice(0, end).split('\n').map(x => x.trim()).filter(x => x && !rendered.has(x));
+  if (foreign.length) throw new Error('CHANGELOG.md: line not from a fragment inside the generated block: "' +
+    foreign[0] + '"; move manual notes outside the markers or into changes/');
+  return { before: existing.slice(0, at).trim(), after: rest.slice(end + END.length).trim() };
+}
+
 export function assembleChangelog(changelog, fragments) {
   const start = changelog.indexOf(HEADER);
   if (start < 0) throw new Error('CHANGELOG.md: missing ## [Unreleased]');
@@ -34,12 +55,9 @@ export function assembleChangelog(changelog, fragments) {
   const match = /^## \[[^\n]+\]/m.exec(after);
   const released = match ? after.slice(match.index) : '';
   const existing = match ? after.slice(0, match.index) : after;
-  // Markers make subsequent assemblies idempotent and preserve migrated notes.
-  const marker = '<!-- generated changelog fragments -->';
-  const legacy = existing.split(marker)[0].trim();
   const notes = validateFragments(fragments).map(f => f.content).join('\n\n');
-  const retained = legacy ? (legacy.includes(LEGACY) ? legacy : LEGACY + '\n\n' + legacy) : '';
-  const rendered = [retained, marker, notes].filter(Boolean).join('\n\n');
+  const kept = splitUnreleased(existing, notes);
+  const rendered = [kept.before, START, notes, END, kept.after].filter(Boolean).join('\n\n');
   return changelog.slice(0, start) + HEADER + '\n\n' + rendered + '\n\n' + released;
 }
 
@@ -53,6 +71,6 @@ export function rolloverChangelog(changelog, version, date) {
   const next = changelog.slice(start + HEADER.length).search(/^## \[[^\n]+\]/m);
   const split = next < 0 ? changelog.length : start + HEADER.length + next;
   const notes = changelog.slice(start + HEADER.length, split)
-    .replace('<!-- generated changelog fragments -->', '').trim();
+    .replace(START, '').replace(END, '').replace(/\n{3,}/g, '\n\n').trim();
   return changelog.slice(0, start) + HEADER + '\n\n' + heading + '\n\n' + notes + '\n\n' + changelog.slice(split);
 }
