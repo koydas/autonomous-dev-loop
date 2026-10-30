@@ -318,7 +318,7 @@ Key steps to expand per workflow:
 - **Verify CHANGELOG.md updated for entrypoint or ADR changes** — exits 0 (skipped) when no entrypoints or ADRs changed; exits 1 with a plain-text error message describing which trigger files were found and what is missing
 
 ### `evals` (`evals.yml`)
-- **eval (one matrix job per suite) → Run eval suite** — the Markdown report; `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly runs, one suite each, repeats 3: `validation` Mondays, `review` Wednesdays, 06:23 UTC (one suite × 3 fills most of the Groq TPD); a manual run's failed suite does not cancel the next
+- **eval (one matrix job per suite) → Run eval suite** — the Markdown report (with `--repeats > 1`, it ends with the case diagnostics table of non-stable cases, `docs/evals.md` → Case diagnostics; replay it offline with `npm run eval:cases -- <results.json>`); `eval-results-<run_id>-<suite>` and `run-trace-<run_id>-<suite>` artifacts. Weekly runs, one suite each, repeats 3: `validation` Mondays, `review` Wednesdays, 06:23 UTC (one suite × 3 fills most of the Groq TPD); a manual run's failed suite does not cancel the next
 - **publish → Build eval dashboard** — history read back from the site, the runs added (`<run_id>-<suite>`), runs skipped on `error_rate` as warnings; `eval-site-<run_id>` backup, then one Pages deploy. A 404 on `scorecard.json` fails a weekly run: it never sets `init_site`; re-run manually with `init_site` (first deploy) or `restore_run_id`. With `rebaseline`: `rebaseline <suite>: new series <old> → <new>, started by run <id>; displaced run(s): …` (`::notice::`), `rebaseline <suite>: no-op (…)`, or `::error::rebaseline <suite> refused … : <reasons>` and the job fails
 
 ### `pipeline-site` (`pipeline-site.yml`)
@@ -398,6 +398,7 @@ A later `models.yaml (…): unknown key` or `ADL_CONFIG_DIR … must be an absol
 | Label creation 403 | Ensure `GITHUB_TOKEN` or `AI_PR_TOKEN` has `issues: write`; re-run workflow |
 | Workflow never triggered | Check **Settings → Actions → General → Actions permissions**; confirm `issues` trigger in `validate-issue.yml` |
 | Manual label override needed | Apply `ready-for-dev` or `needs-refinement` directly from the issue Labels panel; `code-generation` will trigger on the next `labeled` event |
+| Run fails with `Groq response contained invalid JSON` or `Response missing "valid" boolean` (or `"score"`, `"blockers"`, `"warnings"`) | The model broke the validation answer contract (`parseGroqResponse`, `issue_validator.mjs`): one JSON object with `valid`, `score`, `blockers`, `warnings`. Whitespace around a key (`" warnings"`) is trimmed and accepted since #325; a missing or misspelled key, a wrong type, or prose inside the object still fails: the job exits 1 with an `issue_validation.fail` event (`meta.error` holds the message) and no label is applied. Re-run by editing the issue; recurring on one model: check `validation-system.md` still asks for that object and the stage's `max_tokens` (a cut answer is invalid JSON) |
 
 ### `code-generation`
 
