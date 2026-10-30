@@ -20,6 +20,17 @@ export function validateFragment(path, content) {
   return lines.join('\n');
 }
 
+/**
+ * A release change edits CHANGELOG.md and otherwise only deletes the fragments it consumed.
+ * entries: lines of `git diff --name-status` ("M\tCHANGELOG.md", "D\tchanges/2-x.md").
+ */
+export function isReleaseChange(entries) {
+  const parsed = entries.map(line => line.split('\t')).map(cols => ({ status: cols[0], path: cols.at(-1) }));
+  return parsed.some(e => e.status === 'M' && e.path === 'CHANGELOG.md') &&
+    parsed.every(e => (e.status === 'M' && e.path === 'CHANGELOG.md') ||
+      (e.status === 'D' && FRAGMENT_NAME.test(e.path)));
+}
+
 export function validateFragments(fragments) {
   return Object.entries(fragments).map(([path, content]) => ({
     path, number: Number(FRAGMENT_NAME.exec(path)?.[1]), content: validateFragment(path, content),

@@ -59,4 +59,4 @@ The fragment is a new file `changes/<issue-number>-<slug>.md` (lowercase kebab-c
 
 Never edit root `CHANGELOG.md` in a feature PR: the release operator assembles it from the fragments (`node scripts/assemble_changelog.mjs`, `docs/releasing.md`). A PR that changes one of the files above but needs no note puts the line `No-Changelog: true` in its description.
 
-A CI job (`changelog-check.yml`) enforces this on every PR, and again when the description is edited: it fails when `CHANGELOG.md` is modified, when a fragment is malformed, or when a trigger file changed with neither a fragment nor the exemption line.
+A CI job (`changelog-check.yml`) enforces this on every PR, and again when the description is edited: it fails when `CHANGELOG.md` is modified (except by a release change: `CHANGELOG.md` plus deleted fragments only), when a fragment is malformed, or when a trigger file changed with neither a fragment nor the exemption line.

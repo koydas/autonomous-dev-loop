@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateFragment, validateFragments, assembleChangelog, rolloverChangelog } from '../lib/changelog_fragments.mjs';
+import { validateFragment, validateFragments, assembleChangelog, rolloverChangelog, isReleaseChange } from '../lib/changelog_fragments.mjs';
 
 const base = '# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-10-27\n\nOld history\n';
 const fragments = {'changes/10-second.md': '### Fixed\n- Ten', 'changes/2-first.md': '### Added\n- Two'};
@@ -83,4 +83,16 @@ test('fragment validation rejects non-string, NUL and ## headings', () => {
   assert.throws(() => validateFragment('changes/2-first.md', '### Fixed\n- x\n## [9.9.9]'), /unexpected heading/);
   assert.throws(() => validateFragment('changes/2-first.md', '### Security\n- x'), /one category heading/);
   assert.throws(() => validateFragments({'changes/2-first.md': '### Fixed\n- x', 'changes/x.md': '### Fixed\n- y'}), /changes\/x.md: invalid fragment filename/);
+});
+
+test('release change: only CHANGELOG.md and deleted fragments', () => {
+  assert.equal(isReleaseChange(['M\tCHANGELOG.md', 'D\tchanges/2-first.md', 'D\tchanges/10-second.md']), true);
+  assert.equal(isReleaseChange(['M\tCHANGELOG.md']), true);
+  assert.equal(isReleaseChange([]), false);
+  assert.equal(isReleaseChange(['D\tchanges/2-first.md']), false, 'no CHANGELOG.md edit');
+  assert.equal(isReleaseChange(['M\tCHANGELOG.md', 'A\tchanges/2-first.md']), false, 'adds a fragment');
+  assert.equal(isReleaseChange(['M\tCHANGELOG.md', 'M\tscripts/x.mjs']), false, 'carries a code change');
+  assert.equal(isReleaseChange(['M\tCHANGELOG.md', 'D\tchanges/notes.txt']), false, 'deletes a non-fragment');
+  assert.equal(isReleaseChange(['M\tCHANGELOG.md', 'R100\tchanges/2-first.md\tchanges/3-first.md']), false, 'renames a fragment');
+  assert.equal(isReleaseChange(['A\tCHANGELOG.md']), false, 'creates CHANGELOG.md');
 });
