@@ -96,3 +96,21 @@ test('release change: only CHANGELOG.md and deleted fragments', () => {
   assert.equal(isReleaseChange(['M\tCHANGELOG.md', 'R100\tchanges/2-first.md\tchanges/3-first.md']), false, 'renames a fragment');
   assert.equal(isReleaseChange(['A\tCHANGELOG.md']), false, 'creates CHANGELOG.md');
 });
+
+test('an untouched generated block follows fragment corrections; a hand edit inside it is refused', () => {
+  const preview = assembleChangelog(base, {'changes/2-first.md': '### Added\n- Original wording'});
+  const corrected = assembleChangelog(preview, {'changes/2-first.md': '### Added\n- Corrected wording'});
+  assert.ok(corrected.includes('- Corrected wording') && !corrected.includes('- Original wording'));
+  assert.equal(assembleChangelog(preview, {}).includes('- Original wording'), false, 'a removed fragment leaves the block');
+  const handEdited = preview.replace('- Original wording', '- Hand wording');
+  assert.throws(() => assembleChangelog(handEdited, {'changes/2-first.md': '### Added\n- Corrected wording'}), /"- Hand wording"/);
+  const legacyMarker = preview.replace(/ sha256:[0-9a-f]{64}/, '');
+  assert.throws(() => assembleChangelog(legacyMarker, {'changes/2-first.md': '### Added\n- Corrected wording'}), /"- Original wording"/);
+  assert.match(assembleChangelog(legacyMarker, {'changes/2-first.md': '### Added\n- Original wording'}), /sha256:[0-9a-f]{64}/);
+});
+
+test('rollover rejects a released version whatever the date', () => {
+  const assembled = assembleChangelog(base, fragments);
+  assert.throws(() => rolloverChangelog(assembled, '0.1.0', '2026-10-30'), /Release already exists: 0.1.0/);
+  assert.match(rolloverChangelog(assembled.replace('## [0.1.0]', '## [0.10]'), '0.1.0', '2026-10-30'), /## \[0.1.0\] - 2026-10-30/, 'dots are literal');
+});
