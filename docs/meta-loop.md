@@ -99,7 +99,7 @@ Published at the site root with the other static files. A serialization of the D
 
 ## Implementation steps
 
-Each step is mergeable alone; a step does not depend on the next being accepted. Every step follows `AGENTS.md`: tests in the same PR, `CHANGELOG.md` entry, docs for behavior changes.
+Each step is mergeable alone; a step does not depend on the next being accepted. Every step follows `AGENTS.md`: tests in the same PR, `changes/` changelog fragment, docs for behavior changes.
 
 | # | Step | Accepted when |
 |---|---|---|

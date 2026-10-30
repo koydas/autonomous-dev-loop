@@ -93,3 +93,8 @@ blocking contributors on every intermediate commit. Rejected for MVP scope.
 - ⚠️ `scripts/lib/` changes are not gated. A library module that materially changes
   behaviour without touching an entrypoint script will slip through without a changelog
   entry. This is the accepted trade-off for keeping the trigger scope narrow.
+
+
+## 2026-10-28 amendment: conflict-free fragments
+
+The per-PR release-note contract now uses `changes/<issue-number>-<slug>.md`, with a unique lowercase slug per PR, rather than editing root `CHANGELOG.md` from feature branches. Release operators assemble and roll over the fragments. The previous direct `[Unreleased]`-diff gate is superseded for normal PRs; see `docs/releasing.md`.

@@ -68,6 +68,7 @@
     "scripts/lib/lessons.mjs",
     "scripts/lib/consumer_install.mjs",
     {"module": "scripts/lib/lessons_loader.mjs", "test": "lessons.test.mjs"},
+    "scripts/lib/changelog_fragments.mjs",
     {"module": "scripts/build_eval_site.mjs", "note": "Entrypoint gate: build_eval_site.mjs deploys the eval dashboard (run_id guard, multi-suite build)."}
   ]
 }

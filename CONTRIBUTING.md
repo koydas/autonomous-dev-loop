@@ -44,19 +44,19 @@ See `AGENTS.md` for the full engineering rules and `docs/testing.md` for test co
 
 ## Changelog Policy
 
-Update `CHANGELOG.md` whenever your PR modifies:
+Add a changelog fragment whenever your PR modifies:
 
 - **Entrypoint scripts** — any `scripts/*.mjs` file (not `scripts/lib/` or `scripts/tests/`)
 - **ADR files** — any `docs/adr/NNNN-*.md` record
-- **What other repositories depend on (ADR-0045)** — `.github/workflows/adl-*.yml`, `templates/consumer/*.yml` and `docs/workflow-interface.json`; a change that a caller can notice goes under `### Breaking` (see `docs/releasing.md`)
+- **What other repositories depend on (ADR-0045)** — `.github/workflows/adl-*.yml`, `templates/consumer/*.yml` and `docs/workflow-interface.json`; a change that a caller can notice says so in the fragment bullet, and the release operator lists it under `### Breaking` (see `docs/releasing.md`)
 
-Add your entry under the `[Unreleased]` section using [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) conventions:
+The fragment is a new file `changes/<issue-number>-<slug>.md` (lowercase kebab-case slug, unique to the PR: two PRs for the same issue use two slugs), with exactly one category heading and at least one bullet:
 
 ```
-## [Unreleased]
-
 ### Added | Changed | Fixed | Removed
 - Brief description of the behavior change (ADR-XXXX or PR #NNN)
 ```
 
-A CI job (`changelog-check.yml`) enforces this rule on every PR and will fail if `CHANGELOG.md` is not updated.
+Never edit root `CHANGELOG.md` in a feature PR: the release operator assembles it from the fragments (`node scripts/assemble_changelog.mjs`, `docs/releasing.md`). A PR that changes one of the files above but needs no note puts the line `No-Changelog: true` in its description.
+
+A CI job (`changelog-check.yml`) enforces this on every PR, and again when the description is edited: it fails when `CHANGELOG.md` is modified (except by a release change: `CHANGELOG.md` plus deleted fragments only), when a fragment is malformed, or when a trigger file changed with neither a fragment nor the exemption line.

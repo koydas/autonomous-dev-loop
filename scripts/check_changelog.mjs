@@ -1,62 +1,44 @@
 #!/usr/bin/env node
 /**
- * Fails if a PR modifies entrypoint scripts or ADR files without adding an entry
- * under ## [Unreleased] in CHANGELOG.md.
- * Called by .github/workflows/changelog-check.yml on pull_request events.
+ * Gate changelog fragments for PRs touching release-relevant files.
+ * Requires BASE_REF and optionally PR_BODY from the workflow.
  */
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { findTriggerFiles, hasUnreleasedEntry } from './lib/changelog_checker.mjs';
+import { findTriggerFiles } from './lib/changelog_checker.mjs';
+import { isReleaseChange, validateFragment } from './lib/changelog_fragments.mjs';
 
-const CHANGELOG = 'CHANGELOG.md';
-const baseRef = process.env.BASE_REF ?? 'main';
-
-let changedFiles;
+const baseRef = process.env.BASE_REF || 'main';
+let entries;
 try {
-  changedFiles = execSync(`git diff --name-only origin/${baseRef}...HEAD`, { encoding: 'utf8' })
-    .trim()
-    .split('\n')
-    .filter(Boolean);
+  entries = execFileSync('git', ['diff', '--name-status', 'origin/' + baseRef + '...HEAD'], { encoding: 'utf8' })
+    .trim().split('\n').filter(Boolean);
 } catch {
-  console.error(`Failed to get changed files against origin/${baseRef}. Ensure fetch-depth: 0 in checkout.`);
+  console.error(`Cannot diff origin/${baseRef}...HEAD. Fetch the base branch (git fetch origin ${baseRef}) and use fetch-depth: 0.`);
   process.exit(1);
 }
-
-const triggerFiles = findTriggerFiles(changedFiles);
-
-if (triggerFiles.length === 0) {
-  console.log('No entrypoint or ADR files changed — changelog check skipped.');
+const changedFiles = entries.map(line => line.split('\t').at(-1));
+if (isReleaseChange(entries)) {
+  console.log('Release change: CHANGELOG.md assembled from consumed fragments; gate passed.');
   process.exit(0);
 }
+const triggers = findTriggerFiles(changedFiles);
+const fragments = entries.filter(line => !line.startsWith('D')).map(line => line.split('\t').at(-1))
+  .filter(p => p.startsWith('changes/') && p.endsWith('.md'));
+const exempt = /^No-Changelog: true\s*$/m.test(process.env.PR_BODY || '');
 
-if (!changedFiles.includes(CHANGELOG)) {
-  console.error(
-    `\nChangelog check failed.\n` +
-    `These files require a CHANGELOG.md entry:\n` +
-    triggerFiles.map(f => `  - ${f}`).join('\n') +
-    `\n\nAdd an entry under [Unreleased] in CHANGELOG.md.\n` +
-    `See CONTRIBUTING.md § Changelog Policy for format and examples.\n`
-  );
+if (changedFiles.includes('CHANGELOG.md')) {
+  console.error('CHANGELOG.md is release-owned; feature PRs must use changes/<issue-number>-<slug>.md. A release PR changes only CHANGELOG.md and deletes consumed fragments.');
   process.exit(1);
 }
-
-let changelogDiff;
 try {
-  changelogDiff = execSync(`git diff origin/${baseRef}...HEAD -- ${CHANGELOG}`, { encoding: 'utf8' });
-} catch {
-  changelogDiff = '';
-}
-
-const changelogContent = (() => { try { return readFileSync(CHANGELOG, 'utf8'); } catch { return ''; } })();
-
-if (!hasUnreleasedEntry(changelogDiff, changelogContent)) {
-  console.error(
-    `\nChangelog check failed.\n` +
-    `CHANGELOG.md was modified but no entry was added under ## [Unreleased].\n` +
-    `Add a new entry at the top of CHANGELOG.md under the [Unreleased] section.\n` +
-    `See CONTRIBUTING.md § Changelog Policy for format and examples.\n`
-  );
+  for (const file of fragments) validateFragment(file, readFileSync(file, 'utf8'));
+} catch (error) {
+  console.error(error.message);
   process.exit(1);
 }
-
-console.log(`Changelog check passed (${triggerFiles.length} trigger file(s), [Unreleased] entry verified).`);
+if (triggers.length && !exempt && !fragments.length) {
+  console.error('Missing changelog fragment: add changes/<issue-number>-<slug>.md or PR body line No-Changelog: true');
+  process.exit(1);
+}
+console.log('Changelog fragment gate passed.');

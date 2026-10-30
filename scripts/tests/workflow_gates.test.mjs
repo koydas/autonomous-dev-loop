@@ -338,6 +338,12 @@ test('workflows that run PR code without secrets use a read-only token', () => {
   }
 });
 
+test('changelog-check.yml reruns when the PR body (No-Changelog exemption) is edited', () => {
+  const text = readFileSync(resolve(WORKFLOWS_DIR, 'changelog-check.yml'), 'utf8');
+  assert.match(text, /^  pull_request:\n(?:    #[^\n]*\n)?    types: \[opened, synchronize, reopened, edited\]\n/m);
+  assert.match(text, /PR_BODY: \$\{\{ github\.event\.pull_request\.body \}\}/);
+});
+
 // ADR-0039: the LangGraph prototype's Python tests run in CI, on the declared minimum version.
 test('test.yml runs the LangGraph prototype tests on Python 3.11 and 3.13', () => {
   const job = workflow.split(/^  prototype-langgraph:\n/m)[1];

@@ -2,6 +2,8 @@ name: Changelog Check
 
 on:
   pull_request:
+    # edited: the PR body carries the No-Changelog: true exemption the gate reads.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -20,7 +22,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Verify CHANGELOG.md updated for entrypoint or ADR changes
+      - name: Verify per-issue changelog fragment for release-relevant changes
         run: node scripts/check_changelog.mjs
         env:
           BASE_REF: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}

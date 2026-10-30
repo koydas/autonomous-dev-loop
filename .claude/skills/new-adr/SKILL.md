@@ -50,9 +50,9 @@ Open `docs/adr/README.md` and append a line to the `## Records` list:
 - [ADR-<NNNN>: <Title>](./<NNNN>-<kebab-case-title>.md)
 ```
 
-### Step 4 — Update CHANGELOG.md
+### Step 4 — Add a changelog fragment
 
-Because ADR files match the changelog-gate trigger (`docs/adr/NNNN-*.md`), you must add a bullet under `## [Unreleased]` in `CHANGELOG.md` describing the new decision. This is a CI requirement — the PR will fail without it.
+Because ADR files match the changelog-gate trigger (`docs/adr/NNNN-*.md`), add a `changes/<issue-number>-<slug>.md` fragment (one `### Added`/`Changed`/`Fixed`/`Removed` heading, one `- ` bullet) describing the new decision. Never edit root `CHANGELOG.md`: the gate rejects it. This is a CI requirement — the PR will fail without it (see `changelog-gate` skill).
 
 ### Step 5 — Update relevant docs (if applicable)
 
@@ -61,7 +61,7 @@ If the decision changes workflow behavior, trigger conditions, labels, or operat
 ## Constraints
 
 - Do not skip the `docs/adr/README.md` index update — omitting it leaves the ADR orphaned from the index.
-- Do not skip the `CHANGELOG.md` update — the `changelog-check` CI gate will fail the PR.
+- Do not skip the changelog fragment — the `changelog-check` CI gate will fail the PR.
 - ADR numbers must be sequential with no gaps.
 - Status must be `Accepted` (or `Proposed` if under discussion); do not use custom statuses.
 
@@ -69,6 +69,6 @@ If the decision changes workflow behavior, trigger conditions, labels, or operat
 
 - `docs/adr/README.md` — ADR index to update
 - `docs/adr/` — existing ADRs to reference for style and numbering
-- `CHANGELOG.md` — must be updated (see `changelog-gate` skill)
+- `changes/<issue-number>-<slug>.md` — the fragment to add (see `changelog-gate` skill)
 - `AGENTS.md` — "Documentation Rules" and "Review Hygiene" sections
 - `docs/adr/0016-changelog-ci-gate.md` — explains why ADRs trigger the changelog gate

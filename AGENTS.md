@@ -76,7 +76,7 @@ Each CI gate has a local command. Run the ones your diff triggers before pushing
 | Test suite (`test.yml`) | `scripts/`, `prompts/`, `config/`, `evals/`, `.github/workflows/` | `npm test` (~30 s) — one file: `node --test scripts/tests/<name>.test.mjs` |
 | Syntax (`npm run lint`) | `scripts/` | `npm run lint` |
 | Event docs (`test.yml`) | a new `event: '…'` under `scripts/` | `node scripts/check_event_docs.mjs` |
-| Changelog (`changelog-check.yml`) | `scripts/*.mjs` entrypoint, `docs/adr/NNNN-*.md` | `git fetch origin main && node scripts/check_changelog.mjs` |
+| Changelog (`changelog-check.yml`) | release-relevant entrypoints, ADRs, reusable workflows and consumer templates | `git fetch origin main && BASE_REF=main node scripts/check_changelog.mjs` |
 | LangGraph prototype (`test.yml` → `prototype-langgraph`) | `prototypes/langgraph-loop/` | `cd prototypes/langgraph-loop && python -m unittest -v tests.test_loop` (Python ≥ 3.11, `pip install -r requirements.txt`) |
 | c8 ≥ 80% (`test.yml`) | a module listed in `config/coverage-gates.json` | `node scripts/coverage_gates.mjs --only scripts/lib/<m>.mjs` (all gates: `node scripts/coverage_gates.mjs`); a new gated module is added to that file (the review reads it: no other list to update) |
 | Review hygiene (PR review) | behavior change in a workflow or `scripts/` | docs (`docs/code-generation.md` / `docs/runbook.md`) + tests in the same PR |
@@ -103,6 +103,10 @@ Minimum required path coverage for automation modules, enforced by code review. 
 | `.claude/hooks/test-gate.mjs` — Claude Code test gate (Stop + `git push`) | 100% of branches | watched paths run the suite, others skip; an unchanged change set is never re-run; `git push` tests `HEAD` and is blocked on dirty watched paths |
 
 Any PR that adds a new exported function to `scripts/lib/` must include tests for every failure branch, not only the happy path. PRs that lack these tests are considered incomplete regardless of whether existing tests pass.
+
+## Changelog fragments
+
+PRs that change release-relevant files add `changes/<issue-number>-<slug>.md` containing exactly one `### Added`, `### Changed`, `### Fixed`, or `### Removed` heading and at least one `- ` bullet. A PR without release notes may include the literal `No-Changelog: true` line in its body. Regular PRs must not edit root `CHANGELOG.md`; only the release operator assembles and rolls over that file, using `node scripts/assemble_changelog.mjs` and the procedure in `docs/releasing.md`.
 
 ## Workflow Rules _(pipeline only)_
 
