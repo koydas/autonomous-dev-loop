@@ -261,3 +261,4 @@
 {"type":"issue","run_id":"41154586154-1","issue_number":330,"verdict":"MANUAL","score":60,"started_at":"2026-10-31T01:17:13.010Z","ended_at":"2026-10-31T01:17:25.145Z","duration_ms":12130,"input_tokens_est":6164,"output_tokens_est":896}
 {"type":"issue","run_id":"41154619935-1","issue_number":335,"verdict":"APPROVE","score":95,"started_at":"2026-10-31T01:17:36.535Z","ended_at":"2026-10-31T01:17:44.011Z","duration_ms":7470,"input_tokens_est":4039,"output_tokens_est":664}
 {"type":"issue","run_id":"41154646413-1","issue_number":336,"verdict":"MANUAL","score":80,"started_at":"2026-10-31T01:17:57.582Z","ended_at":"2026-10-31T01:18:07.773Z","duration_ms":10187,"input_tokens_est":4139,"output_tokens_est":790}
+{"type":"codegen_skip","run_id":"41154652610-1-codegen-skip","issue_number":"335","reason":"blocked","source":"model","ts":"2026-10-31T01:18:23.196Z"}
