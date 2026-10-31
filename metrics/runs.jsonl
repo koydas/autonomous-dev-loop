@@ -263,3 +263,4 @@
 {"type":"issue","run_id":"41154646413-1","issue_number":336,"verdict":"MANUAL","score":80,"started_at":"2026-10-31T01:17:57.582Z","ended_at":"2026-10-31T01:18:07.773Z","duration_ms":10187,"input_tokens_est":4139,"output_tokens_est":790}
 {"type":"codegen_skip","run_id":"41154652610-1-codegen-skip","issue_number":"335","reason":"blocked","source":"model","ts":"2026-10-31T01:18:23.196Z"}
 {"type":"issue","run_id":"41154674007-1","issue_number":337,"verdict":"APPROVE","score":92,"started_at":"2026-10-31T01:18:15.320Z","ended_at":"2026-10-31T01:18:25.264Z","duration_ms":9940,"input_tokens_est":4220,"output_tokens_est":621}
+{"type":"issue","run_id":"41154706629-1","issue_number":332,"verdict":"MANUAL","score":55,"started_at":"2026-10-31T01:18:39.177Z","ended_at":"2026-10-31T01:18:50.627Z","duration_ms":11442,"input_tokens_est":4412,"output_tokens_est":1173}
