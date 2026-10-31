@@ -269,3 +269,4 @@
 {"type":"issue","run_id":"41154746517-1","issue_number":334,"verdict":"MANUAL","score":85,"started_at":"2026-10-31T01:19:07.900Z","ended_at":"2026-10-31T01:19:16.113Z","duration_ms":8207,"input_tokens_est":4050,"output_tokens_est":909}
 {"type":"issue","run_id":"41154791089-1","issue_number":332,"verdict":"MANUAL","score":85,"started_at":"2026-10-31T01:19:42.566Z","ended_at":"2026-10-31T01:19:52.473Z","duration_ms":9902,"input_tokens_est":4854,"output_tokens_est":802}
 {"type":"issue","run_id":"41155239149-1","issue_number":333,"verdict":"MANUAL","score":65,"started_at":"2026-10-31T01:25:08.377Z","ended_at":"2026-10-31T01:25:19.293Z","duration_ms":10912,"input_tokens_est":4061,"output_tokens_est":912}
+{"type":"issue","run_id":"41155255528-1","issue_number":333,"verdict":"APPROVE","score":95,"started_at":"2026-10-31T01:25:40.135Z","ended_at":"2026-10-31T01:25:48.578Z","duration_ms":8439,"input_tokens_est":4161,"output_tokens_est":609}
