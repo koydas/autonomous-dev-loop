@@ -23,7 +23,7 @@ a { color:var(--link); text-underline-offset:3px; }
 a:hover { text-decoration-thickness:2px; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
 [hidden] { display:none !important; }
-.skip-link { position:absolute; left:12px; top:-100px; z-index:30; background:var(--surface); padding:12px; }
+.skip-link { position:absolute; left:12px; top:-100px; z-index:60; background:var(--surface); padding:12px; }
 .skip-link:focus { top:12px; }
 .app-header { position:sticky; top:var(--sk-bar-h, 0px); z-index:20; background:color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--border); }
 .app-header-inner { max-width:1480px; margin:auto; padding:10px 24px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 22px; }

@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { page, renderHome, BASE_STYLE } from '../lib/eval_site.mjs';
+import { renderHeader, renderFooter, renderPageHead } from '../lib/site_kit/render.mjs';
 import { dashboardHeader, DASHBOARD_STYLE } from '../lib/dashboard_ui.mjs';
 import { consoleOverview } from '../lib/console_overview.mjs';
 import { consoleContext } from '../lib/console_views.mjs';
@@ -77,4 +78,27 @@ test('home: opens with the shared page header, which carries the only h1; the ov
 
 test('other pages have no page header block of their own (they keep their h1)', () => {
   assert.doesNotMatch(page('T', '<h1>Own</h1>', { pipeline: true }), /class="sk-pagehead"/);
+});
+
+test('the focused skip link stays above the sticky kit bar (keyboard bypass is never hidden)', () => {
+  const z = (css, sel) => Number(new RegExp(`${sel.replace(/[.]/g, '\\.')} \\{[^}]*z-index:\\s*(\\d+)`).exec(css)?.[1]);
+  const bar = z(BASE_STYLE, '.sk-bar');
+  assert.ok(bar > 0);
+  assert.ok(z(DASHBOARD_STYLE, '.skip-link') > bar, 'skip link z-index above the bar');
+});
+
+test('renderers: an unknown site id is rejected by the header and the footer, naming the id', () => {
+  for (const render of [renderHeader, renderFooter]) {
+    assert.throws(() => render('nope'), /site-kit: unknown site "nope"/);
+    assert.throws(() => render(undefined), /unknown site "undefined"/);
+  }
+});
+
+test('renderers: the page header escapes every field and a known site renders', () => {
+  const html = renderPageHead({ eyebrow: '<e>', title: '"t"', lede: "a&b'" });
+  assert.match(html, /&lt;e&gt;/);
+  assert.match(html, /&quot;t&quot;/);
+  assert.match(html, /a&amp;b&#x27;/);
+  assert.doesNotMatch(html, /<e>/);
+  assert.match(renderHeader('ai-dev-tools'), /data-sk-current="ai-dev-tools"/);
 });
