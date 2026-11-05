@@ -1,6 +1,7 @@
 // Presentation only: the published scorecard, run records and trace indexes remain authoritative.
 // No framework, credentials or third-party assets are needed by the generated pages.
 import { costAmount, sumCosts } from './llm_cost.mjs';
+import { renderHeader } from './site_kit/render.mjs';
 
 const e = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const label = (v) => String(v ?? 'Unknown').replace(/_/g, ' ');
@@ -16,15 +17,15 @@ const metric = (title, value, note, href, tone = '') => `<a class="stat-card ${t
 export const DASHBOARD_STYLE = `
 :root, :root:where(:not([data-theme="light"])) { color-scheme:dark; --page:#0a0f1d; --surface:#111a2c; --surface-2:#16213a; --ink:#e8edf7; --ink-2:#b3bed3; --muted:#8190ab; --border:#22304b; --grid:#1b2640; --axis:#2d3b58; --good:#22c55e; --critical:#f05252; --warning:#f59e0b; --warn-ink:#fbbf24; --accent:#7c5cff; --accent-soft:rgba(124,92,255,.16); --link:#7aa7ff; --s1:#7c5cff; --s2:#f97316; --s3:#22c55e; --s4:#eab308; --radius:12px; }
 :root[data-theme="light"] { color-scheme:light; --page:#f4f6fb; --surface:#ffffff; --surface-2:#f7f8fc; --ink:#101828; --ink-2:#475467; --muted:#667085; --border:#e3e8f0; --grid:#edf0f6; --axis:#cfd6e3; --good:#16a34a; --critical:#dc2626; --warning:#d97706; --warn-ink:#b45309; --accent:#6941f5; --accent-soft:rgba(105,65,245,.10); --link:#2f5fe0; --s1:#6941f5; }
-html { scroll-behavior:smooth; scroll-padding-top:90px; }
+html { scroll-behavior:smooth; scroll-padding-top:calc(90px + var(--sk-bar-h, 0px)); }
 body { font-size:14px; -webkit-font-smoothing:antialiased; background:var(--page); color:var(--ink); }
 a { color:var(--link); text-underline-offset:3px; }
 a:hover { text-decoration-thickness:2px; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:4px; }
 [hidden] { display:none !important; }
-.skip-link { position:absolute; left:12px; top:-100px; z-index:30; background:var(--surface); padding:12px; }
+.skip-link { position:absolute; left:12px; top:-100px; z-index:60; background:var(--surface); padding:12px; }
 .skip-link:focus { top:12px; }
-.app-header { position:sticky; top:0; z-index:20; background:color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--border); }
+.app-header { position:sticky; top:var(--sk-bar-h, 0px); z-index:20; background:color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--border); }
 .app-header-inner { max-width:1480px; margin:auto; padding:10px 24px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 22px; }
 .brand { display:flex; align-items:center; gap:10px; font-weight:750; font-size:16px; color:var(--ink); text-decoration:none; letter-spacing:-.3px; white-space:nowrap; }
 .brand-icon { display:grid; place-items:center; width:30px; height:30px; border-radius:9px; color:#fff; background:linear-gradient(135deg,#8b5cf6,#6366f1); font-size:17px; }
@@ -41,7 +42,7 @@ a:hover { text-decoration-thickness:2px; }
 .source-link { font-size:12px; }
 .app-body { max-width:1480px; margin:auto; display:grid; grid-template-columns:220px minmax(0,1fr); gap:0; }
 .app-body.no-side { grid-template-columns:minmax(0,1fr); }
-.sidebar { position:sticky; top:56px; align-self:start; max-height:calc(100vh - 56px); overflow:auto; padding:22px 14px 40px 20px; border-right:1px solid var(--border); }
+.sidebar { position:sticky; top:calc(56px + var(--sk-bar-h, 0px)); align-self:start; max-height:calc(100vh - 56px - var(--sk-bar-h, 0px)); overflow:auto; padding:22px 14px 40px 20px; border-right:1px solid var(--border); }
 .side-nav { display:grid; gap:2px; margin-bottom:22px; }
 .side-nav a { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:8px; color:var(--ink-2); text-decoration:none; font-weight:600; font-size:13px; }
 .side-nav a:hover { background:var(--surface); color:var(--ink); }
@@ -274,7 +275,7 @@ const navLinks = (root, pipeline) => sections(root).filter(([k]) => pipeline || 
 const THEME_BOOT = `<script>try { const t = localStorage.getItem('adl-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : ''); if (t === 'light') document.documentElement.dataset.theme = 'light'; } catch {}</script>`;
 
 export function dashboardHeader(root, pipeline) {
-  return `${THEME_BOOT}<a class="skip-link" href="#main-content">Skip to content</a><header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Autonomous Dev Loop</a><nav class="primary-nav" aria-label="Main navigation">${sections(root).filter(([k]) => pipeline || k === 'overview').map(([k, label, href]) => `<a href="${href}">${navIcon(k)}${label}</a>`).join('')}</nav><div class="header-tools"><span class="updated-dot" data-generated="" data-prefix="Updated "></span><button type="button" class="theme-toggle" data-theme-toggle>☀ Light</button><a class="source-link" href="${TOOLBOX_DASHBOARD_URL}">ai-dev-tools ⇄</a><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">Repository →</a></div></div></header>`;
+  return `${THEME_BOOT}<a class="skip-link" href="#main-content">Skip to content</a>${renderHeader('autonomous-dev-loop')}<header class="app-header"><div class="app-header-inner"><a class="brand" href="${root}index.html"><span class="brand-icon" aria-hidden="true">↻</span>Autonomous Dev Loop</a><nav class="primary-nav" aria-label="Main navigation">${sections(root).filter(([k]) => pipeline || k === 'overview').map(([k, label, href]) => `<a href="${href}">${navIcon(k)}${label}</a>`).join('')}</nav><div class="header-tools"><span class="updated-dot" data-generated="" data-prefix="Updated "></span><button type="button" class="theme-toggle" data-theme-toggle>☀ Light</button><a class="source-link" href="${TOOLBOX_DASHBOARD_URL}">ai-dev-tools ⇄</a><a class="source-link" href="https://github.com/koydas/autonomous-dev-loop">Repository →</a></div></div></header>`;
 }
 
 /** Left column: section links, then page-specific filters (Overview, Pipelines). */

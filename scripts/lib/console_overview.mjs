@@ -317,14 +317,12 @@ function cockpit(ctx, root, suites, evalRoot, hasWithheld) {
  * The home: `ctx` from consoleContext(), `root` the path to pipeline/ ('pipeline/' on the home page),
  * `suites` the scorecard suites with runs (`[name, { runs }]`, latest first).
  */
-export function consoleOverview(ctx, root = '', { suites = [] } = {}) {
+export function consoleOverview(ctx, root = '', { suites = [], heading = true } = {}) {
   const { diagnosis: d } = ctx;
   const hasWithheld = d.findings.some((f) => f.id === 'review-withheld');
   const evalRoot = root.replace(/pipeline\/$/, '');
   return `<section class="console glance" aria-label="System overview">
-<h1>System overview</h1>
-${hero()}
-${statusLine(d, root)}
+${heading ? `<h1>System overview</h1>\n${hero()}\n` : ''}${statusLine(d, root)}
 ${cockpit(ctx, root, suites, evalRoot, hasWithheld)}
 ${waitingRow(ctx.waiting ?? [], root)}
 <p class="g-foot"><a href="${root}health.html#trends">Trends, 14 / 30 days and definitions →</a></p>

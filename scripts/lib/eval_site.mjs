@@ -7,6 +7,7 @@
  */
 
 import { formatScorecard, MAX_RUNS } from './eval_scorecard.mjs';
+import { kitCss, renderFooter, renderPageHead } from './site_kit/render.mjs';
 import { DASHBOARD_STYLE, DASHBOARD_SCRIPT, dashboardHeader, sidebar, mobileNav, evalOverview, suiteWidget } from './dashboard_ui.mjs';
 
 // ---------------------------------------------------------------------------
@@ -87,7 +88,7 @@ function metricAt(summaryLike, metricPath) {
 // ---------------------------------------------------------------------------
 
 // Base tokens and layout of every page; with pipeline views it ships in pipeline/console.css instead.
-export const BASE_STYLE = `
+export const BASE_STYLE = `${kitCss()}
 :root {
   color-scheme: light;
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
@@ -133,7 +134,7 @@ pre { white-space: pre-wrap; word-break: break-word; background: var(--page); bo
 
 // pipeline: the site also holds the pipeline views (build_eval_site.mjs --pipeline-dir): nav link.
 // filters: page-specific sidebar filters (HTML); without pipeline views there is no sidebar.
-export function page(title, body, { depth = 0, pipeline = false, style = '', filters = '' } = {}) {
+export function page(title, body, { depth = 0, pipeline = false, style = '', filters = '', masthead = '' } = {}) {
   const root = '../'.repeat(depth);
   return `<!doctype html>
 <html lang="en">
@@ -146,13 +147,14 @@ ${pipeline ? `<link rel="stylesheet" href="${root}pipeline/console.css">
 </head>
 <body>
 ${dashboardHeader(root, pipeline)}
-<div class="app-body${pipeline ? '' : ' no-side'}">${pipeline ? sidebar(root, pipeline, filters) : ''}
+${masthead}<div class="app-body${pipeline ? '' : ' no-side'}">${pipeline ? sidebar(root, pipeline, filters) : ''}
 <main id="main-content">
 ${pipeline ? '' : `<p class="muted legacy-nav"><a href="${root}index.html">Eval dashboard</a> · <a href="https://github.com/koydas/autonomous-dev-loop">autonomous-dev-loop</a> · <a href="${root}scorecard.json">scorecard.json</a></p>
 `}${body}
 <footer class="page-footer">Dev loop monitor · Explore a summary, then open its details. All published data stays available through the original tables and JSON files.</footer>
 </main>
 </div>
+${renderFooter('autonomous-dev-loop')}
 ${mobileNav(root, pipeline)}
 ${DASHBOARD_SCRIPT}
 </body>
@@ -297,7 +299,14 @@ const SUITE_HASH_SCRIPT = `<script>
 // to evals.html, so an old index.html#evaluations link is forwarded there.
 export function renderHome() {
   return page('Dev loop overview', `<!-- pipeline-overview -->
-<script>if (location.hash === '#evaluations') location.replace('evals.html#evaluations');</script>`, { pipeline: true });
+<script>if (location.hash === '#evaluations') location.replace('evals.html#evaluations');</script>`, {
+    pipeline: true,
+    masthead: renderPageHead({
+      eyebrow: 'Autonomous Dev Loop · Dashboard',
+      title: 'System overview',
+      lede: 'Issue → AI validation → code generation → PR → AI review → auto-fix → human merge: pipeline health, diagnostics and evals.',
+    }),
+  });
 }
 
 function confusionTable(confusion = {}) {

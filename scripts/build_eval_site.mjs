@@ -241,7 +241,7 @@ export function assembleSite({ previous, resultsList, pipeline = null, generated
   // The home page leads with the pipeline's health (ADR-0043); the eval sections follow it.
   if (assembled) {
     const suites = Object.entries(scorecard.suites).filter(([, s]) => s.runs?.length);
-    files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', () => consoleOverview(assembled.console, 'pipeline/', { suites }))
+    files['index.html'] = files['index.html'].replace('<!-- pipeline-overview -->', () => consoleOverview(assembled.console, 'pipeline/', { suites, heading: false }))
       .replace('</nav></aside>', () => `</nav><div class="side-filters">${pipelineFacets(assembled.console.journeys)}</div></aside>`);
   }
   // Header facts known only here: the build time ("Updated …") and, with pipeline views, the findings count.

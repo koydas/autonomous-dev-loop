@@ -1,0 +1,15 @@
+{
+  "name": "site-kit",
+  "version": "1.0.0",
+  "profile": "node",
+  "hash": "078e7d52a3e38b585f1a1d59b77e507d16af0b980efda751582d34e44ebeafad",
+  "files": {
+    "footer.html": "2b771e74f12ee5bf2dc81322c9b3c6ff5da55f92e70502d8bdada7bf0647507c",
+    "header.html": "3c7fd5f6db128821f2ca86b970158af978d23b5b594a5dca25619ff7e354b890",
+    "nav.json": "7813ba47ace04034368b78d63a6998577a95542de1f731fb368c57fea6ff39c1",
+    "pagehead.html": "7b053354d6ba3409b37bee62e86141511814a84974fba2e78b2560d32b4124f0",
+    "render.mjs": "9bfc291b9022df4dd037c410c5dadd04cf8ba6b5212b63a3da777bbbbd3d963c",
+    "shell.css": "123ca70bdd80b681336bf7c9e006c2472758a51e21837ee9a19415a4c4f8bb7b",
+    "tokens.css": "fff6958ee4f9be2dc8d79967e8089f48a73c126cd9aee00833e5e378d61dfd75"
+  }
+}

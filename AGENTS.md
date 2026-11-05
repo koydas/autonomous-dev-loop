@@ -31,6 +31,7 @@ Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; for au
 
 - `scripts/*.mjs` entrypoints (one per stage, run by the workflows); `scripts/lib/` modules; `scripts/tests/` the only place for tests.
 - `prompts/` stage prompts (their hard guardrails are hand-copied from this file and enforced in `scripts/lib/static_verifier.mjs`: change both together); `config/` models, labels, protected paths, coverage gates; `evals/` datasets and graders.
+- `scripts/lib/site_kit/` is a vendored copy of the shared site shell of koydas/koydas (`site-kit/`): never edited by hand, synced with that repo's `kit.mjs`, checked by `scripts/tests/site_kit.test.mjs` (`docs/runbook.md` → Shared site shell).
 - `docs/adr/` numbered ADRs; `.github/workflows/` orchestration (`adl-*.yml` are the reusable workflows consumers depend on); `.claude/` skills and the test-gate hook.
 - The pipeline never reads this file at run time: it governs interactive agents and the external reviewer. Pipeline behavior changes in code and prompts.
 - The pipeline cannot write `scripts/`, `config/`, `prompts/`, `docs/`, `.github/`, `evals/fixtures/`, `evals/graders/` (ADR-0021, `config/protected-paths.yaml`): those changes are made by hand or by an interactive agent.
