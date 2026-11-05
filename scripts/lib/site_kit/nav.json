@@ -1,0 +1,45 @@
+{
+  "identity": "Stéphane Hamel · platform engineer building agent harnesses, safe execution, evaluations and developer platforms.",
+  "sites": [
+    {
+      "id": "portfolio",
+      "name": "Stéphane Hamel",
+      "label": "Portfolio",
+      "url": "https://koydas.github.io/koydas/",
+      "repo": "koydas/koydas",
+      "blurb": "Profile, selected work and writing"
+    },
+    {
+      "id": "agent-patterns",
+      "name": "Agent Patterns",
+      "label": "Agent Patterns",
+      "url": "https://koydas.github.io/agent-patterns/",
+      "repo": "koydas/agent-patterns",
+      "blurb": "Multi-agent patterns, playable in the browser"
+    },
+    {
+      "id": "autonomous-dev-loop",
+      "name": "Autonomous Dev Loop",
+      "label": "Autonomous Dev Loop",
+      "url": "https://koydas.github.io/autonomous-dev-loop/",
+      "repo": "koydas/autonomous-dev-loop",
+      "blurb": "Pipeline, evals and diagnostics dashboard"
+    },
+    {
+      "id": "ai-dev-tools",
+      "name": "AI Dev Tools",
+      "label": "AI Dev Tools",
+      "url": "https://koydas.github.io/ai-dev-tools/",
+      "repo": "koydas/ai-dev-tools",
+      "blurb": "Claude Code toolbox health dashboard"
+    },
+    {
+      "id": "repo-orchestrator",
+      "name": "Repo Orchestrator",
+      "label": "Repo Orchestrator",
+      "url": "https://koydas.github.io/repo-orchestrator/",
+      "repo": "koydas/repo-orchestrator",
+      "blurb": "Cross-repository coherence reports"
+    }
+  ]
+}

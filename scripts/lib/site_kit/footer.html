@@ -1,0 +1,11 @@
+<div class="sk-footer" data-site-kit="{{version}}" data-sk-current="{{site_id}}">
+  <div class="sk-footer-in">
+    <nav aria-label="All sites">
+      <ul>
+{{#sites}}        <li><a href="{{s.url}}"{{s.cur}}>{{s.label}}</a></li>
+{{/sites}}      </ul>
+    </nav>
+    <p>{{identity}}</p>
+    <p><a href="{{repo_url}}">{{repo_name}}</a> on GitHub</p>
+  </div>
+</div>

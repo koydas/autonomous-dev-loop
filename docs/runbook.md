@@ -56,6 +56,14 @@ The lever for an `info` withheld card is the provider or its input budget (`revi
 
 **Data gaps** lists what the records cannot tell (merge and closing before `item-closed.yml`, running state, missing records, estimated tokens, too few runs for a trend): a gap is not an absence of problem.
 
+### Shared site shell (top bar, switcher, footer)
+
+Every dashboard page starts with the top bar shared by the five GitHub Pages sites (brand, site switcher with this site marked, GitHub link, link to the portfolio) and ends with the shared footer; the home page opens with the shared page header (eyebrow, title, one line). They come from `scripts/lib/site_kit/`, a vendored copy of koydas/koydas `site-kit/` (ADR-0001 there): plain HTML and CSS, no script, no network at build time. The dashboard's own header, sidebar and phone tab bar are unchanged and sit below the bar.
+
+- **Never edit `scripts/lib/site_kit/` by hand.** To update it, from a koydas/koydas checkout: `node site-kit/scripts/kit.mjs sync --target <this repo>/scripts/lib/site_kit --profile node`, then `npm test`. `KIT.json` in that folder declares the version and hash; `scripts/tests/site_kit.test.mjs` fails when the files differ from it.
+- A weekly read-only workflow in koydas/koydas lists the repositories whose declared version differs from the kit's. A repository behind the kit still builds and deploys; only the check reports it.
+- The kit CSS is in `BASE_STYLE` (so inline on a build without pipeline views, in `pipeline/console.css` with them). Where the dashboard has sticky parts (header, sidebar), they are offset by the bar height (`--sk-bar-h`).
+
 ## Metrics System
 
 Pipeline performance is recorded to `metrics/runs.jsonl` (append-only JSONL, one record per completed run). Each record is committed to the `metrics` branch (not the default branch: `main` only takes changes through a pull request) by the "Commit metrics" step (`scripts/commit_run_record.mjs`, ADR-0013 amendments), in one commit with the run's redacted record `metrics/runs/<YYYY-MM>/<run_id>.json` (ADR-0040). Scripts write the run's records to `$RUNNER_TEMP/pipeline-metrics.jsonl` (`METRICS_FILE`), outside the checkout, and "Commit metrics" appends only those lines, so a `metrics/runs.jsonl` in the checked-out branch is never uploaded (ADR-0021).

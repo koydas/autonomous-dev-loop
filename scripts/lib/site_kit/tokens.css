@@ -1,0 +1,44 @@
+/* site-kit design tokens. Palette: koydas portfolio. One scale each for spacing, radius, type and focus ring. */
+:root {
+  --sk-bg: #05070f;
+  --sk-surface: #0a1020;
+  --sk-raised: #111a2e;
+  --sk-border: #1b2640;
+  --sk-border-strong: #2c3b60;
+  --sk-text: #f1f5f9;
+  --sk-muted: #a3b0c5;
+  --sk-subtle: #64748b; /* decorative only: below 4.5:1 on --sk-surface, never for text */
+  --sk-accent: #2f63f0;
+  --sk-accent-soft: #6d8dff;
+  --sk-violet: #8b5cf6;
+  --sk-success: #34d399;
+
+  --sk-space-1: 4px;
+  --sk-space-2: 8px;
+  --sk-space-3: 12px;
+  --sk-space-4: 16px;
+  --sk-space-5: 24px;
+  --sk-space-6: 32px;
+  --sk-space-7: 48px;
+
+  --sk-radius-sm: 8px;
+  --sk-radius-md: 12px;
+  --sk-radius-lg: 18px;
+
+  --sk-text-xs: 12px;
+  --sk-text-sm: 13px;
+  --sk-text-md: 15px;
+  --sk-text-lg: 18px;
+  --sk-text-xl: 24px;
+  --sk-text-2xl: 32px;
+  --sk-text-display: clamp(30px, 5.4vw, 44px);
+  --sk-font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --sk-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --sk-focus: #6d8dff;
+  --sk-focus-width: 2px;
+  --sk-focus-offset: 2px;
+
+  --sk-max: 1200px;
+  --sk-bar-h: 52px;
+}
