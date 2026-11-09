@@ -284,3 +284,4 @@
 {"type":"issue","run_id":"42654036355-1","issue_number":332,"verdict":"MANUAL","score":85,"started_at":"2026-11-09T16:22:19.572Z","ended_at":"2026-11-09T16:22:34.338Z","duration_ms":14761,"input_tokens_est":5218,"output_tokens_est":1003}
 {"type":"issue","run_id":"42654030632-1","issue_number":339,"verdict":"APPROVE","score":90,"started_at":"2026-11-09T16:22:32.079Z","ended_at":"2026-11-09T16:22:41.752Z","duration_ms":9670,"input_tokens_est":3964,"output_tokens_est":724}
 {"type":"codegen_skip","run_id":"42654070918-1-codegen-skip","issue_number":"339","reason":"blocked","source":"denylist","ts":"2026-11-09T16:22:51.151Z"}
+{"type":"codegen_skip","run_id":"42654108214-1-codegen-skip","issue_number":"344","reason":"blocked","source":"denylist","ts":"2026-11-09T16:22:59.711Z"}
