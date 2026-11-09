@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CASE_STATES, DYNAMIC_TITLE, MIN_TITLE_CHARS, assertionDrops, casesChange, clipTitle, compareCases, isWaived, lineCases, maskedCases, rawCases, stateOfOptions, without,
+  CASE_STATES, DYNAMIC_TITLE, MAX_OPTIONS_CHARS, MIN_TITLE_CHARS, assertionDrops, casesChange, clipTitle, compareCases, isWaived, lineCases, maskedCases, rawCases, stateOfOptions, without,
 } from '../lib/test_cases.mjs';
 
 const { ACTIVE, SKIPPED, TODO } = CASE_STATES;
@@ -99,4 +99,43 @@ test('isWaived needs a title of MIN_TITLE_CHARS named in the text; clipTitle and
   assert.equal(clipTitle(`a\n\`b\`${'x'.repeat(200)}`).length, 160);
   assert.equal(clipTitle('a\n`b`'), 'a b');
   assert.deepEqual(without(['a', 'a', 'b'], ['a']), ['a', 'b']);
+});
+
+// PR #345 review (Codex): the two finding classes, every reading.
+test('options with nested braces, calls or arrays are read at their top level, on every reading', () => {
+  const forms = [
+    "{ skip: true, signal: new AbortController({}).signal }",
+    "{ signal: f({ a: 1 }), skip: 'x' }",
+    "{ meta: { owner: 'a' }, todo: true }",
+    "{ tags: ['a', 'b'], skip: process.env.CI }",
+    "{\n  timeout: 5,\n  meta: { a: { b: 1 } },\n  skip: true,\n}",
+  ];
+  for (const opts of forms) {
+    const src = `test('nested case', ${opts}, () => {});\n`;
+    const want = /todo: true/.test(opts) ? TODO : SKIPPED;
+    assert.equal(maskedCases(src)[0].state, want, `masked ${opts}`);
+    assert.equal(rawCases(src)[0].state, want, `raw ${opts}`);
+    if (!opts.includes('\n')) assert.equal(lineCases([src.trim()])[0].state, want, `line ${opts}`);
+  }
+  // A nested skip is not the case's own option; a brace or a comma inside a string is text.
+  assert.equal(maskedCases("test('n case', { meta: { skip: true } }, () => {});")[0].state, ACTIVE);
+  assert.equal(rawCases("test('n case', { label: '}, skip: true', timeout: 1 }, () => {});")[0].state, ACTIVE);
+  assert.equal(rawCases("test('n case', { label: '{', skip: true }, () => {});")[0].state, SKIPPED);
+  // An object past the cap is read up to it; an unclosed quote stops at the cap.
+  const long = `test('long case', { pad: '${'x'.repeat(MAX_OPTIONS_CHARS)}', skip: true }, () => {});`;
+  assert.equal(rawCases(long)[0].state, ACTIVE, 'past the cap: not seen');
+  assert.equal(rawCases(`test('open case', { skip: true, label: 'unclosed ${'y'.repeat(50)}`)[0].state, SKIPPED);
+  assert.deepEqual(casesChange("test('kept test case', () => {});\n", "test('kept test case', { skip: true, signal: new AbortController({}).signal }, () => {});\n").removed, ['kept test case']);
+});
+
+test('a body holding a regex literal or a division is not read: no assertion drop is guessed', () => {
+  const base = "test('kept test case', () => {\n  assert.ok(x);\n});\n";
+  for (const added of ['const re = /\\)/;', 'const re = /\\(/;', 'const half = total / 2;']) {
+    const head = base.replace('  assert.ok', `  ${added}\n  assert.ok`);
+    assert.equal(maskedCases(head)[0].assertions, null, added);
+    assert.deepEqual(assertionDrops(base, head), [], added);
+  }
+  // A regex outside every case body does not hide the drop of a case after it.
+  const withRe = (n) => `const re = /\\)/;\ntest('kept test case', () => {\n${'  assert.ok(x);\n'.repeat(n)}});\n`;
+  assert.deepEqual(assertionDrops(withRe(2), withRe(1)), [{ title: 'kept test case', was: 2, is: 1 }]);
 });

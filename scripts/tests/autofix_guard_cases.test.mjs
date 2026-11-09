@@ -66,3 +66,8 @@ test('findUnsafeChanges: the new checks apply to JavaScript test files only, and
   );
   assert.deepEqual(named.map((v) => v.rule), ['assertion_count_drop']);
 });
+
+test('findUnsafeChanges (PR #345 review): a skip beside a nested option is a drop; a regex added to a kept case is not an assertion drop', () => {
+  assert.match(guardTest(CASES, CASES.replace("test('alpha case', () => {", "test('alpha case', { skip: true, signal: new AbortController({}).signal }, () => {"))[0].reason, /"alpha case" skipped/);
+  assert.deepEqual(guardTest(CASES, CASES.replace('  assert.ok(ready);', '  const re = /\\)/;\n  assert.ok(ready);')), []);
+});

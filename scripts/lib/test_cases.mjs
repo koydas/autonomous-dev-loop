@@ -24,13 +24,18 @@ const RAW_CASE_CALL = /^[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)((?:\.[A-Za-z]
 // One line of a diff (the title alternatives are disjoint: a backslash is only ever consumed by `\\.`, so an unclosed
 // title is linear): `re.test(x)` inside an assertion does not open a statement, so it is not a case.
 const CASE_LINE = /^\s*(?:(?:await|void)\s+)?(?:test|it)((?:\.[A-Za-z]+)*)\s*\(\s*(?:(['"`])((?:\\.|(?!\2)[^\\])*)\2)?/;
-// The options object right after the title (or first): no nested braces, so each scan stops at the next brace.
-const OPTIONS_AFTER_TITLE = /\s*,\s*\{([^{}]*)\}/y;
-const OPTIONS_FIRST = /\s*\{([^{}]*)\}/y;
+// Where the options object opens, right after the title (or first). Its body is read by `objectBody`, braces balanced.
+const OPTIONS_AFTER_TITLE = /\s*,\s*\{/y;
+const OPTIONS_FIRST = /\s*\{/y;
+// An options object longer than this is read up to the cap: the properties seen so far still count.
+export const MAX_OPTIONS_CHARS = 2000;
 const OPTION_ENTRY = /^\s*(?:(skip|todo)|"S(\d+)"|(['"])(skip|todo)\3)\s*(?::([\s\S]*))?$/;
 // A masked template is `` whatever its text, so it is never read as falsy.
 const FALSY_LITERAL = /^(?:false|0|-0|0n|null|undefined|NaN|""|'')$/;
 const ASSERTION = /(?<![\w$.])(?:t\.)?assert(?:\.[A-Za-z_$][\w$]*)*\s*\(/g;
+// A `/` left in masked code is a regex literal or a division: the lexer and the parenthesis matcher cannot tell, and a
+// regex such as `/\)/` would end the case early. A body holding one is not read (its assertions are null).
+const AMBIGUOUS_BODY = /\//;
 
 const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f`]/g, ' ').replace(/\s+/g, ' ').trim();
 /** A case title as a reason may quote it: untrusted text, flattened to one line and clipped. */
@@ -49,7 +54,7 @@ export function isWaived(title, mentionText) {
  */
 export function stateOfOptions(text, stringAt = () => null) {
   let state = CASE_STATES.ACTIVE;
-  for (const part of String(text ?? '').split(',')) {
+  for (const part of topLevelParts(text)) {
     const m = OPTION_ENTRY.exec(part);
     if (!m) continue;
     const key = m[1] ?? m[4] ?? (m[2] !== undefined ? stringAt(`"S${m[2]}"`) : null);
@@ -69,10 +74,51 @@ function stateOf(modifiers, options, stringAt) {
   return options === null ? CASE_STATES.ACTIVE : stateOfOptions(options, stringAt);
 }
 
+// The text of an object whose `{` is just before `from`, up to its balanced `}` (or the cap / end of text). Quoted text
+// is skipped, so a brace or a comma inside a string (raw text) does not count.
+function objectBody(text, from) {
+  let depth = 0;
+  const end = Math.min(text.length, from + MAX_OPTIONS_CHARS);
+  for (let i = from; i < end; i += 1) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const close = text.slice(i + 1, end).indexOf(ch); // bounded by the cap: an unclosed quote cannot make it quadratic
+      i = close < 0 ? end : i + 1 + close;
+    } else if (ch === '{' || ch === '(' || ch === '[') depth += 1;
+    else if (ch === '}' || ch === ')' || ch === ']') {
+      if (depth === 0) return text.slice(from, i);
+      depth -= 1;
+    }
+  }
+  return text.slice(from, end);
+}
+
+// The comma-separated parts of an object body at its own level: a comma inside `{}`, `()`, `[]` or a string is not one.
+function topLevelParts(body) {
+  const text = String(body ?? '');
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const close = text.indexOf(ch, i + 1);
+      i = close < 0 ? text.length : close;
+    } else if (ch === '{' || ch === '(' || ch === '[') depth += 1;
+    else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
 const optionsAt = (text, index, titled) => {
   const re = titled ? OPTIONS_AFTER_TITLE : OPTIONS_FIRST;
   re.lastIndex = index;
-  return re.exec(text)?.[1] ?? null;
+  return re.exec(text) ? objectBody(text, re.lastIndex) : null;
 };
 
 const rawStringAt = (token) => {
@@ -109,7 +155,8 @@ const countBetween = (sorted, from, to) => {
 /**
  * Cases of a whole file on masked code: a `test(` inside a fixture or a comment is not a case, but the lexer is
  * heuristic (a regex literal holding a quote or a backtick can hide the code after it). `assertions` is the count in
- * the call's arguments, or null when its closing parenthesis is not found (the body cannot be read without doubt).
+ * the call's arguments, or null when the body cannot be read without doubt: its closing parenthesis is not found, or
+ * it holds a `/` (a regex literal can carry a parenthesis that ends the call early; a division is withheld with it).
  * @returns {{ title: string, state: string, assertions: number | null }[]}
  */
 export function maskedCases(source) {
@@ -128,7 +175,7 @@ export function maskedCases(source) {
     return {
       title: titled ? strings[Number(m[2])] : DYNAMIC_TITLE,
       state: stateOf(m[1], optionsAt(code, end, titled), stringAt),
-      assertions: closeAt === undefined ? null : countBetween(asserts, open, closeAt),
+      assertions: closeAt === undefined || AMBIGUOUS_BODY.test(code.slice(open, closeAt)) ? null : countBetween(asserts, open, closeAt),
     };
   });
 }

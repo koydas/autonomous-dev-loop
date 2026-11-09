@@ -92,6 +92,7 @@ Deterministic: regex and masking only, no LLM, no new dependency; `config/protec
 
 Remaining limits:
 - **What an assertion checks is not read.** An expected value changed at an equal count (`assert.equal(a, 3)` → `assert.equal(a, 4)`, or → `assert.ok(true)`) is not detected; neither is an assertion moved into a helper the case calls.
+- A case body holding a `/` on masked code (a regex literal, whose `)` would end the call early, or a division) is not compared: its assertions are unread, never guessed. An options object is read at its top level (nested braces, calls and arrays allowed) up to 2,000 characters.
 - A runtime skip inside the body (`t.skip()`, `t.todo()`), a skipped `describe.skip(` block and frameworks other than `node:test` are not read.
 - The review's diff-line mode (the `review` eval suite, which has no tree) sees an options object only on the call's own line, and reports no `assertion_count_drop` (a hunk does not hold a whole case).
 

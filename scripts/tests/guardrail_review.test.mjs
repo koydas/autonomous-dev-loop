@@ -486,3 +486,12 @@ test('assertion_count_drop: rendered with its fix hint, deduplicated against a m
   const review = '### ⚠️ Issues Found\n- [High] The assertion on the sum is commented out — File: t/a.test.mjs Root cause: weakens the test. Fix: restore it.\n\n### 🚀 Verdict\nREQUEST_CHANGES';
   assert.equal(withGuardrailIssues(review, { findings: [finding] }), review);
 });
+
+test('review guards (PR #345 review): a skip beside a nested option is a removal; a regex added to a kept case is not an assertion drop', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const nested = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { skip: true, signal: new AbortController({}).signal }, () => {");
+  assert.match(findTestCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': nested }))[0].reason, /"alpha guarded case" now skipped/);
+  assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", `+${nested.split('\n')[0]}`]))[0].reason, /now skipped/);
+  const regex = KEPT.replace('  assert.ok(ready);', '  const re = /\\)/;\n  assert.ok(ready);');
+  assert.deepEqual(findAssertionCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': regex })), []);
+});
