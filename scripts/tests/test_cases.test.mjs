@@ -1,0 +1,102 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  CASE_STATES, DYNAMIC_TITLE, MIN_TITLE_CHARS, assertionDrops, casesChange, clipTitle, compareCases, isWaived, lineCases, maskedCases, rawCases, stateOfOptions, without,
+} from '../lib/test_cases.mjs';
+
+const { ACTIVE, SKIPPED, TODO } = CASE_STATES;
+const c = (title, state = ACTIVE) => ({ title, state });
+
+test('maskedCases and rawCases read the state of every case: modifiers, options object, test.only', () => {
+  const src = [
+    "test('plain', () => {});",
+    "test.only('only', () => {});",
+    "it.skip('mod skip', () => {});",
+    "test.todo('mod todo');",
+    "test('opt skip', { skip: true }, () => {});",
+    "test('opt todo', { todo: 'later' }, () => {});",
+    "test('opt reason', { skip: 'flaky' }, () => {});",
+    "test('opt false', { skip: false, todo: 0 }, () => {});",
+    "test('opt empty', { skip: '' }, () => {});",
+    "test('opt dynamic', { skip: process.env.CI }, () => {});",
+    "test('opt shorthand', { skip }, () => {});",
+    "test('opt quoted', { 'todo': true }, () => {});",
+    "test('opt other', { timeout: 5 }, () => {});",
+    "test({ skip: true }, () => {});",
+  ].join('\n');
+  const expected = [
+    ['plain', ACTIVE], ['only', ACTIVE], ['mod skip', SKIPPED], ['mod todo', TODO], ['opt skip', SKIPPED], ['opt todo', TODO],
+    ['opt reason', SKIPPED], ['opt false', ACTIVE], ['opt empty', ACTIVE], ['opt dynamic', SKIPPED], ['opt shorthand', SKIPPED],
+    ['opt quoted', TODO], ['opt other', ACTIVE], [DYNAMIC_TITLE, SKIPPED],
+  ];
+  assert.deepEqual(maskedCases(src).map((x) => [x.title, x.state]), expected);
+  assert.deepEqual(rawCases(src).map((x) => [x.title, x.state]), expected);
+});
+
+test('stateOfOptions: skip wins over todo, unknown entries are ignored, a missing text is active', () => {
+  assert.equal(stateOfOptions(' todo: true, skip: true '), SKIPPED);
+  assert.equal(stateOfOptions(' todo: true, skip: false '), TODO);
+  assert.equal(stateOfOptions(' "S0": true ', (t) => (t === '"S0"' ? 'skip' : null)), SKIPPED);
+  assert.equal(stateOfOptions(' "S0": true ', () => 'timeout'), ACTIVE);
+  assert.equal(stateOfOptions(' skip: "S1" ', (t) => (t === '"S1"' ? '' : null)), ACTIVE, 'an empty masked string is falsy');
+  assert.equal(stateOfOptions(' skip: `` '), SKIPPED, 'a masked template keeps no text: never read as falsy');
+  assert.equal(stateOfOptions(null), ACTIVE);
+  assert.equal(stateOfOptions('a: { b'), ACTIVE);
+});
+
+test('maskedCases counts assertions in the call only, on code: comments and strings do not count; an unclosed call is unread', () => {
+  const src = "test('a case', (t) => {\n  assert.equal(1, 1);\n  assert(x);\n  t.assert.ok(y);\n  assert.strict.equal(1, 1);\n  // assert.ok(z)\n  const s = 'assert.ok(z)';\n  foo.assert(1);\n});\nassert.ok(outside);\n";
+  assert.deepEqual(maskedCases(src), [{ title: 'a case', state: ACTIVE, assertions: 4 }]);
+  assert.equal(maskedCases("test('open case', () => {\n  assert.ok(1);\n")[0].assertions, null);
+  assert.equal(maskedCases(") test('x case', () => { assert.ok(1); });")[0], undefined, 'not a statement start');
+  assert.deepEqual(maskedCases('test(`tpl ${x}`, () => {});').map((x) => x.title), [DYNAMIC_TITLE]);
+  assert.deepEqual(rawCases('test(`tpl`, () => {});\ntest(name, () => {});').map((x) => x.title), [DYNAMIC_TITLE, DYNAMIC_TITLE]);
+  assert.deepEqual([maskedCases(null), rawCases(undefined)], [[], []]);
+});
+
+test('lineCases reads one diff line each; options on a later line are not seen', () => {
+  assert.deepEqual(lineCases(["test.skip('a', () => {", "  it('b', { todo: true }, () => {", "test('c', {", 'assert.ok(/x/.test(v));', "await test(\"d\", () => {"]),
+    [c('a', SKIPPED), c('b', TODO), c('c'), c('d')]);
+  assert.deepEqual(lineCases(null), []);
+});
+
+test('compareCases: deactivated, deleted, re-enabled, kept inactive and added cases', () => {
+  assert.deepEqual(compareCases([c('a'), c('b')], [c('a', SKIPPED), c('b')]), { removed: [{ title: 'a', became: SKIPPED }], added: [] });
+  assert.deepEqual(compareCases([c('a')], []), { removed: [{ title: 'a', became: null }], added: [] });
+  assert.deepEqual(compareCases([c('p', TODO)], [c('p', TODO)]), { removed: [], added: [] }, 'already inactive and kept');
+  assert.deepEqual(compareCases([c('p', TODO)], [c('p')]), { removed: [], added: [] }, 're-enabled: not a removal, not a replacement');
+  assert.deepEqual(compareCases([c('p', SKIPPED)], []), { removed: [{ title: 'p', became: null }], added: [] }, 'an inactive case deleted');
+  assert.deepEqual(compareCases([c('a')], [c('n'), c('x', SKIPPED)]), { removed: [{ title: 'a', became: null }], added: ['n'] });
+  // The same title skipped before and after does not hide the new deactivation of its active twin (which twin is new is not knowable).
+  const twins = compareCases([c('d'), c('d', SKIPPED)], [c('d', SKIPPED), c('d', TODO)]);
+  assert.deepEqual([twins.removed.length, twins.removed[0].title, [SKIPPED, TODO].includes(twins.removed[0].became), twins.added], [1, 'd', true, []]);
+});
+
+test('casesChange: a removal needs both readings, a gain either; a fooled lexer cannot fake a deactivation', () => {
+  const base = "test('kept case', () => {});\n";
+  assert.deepEqual(casesChange(base, "test.skip('kept case', () => {});\n"), { removed: ['kept case'], added: [], became: new Map([['kept case', SKIPPED]]) });
+  // In a fixture (template literal) the raw reading sees a skip the masked one does not: no removal.
+  const fixture = "const fx = `\ntest.skip('kept case', () => {});\n`;\n";
+  assert.deepEqual(casesChange(base + fixture, `${base}${fixture}`).removed, []);
+  assert.deepEqual(casesChange("test('a case', () => {});\nconst fx = `\ntest('a case', () => {});\n`;\n", "test.skip('a case', () => {});\nconst fx = `\ntest('a case', () => {});\n`;\n").removed, ['a case']);
+});
+
+test('assertionDrops pairs kept titles in order and skips dynamic titles, unread bodies and cases the raw reading does not see', () => {
+  const two = (n) => `test('dup case', () => {\n${'  assert.ok(1);\n'.repeat(n)}});\n`;
+  assert.deepEqual(assertionDrops(two(2) + two(2), two(2) + two(1)), [{ title: 'dup case', was: 2, is: 1 }]);
+  assert.deepEqual(assertionDrops(two(2) + two(2), two(2)), [], 'the second twin is gone: test_count_drop, not this rule');
+  assert.deepEqual(assertionDrops('test(name, () => { assert.ok(1); });\n', 'test(name, () => {});\n'), []);
+  assert.deepEqual(assertionDrops(two(2), "test('dup case', () => {\n  assert.ok(1);\n"), [], 'unclosed after: unread');
+  assert.deepEqual(assertionDrops(two(2), `x; ${two(1)}`), [], 'not at a line start: the raw reading does not see the case');
+  assert.deepEqual(assertionDrops(two(2), two(2).replace("test('dup case'", "test.skip('dup case'")), [], 'deactivated: test_count_drop, not this rule');
+});
+
+test('isWaived needs a title of MIN_TITLE_CHARS named in the text; clipTitle and without', () => {
+  assert.equal(MIN_TITLE_CHARS, 8);
+  assert.equal(isWaived('Named Case', 'this drops the named case test'), true);
+  assert.equal(isWaived('short', 'short'), false);
+  assert.equal(isWaived('named case', null), false);
+  assert.equal(clipTitle(`a\n\`b\`${'x'.repeat(200)}`).length, 160);
+  assert.equal(clipTitle('a\n`b`'), 'a b');
+  assert.deepEqual(without(['a', 'a', 'b'], ['a']), ['a', 'b']);
+});

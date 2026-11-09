@@ -1,7 +1,7 @@
 # ADR-0029: Deterministic write guard for auto-fix
 
 - **Date:** 2026-10-05
-- **Status:** Accepted — extended to code generation, and composed with the static rules (module format, exported signatures, imports), by [ADR-0019](./0019-static-verification-backstop.md); amended 2026-10-13: a blocked issue opens no PR on generation
+- **Status:** Accepted — extended to code generation, and composed with the static rules (module format, exported signatures, imports), by [ADR-0019](./0019-static-verification-backstop.md); amended 2026-10-13: a blocked issue opens no PR on generation; amended 2026-11-09: test cases are counted active, and kept cases keep their assertions (issue #339)
 
 ## Context
 
@@ -78,4 +78,20 @@ Six blocked generation runs of October 2026 (#134, #150, #200, #209, #211, #236)
 `findNeededPaths` now counts a candidate that contains a `/` only when it exists in the repository or ends in a file extension (a new file is still a path; any extension, as `App.csproj`), and restores the leading dot when the text has it right before the candidate. `extractFilePaths` itself is unchanged: the file-context injection still reads every candidate. The model is still called when check 1 fires (the comment keeps its planned fix); what changes is the recorded `source` (`denylist`), which Diagnostics reads as a block by design. On the same texts, 4 of 5 issues now fire check 1; #236 still does not, because it names `pipeline/flows.html`, a generated page that does not exist and has a file extension.
 
 Consequence: a path-looking word with a dotted ending that is not a file (`docs/v1.2`) is still a candidate, and an issue that names only protected files next to a new unprotected one is not blocked, as before.
+
+## Amendment (2026-11-09): active test cases and kept assertions (issue #339)
+
+`test_count_drop` counted calls, not tests that run. `TEST_CALL_PATTERN` counted `test.skip(` and `test.todo(`, and the review check (ADR-0060) read `test.skip('same title'` as the same case, so turning a test into a skip kept both the count and the title: CI went green on a neutralized test, the review saw a passing check. Neither guard saw the `node:test` options form (`{ skip: true }`, `{ todo: '…' }`) nor a weakened assertion inside a kept case. This is the reward-hacking path of the review → auto-fix loop.
+
+`scripts/lib/test_cases.mjs` reads the cases of a test file once for both guards:
+
+1. **Active cases.** A case is inactive when its call is `.skip(` / `.todo(` or its options object has a truthy `skip` / `todo` key (anything but a falsy literal: `true`, a non-empty string, an expression, a shorthand key); `test.only` is active. Both guards compare active cases: active → inactive is a removal under the same rule id `test_count_drop`, whose reason names the case `skipped` / `todo`. A case already inactive and kept counts for nothing either side; deleting it is still a removal, as before. The write guard keeps its raw call count as a first check, so nothing it detected before goes unseen.
+2. **`assertion_count_drop`.** For a case whose title is kept (active before and after, on the masked and the raw reading), the count of `assert(` / `assert.<name>(` / `t.assert.<name>(` calls in its body, read on masked code (comments and string contents do not count), may not drop. An added case, a removed one (that is `test_count_drop`), a case moved within the file or to another file, a dynamic title, or a body whose closing parenthesis the lexer does not find is not compared. Same escalation as the other rules: a `GuardrailError` on generation and auto-fix, a High finding in the review (ADR-0060). Waived in the review when the PR title or body names the case (8+ characters, as `test_count_drop`). **Not waived in the write guard:** its mention text is the review feedback, which names the very case an auto-fix would weaken.
+
+Deterministic: regex and masking only, no LLM, no new dependency; `config/protected-paths.yaml` unchanged. The lesson catalog (ADR-0051) gets `rule:assertion_count_drop`, and a gated `review` eval case (`guardrail-test-turned-skip`, `source: "issue #339"`) reproduces the skip conversion.
+
+Remaining limits:
+- **What an assertion checks is not read.** An expected value changed at an equal count (`assert.equal(a, 3)` → `assert.equal(a, 4)`, or → `assert.ok(true)`) is not detected; neither is an assertion moved into a helper the case calls.
+- A runtime skip inside the body (`t.skip()`, `t.todo()`), a skipped `describe.skip(` block and frameworks other than `node:test` are not read.
+- The review's diff-line mode (the `review` eval suite, which has no tree) sees an options object only on the call's own line, and reports no `assertion_count_drop` (a hunk does not hold a whole case).
 

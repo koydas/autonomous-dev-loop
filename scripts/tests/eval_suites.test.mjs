@@ -558,8 +558,9 @@ test('review dataset: incident cases name their source PR and reproduce its shap
   const cases = await loadReviewCases();
   const incidents = filterCases(cases, { tags: ['incident'] });
   assert.ok(incidents.length >= 5, `only ${incidents.length} incident cases`);
-  for (const c of cases) assert.equal(c.tags.includes('incident'), c.source !== undefined, `${c.id}: source iff incident`);
-  for (const c of incidents) assert.match(c.source, /^PR #\d+$/, `${c.id}: source`);
+  // An incident names its source PR; a preventive case (no production misjudgment yet) may name its issue (#339).
+  for (const c of cases) if (!c.tags.includes('incident')) assert.ok(c.source === undefined || /^issue #\d+$/.test(c.source), `${c.id}: only an incident names a PR`);
+  for (const c of incidents) assert.match(c.source ?? '', /^PR #\d+$/, `${c.id}: source`);
   const byId = Object.fromEntries(incidents.map((c) => [c.id, c]));
   await withEnv({ AI_PROVIDER: undefined, ANTHROPIC_API_KEY: undefined }, async () => {
     // #191/#196: documentation only, so tests are not expected: the finding must come from the issue, not gate (a).
@@ -969,10 +970,10 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   }
   assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 42 cases run, 36 gated: the six known-gap cases are counted only in summary.known_gap.
+  // 43 cases run, 37 gated: the six known-gap cases are counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [42, 0.0278, 0.9167, 0.8667, 0.8],
+    [43, 0.027, 0.9189, 0.8667, 0.8],
   );
   // Finding level (RV-01): the four incident cases that list their defects are known-gap, so the gated metrics
   // above are unchanged and the finding metrics live in summary.known_gap. Recorded answers: a miss (approved), a
@@ -982,6 +983,10 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   // RV-03: the recorded answer approves, the guardrail check finds the removed case in code: the verdict and the finding are the published ones.
   assert.deepEqual([fx('incident-removed-test-case').finding_recall, fx('incident-removed-test-case').finding_precision, fx('incident-removed-test-case').critical_recall], [1, 1, 1]);
   assert.deepEqual([byId['incident-removed-test-case'].output.llm_verdict, byId['incident-removed-test-case'].output.verdict, byId['incident-removed-test-case'].output.guardrail_findings], ['APPROVED', 'REQUEST_CHANGES', [{ rule: 'test_count_drop', path: 'scripts/tests/gate_list.test.mjs' }]]);
+  // Issue #339: the recorded answer approves a case turned test.skip; the active-case check finds it from the diff lines.
+  assert.deepEqual([byId['guardrail-test-turned-skip'].output.llm_verdict, byId['guardrail-test-turned-skip'].output.verdict, byId['guardrail-test-turned-skip'].output.guardrail_findings], ['APPROVED', 'REQUEST_CHANGES', [{ rule: 'test_count_drop', path: 'src/lib/window.test.mjs' }]]);
+  assert.deepEqual([fx('guardrail-test-turned-skip').finding_recall, fx('guardrail-test-turned-skip').finding_precision, fx('guardrail-test-turned-skip').critical_recall], [1, 1, 1]);
+  assert.match(byId['guardrail-test-turned-skip'].output.review, /"windowEnd of a zero-minute window is its start" now skipped/);
   assert.deepEqual([fx('incident-low-continuation-axes').finding_recall, fx('incident-low-continuation-axes').finding_precision, fx('incident-low-continuation-axes').critical_recall], [1, 1, null]);
   assert.deepEqual([fx('incident-docs-contradict-new-behavior').finding_recall, fx('incident-docs-contradict-new-behavior').finding_precision], [0, null]);
   assert.deepEqual([fx('incident-grader-first-push').finding_recall, fx('incident-grader-first-push').finding_precision, fx('incident-grader-first-push').critical_recall], [0.3333, 0.6667, 0]);
@@ -998,11 +1003,11 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   const gap = summary.known_gap.scores;
   assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [6, 0.5833, 0.8889, 0.5]);
   assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
-  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9375, 0.875]);
+  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9412, 0.875]);
   // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
   const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push', 'impact-caller-misses-new-parameter']; // RV-01 / RV-02, known-gap
-  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these; PR #282's is newer still (known-gap).
-  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && !['incident-unreadable-verdict-clean-change', 'incident-comment-only-config-withheld'].includes(r.case_id)));
+  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these; PR #282's is newer still (known-gap), and issue #339's.
+  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && !['incident-unreadable-verdict-clean-change', 'incident-comment-only-config-withheld', 'guardrail-test-turned-skip'].includes(r.case_id)));
   assert.deepEqual(
     [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
     [30, 0.0345, 0.8966, 0.8667, 0.7143],

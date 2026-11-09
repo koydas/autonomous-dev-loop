@@ -6,19 +6,19 @@
 import path from 'node:path';
 import { parseFindings, pathMatches } from './review_findings.mjs';
 import { isTestFile, normalizeRepoPath } from './autofix_guard.mjs';
+import { MIN_TITLE_CHARS, assertionDrops, casesChange, compareCases, isWaived, lineCases } from './test_cases.mjs';
 import {
   RULES, isJsFile, maskSource, extractExportedSignatures, findModuleSystemViolation, findSignatureViolations, findUnresolvedImports, mentions,
 } from './static_verifier.mjs';
 
-export const GUARDRAIL_RULES = Object.freeze({ ...RULES, TEST_COUNT_DROP: 'test_count_drop' });
+export const GUARDRAIL_RULES = Object.freeze({ ...RULES, TEST_COUNT_DROP: 'test_count_drop', ASSERTION_COUNT_DROP: 'assertion_count_drop' });
 export const MAX_FILES = 40;
 export const MAX_FINDINGS = 12;
-export const MIN_TITLE_CHARS = 8;
+export { MIN_TITLE_CHARS };
 const MAX_TEXT_CHARS = 160;
 
-// A test case opens a statement (the title alternatives are disjoint: a backslash is only ever consumed by `\\.`, so an unclosed title is linear): `re.test(x)` inside an assertion is not one.
-const TEST_CASE_LINE = /^\s*(?:(?:await|void)\s+)?(?:test|it)(?:\.[A-Za-z]+)*\s*\(\s*(?:(['"`])((?:\\.|(?!\1)[^\\])*)\1)?/;
-const SEVERITY = { module_system: 'High', unresolved_import: 'High', test_count_drop: 'High', exported_signature: 'Medium' };
+// Test cases are read by test_cases.mjs (shared with the auto-fix write guard): only active cases count (issue #339).
+const SEVERITY = { module_system: 'High', unresolved_import: 'High', test_count_drop: 'High', assertion_count_drop: 'High', exported_signature: 'Medium' };
 const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f`]/g, ' ').replace(/\s+/g, ' ').trim();
 const clip = (text) => plain(text).slice(0, MAX_TEXT_CHARS);
 
@@ -47,49 +47,11 @@ export function parseDiffChanges(rawDiff) {
   return files;
 }
 
-const caseTitles = (lines) => lines.map((l) => TEST_CASE_LINE.exec(l)).filter(Boolean).map((m) => m[2] ?? '(dynamic title)');
-
-// Test cases of a whole source file, two ways. Masked: comments are gone and each string is a placeholder, so a `test(`
-// inside a template literal (a fixture) or a block comment is not a case, but the lexer is heuristic (a regex literal
-// holding a quote or a backtick can hide the code after it). Raw: every statement-start call, fixtures and comments
-// included, but no lexer to fool. A title that is not a plain string (template, variable) is "(dynamic title)".
-const CASE_CALL = /(?:^|[;\n{}])[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)(?:\.[A-Za-z]+)*\s*\(\s*(?:"S(\d+)")?/g;
-const RAW_CASE_CALL = /^[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)(?:\.[A-Za-z]+)*\s*\(\s*(?:(['"`])((?:\\.|(?!\1)[^\\\n])*)\1)?/gm;
-const maskedCases = (source) => {
-  const { code, strings } = maskSource(source);
-  return [...code.matchAll(CASE_CALL)].map((m) => (m[1] === undefined ? '(dynamic title)' : strings[Number(m[1])]));
-};
-// A template title is dynamic on both readings (the masked code keeps no template text).
-const rawCases = (source) => [...String(source ?? '').matchAll(RAW_CASE_CALL)].map((m) => (m[1] === '`' || m[2] === undefined ? '(dynamic title)' : m[2]));
-// What `a` has that `b` does not, as multisets.
-const without = (a, b) => {
-  const left = [...b];
-  return a.filter((t) => {
-    const at = left.indexOf(t);
-    if (at >= 0) left.splice(at, 1);
-    return at < 0;
-  });
-};
-
-// What a file lost and gained. A case counts as lost only when both readings agree it is gone: a lexer fooled into hiding
-// code cannot make a kept case look removed, and a fixture can only make a removal go unseen, which is the safe side for
-// a rule that blocks approval. A gain counts when either reading sees it.
-const casesChange = (before, after) => {
-  const [maskedWas, maskedIs, rawWas, rawIs] = [maskedCases(before), maskedCases(after), rawCases(before), rawCases(after)];
-  const lostMasked = without(maskedWas, maskedIs);
-  const lostRaw = without(rawWas, rawIs);
-  const removed = lostMasked.filter((t) => {
-    const at = lostRaw.indexOf(t);
-    if (at >= 0) lostRaw.splice(at, 1);
-    return at >= 0;
-  });
-  const gainedMasked = without(maskedIs, maskedWas);
-  return { removed, added: [...gainedMasked, ...without(without(rawIs, rawWas), gainedMasked)] };
-};
-
-const isWaived = (title, mentionText) => {
-  const t = plain(title).toLowerCase();
-  return t.length >= MIN_TITLE_CHARS && plain(mentionText).toLowerCase().includes(t);
+const activeTitles = (lines) => lineCases(lines).filter((c) => c.state === 'active').map((c) => c.title);
+// Diff-line mode: the case lines a diff removes against the ones it adds, active and inactive (issue #339).
+const lineChange = (f) => {
+  const { removed, added } = compareCases(lineCases(f.removed), lineCases(f.added));
+  return { removed: removed.map((r) => r.title), added, became: new Map(removed.filter((r) => r.became).map((r) => [r.title, r.became])) };
 };
 
 /**
@@ -98,7 +60,8 @@ const isWaived = (title, mentionText) => {
  * Without readers (the `review` eval suite has no tree) they come from the case lines the diff adds and removes,
  * which cannot tell code from a fixture. A case moved to another file of the diff, or renamed in place, is not a
  * loss; one whose title the PR text names is intended ("explicitly requested"). Deleted files are out of scope (the
- * tests of a removed module go with it).
+ * tests of a removed module go with it). Only active cases count: a case turned skip / todo is a loss, named
+ * "now skipped" / "now todo"; one already inactive and kept counts for nothing (issue #339).
  * @returns {{ rule: string, path: string, severity: string, reason: string }[]}
  */
 export function findTestCountDrops(rawDiff, { mentionText = '', readBase = null, readHead = null } = {}) {
@@ -110,9 +73,9 @@ export function findTestCountDrops(rawDiff, { mentionText = '', readBase = null,
   files.forEach((f, i) => {
     // A file we do not read (over the cap, unreadable, missing) can still be the destination of a moved case: its
     // added case lines stand in as replacements and it reports nothing, so a move into it is never a loss.
-    const unscanned = { file: f, removed: [], added: caseTitles(f.added) };
+    const unscanned = { file: f, removed: [], added: activeTitles(f.added), became: new Map() };
     if (!withReaders) {
-      state.push({ file: f, removed: caseTitles(f.removed), added: caseTitles(f.added) });
+      state.push({ file: f, ...lineChange(f) });
       return;
     }
     if (i >= MAX_FILES) {
@@ -140,16 +103,48 @@ export function findTestCountDrops(rawDiff, { mentionText = '', readBase = null,
     }
   }
   const findings = [];
-  for (const { file: f, removed, added } of state) {
+  for (const { file: f, removed, added, became } of state) {
     const lost = removed.filter((t) => !isWaived(t, mentionText));
     const drop = lost.length - added.length;
     if (drop <= 0) continue;
-    const shown = lost.slice(0, 3).map((t) => `"${clip(t)}"`).join(', ');
+    const shown = lost.slice(0, 3).map((t) => `"${clip(t)}"${became.has(t) ? ` now ${became.get(t)}` : ''}`).join(', ');
     findings.push({
       rule: GUARDRAIL_RULES.TEST_COUNT_DROP,
       path: normalizeRepoPath(f.after),
       severity: SEVERITY.test_count_drop,
       reason: `${drop} test case${drop === 1 ? '' : 's'} removed without a replacement (${shown}${lost.length > 3 ? ', …' : ''})`,
+    });
+  }
+  return findings;
+}
+
+/**
+ * Rule: a kept test case keeps its assertions (issue #339). Needs the whole files: without readers (the `review` eval
+ * suite) nothing is reported, since a hunk does not hold a whole case. A case whose title the PR text names is
+ * intended; files over MAX_FILES, unreadable, new or deleted are skipped. What an assertion checks is not read: an
+ * expected value changed at an equal count is not seen.
+ * @returns {{ rule: string, path: string, severity: string, reason: string }[]}
+ */
+export function findAssertionCountDrops(rawDiff, { mentionText = '', readBase = null, readHead = null } = {}) {
+  if (!readBase || !readHead) return [];
+  const findings = [];
+  const files = parseDiffChanges(rawDiff).filter((f) => !f.isDeleted && !f.isNew && isTestFile(f.after) && isJsFile(f.after));
+  for (const f of files.slice(0, MAX_FILES)) {
+    let drops = [];
+    try {
+      const after = readHead(normalizeRepoPath(f.after));
+      const before = readBase(normalizeRepoPath(f.before));
+      if (after != null && before != null) drops = assertionDrops(before, after).filter((d) => !isWaived(d.title, mentionText));
+    } catch {
+      continue;
+    }
+    if (drops.length === 0) continue;
+    const shown = drops.slice(0, 3).map((d) => `"${clip(d.title)}" ${d.was} → ${d.is}`).join(', ');
+    findings.push({
+      rule: GUARDRAIL_RULES.ASSERTION_COUNT_DROP,
+      path: normalizeRepoPath(f.after),
+      severity: SEVERITY.assertion_count_drop,
+      reason: `${drops.length} kept test case${drops.length === 1 ? '' : 's'} lost assertions (${shown}${drops.length > 3 ? ', …' : ''})`,
     });
   }
   return findings;
@@ -306,6 +301,7 @@ export function collectGuardrailFindings(parts) {
 
 const FIX_HINT = {
   test_count_drop: 'Restore the case, or name it in the PR description if removing it is the request.',
+  assertion_count_drop: 'Restore the assertions, or name the case in the PR description if weakening it is the request.',
   exported_signature: 'Keep the contract, or name the function in the PR description if changing it is the request.',
   module_system: 'Keep the file’s module format.',
   unresolved_import: 'Add the file or the dependency, or drop the import.',
@@ -315,7 +311,8 @@ const bullet = (f) => `- [${f.severity}] Guardrail ${f.rule} — File: \`${plain
 
 // What a model finding says when it reports the defect a rule finds (a finding on the same file about something else is not it).
 const SAME_DEFECT = {
-  test_count_drop: /\b(?:test|tests|case|cases|spec)\b|remov|delet|drop|fewer|lost/i,
+  test_count_drop: /\b(?:test|tests|case|cases|spec)\b|remov|delet|drop|fewer|lost|skip/i,
+  assertion_count_drop: /assert|weaken|expect|check/i,
   exported_signature: /signature|arity|param|argument|export|remov|breaking|caller|contract/i,
   module_system: /require|import|esm|commonjs|module|\.mjs|\.cjs/i,
   unresolved_import: /import|resolve|depend|package|module|manifest/i,

@@ -27,7 +27,7 @@ const FLOOR = {
     },
   },
   review: {
-    cases: 34,
+    cases: 37,
     thresholds: {
       'scores.verdict_match.mean': { min: 0.75 },
       'per_class.request_changes.recall': { min: 0.8 },
@@ -133,6 +133,8 @@ const PINNED = {
     "clean-empty-body-no-claim": ["approve", "e74a011dc1df"],
     "docs-only-behavior-sentence": ["approve", "722511175605"],
     "truncated-claim-tests-past-cut": ["approve", "875c4df1e00a"],
+    // Issue #339: a test case turned test.skip; the guardrail check finds it in code, gated like RV-03.
+    "guardrail-test-turned-skip": ["request_changes", "8ed202bb021e"],
   },
 };
 
