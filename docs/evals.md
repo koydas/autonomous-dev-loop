@@ -292,6 +292,37 @@ A case tagged **`known-gap`** (ADR-0031 §7) is run, scored, published and shown
 
 A red eval is fixed in the stage (prompt, parser, production code), never by loosening its gate: no lower `min`, higher `max`, new `optional`, dropped or relabelled case, or filtered run. `scripts/tests/eval_threshold_floor.test.mjs` pins every suite's thresholds, minimum case count and each case's id, label and input hash (a relabelled, removed or rewritten case fails it), and fails when a suite's prompts share a 5-word run with one of its cases (prompt examples must not quote the dataset); tightening a threshold or adding cases raises the floor in the same PR. Loosening needs a new ADR.
 
+## RV-05 location tolerance (issue #333, ADR-0063)
+
+`isLocated` (`finding_evidence.mjs`) marks a finding that cites a file of the diff as `supported` when its lines are within `DEFAULT_LINE_TOLERANCE` (5) of a hunk. The constant is shared with `matchFindings` and the finding-level metrics, and was never measured. `node scripts/measure_line_tolerance.mjs --results <review-run.json> --dataset <review.jsonl>` replays recorded answers through `substantiateFindings`: offline, no LLM call, not wired into any workflow. It refuses any input but the pinned one (run, model, `repeats === 3`, dataset hash) and fails on a missing answer, diff or result.
+
+**Input (pinned, not substituted):** [run 40161093183](https://github.com/koydas/autonomous-dev-loop/actions/runs/40161093183), commit `6147bf65fdf7126c78b68e02ad9d4954d6dd0819`, artifact `eval-results-40161093183-review` (ID 12585849620), `anthropic:claude-sonnet-5-5`, 3 repeats, 40 cases / 120 recorded results, dataset SHA-256 `9add3de8ef544693a1fc73d51b01278869b8f2bcd1fb534b5938b678d178ce25` (diffs from `evals/datasets/review.jsonl` at that commit, not at `main`). The lookup is the suite's own (`impactLookup` over the case's Impact and Documents blocks). A blocking finding (High or Medium) is counted once per case and repeat.
+
+| Blocking findings (per case and repeat) | Count |
+|---|---|
+| all | 108 |
+| verified | 0 |
+| supported | 108 |
+| unverified | 0 |
+| refuted | 0 |
+| unverified, in-diff file with lines: gap ≤ 10 (cumulative) | 0 |
+| unverified, in-diff file with lines: gap ≤ 20 (cumulative) | 0 |
+| unverified, in-diff file with lines: gap > 20 | 0 |
+| unverified, file outside the diff | 0 |
+| unverified, no file cited | 0 |
+| unverified, line missing (in-diff file) | 0 |
+| unverified, diff file with no hunk | 0 |
+| unverified, gap 6–10 (decides the tolerance) | 0 |
+| supported, diff file with no hunk (located by default) | 0 |
+| supported, line missing (located by default) | 0 |
+| supported, lines near a hunk (gap → count) | 0→108 |
+
+The gap is the minimum absolute distance between the cited lines and the closest hunk (old or new side) of a cited diff file, 0 when they overlap; the ≤ 10 and ≤ 20 rows are cumulative.
+
+**Decision (issue rule): the location tolerance stays at 5, `DEFAULT_LINE_TOLERANCE` is unchanged, no `LOCATION_LINE_TOLERANCE` is added, ADR-0063 is not amended.** No unverified blocking finding is 6–10 lines from a hunk; there is no unverified finding at all in this run. All 108 blocking findings are supported, each with lines overlapping a hunk (gap 0).
+
+What the number does and does not say: at tolerance 5 the window withheld no correct finding in this run, so there is nothing to recover. It is also no evidence that 5 is the right margin: every cited line sat inside a hunk, so the run does not probe the 1–5 range either. A later published run is measured the same way with the same script; the tolerance moves only on findings in the 6–10 window (new constant `LOCATION_LINE_TOLERANCE` = their largest gap, used by `isLocated` alone). No eval threshold moves (ADR-0031).
+
 ## Metrics
 
 Every quality metric but `known_gap` leaves the [known-gap cases](#known-gap-cases) out; they are the only metrics thresholds read.
