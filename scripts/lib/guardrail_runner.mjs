@@ -7,7 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collectGuardrailFindings, declaredPackages, findFileRuleViolations, findTestCountDrops } from './guardrail_review.mjs';
+import { collectGuardrailFindings, declaredPackages, findAssertionCountDrops, findFileRuleViolations, findTestCountDrops } from './guardrail_review.mjs';
 import { lstatPrTreePath, readPrTreeFile, PR_TREE_MAX_BYTES } from './pr_tree_reader.mjs';
 import { PIPELINE_ROOT } from './roots.mjs';
 
@@ -47,6 +47,7 @@ export function computeGuardrails({ rawDiff, mentionText, repoRoot, mergeBase },
   };
   return collectGuardrailFindings([
     findTestCountDrops(rawDiff, { mentionText, readBase, readHead }),
+    findAssertionCountDrops(rawDiff, { mentionText, readBase, readHead }),
     findFileRuleViolations(rawDiff, {
       readBase,
       readHead,

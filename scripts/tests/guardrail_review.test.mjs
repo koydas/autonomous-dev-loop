@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractExportedSignatures } from '../lib/static_verifier.mjs';
 import {
-  AMBIGUOUS_PARAMETER_TEXT, parseDiffChanges, findTestCountDrops, findFileRuleViolations, collectGuardrailFindings, confirmedOnRawText, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
+  AMBIGUOUS_PARAMETER_TEXT, parseDiffChanges, findTestCountDrops, findAssertionCountDrops, findFileRuleViolations, collectGuardrailFindings, confirmedOnRawText, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
 } from '../lib/guardrail_review.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -417,4 +417,93 @@ test('findFileRuleViolations: a quoted parameter key is compared by its text, no
   const renamed = run(fn, "export function f({ 'bar': value }, opts) {}\n");
   assert.match(renamed[0], /^exported_signature: changes the parameters of exported f\(\{"foo"\}, opts\) to f\(\{"bar"\}, opts\)/);
   assert.equal(run(fn, `const label = 'new';\nexport function f({ 'bar': value }, opts) {}\n`).length, 1);
+});
+
+// Issue #339: only active cases count; a kept case keeps its assertions.
+const CONVERSIONS = [
+  ["test.skip('alpha guarded case', () => {", 'now skipped'],
+  ["test.todo('alpha guarded case', () => {", 'now todo'],
+  ["test('alpha guarded case', { skip: true }, () => {", 'now skipped'],
+  ["test('alpha guarded case', { todo: 'later' }, () => {", 'now todo'],
+];
+const KEPT = "test('alpha guarded case', () => {\n  assert.equal(add(1, 2), 3);\n  assert.ok(ready);\n});\ntest('beta guarded case', () => {\n  assert(true);\n});\n";
+
+test('findTestCountDrops from diff lines: a case turned skip or todo is a High removal naming it, waived when the PR names it', () => {
+  for (const [line, state] of CONVERSIONS) {
+    const diff = fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", `+${line}`]);
+    const [f, ...rest] = findTestCountDrops(diff, { mentionText: 'Unrelated description.' });
+    assert.deepEqual([rest.length, f.rule, f.severity, f.path], [0, 'test_count_drop', 'High', 't/a.test.mjs'], line);
+    assert.equal(f.reason, `1 test case removed without a replacement ("alpha guarded case" ${state})`, line);
+    assert.deepEqual(findTestCountDrops(diff, { mentionText: 'Skips the "alpha guarded case" test until #12 lands.' }), [], line);
+  }
+  // Already inactive and kept, re-enabled, or test.only: nothing to report.
+  assert.deepEqual(findTestCountDrops(fileDiff('t/a.test.mjs', ["-it.skip('pending guarded case', () => {", "+it.skip('pending guarded case', async () => {"])), []);
+  assert.deepEqual(findTestCountDrops(fileDiff('t/a.test.mjs', ["-it.skip('pending guarded case', () => {", "+it('pending guarded case', () => {"])), []);
+  assert.deepEqual(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", "+test.only('alpha guarded case', () => {"])), []);
+  // An inactive case deleted altogether is still a removal, as it always was.
+  assert.equal(findTestCountDrops(fileDiff('t/a.test.mjs', ["-it.skip('pending guarded case', () => {"])).length, 1);
+  // A skipped case added does not replace an active one removed.
+  assert.equal(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", "+test.skip('other guarded case', () => {"])).length, 1);
+});
+
+test('findTestCountDrops with file contents: the four conversions, a multi-line options object, a kept skip and test.only', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const run = (head) => findTestCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }));
+  for (const [line, state] of CONVERSIONS) {
+    const [f] = run(KEPT.replace("test('alpha guarded case', () => {", line));
+    assert.equal(f?.reason, `1 test case removed without a replacement ("alpha guarded case" ${state})`, line);
+  }
+  assert.match(run(KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', {\n  skip: 'flaky on CI',\n}, () => {"))[0].reason, /now skipped/);
+  assert.deepEqual(run(KEPT.replace("test('alpha guarded case'", "test.only('alpha guarded case'")), []);
+  assert.deepEqual(run(KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { skip: '' }, () => {")), [], 'an empty string is falsy');
+  const skipped = `${KEPT}it.skip('pending guarded case', () => {});\n`;
+  assert.deepEqual(findTestCountDrops(diff, readers({ 't/a.test.mjs': skipped }, { 't/a.test.mjs': skipped.replace('() => {});', 'async () => {});') })), []);
+});
+
+test('findAssertionCountDrops: a kept case that loses assertions is a High finding; added, moved, comments and strings are not', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const run = (head, mentionText = '') => findAssertionCountDrops(diff, { ...readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }), mentionText });
+  const weakened = KEPT.replace('assert.equal(add(1, 2), 3);', '// assert.equal(add(1, 2), 3);');
+  assert.deepEqual(run(weakened), [{ rule: 'assertion_count_drop', path: 't/a.test.mjs', severity: 'High', reason: '1 kept test case lost assertions ("alpha guarded case" 2 → 1)' }]);
+  assert.equal(run(KEPT.replace('assert.equal(add(1, 2), 3);', "const s = 'assert.equal(add(1, 2), 3)';")).length, 1, 'a string is not an assertion');
+  assert.deepEqual(run(weakened, 'Drops a redundant check from the "alpha guarded case" test.'), [], 'waived when the PR names the case');
+  assert.deepEqual(run(`${KEPT}test('gamma guarded case', () => {\n  assert.ok(x);\n});\n`), [], 'added case');
+  assert.deepEqual(run("test('beta guarded case', () => {\n  assert(true);\n});\ntest('alpha guarded case', () => {\n  assert.ok(ready);\n  assert.equal(add(1, 2), 3);\n});\n"), [], 'moved case');
+  assert.deepEqual(run(KEPT.replace('assert.ok(ready);', 'assert.ok(ready); // assert.ok(more)')), [], 'a commented assertion is not a gain either');
+  // Without readers (the eval suite), for new, unreadable or non-test files: nothing, never a guess.
+  assert.deepEqual(findAssertionCountDrops(diff), []);
+  assert.deepEqual(findAssertionCountDrops(fileDiff('t/a.test.mjs', ['+x'], 'new file mode 100644\n'), { readBase: () => { throw new Error('must not be read'); }, readHead: () => KEPT }), []);
+  assert.deepEqual(findAssertionCountDrops(diff, { readBase: () => { throw new Error('no such object'); }, readHead: () => weakened }), []);
+  assert.deepEqual(findAssertionCountDrops(diff, readers({}, { 't/a.test.mjs': weakened })), []);
+  assert.deepEqual(findAssertionCountDrops(fileDiff('src/a.mjs', ['-x']), readers({ 'src/a.mjs': KEPT }, { 'src/a.mjs': weakened })), []);
+  const many = ['one', 'two', 'three', 'four'].map((t) => `test('${t} guarded case', () => {\n  assert.ok(1);\n});\n`).join('');
+  assert.match(findAssertionCountDrops(diff, readers({ 't/a.test.mjs': many }, { 't/a.test.mjs': many.replaceAll('  assert.ok(1);\n', '') }))[0].reason, /^4 kept test cases lost assertions \(.*, …\)$/);
+});
+
+test('assertion_count_drop: rendered with its fix hint, deduplicated against a model finding about assertions', () => {
+  const finding = { rule: 'assertion_count_drop', path: 't/a.test.mjs', severity: 'High', reason: '1 kept test case lost assertions ("x" 2 → 1)' };
+  assert.match(formatGuardrailSection({ findings: [finding] }), /Guardrail assertion_count_drop — File: `t\/a\.test\.mjs` Root cause: 1 kept test case lost assertions[^\n]*Fix: Restore the assertions/);
+  const review = '### ⚠️ Issues Found\n- [High] The assertion on the sum is commented out — File: t/a.test.mjs Root cause: weakens the test. Fix: restore it.\n\n### 🚀 Verdict\nREQUEST_CHANGES';
+  assert.equal(withGuardrailIssues(review, { findings: [finding] }), review);
+});
+
+test('review guards (PR #345 review): a skip beside a nested option is a removal; a regex added to a kept case is not an assertion drop', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const nested = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { skip: true, signal: new AbortController({}).signal }, () => {");
+  assert.match(findTestCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': nested }))[0].reason, /"alpha guarded case" now skipped/);
+  assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", `+${nested.split('\n')[0]}`]))[0].reason, /now skipped/);
+  const regex = KEPT.replace('  assert.ok(ready);', '  const re = /\\)/;\n  assert.ok(ready);');
+  assert.deepEqual(findAssertionCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': regex })), []);
+});
+
+test('review guards (PR #345 review, round 2): a commented skip option is still a removal', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const head = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { /* flaky */ skip: true }, () => {");
+  assert.match(findTestCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }))[0].reason, /"alpha guarded case" now skipped/);
+});
+
+test('review guards (PR #345 review, round 3): an escaped quote beside a skip option is still a removal', () => {
+  const head = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { label: 'it\\'s flaky', skip: true }, () => {");
+  assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ['-x']), readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }))[0].reason, /now skipped/);
+  assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", `+${head.split('\n')[0]}`]))[0].reason, /now skipped/);
 });

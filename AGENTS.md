@@ -51,7 +51,7 @@ Context windows: `openai/gpt-oss-120b` (Groq default) has 131 072 tokens; for au
 
 These apply to **all agents** (interactive and pipeline) whenever modifying existing files:
 
-- **Test files**: never produce a test file with fewer test cases than the original. Preserve all existing tests; only add new ones or modify the specific case explicitly requested.
+- **Test files**: never produce a test file with fewer test cases than the original. Preserve all existing tests; only add new ones or modify the specific case explicitly requested. A case turned `.skip` / `.todo` (or `{ skip }` / `{ todo }`) counts as removed, and a kept case keeps its assertions (ADR-0029 amendment, issue #339).
 - **Module format**: never change a file's module system. `.mjs` files are always ESM — `import`/`export` only; `require()` is forbidden. `.cjs` or `require`-based files stay CJS.
 - **Exported function signatures**: never rename, re-type parameters, or change the return type of an exported function unless the request explicitly targets that signature.
 - **External dependencies**: never introduce an `import` or `require` for a package not already present in the file's existing imports or in `package.json`.

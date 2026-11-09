@@ -6,6 +6,7 @@ import {
 import { loadLessons } from '../lib/lessons_loader.mjs';
 import { ADVERSARIAL_AXES } from '../lib/adversarial_review.mjs';
 import { RULES } from '../lib/static_verifier.mjs';
+import { GUARDRAIL_RULES } from '../lib/guardrail_review.mjs';
 
 const NOW = Date.parse('2026-10-23T12:00:00Z');
 const day = (n) => new Date(NOW - n * 86400000).toISOString();
@@ -14,7 +15,8 @@ const sig = (id, ageDays = 1) => ({ id, ts: NOW - ageDays * 86400000 });
 
 test('the catalog covers every rule of the static verifier and every review axis, and each lesson is one bounded sentence', () => {
   for (const rule of Object.values(RULES)) assert.ok(Object.hasOwn(LESSONS, `rule:${rule}`), `rule:${rule}`);
-  for (const rule of ['unshown_file', 'withheld_file', 'mass_deletion', 'test_count_drop']) assert.ok(Object.hasOwn(LESSONS, `rule:${rule}`), `rule:${rule}`);
+  for (const rule of Object.values(GUARDRAIL_RULES)) assert.ok(Object.hasOwn(LESSONS, `rule:${rule}`), `rule:${rule} (review guardrail)`);
+  for (const rule of ['unshown_file', 'withheld_file', 'mass_deletion', 'test_count_drop', 'assertion_count_drop']) assert.ok(Object.hasOwn(LESSONS, `rule:${rule}`), `rule:${rule}`);
   for (const { id } of ADVERSARIAL_AXES) assert.ok(Object.hasOwn(LESSONS, `axis:${id}`), `axis:${id}`);
   for (const [id, text] of Object.entries(LESSONS)) {
     assert.match(id, /^(rule|axis):[a-z_]+$/);

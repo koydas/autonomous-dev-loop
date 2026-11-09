@@ -46,6 +46,21 @@ test('computeGuardrails reads the base with git and the head from the tree, and 
   }
 });
 
+test('computeGuardrails reports a case turned skip and a kept case that lost assertions (issue #339)', () => {
+  const kept = "test('kept guarded case', () => {\n  assert.equal(sum(1, 2), 3);\n  assert.ok(ready);\n});\n";
+  const repo = makeRepo({
+    base: { 'tests/a.test.mjs': kept + T('skipped guarded case') },
+    head: { 'tests/a.test.mjs': kept.replace('  assert.ok(ready);\n', '') + "test.skip('skipped guarded case', () => {});\n" },
+  });
+  try {
+    const { findings } = computeGuardrails({ rawDiff: fileDiff('tests/a.test.mjs', ['-x']), mentionText: '', repoRoot: repo.dir, mergeBase: repo.sha });
+    assert.deepEqual(findings.map((f) => [f.rule, f.severity]), [['assertion_count_drop', 'High'], ['test_count_drop', 'High']]);
+    assert.match(findings[1].reason, /"skipped guarded case" now skipped/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test('pathIsFileInTree: files, large files and symlinks exist; directories, special paths and the outside do not', () => {
   const repo = makeRepo({ base: { 'a.mjs': 'x', 'dir/inner.mjs': 'x' }, head: { 'big.mjs': 'x'.repeat(1024 * 1024 + 5) }, links: { 'link.mjs': 'a.mjs' } });
   try {

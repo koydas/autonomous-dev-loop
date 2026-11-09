@@ -382,6 +382,15 @@
           "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: config | Tests expected: no — comment-only change\n\n### ✅ Summary\nRewrites the comment above the Anthropic entries of config/models.yaml; no key or value changes.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — none, only YAML comment lines change\n- **Side effects** — config/models.yaml:42 the comment names repository variables whose values are not shown here\n- **Type integrity** — none, no mapping or scalar changes\n- **Issue fit** — none, the diff matches the description\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
         }
       ]
+    },
+    {
+      "case_id": "guardrail-test-turned-skip",
+      "repeat": 0,
+      "calls": [
+        {
+          "raw": "## 🔍 Automated Code Review\n\n### 🏷️ Change Classification\nType: fix | Tests expected: yes — behavior change in an executable helper\n\n### ✅ Summary\nMakes `windowEnd` exclusive and updates the whole-minutes expectation; CI is green.\n\n### 🔬 Adversarial Analysis\n- **Robustness** — src/lib/window.mjs:4 a zero-minute window now ends before it starts\n- **Side effects** — src/lib/window.mjs:3 callers comparing with `<=` shift by one millisecond\n- **Type integrity** — none, checked the return type\n- **Issue fit** — none, the diff matches the description\n\n### ⚠️ Issues Found\nNone.\n\n### 🚀 Verdict\nAPPROVED"
+        }
+      ]
     }
   ]
 }

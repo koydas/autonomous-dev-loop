@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { isJsFile } from './static_verifier.mjs';
+import { assertionDrops, casesChange, clipTitle } from './test_cases.mjs';
 
 // Deterministic write guard for auto-fix (ADR-0029). The model returns whole-file contents,
 // so anything it did not see in full is at risk of being dropped. Prompt guardrails
@@ -50,6 +52,7 @@ export function countDeletedLines(before, after) {
  * @param {{ existing: Map<string, string|null>, shownPaths: Set<string>, hiddenPaths: Set<string> }} context
  *   existing: current on-disk content per normalized target path (null when the file does not exist);
  *   shownPaths: files included in full in the prompt; hiddenPaths: files withheld for size/budget.
+ *   No waiver here: the auto-fix reads the review, which names the very case it would weaken (issue #339).
  * @returns {{ targetPath: string, rule: string, reason: string }[]}
  */
 export function findUnsafeChanges(changes, { existing, shownPaths, hiddenPaths }) {
@@ -80,6 +83,15 @@ export function findUnsafeChanges(changes, { existing, shownPaths, hiddenPaths }
       const afterTests = countTestCalls(fileContent);
       if (afterTests < beforeTests) {
         violations.push({ targetPath, rule: 'test_count_drop', reason: `test count drops from ${beforeTests} to ${afterTests}` });
+      } else if (isJsFile(key)) {
+        // Active cases (issue #339): a case turned skip / todo keeps the raw count but is a removal.
+        const { removed, added, became } = casesChange(before, fileContent);
+        const drop = removed.length - added.length;
+        const named = removed.slice(0, 3).map((t) => `"${clipTitle(t)}" ${became.get(t) ?? 'removed'}`).join(', ');
+        if (drop > 0) violations.push({ targetPath, rule: 'test_count_drop', reason: `active test cases drop by ${drop} (${named})` });
+      }
+      for (const d of isJsFile(key) ? assertionDrops(before, fileContent) : []) {
+        violations.push({ targetPath, rule: 'assertion_count_drop', reason: `test case "${clipTitle(d.title)}" keeps its title but its assertions drop from ${d.was} to ${d.is}` });
       }
     }
   }
