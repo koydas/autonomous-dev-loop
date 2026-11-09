@@ -495,3 +495,9 @@ test('review guards (PR #345 review): a skip beside a nested option is a removal
   const regex = KEPT.replace('  assert.ok(ready);', '  const re = /\\)/;\n  assert.ok(ready);');
   assert.deepEqual(findAssertionCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': regex })), []);
 });
+
+test('review guards (PR #345 review, round 2): a commented skip option is still a removal', () => {
+  const diff = fileDiff('t/a.test.mjs', ['-x']);
+  const head = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { /* flaky */ skip: true }, () => {");
+  assert.match(findTestCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }))[0].reason, /"alpha guarded case" now skipped/);
+});

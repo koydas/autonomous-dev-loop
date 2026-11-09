@@ -19,14 +19,12 @@ export const MIN_TITLE_CHARS = 8;
 
 // Masked reading: a statement-start call (comments gone, strings are `"S<n>"`). 1: modifiers, 2: title string index.
 const CASE_CALL = /(?:^|[;\n{}])[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)((?:\.[A-Za-z]+)*)\s*\(\s*(?:"S(\d+)")?/g;
-// Raw reading: a line-start call on the unmasked text. 1: modifiers, 2: quote, 3: title.
-const RAW_CASE_CALL = /^[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)((?:\.[A-Za-z]+)*)\s*\(\s*(?:(['"`])((?:\\.|(?!\2)[^\\\n])*)\2)?/gm;
+// Raw reading: a line-start call on the unmasked text (block comments before the title, on its line). 1: modifiers, 2: quote, 3: title.
+const RAW_CASE_CALL = /^[ \t]*(?:(?:await|void)[ \t]+)?(?:test|it)((?:\.[A-Za-z]+)*)\s*\(\s*(?:\/\*(?:[^*\n]|\*(?!\/))*\*\/\s*)*(?:(['"`])((?:\\.|(?!\2)[^\\\n])*)\2)?/gm;
 // One line of a diff (the title alternatives are disjoint: a backslash is only ever consumed by `\\.`, so an unclosed
 // title is linear): `re.test(x)` inside an assertion does not open a statement, so it is not a case.
-const CASE_LINE = /^\s*(?:(?:await|void)\s+)?(?:test|it)((?:\.[A-Za-z]+)*)\s*\(\s*(?:(['"`])((?:\\.|(?!\2)[^\\])*)\2)?/;
-// Where the options object opens, right after the title (or first). Its body is read by `objectBody`, braces balanced.
-const OPTIONS_AFTER_TITLE = /\s*,\s*\{/y;
-const OPTIONS_FIRST = /\s*\{/y;
+const CASE_LINE = /^\s*(?:(?:await|void)\s+)?(?:test|it)((?:\.[A-Za-z]+)*)\s*\(\s*(?:\/\*(?:[^*]|\*(?!\/))*\*\/\s*)*(?:(['"`])((?:\\.|(?!\2)[^\\])*)\2)?/;
+// The options object opens right after the title (or first); comments around it are skipped (raw text, diff lines).
 // An options object longer than this is read up to the cap: the properties seen so far still count.
 export const MAX_OPTIONS_CHARS = 2000;
 const OPTION_ENTRY = /^\s*(?:(skip|todo)|"S(\d+)"|(['"])(skip|todo)\3)\s*(?::([\s\S]*))?$/;
@@ -74,23 +72,49 @@ function stateOf(modifiers, options, stringAt) {
   return options === null ? CASE_STATES.ACTIVE : stateOfOptions(options, stringAt);
 }
 
-// The text of an object whose `{` is just before `from`, up to its balanced `}` (or the cap / end of text). Quoted text
-// is skipped, so a brace or a comma inside a string (raw text) does not count.
-function objectBody(text, from) {
+// Index past the whitespace and comments at `i`, bounded by MAX_OPTIONS_CHARS (masked code has none; raw text and diff
+// lines do). An unclosed comment ends the search at the bound: many of them cannot make the reading quadratic.
+function skipTrivia(text, i, limit = text.length) {
+  const end = Math.min(limit, i + MAX_OPTIONS_CHARS);
+  for (;;) {
+    while (i < end && /\s/.test(text[i])) i += 1;
+    const block = text.startsWith('/*', i);
+    if (!block && !text.startsWith('//', i)) return i;
+    const close = text.slice(i + 2, end).indexOf(block ? '*/' : '\n');
+    if (close < 0) return end;
+    i = i + 2 + close + (block ? 2 : 1);
+  }
+}
+
+// The text of an object whose `{` is just before `from`, up to its balanced `}` (or the cap / end of text), comments
+// removed. Quoted text is skipped, so a brace, a comma or a comment marker inside a string does not count.
+function objectBody(text, from, limit = text.length) {
   let depth = 0;
-  const end = Math.min(text.length, from + MAX_OPTIONS_CHARS);
+  let out = '';
+  const end = Math.min(limit, from + MAX_OPTIONS_CHARS);
   for (let i = from; i < end; i += 1) {
     const ch = text[i];
+    if (ch === '/' && (text[i + 1] === '*' || text[i + 1] === '/')) {
+      const close = text[i + 1] === '*' ? text.slice(i + 2, end).indexOf('*/') : text.slice(i + 2, end).indexOf('\n');
+      out += ' ';
+      i = close < 0 ? end : i + 2 + close + (text[i + 1] === '*' ? 1 : 0);
+      continue;
+    }
     if (ch === '"' || ch === "'" || ch === '`') {
       const close = text.slice(i + 1, end).indexOf(ch); // bounded by the cap: an unclosed quote cannot make it quadratic
-      i = close < 0 ? end : i + 1 + close;
-    } else if (ch === '{' || ch === '(' || ch === '[') depth += 1;
+      const stop = close < 0 ? end : i + 1 + close;
+      out += text.slice(i, stop + 1);
+      i = stop;
+      continue;
+    }
+    if (ch === '{' || ch === '(' || ch === '[') depth += 1;
     else if (ch === '}' || ch === ')' || ch === ']') {
-      if (depth === 0) return text.slice(from, i);
+      if (depth === 0) return out;
       depth -= 1;
     }
+    out += ch;
   }
-  return text.slice(from, end);
+  return out;
 }
 
 // The comma-separated parts of an object body at its own level: a comma inside `{}`, `()`, `[]` or a string is not one.
@@ -115,10 +139,15 @@ function topLevelParts(body) {
   return parts;
 }
 
-const optionsAt = (text, index, titled) => {
-  const re = titled ? OPTIONS_AFTER_TITLE : OPTIONS_FIRST;
-  re.lastIndex = index;
-  return re.exec(text) ? objectBody(text, re.lastIndex) : null;
+// `limit`: where the next case call starts. An unclosed object never reads into it, so a file of many unclosed objects
+// is read once in total, not once per case.
+const optionsAt = (text, index, titled, limit = text.length) => {
+  let i = skipTrivia(text, index, limit);
+  if (titled) {
+    if (text[i] !== ',') return null;
+    i = skipTrivia(text, i + 1, limit);
+  }
+  return text[i] === '{' && i < limit ? objectBody(text, i + 1, limit) : null;
 };
 
 const rawStringAt = (token) => {
@@ -167,14 +196,16 @@ export function maskedCases(source) {
   };
   const close = closingParens(code);
   const asserts = [...code.matchAll(ASSERTION)].map((m) => m.index);
-  return [...code.matchAll(CASE_CALL)].map((m) => {
+  const calls = [...code.matchAll(CASE_CALL)];
+  return calls.map((m, k) => {
     const titled = m[2] !== undefined;
     const end = m.index + m[0].length;
+    const next = k + 1 < calls.length ? calls[k + 1].index : code.length;
     const open = m.index + m[0].indexOf('(');
     const closeAt = close.get(open);
     return {
       title: titled ? strings[Number(m[2])] : DYNAMIC_TITLE,
-      state: stateOf(m[1], optionsAt(code, end, titled), stringAt),
+      state: stateOf(m[1], optionsAt(code, end, titled, Math.max(end, next)), stringAt),
       assertions: closeAt === undefined || AMBIGUOUS_BODY.test(code.slice(open, closeAt)) ? null : countBetween(asserts, open, closeAt),
     };
   });
@@ -183,11 +214,14 @@ export function maskedCases(source) {
 /** Cases of a whole file on the raw text: every line-start call, fixtures and comments included, no lexer to fool. */
 export function rawCases(source) {
   const text = String(source ?? '');
-  return [...text.matchAll(RAW_CASE_CALL)].map((m) => {
+  const calls = [...text.matchAll(RAW_CASE_CALL)];
+  return calls.map((m, k) => {
     const titled = m[3] !== undefined;
+    const end = m.index + m[0].length;
+    const next = k + 1 < calls.length ? calls[k + 1].index : text.length;
     return {
       title: m[2] === '`' || !titled ? DYNAMIC_TITLE : m[3],
-      state: stateOf(m[1], optionsAt(text, m.index + m[0].length, titled), rawStringAt),
+      state: stateOf(m[1], optionsAt(text, end, titled, Math.max(end, next)), rawStringAt),
     };
   });
 }

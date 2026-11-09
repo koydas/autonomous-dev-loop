@@ -71,3 +71,7 @@ test('findUnsafeChanges (PR #345 review): a skip beside a nested option is a dro
   assert.match(guardTest(CASES, CASES.replace("test('alpha case', () => {", "test('alpha case', { skip: true, signal: new AbortController({}).signal }, () => {"))[0].reason, /"alpha case" skipped/);
   assert.deepEqual(guardTest(CASES, CASES.replace('  assert.ok(ready);', '  const re = /\\)/;\n  assert.ok(ready);')), []);
 });
+
+test('findUnsafeChanges (PR #345 review, round 2): a commented skip option is still a test_count_drop', () => {
+  assert.match(guardTest(CASES, CASES.replace("test('alpha case', () => {", "test('alpha case', { /* flaky */ skip: true }, () => {"))[0].reason, /"alpha case" skipped/);
+});

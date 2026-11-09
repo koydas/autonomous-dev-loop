@@ -139,3 +139,41 @@ test('a body holding a regex literal or a division is not read: no assertion dro
   const withRe = (n) => `const re = /\\)/;\ntest('kept test case', () => {\n${'  assert.ok(x);\n'.repeat(n)}});\n`;
   assert.deepEqual(assertionDrops(withRe(2), withRe(1)), [{ title: 'kept test case', was: 2, is: 1 }]);
 });
+
+// PR #345 review (Codex, round 2): a comment must not blind the raw reading, which a removal needs to agree.
+test('comments around and inside an options object, and before the title, do not hide a skip on any reading', () => {
+  const base = "test('kept test case', () => {});\n";
+  const forms = [
+    "test('kept test case', { /* flaky */ skip: true }, () => {});\n",
+    "test('kept test case', /* why */ { skip: true }, () => {});\n",
+    "test('kept test case', // why\n  { skip: true }, () => {});\n",
+    "test('kept test case', {\n  // flaky on CI\n  skip: true,\n}, () => {});\n",
+    "test(/* c */ 'kept test case', { skip: true }, () => {});\n",
+    "test('kept test case', { label: 'a /* b', skip: true }, () => {});\n",
+  ];
+  for (const head of forms) {
+    assert.deepEqual([maskedCases(head)[0].state, rawCases(head)[0].state, rawCases(head)[0].title], [SKIPPED, SKIPPED, 'kept test case'], head);
+    assert.deepEqual(casesChange(base, head).removed, ['kept test case'], head);
+  }
+  assert.equal(lineCases(["test('kept test case', /* why */ { /* flaky */ todo: true }, () => {"])[0].state, TODO);
+  assert.equal(lineCases(["test(/* c */ 'kept test case', () => {"])[0].title, 'kept test case');
+  // A skip written only inside a comment is no option; an unclosed comment stops at the bound.
+  assert.equal(rawCases("test('kept test case', { timeout: 5 /* skip: true */ }, () => {});")[0].state, ACTIVE);
+  assert.equal(rawCases("test('kept test case', { timeout: 5 // skip: true\n }, () => {});")[0].state, ACTIVE);
+  assert.equal(rawCases("test('kept test case', /* never closed { skip: true }")[0].state, ACTIVE);
+  assert.equal(rawCases("test('kept test case', // never ends")[0].state, ACTIVE);
+  assert.equal(rawCases("test('kept test case', { skip: true /* never closed")[0].state, SKIPPED);
+  assert.equal(rawCases(`test('kept test case', ${' '.repeat(MAX_OPTIONS_CHARS)}{ skip: true }, () => {});`)[0].state, ACTIVE, 'past the bound');
+});
+
+test('hostile text: many unclosed comments and options objects stay linear', () => {
+  const lines = 20000;
+  const hostile = ["test(/* x\n", "test('t', /* x\n", "test('t', { /* x\n", "test('t', { a: '\n"].map((l) => l.repeat(lines));
+  for (const text of hostile) {
+    const started = Date.now();
+    maskedCases(text);
+    rawCases(text);
+    casesChange(text, text);
+    assert.ok(Date.now() - started < 5000, `${JSON.stringify(text.slice(0, 16))}: ${Date.now() - started} ms`);
+  }
+});
