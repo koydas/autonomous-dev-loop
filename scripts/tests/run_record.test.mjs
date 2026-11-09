@@ -840,3 +840,10 @@ test('review.verdict publishes verified_axes (ADR-0065, shadow) as a count, like
   const record = redactTrace(trace({ events: [verdict] }), { env: ENV });
   assert.deepEqual(record.events[0].meta, { prNumber: 5, verdict: 'APPROVE', adversarial_points: 2, adversarial_axes: ['robustness', 'side_effects'], verified_axes: 3 });
 });
+
+test('review.verdict publishes unaddressed_docs and unaddressed_docs_generic (#340, shadow) as counts; a path, a document line or a term name is never published', () => {
+  const verdict = ev('review.verdict', { prNumber: 5, verdict: 'APPROVE', unaddressed_docs: 2, unaddressed_docs_generic: 1, unaddressed_docs_files: ['docs/pricing.md'], unaddressed_docs_terms: ['applyDiscount'], doc_text: 'takes two arguments' });
+  const record = redactTrace(trace({ events: [verdict] }), { env: ENV });
+  assert.deepEqual(record.events[0].meta, { prNumber: 5, verdict: 'APPROVE', unaddressed_docs: 2, unaddressed_docs_generic: 1 });
+  assert.ok(!JSON.stringify(record).match(/pricing|applyDiscount|two arguments/));
+});
