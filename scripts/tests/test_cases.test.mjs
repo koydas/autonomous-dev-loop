@@ -177,3 +177,30 @@ test('hostile text: many unclosed comments and options objects stay linear', () 
     assert.ok(Date.now() - started < 5000, `${JSON.stringify(text.slice(0, 16))}: ${Date.now() - started} ms`);
   }
 });
+
+// PR #345 review (Codex, round 3): escaped quotes; and the root cause: the raw reading confirms presence, never state.
+test('escaped quotes in a sibling option do not hide a skip, on any reading', () => {
+  const base = "test('kept test case', () => {});\n";
+  const forms = [
+    "test('kept test case', { label: 'it\\'s flaky', skip: true }, () => {});\n",
+    'test(\'kept test case\', { label: "say \\"hi\\"", todo: true }, () => {});\n',
+    "test('kept test case', { label: 'ends with a backslash \\\\', skip: true }, () => {});\n",
+  ];
+  for (const head of forms) {
+    const want = head.includes('todo') ? TODO : SKIPPED;
+    assert.deepEqual([maskedCases(head)[0].state, rawCases(head)[0].state, lineCases([head.trim()])[0].state], [want, want, want], head);
+    assert.deepEqual(casesChange(base, head).removed, ['kept test case'], head);
+  }
+  assert.equal(rawCases("test('kept test case', { label: 'a \\', skip: true', timeout: 1 }, () => {});")[0].state, ACTIVE, 'the skip is inside the string');
+});
+
+test('casesChange: a deactivation needs the raw reading to see the case, not to agree on its state; hidden gains only', () => {
+  const base = "test('kept test case', () => {});\n";
+  // The case is gone from the raw reading (not at a line start): the masked skip alone is not reported.
+  assert.deepEqual(casesChange(base, "x; test.skip('kept test case', () => {});\n").removed, []);
+  // A case only the raw reading sees (inside a fixture) is a gain; one the masked reading also sees is counted once.
+  const fixture = "const fx = `\ntest('fixture case', () => {});\n`;\n";
+  assert.deepEqual(casesChange(base, base + fixture).added, ['fixture case']);
+  assert.deepEqual(casesChange(base, `${base}test('new case', () => {});\n`).added, ['new case']);
+  assert.deepEqual(casesChange(base, `${base}test.skip('new case', () => {});\n`).added, [], 'an inactive case seen by the masked reading is no gain');
+});

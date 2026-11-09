@@ -86,6 +86,15 @@ function skipTrivia(text, i, limit = text.length) {
   }
 }
 
+// Index of the quote closing the string opened at `i` (backslash escapes honoured), or -1 before `end`.
+function quoteEnd(text, i, end) {
+  for (let j = i + 1; j < end; j += 1) {
+    if (text[j] === '\\') j += 1;
+    else if (text[j] === text[i]) return j;
+  }
+  return -1;
+}
+
 // The text of an object whose `{` is just before `from`, up to its balanced `}` (or the cap / end of text), comments
 // removed. Quoted text is skipped, so a brace, a comma or a comment marker inside a string does not count.
 function objectBody(text, from, limit = text.length) {
@@ -101,8 +110,8 @@ function objectBody(text, from, limit = text.length) {
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`') {
-      const close = text.slice(i + 1, end).indexOf(ch); // bounded by the cap: an unclosed quote cannot make it quadratic
-      const stop = close < 0 ? end : i + 1 + close;
+      const close = quoteEnd(text, i, end); // bounded by the cap: an unclosed quote cannot make it quadratic
+      const stop = close < 0 ? end : close;
       out += text.slice(i, stop + 1);
       i = stop;
       continue;
@@ -126,7 +135,7 @@ function topLevelParts(body) {
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
     if (ch === '"' || ch === "'" || ch === '`') {
-      const close = text.indexOf(ch, i + 1);
+      const close = quoteEnd(text, i, text.length);
       i = close < 0 ? text.length : close;
     } else if (ch === '{' || ch === '(' || ch === '[') depth += 1;
     else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
@@ -276,29 +285,40 @@ export function compareCases(was, is) {
 }
 
 /**
- * What a whole file lost and gained, read twice. A case counts as lost only when both readings agree it is gone: a
- * lexer fooled into hiding code cannot make a kept case look removed, and a fixture can only make a removal go unseen,
- * which is the safe side for a rule that blocks. A gain counts when either reading sees it.
+ * What a whole file lost and gained, read twice. The masked reading (the real lexer) decides; the raw one only confirms
+ * that a case is there or gone, never its state, which it reads with a weaker lexer (PR #345 review: a comment or an
+ * escaped quote in the options must not hide a skip):
+ * - a case gone from the masked reading is lost only when the raw reading agrees (gone, or inactive): a lexer fooled
+ *   into hiding code cannot make a kept case look removed, and a fixture can only make a removal go unseen;
+ * - a case the masked reading sees turned skip / todo is lost when the raw reading still sees the case, in any state;
+ * - a gain counts when the masked reading sees it, or when the raw one sees a title the masked reading does not see at
+ *   all (a case the lexer hid). A raw misreading of a case's state never pays for a removal.
  * @returns {{ removed: string[], added: string[], became: Map<string, string> }}
  */
 export function casesChange(before, after) {
-  const masked = compareCases(maskedCases(before), maskedCases(after));
-  const raw = compareCases(rawCases(before), rawCases(after));
+  const maskedIs = maskedCases(after);
+  const rawIs = rawCases(after);
+  const masked = compareCases(maskedCases(before), maskedIs);
+  const raw = compareCases(rawCases(before), rawIs);
   const lostRaw = raw.removed.map((r) => r.title);
-  const kept = masked.removed.filter((r) => take(lostRaw, r.title));
+  const presentRaw = rawIs.map((c) => c.title);
+  const kept = masked.removed.filter((r) => (r.became ? take(presentRaw, r.title) : take(lostRaw, r.title)));
   const became = new Map(kept.filter((r) => r.became).map((r) => [r.title, r.became]));
-  return { removed: kept.map((r) => r.title), added: [...masked.added, ...without(raw.added, masked.added)], became };
+  const seenMasked = maskedIs.map((c) => c.title);
+  const hidden = without(raw.added, masked.added).filter((t) => !seenMasked.includes(t));
+  return { removed: kept.map((r) => r.title), added: [...masked.added, ...hidden], became };
 }
 
 /**
- * Kept cases that lost assertions: a plain title active before and after on both readings, its body read without doubt
- * on both sides, paired by title in order. A case added, removed or moved to another file is not compared.
+ * Kept cases that lost assertions: a plain title active before and after (masked reading) and present on the raw one,
+ * its body read without doubt on both sides, paired by title in order. A case added, removed or moved to another file is not compared.
  * @returns {{ title: string, was: number, is: number }[]}
  */
 export function assertionDrops(before, after) {
-  const activeTitles = (list) => list.filter((c) => isActive(c) && c.title !== DYNAMIC_TITLE).map((c) => c.title);
-  const rawWas = activeTitles(rawCases(before));
-  const rawIs = activeTitles(rawCases(after));
+  // The raw reading confirms the case is there (any state: its state is the masked reading's call).
+  const presentTitles = (list) => list.map((c) => c.title);
+  const rawWas = presentTitles(rawCases(before));
+  const rawIs = presentTitles(rawCases(after));
   const byTitle = (list) => {
     const map = new Map();
     for (const c of list) if (isActive(c) && c.title !== DYNAMIC_TITLE) map.set(c.title, [...(map.get(c.title) ?? []), c.assertions]);

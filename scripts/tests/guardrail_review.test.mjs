@@ -501,3 +501,9 @@ test('review guards (PR #345 review, round 2): a commented skip option is still 
   const head = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { /* flaky */ skip: true }, () => {");
   assert.match(findTestCountDrops(diff, readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }))[0].reason, /"alpha guarded case" now skipped/);
 });
+
+test('review guards (PR #345 review, round 3): an escaped quote beside a skip option is still a removal', () => {
+  const head = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { label: 'it\\'s flaky', skip: true }, () => {");
+  assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ['-x']), readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }))[0].reason, /now skipped/);
+  assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", `+${head.split('\n')[0]}`]))[0].reason, /now skipped/);
+});
