@@ -27,7 +27,7 @@ const FLOOR = {
     },
   },
   review: {
-    cases: 37,
+    cases: 38,
     thresholds: {
       'scores.verdict_match.mean': { min: 0.75 },
       'per_class.request_changes.recall': { min: 0.8 },
@@ -135,6 +135,8 @@ const PINNED = {
     "truncated-claim-tests-past-cut": ["approve", "875c4df1e00a"],
     // Issue #339: a test case turned test.skip; the guardrail check finds it in code, gated like RV-03.
     "guardrail-test-turned-skip": ["request_changes", "8ed202bb021e"],
+    // Issue #341: PR #194 was known-gap (expected missed on Groq); the check_then_use guardrail finds the lstat-then-read in code from the diff.
+    "incident-toctou-untested-claim": ["request_changes", "3f6da6d06c69"],
   },
 };
 
@@ -144,8 +146,6 @@ const KNOWN_GAP = {
   autofix: {},
   validation: {},
   review: {
-    // PR #194 incident, expected missed on Groq: the #199 provider comparison case.
-    "incident-toctou-untested-claim": "3f6da6d06c69",
     // RV-01: Codex findings on PR #276, #279 and #283 that the review approved; outside the gate until a live run shows the review finds them.
     "incident-low-continuation-axes": "685e8b033c27",
     "incident-docs-contradict-new-behavior": "5de4f9671656",

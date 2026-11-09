@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractExportedSignatures } from '../lib/static_verifier.mjs';
 import {
-  AMBIGUOUS_PARAMETER_TEXT, parseDiffChanges, findTestCountDrops, findAssertionCountDrops, findFileRuleViolations, collectGuardrailFindings, confirmedOnRawText, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
+  AMBIGUOUS_PARAMETER_TEXT, parseDiffChanges, findCheckThenUseFindings, findTestCountDrops, findAssertionCountDrops, findFileRuleViolations, collectGuardrailFindings, confirmedOnRawText, declaredPackages, formatGuardrailSection, mayStillExport, withGuardrailIssues, guardrailSignature, MAX_FINDINGS, MAX_FILES,
 } from '../lib/guardrail_review.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -506,4 +506,47 @@ test('review guards (PR #345 review, round 3): an escaped quote beside a skip op
   const head = KEPT.replace("test('alpha guarded case', () => {", "test('alpha guarded case', { label: 'it\\'s flaky', skip: true }, () => {");
   assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ['-x']), readers({ 't/a.test.mjs': KEPT }, { 't/a.test.mjs': head }))[0].reason, /now skipped/);
   assert.match(findTestCountDrops(fileDiff('t/a.test.mjs', ["-test('alpha guarded case', () => {", `+${head.split('\n')[0]}`]))[0].reason, /now skipped/);
+});
+
+test('parseDiffChanges keeps the new-side lines of each hunk with their numbers (issue #341)', () => {
+  const diff = 'diff --git a/a.mjs b/a.mjs\n--- a/a.mjs\n+++ b/a.mjs\n@@ -3,4 +10,5 @@ export function f() {\n keep\n-gone\n+one\n+two\n keep2\n\\ No newline at end of file\n@@ -40 +50 @@\n+later\n';
+  const [file] = parseDiffChanges(diff);
+  assert.equal(file.hunks.length, 2);
+  assert.deepEqual([file.hunks[0].next, file.hunks[0].context], [10, 'export function f() {']);
+  assert.deepEqual(file.hunks[0].lines.map((l) => [l.text, l.added, l.no]), [['keep', false, 10], ['one', true, 11], ['two', true, 12], ['keep2', false, 13]]);
+  assert.deepEqual(file.hunks[1].lines.map((l) => [l.text, l.no]), [['later', 50]]);
+  assert.equal(parseDiffChanges('diff --git a/a.mjs b/a.mjs\n--- a/a.mjs\n+++ b/a.mjs\n@@ weird @@\n+x\n')[0].hunks[0].lines[0].no, null);
+});
+
+test('findCheckThenUseFindings: the PR #194 incident is flagged with both lines, as Medium (issue #341)', () => {
+  const c = incident('incident-toctou-untested-claim');
+  const findings = findCheckThenUseFindings(c.input.diff, { mentionText: `${c.input.title}\n${c.input.body}` });
+  assert.equal(findings.length, 1);
+  assert.deepEqual([findings[0].rule, findings[0].severity, findings[0].path], ['check_then_use', 'Medium', 'src/upload/read_manifest.mjs']);
+  assert.match(findings[0].reason, /lstat\(full\)` \(line 6\).*readFile\(full\)` \(line 8\).* in readManifest/);
+  assert.deepEqual(findCheckThenUseFindings(c.input.diff, { mentionText: 'The check-then-use in readManifest is intentional.' }), []);
+});
+
+test('findCheckThenUseFindings skips tests, other languages, deleted files and the file cap (issue #341)', () => {
+  const body = ['function f(p) {', '+  fs.statSync(p);', '+  fs.readFileSync(p);', '}'];
+  assert.equal(findCheckThenUseFindings(fileDiff('src/a.cjs', body)).length, 1);
+  assert.equal(findCheckThenUseFindings(fileDiff('src/a.js', body)).length, 1);
+  assert.deepEqual(findCheckThenUseFindings(fileDiff('test/a.test.mjs', body)), []);
+  assert.deepEqual(findCheckThenUseFindings(fileDiff('src/a.ts', body)), []);
+  assert.deepEqual(findCheckThenUseFindings(fileDiff('src/a.py', body)), []);
+  assert.deepEqual(findCheckThenUseFindings(fileDiff('src/gone.mjs', body, 'deleted file mode 100644\n')), []);
+  assert.deepEqual(findCheckThenUseFindings(''), []);
+  const many = Array.from({ length: MAX_FILES + 2 }, (_, i) => fileDiff(`src/f${i}.mjs`, body)).join('');
+  assert.equal(findCheckThenUseFindings(many).length, MAX_FILES);
+  const noNumbers = 'diff --git a/a.mjs b/a.mjs\n--- a/a.mjs\n+++ b/a.mjs\n@@ x @@\n+fs.statSync(p);\n+fs.readFileSync(p);\n';
+  assert.doesNotMatch(findCheckThenUseFindings(noNumbers)[0].reason, /\(line/);
+});
+
+test('a check_then_use finding is formatted, signed and feeds the eval review text like the other rules (issue #341)', () => {
+  const [f] = findCheckThenUseFindings(fileDiff('src/a.mjs', ['function f(p) {', '+  fs.statSync(p);', '+  fs.readFileSync(p);', '}']));
+  assert.match(formatGuardrailSection({ findings: [f] }), /\[Medium\] Guardrail check_then_use — File: `src\/a\.mjs` Root cause: .*Open the file once/);
+  assert.deepEqual(guardrailSignature([f]), ['guardrail:check_then_use:src/a.mjs']);
+  assert.match(withGuardrailIssues('### Verdict\nAPPROVED', { findings: [f] }), /Guardrail check_then_use/);
+  const reported = '### ⚠️ Issues Found\n- [High] src/a.mjs: the stat then read on the same path is a TOCTOU race\n';
+  assert.doesNotMatch(withGuardrailIssues(reported, { findings: [f] }), /Guardrails\)/, 'a model finding on the same defect is not listed twice');
 });

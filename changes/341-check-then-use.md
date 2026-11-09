@@ -1,0 +1,3 @@
+### Added
+- Guardrail rule `check_then_use` (Medium, issue #341, ADR-0060 amendment): in one function body, a `stat` / `lstat` / `access` / `exists` call on an identifier followed by a `readFile` / `open` / `writeFile` / `rm` / `unlink` / `rename` / `copyFile` / `readdir` call on the same identifier (TOCTOU) blocks approval in the review, citing file and both lines. Read from the diff alone (`scripts/lib/check_then_use.mjs`), so it also runs in the `review` eval suite. `open` then `fh.stat()` is not flagged. Waiver: a PR-description paragraph that names the function and acknowledges the risk. Lesson `rule:check_then_use`.
+- `incident-toctou-untested-claim` (PR #194) leaves `known-gap` for the gate; review floor 37 → 38.

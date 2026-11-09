@@ -35,10 +35,14 @@ function stringEnd(src, start) {
   return -1;
 }
 
+const lineBreaks = (text) => text.split('\n').length - 1;
+
 // A template literal opening at `start`: index just past it, and its `${…}` expressions, which
 // may themselves hold strings, braces and nested template literals.
 function readTemplate(src, start) {
   const exprs = [];
+  const gaps = [];
+  let segment = start + 1;
   let i = start + 1;
   while (i < src.length && src[i] !== '`') {
     if (src[i] === '\\') {
@@ -53,16 +57,20 @@ function readTemplate(src, start) {
         else if (c === '{') depth += 1;
         else if (c === '}' && depth-- === 0) break;
       }
+      gaps.push(lineBreaks(src.slice(segment, i)));
       exprs.push(src.slice(i + 2, j));
       i = j + 1;
+      segment = i;
     } else {
       i += 1;
     }
   }
-  return { end: Math.min(i + 1, src.length), exprs };
+  gaps.push(lineBreaks(src.slice(segment, i)));
+  // `gaps[k]`: line breaks of the literal text before expression k; the last one follows the last expression.
+  return { end: Math.min(i + 1, src.length), exprs, gaps };
 }
 
-function mask(src, strings) {
+function mask(src, strings, keepLines = false) {
   let out = '';
   let i = 0;
   while (i < src.length) {
@@ -72,8 +80,9 @@ function mask(src, strings) {
       i = eol === -1 ? src.length : eol;
     } else if (c === '/' && src[i + 1] === '*') {
       const close = src.indexOf('*/', i + 2);
+      const from = i;
       i = close === -1 ? src.length : close + 2;
-      out += ' ';
+      out += keepLines ? ` ${'\n'.repeat(lineBreaks(src.slice(from, i)))}` : ' ';
     } else if (c === '"' || c === "'") {
       const end = stringEnd(src, i);
       if (end === -1) {
@@ -82,12 +91,16 @@ function mask(src, strings) {
       } else {
         strings.push(src.slice(i + 1, end - 1));
         out += `"S${strings.length - 1}"`;
+        // A `\`-continued string spans lines: keep them so a position stays on its source line.
+        if (keepLines) out += '\n'.repeat(lineBreaks(src.slice(i, end)));
         i = end;
       }
     } else if (c === '`') {
       // The literal text is never a specifier, but the code in its `${…}` is.
-      const { end, exprs } = readTemplate(src, i);
-      out += `\`\`${exprs.map((e) => `;${mask(e, strings)};`).join('')}`;
+      // With `keepLines`, the literal text's line breaks stay in front of the expression they precede.
+      const { end, exprs, gaps } = readTemplate(src, i);
+      const gap = (k) => (keepLines ? '\n'.repeat(gaps[k]) : '');
+      out += `\`\`${exprs.map((e, k) => `${gap(k)};${mask(e, strings, keepLines)};`).join('')}${gap(exprs.length)}`;
       i = end;
     } else {
       out += c;
@@ -100,11 +113,12 @@ function mask(src, strings) {
 /**
  * Removes comments and replaces each quoted string with `"S<n>"`, so the regexes below only see
  * code. A template literal keeps only its `${…}` expressions (nesting included), masked the same
- * way. Heuristic lexer: a regex literal containing a quote, a backtick or `//` can mask the code after it.
+ * way. `keepLines` keeps the line breaks of block comments and template literals, so a position in the
+ * masked code stays on its source line. Heuristic lexer: a regex literal containing a quote, a backtick or `//` can mask the code after it.
  */
-export function maskSource(source) {
+export function maskSource(source, { keepLines = false } = {}) {
   const strings = [];
-  const code = mask(String(source ?? ''), strings);
+  const code = mask(String(source ?? ''), strings, keepLines);
   return { code, strings };
 }
 

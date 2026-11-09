@@ -24,7 +24,7 @@ import { loadPrompt } from './prompts.mjs';
 import { detectProvider, GROQ_MODEL_DEFAULTS, loadProviderConfig, reviewMaxDiffChars } from './config.mjs';
 import { buildReviewPrompt, loadReviewSystemPrompt, parseReviewVerdict } from './review_prompt.mjs';
 import { resolveReviewDecision } from './review_decision.mjs';
-import { collectGuardrailFindings, findTestCountDrops, withGuardrailIssues } from './guardrail_review.mjs';
+import { collectGuardrailFindings, findCheckThenUseFindings, findTestCountDrops, withGuardrailIssues } from './guardrail_review.mjs';
 import { substantiateFindings, evidenceCounts, impactLookup } from './finding_evidence.mjs';
 import { MIN_CRITICAL_POINTS, verifyAxes } from './adversarial_review.mjs';
 import { analyzeFindings } from './review_findings.mjs';
@@ -281,8 +281,9 @@ export const reviewSuite = {
     // so a format regression shows in error_rate rather than inflating request_changes recall.
     if (!llmVerdict) throw new Error('No verdict line in the review (expected APPROVED or REQUEST_CHANGES)');
     // The same resolution as pr_review.mjs (evidence, cut code, adversarial protocol): the scored verdict is the published one.
-    // RV-03: the guardrail checks that need only the diff (a test case removed); the file-based ones need the PR tree.
-    const guardrails = collectGuardrailFindings([findTestCountDrops(input.diff, { mentionText: `${input.title}\n${input.body || '(no description provided)'}` })]);
+    // RV-03: the guardrail checks that need only the diff (a test case removed, a check-then-use on a path); the file-based ones need the PR tree.
+    const guardrailText = { mentionText: `${input.title}\n${input.body || '(no description provided)'}` };
+    const guardrails = collectGuardrailFindings([findTestCountDrops(input.diff, guardrailText), findCheckThenUseFindings(input.diff, guardrailText)]);
     // RV-04a: proof for the findings about code outside the diff; with no tree, the lines of the case's Impact analysis.
     const findingAssessment = substantiateFindings({ review: cleanReview, rawDiff: input.diff, lookup: impactLookup({ symbols: [...(input.impact?.symbols ?? []), ...(input.doc_mentions?.terms ?? [])] }) });
     const { verdict, reason, withheldFor, adversarial } = resolveReviewDecision({

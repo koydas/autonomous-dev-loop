@@ -945,14 +945,15 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   // decideVerdict on recorded output: an approval over a timed-out check is withheld.
   assert.equal(byId['evidence-unverified-timeout'].output.llm_verdict, 'APPROVED');
   assert.equal(byId['evidence-unverified-timeout'].label, 'withheld');
-  // Incident cases: an approval of a clean diff whose code was cut is withheld (ADR-0038); the known-gap
-  // TOCTOU case is missed, as on Groq, and stays out of the gated metrics (ADR-0031 §7).
+  // Incident cases: an approval of a clean diff whose code was cut is withheld (ADR-0038).
   assert.equal(byId['incident-clean-code-cut'].label, 'withheld');
   assert.equal(byId['incident-note-instead-of-fix'].scores.flags_issue, 1);
   assert.equal(byId['incident-stale-refs-shared-phrasing'].scores.no_false_alarm, 1);
   // PR #311: a clean change whose review is readable and approved (the format regression it came from is an errored run).
   assert.deepEqual([byId['incident-unreadable-verdict-clean-change'].label, byId['incident-unreadable-verdict-clean-change'].scores.no_false_alarm], ['approve', 1]);
-  assert.equal(byId['incident-toctou-untested-claim'].label, 'approve');
+  // Issue #341: the recorded answer approves the lstat-then-read (PR #194); the check_then_use guardrail finds it in the diff, so the case is gated.
+  assert.deepEqual([byId['incident-toctou-untested-claim'].output.llm_verdict, byId['incident-toctou-untested-claim'].label, byId['incident-toctou-untested-claim'].output.guardrail_findings], ['APPROVED', 'request_changes', [{ rule: 'check_then_use', path: 'src/upload/read_manifest.mjs' }]]);
+  assert.equal(byId['incident-toctou-untested-claim'].scores.flags_issue, 0, 'flags_issue reads the model verdict: the recorded answer approved (same as before the rule)');
   // PR #282 (known-gap): the recorded approval of a comment-only change names one risk axis, so the protocol withholds it (ADR-0049).
   assert.deepEqual([byId['incident-comment-only-config-withheld'].output.llm_verdict, byId['incident-comment-only-config-withheld'].label, byId['incident-comment-only-config-withheld'].scores.no_spurious_flag], ['APPROVED', 'withheld', 1]);
   assert.match(byId['incident-comment-only-config-withheld'].output.reason, /^adversarial protocol not met \(1 of 2 critical points listed\)/);
@@ -970,10 +971,10 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   }
   assert.equal(byId['truncated-claim-tests-past-cut'].output.diff_truncated, true);
   const { summary } = saved;
-  // 43 cases run, 37 gated: the six known-gap cases are counted only in summary.known_gap.
+  // 43 cases run, 38 gated: the five known-gap cases are counted only in summary.known_gap.
   assert.deepEqual(
     [summary.n_cases, summary.error_rate, summary.scores.verdict_match.mean, summary.scores.flags_issue.mean, summary.scores.no_false_alarm.mean],
-    [43, 0.027, 0.9189, 0.8667, 0.8],
+    [43, 0.0263, 0.9211, 0.8125, 0.8],
   );
   // Finding level (RV-01): the four incident cases that list their defects are known-gap, so the gated metrics
   // above are unchanged and the finding metrics live in summary.known_gap. Recorded answers: a miss (approved), a
@@ -1001,23 +1002,23 @@ test('run_evals --suite review --replay scores the hand-written fixture through 
   assert.equal(byId['bug-off-by-one-chunk'].output.finding_analysis, undefined, 'a case without expected.findings has no analysis');
   assert.equal(byId['bug-off-by-one-chunk'].scores.finding_recall, null);
   const gap = summary.known_gap.scores;
-  assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [6, 0.5833, 0.8889, 0.5]);
+  assert.deepEqual([summary.known_gap.n_cases, gap.finding_recall.mean, gap.finding_precision.mean, gap.critical_recall.mean], [5, 0.5833, 0.8889, 0.5]);
   assert.deepEqual([summary.scores.advisory.mean, summary.scores.no_spurious_flag.mean], [1, 1]);
-  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9412, 0.875]);
-  // The 30 cases before #199 keep their pinned metrics: the new cases and scorers change no existing score.
+  assert.deepEqual([summary.per_class.request_changes.recall, summary.per_class.approve.recall], [0.9444, 0.875]);
+  // The 29 gated cases before #199 (the 30th, #194, left known-gap in #341; n_cases counts known-gap runs too) keep their pinned metrics: the new cases and scorers change no existing score.
   const FINDING_CASES = ['incident-removed-test-case', 'incident-low-continuation-axes', 'incident-docs-contradict-new-behavior', 'incident-grader-first-push', 'impact-caller-misses-new-parameter']; // RV-01 / RV-02, known-gap
-  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these; PR #282's is newer still (known-gap), and issue #339's.
-  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && !['incident-unreadable-verdict-clean-change', 'incident-comment-only-config-withheld', 'guardrail-test-turned-skip'].includes(r.case_id)));
+  // PR #311's case is newer than those 30: it moves the gated aggregates above, not these; PR #282's is newer still (known-gap), and issue #339's. Issue #341 moved the #194 case out of this set: its verdict is now the guardrail's.
+  const before = summarize(saved.results.filter((r) => !UNTESTED_CLAIM_CASES.includes(r.case_id) && !FINDING_CASES.includes(r.case_id) && !['incident-unreadable-verdict-clean-change', 'incident-comment-only-config-withheld', 'guardrail-test-turned-skip', 'incident-toctou-untested-claim'].includes(r.case_id)));
   assert.deepEqual(
     [before.n_cases, before.error_rate, before.scores.verdict_match.mean, before.scores.flags_issue.mean, before.scores.no_false_alarm.mean],
-    [30, 0.0345, 0.8966, 0.8667, 0.7143],
+    [29, 0.0345, 0.8966, 0.8667, 0.7143],
   );
   assert.deepEqual([before.per_class.request_changes.recall, before.per_class.approve.recall], [0.9333, 0.8]);
   assert.deepEqual([before.scores.advisory.n, before.scores.no_spurious_flag.n], [0, 0]);
   assert.deepEqual(
     [summary.known_gap.n_cases, summary.known_gap.error_rate, summary.known_gap.scores.verdict_match.mean, summary.known_gap.per_class.request_changes.recall],
-    // The #194 case is missed, as on Groq; of the three RV-01 cases left (the fourth is solved in code, RV-03) the recorded answers reject two and approve one; the RV-02 case is rejected; the #282 case is withheld.
-    [6, 0, 0.5, 0.6],
+    // Of the three RV-01 cases left (the fourth is solved in code, RV-03) the recorded answers reject two and approve one; the RV-02 case is rejected; the #282 case is withheld. The #194 case left in #341 (check_then_use).
+    [5, 0, 0.6, 0.75],
   );
 });
 
