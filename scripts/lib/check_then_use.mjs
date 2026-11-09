@@ -77,23 +77,29 @@ function callArguments(code, from) {
   return args;
 }
 
-// The names a function header (the masked text before its `{` or `=>`) binds: parameters, destructured ones included.
-// Over-collecting (a default value's identifier) only makes the rule flag less, never more.
+// The names a block header (the masked text before its `{` or `=>`) binds. A function binds its parameters (destructured
+// ones included); `catch (e)` binds `e` and `for (const x of ...)` binds `x`; an `if` / `while` / `switch` / `with`
+// condition binds nothing, so `if (exists(p)) { read(p) }` stays a pair. Over-collecting (a default value's identifier)
+// only makes the rule flag less, never more.
 function parameterNames(before) {
-  let pre = before.replace(/\s*=>\s*$/, '').replace(/\s+$/, '');
+  const pre = before.replace(/\s*=>\s*$/, '').replace(/\s+$/, '');
   let list = '';
+  let keyword = '';
   if (pre.endsWith(')')) {
     let depth = 0;
     for (let i = pre.length - 1; i >= 0; i -= 1) {
       if (pre[i] === ')') depth += 1;
       else if (pre[i] === '(' && --depth === 0) {
         list = pre.slice(i + 1, -1);
+        keyword = /([\w$]+)\s*$/.exec(pre.slice(0, i))?.[1] ?? '';
         break;
       }
     }
   } else if (before.trimEnd().endsWith('=>')) {
     list = /([\w$]+)\s*$/.exec(pre)?.[1] ?? '';
   }
+  if (['if', 'while', 'switch', 'with'].includes(keyword)) return new Set();
+  if (keyword === 'for') list = [...list.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]).join(',');
   return new Set(list.match(/[A-Za-z_$][\w$]*/g) ?? []);
 }
 

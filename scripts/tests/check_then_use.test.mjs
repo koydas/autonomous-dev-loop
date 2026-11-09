@@ -134,3 +134,11 @@ test('the destination of rename / copyFile is matched whatever the source argume
   assert.deepEqual(pairs(['function f(dest) {', '+  fs.accessSync(dest);', "+  fs.copyFileSync(dest + '.bak', other);", '}']), [], 'the destination is another name');
   assert.deepEqual(pairs(['function f(dest) {', '+  fs.accessSync(dest);', "+  fs.readFileSync('x', dest);", '}']), [], 'only rename / copyFile read a second path');
 });
+
+test('a control-flow header binds nothing: an if / while condition on the checked name is still a pair', () => {
+  assert.equal(pairs(['function f(p) {', '+  if (fs.existsSync(p)) {', '+    return fs.readFileSync(p);', '+  }', '}']).length, 1, 'if (exists(p)) { read(p) }');
+  assert.equal(pairs(['function f(p) {', '+  while (fs.existsSync(p)) {', '+    fs.rmSync(p);', '+  }', '}']).length, 1, 'while');
+  assert.equal(pairs(['function f(p) {', '+  fs.statSync(p);', '+  if (ok(p)) {', '+    fs.readFileSync(p);', '+  }', '}']).length, 1, 'a later if (ok(p)) block does not hide the use');
+  assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+  for (const p of list) {', '+    fs.readFileSync(p);', '+  }', '}']), [], 'for (const p of ...) rebinds p');
+  assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+  try { x(); } catch (p) {', '+    fs.readFileSync(p);', '+  }', '}']), [], 'catch (p) rebinds p');
+});
