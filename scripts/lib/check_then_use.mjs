@@ -21,7 +21,9 @@ const KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', '
 const QUALIFIER = String.raw`(?<![\w$.])((?:(?:fs|fsp|fsPromises|promises)\.)*)`;
 const ARG = String.raw`([A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*)`;
 const CHECK = new RegExp(`${QUALIFIER}(stat|lstat|access|exists)(?:Sync)?\\s*\\(\\s*${ARG}\\s*[,)]`, 'g');
-const USE = new RegExp(`${QUALIFIER}(readFile|open|createReadStream|writeFile|appendFile|rm|unlink|rename|copyFile|readdir)(?:Sync)?\\s*\\(\\s*${ARG}\\s*(?:,\\s*${ARG}\\s*)?[,)]`, 'g');
+const USE = new RegExp(`${QUALIFIER}(readFile|open|createReadStream|writeFile|appendFile|rm|unlink|rename|copyFile|readdir)(?:Sync)?\\s*\\(`, 'g');
+const ARG_ONLY = new RegExp(`^${ARG}$`);
+const MAX_ARGS_SPAN = 400;
 const TWO_PATHS = new Set(['rename', 'copyFile']);
 const NEW_STATEMENT = /^\s*(?:const|let|var|function|class|export|import|if|for|while|return|throw|try|switch|do|async\s+function)\b/;
 
@@ -56,23 +58,68 @@ const isWaived = (text, name) => String(text ?? '').split(/\n\s*\n/).some((parag
 
 const normal = (ident) => ident.replace(/\?\./g, '.');
 
+// The top-level arguments of the call whose `(` ends at `from`, as trimmed source text (strings are already opaque).
+function callArguments(code, from) {
+  const args = [];
+  let depth = 0;
+  let start = from;
+  for (let i = from; i < code.length && i < from + MAX_ARGS_SPAN; i += 1) {
+    const c = code[i];
+    if (c === '(' || c === '[' || c === '{') depth += 1;
+    else if ((c === ')' || c === ']' || c === '}') && depth-- === 0) {
+      args.push(code.slice(start, i).trim());
+      return args;
+    } else if (c === ',' && depth === 0) {
+      args.push(code.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  return args;
+}
+
+// The names a function header (the masked text before its `{` or `=>`) binds: parameters, destructured ones included.
+// Over-collecting (a default value's identifier) only makes the rule flag less, never more.
+function parameterNames(before) {
+  let pre = before.replace(/\s*=>\s*$/, '').replace(/\s+$/, '');
+  let list = '';
+  if (pre.endsWith(')')) {
+    let depth = 0;
+    for (let i = pre.length - 1; i >= 0; i -= 1) {
+      if (pre[i] === ')') depth += 1;
+      else if (pre[i] === '(' && --depth === 0) {
+        list = pre.slice(i + 1, -1);
+        break;
+      }
+    }
+  } else if (before.trimEnd().endsWith('=>')) {
+    list = /([\w$]+)\s*$/.exec(pre)?.[1] ?? '';
+  }
+  return new Set(list.match(/[A-Za-z_$][\w$]*/g) ?? []);
+}
+
+const rootOf = (ident) => ident.split('.')[0];
+const declares = (text, name) => new RegExp(`\\b(?:const|let|var|function|class)\\s+${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text);
+
 // Every check and use call of the masked code of a hunk, with the scope it stands in. A scope is a brace body or an
 // arrow expression body; the root is the hunk itself. `chain` lists the scope ids from the root to the call.
 function scan(code, rootName) {
   const calls = [];
   const byIndex = new Map();
-  for (const [kind, re] of [['check', CHECK], ['use', USE]]) {
-    for (const m of code.matchAll(re)) {
-      const idents = [normal(m[3])];
-      if (kind === 'use' && TWO_PATHS.has(m[2]) && m[4]) idents.push(normal(m[4]));
-      const call = { kind, fn: m[2], idents, index: m.index + m[1].length, chain: [] };
-      calls.push(call);
-      byIndex.set(call.index, call);
-    }
+  const add = (kind, m, idents) => {
+    if (idents.length === 0) return;
+    const call = { kind, fn: m[2], idents, index: m.index + m[1].length, chain: [] };
+    calls.push(call);
+    byIndex.set(call.index, call);
+  };
+  for (const m of code.matchAll(CHECK)) add('check', m, [normal(m[3])]);
+  // Each path argument is read on its own: `copyFile('src', dest)` still uses `dest`, whatever the source expression is.
+  for (const m of code.matchAll(USE)) {
+    const args = callArguments(code, m.index + m[0].length).slice(0, TWO_PATHS.has(m[2]) ? 2 : 1);
+    add('use', m, args.map((a) => ARG_ONLY.exec(a)?.[1]).filter(Boolean).map(normal));
   }
   let nextId = 0;
   let stack = [{ id: nextId, kind: 'root', name: rootName }];
-  const chainNow = () => stack.filter((f) => f.kind === 'root' || f.kind === 'brace' || f.kind === 'arrow').map((f) => ({ id: f.id, name: f.name }));
+  const chainNow = () => stack.filter((f) => f.kind === 'root' || f.kind === 'brace' || f.kind === 'arrow').map((f) => ({ id: f.id, name: f.name, open: f.open ?? 0, params: f.params ?? new Set() }));
   const popTo = (kinds) => {
     while (stack.length > 1 && !kinds.includes(stack[stack.length - 1].kind)) stack.pop();
     return stack.length > 1 ? stack.pop() : null;
@@ -87,10 +134,11 @@ function scan(code, rootName) {
     if (c === '=' && code[i + 1] === '>') {
       let j = i + 2;
       while (j < code.length && /\s/.test(code[j])) j += 1;
-      if (code[j] !== '{') stack.push({ id: (nextId += 1), kind: 'arrow', name: functionName(code.slice(0, i)) });
+      if (code[j] !== '{') stack.push({ id: (nextId += 1), kind: 'arrow', name: functionName(code.slice(0, i)), open: i, params: parameterNames(code.slice(Math.max(0, i - NAME_LOOKBACK), i + 2)) });
       i += 1;
     } else if (c === '{') {
-      stack.push({ id: (nextId += 1), kind: 'brace', name: functionName(code.slice(0, i)) });
+      const header = code.slice(Math.max(0, i - NAME_LOOKBACK), i);
+      stack.push({ id: (nextId += 1), kind: 'brace', name: functionName(code.slice(0, i)), open: i, params: parameterNames(header) });
     } else if (c === '(' || c === '[') {
       stack.push({ id: (nextId += 1), kind: c === '(' ? 'paren' : 'bracket' });
     } else if (c === '}') {
@@ -137,7 +185,9 @@ export function findCheckThenUse(hunks, { mentionText = '' } = {}) {
       if (checks >= MAX_CHECKS_PER_FILE) return found;
       checks += 1;
       const scope = check.chain[check.chain.length - 1];
-      const use = uses.find((u) => u.index > check.index && u.idents.includes(check.idents[0]) && u.chain.some((s) => s.id === scope.id));
+      // A scope nested below the check's own that binds the same name (a parameter, a declaration) makes the use another variable.
+      const shadowed = (u, name) => u.chain.slice(u.chain.findIndex((s) => s.id === scope.id) + 1).some((s) => s.params.has(rootOf(name)) || declares(code.slice(s.open, u.index), rootOf(name)));
+      const use = uses.find((u) => u.index > check.index && u.idents.includes(check.idents[0]) && u.chain.some((s) => s.id === scope.id) && !shadowed(u, check.idents[0]));
       if (!use) continue;
       const first = lineAt(check.index);
       const second = lineAt(use.index);

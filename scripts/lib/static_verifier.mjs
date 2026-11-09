@@ -35,10 +35,14 @@ function stringEnd(src, start) {
   return -1;
 }
 
+const lineBreaks = (text) => text.split('\n').length - 1;
+
 // A template literal opening at `start`: index just past it, and its `${…}` expressions, which
 // may themselves hold strings, braces and nested template literals.
 function readTemplate(src, start) {
   const exprs = [];
+  const gaps = [];
+  let segment = start + 1;
   let i = start + 1;
   while (i < src.length && src[i] !== '`') {
     if (src[i] === '\\') {
@@ -53,16 +57,18 @@ function readTemplate(src, start) {
         else if (c === '{') depth += 1;
         else if (c === '}' && depth-- === 0) break;
       }
+      gaps.push(lineBreaks(src.slice(segment, i)));
       exprs.push(src.slice(i + 2, j));
       i = j + 1;
+      segment = i;
     } else {
       i += 1;
     }
   }
-  return { end: Math.min(i + 1, src.length), exprs };
+  gaps.push(lineBreaks(src.slice(segment, i)));
+  // `gaps[k]`: line breaks of the literal text before expression k; the last one follows the last expression.
+  return { end: Math.min(i + 1, src.length), exprs, gaps };
 }
-
-const lineBreaks = (text) => text.split('\n').length - 1;
 
 function mask(src, strings, keepLines = false) {
   let out = '';
@@ -85,13 +91,16 @@ function mask(src, strings, keepLines = false) {
       } else {
         strings.push(src.slice(i + 1, end - 1));
         out += `"S${strings.length - 1}"`;
+        // A `\`-continued string spans lines: keep them so a position stays on its source line.
+        if (keepLines) out += '\n'.repeat(lineBreaks(src.slice(i, end)));
         i = end;
       }
     } else if (c === '`') {
       // The literal text is never a specifier, but the code in its `${…}` is.
-      const { end, exprs } = readTemplate(src, i);
-      const piece = `\`\`${exprs.map((e) => `;${mask(e, strings, keepLines)};`).join('')}`;
-      out += keepLines ? piece + '\n'.repeat(Math.max(0, lineBreaks(src.slice(i, end)) - lineBreaks(piece))) : piece;
+      // With `keepLines`, the literal text's line breaks stay in front of the expression they precede.
+      const { end, exprs, gaps } = readTemplate(src, i);
+      const gap = (k) => (keepLines ? '\n'.repeat(gaps[k]) : '');
+      out += `\`\`${exprs.map((e, k) => `${gap(k)};${mask(e, strings, keepLines)};`).join('')}${gap(exprs.length)}`;
       i = end;
     } else {
       out += c;

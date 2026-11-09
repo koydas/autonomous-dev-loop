@@ -414,3 +414,14 @@ test('extractExportedSignatures compares a quoted parameter key by its text, wha
   assert.deepEqual(at("const s = 'first';\nexport function f({ 'a-b': v }, x) {}\n"), ['{"a-b"}', 'x']);
   assert.deepEqual(at('export function f({ "a-b": v, c }, x) {}\n'), ['{"a-b",c}', 'x']);
 });
+
+test('maskSource keepLines keeps the line breaks of a template literal in front of the expression they precede', () => {
+  const { code } = maskSource('a`x\ny${b}z\nw`;c', { keepLines: true });
+  assert.equal(code, 'a``\n;b;\n;c');
+  assert.equal(maskSource('a`x\ny${b}z\nw`;c').code, 'a``;b;;c', 'default output is unchanged');
+});
+
+test('maskSource keepLines keeps the line breaks of a backslash-continued string', () => {
+  assert.equal(maskSource('a = "x\\\ny"; b', { keepLines: true }).code, 'a = "S0"\n; b');
+  assert.equal(maskSource('a = "x\\\ny"; b').code, 'a = "S0"; b', 'default output is unchanged');
+});

@@ -108,3 +108,29 @@ test('hostile text stays linear: thousands of unclosed brackets, arrows and brac
   findCheckThenUse(hunk(['+' + '(['.repeat(20000), '+' + '=> '.repeat(20000), '+' + '{'.repeat(20000), '+fs.statSync(p); fs.readFileSync(p);']));
   assert.ok(Date.now() - t0 < 3000);
 });
+
+test('a nested function that rebinds the checked name is another variable (parameter, arrow parameter, declaration)', () => {
+  assert.deepEqual(pairs(['function inspect(p) {', '+  fs.statSync(p);', '+  function unrelated(p) { return fs.readFileSync(p); }', '}']), [], 'a parameter shadows');
+  assert.deepEqual(pairs(['function inspect(p) {', '+  fs.statSync(p);', '+  const later = (p) => fs.readFileSync(p);', '}']), [], 'an arrow parameter shadows');
+  assert.deepEqual(pairs(['function inspect(p) {', '+  fs.statSync(p);', '+  const later = p => fs.readFileSync(p);', '}']), [], 'a bare arrow parameter shadows');
+  assert.deepEqual(pairs(['function inspect(p) {', '+  fs.statSync(p);', '+  const later = () => { const p = other(); return fs.readFileSync(p); };', '}']), [], 'a declaration shadows');
+  assert.deepEqual(pairs(['function inspect(o) {', '+  fs.statSync(o.file);', '+  const later = (o) => fs.readFileSync(o.file);', '}']), [], 'a member path shadows through its root');
+  assert.equal(pairs(['function inspect(p) {', '+  fs.statSync(p);', '+  const later = (q) => fs.readFileSync(p);', '}']).length, 1, 'another parameter name leaves the outer p in use');
+  assert.equal(pairs(['function inspect(p) {', '+  fs.stat(p, (err) => {', '+    fs.readFile(p, (e, d) => d);', '+  });', '}']).length, 1, 'a callback that does not rebind p is still a pair');
+});
+
+test('line numbers survive interpolations in a multiline template literal', () => {
+  assert.deepEqual(pairs(['function f(p) {', '  fs.statSync(p);', '+  const t = `head', '+${fs.readFileSync(p)}', '+tail`;', '}']), [['stat', 'p', 2, 'readFile', 'p', 4]], 'the read keeps its own line, not the template opening line');
+});
+
+test('line numbers survive a backslash-continued string', () => {
+  assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+  const s = "one \\', '+  two";', '+  return fs.readFileSync(p);', '}']), [['stat', 'p', 2, 'readFile', 'p', 5]]);
+});
+
+test('the destination of rename / copyFile is matched whatever the source argument is', () => {
+  assert.equal(pairs(['function f(dest) {', '+  fs.accessSync(dest);', "+  fs.copyFileSync('source.txt', dest);", '}']).length, 1, 'literal source');
+  assert.equal(pairs(['function f(dest, d) {', '+  fs.accessSync(dest);', '+  fs.renameSync(join(d, "a"), dest);', '}']).length, 1, 'computed source');
+  assert.equal(pairs(['function f(dest) {', '+  fs.accessSync(dest);', '+  fs.copyFileSync(path.join(a, b), dest);', '}']).length, 1, 'nested call in the source');
+  assert.deepEqual(pairs(['function f(dest) {', '+  fs.accessSync(dest);', "+  fs.copyFileSync(dest + '.bak', other);", '}']), [], 'the destination is another name');
+  assert.deepEqual(pairs(['function f(dest) {', '+  fs.accessSync(dest);', "+  fs.readFileSync('x', dest);", '}']), [], 'only rename / copyFile read a second path');
+});
