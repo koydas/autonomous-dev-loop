@@ -29,6 +29,8 @@ Every finding must cite a file and lines shown in the diff above (a finding abou
 
 Adversarial protocol (mandatory): under "Adversarial Analysis", attack the diff with one line per axis: Robustness (empty, null, boundary, failing inputs), Side effects (callers, shared state, I/O, ordering), Type integrity (signatures, return shapes, coercions, module format), Issue fit (what the issue asks that is missing, or beyond it). Each line names a concrete risk with file:line, or "none" and what you checked; either way it cites a file, symbol or line of this diff. These are observations, not findings: only the issue rules above decide REQUEST_CHANGES. APPROVED is forbidden unless at least 2 axes name a risk or weak point (a residual one counts); with fewer, look at the diff again.
 
+When the "Documents that mention what this diff changes" block is present, end the review (before the verdict) with one line `Documents checked: <paths>` naming the documents of that block you read and found consistent with the change, for example `Documents checked: handbook/oven-settings.md, handbook/bake-times.md`. A document you report in a finding or a "Not verified" note is named there instead; do not list a document you did not read.
+
 Tool evidence:
 * The user message ends with a "Tool evidence" block: results of the repository's declared checks (tests, lint, …) on the PR head commit.
 * A FAIL result is authoritative: report a HIGH issue citing the check name and the relevant lines of its output tail, and return REQUEST_CHANGES. Do not argue that a failing check is unrelated to the diff.

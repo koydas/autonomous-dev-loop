@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  docTerms, findDocMentions, formatDocMentionsContext, isDocPath, MAX_DOC_TERMS, MAX_DOC_FILES, MIN_BASENAME_CHARS,
+  docTerms, findDocMentions, formatDocMentionsContext, unaddressedDocs, isDocPath, MAX_DOC_TERMS, MAX_DOC_FILES, MIN_BASENAME_CHARS,
 } from '../lib/doc_mentions.mjs';
 import { MAX_REFS_PER_SYMBOL, GENERIC_FILE_COUNT } from '../lib/impact_context.mjs';
 
@@ -146,4 +146,39 @@ test('formatDocMentionsContext: empty without terms, whole terms only within max
   assert.match(first, /one-module/);
   assert.doesNotMatch(first, /two-module/);
   assert.equal(formatDocMentionsContext(two, { maxChars: 50 }), '');
+});
+
+// #340 step 1 (shadow): documents of the Documents block that an approval neither cites nor lists as checked.
+const docTerm = (name, paths, extra = {}) => ({ kind: 'export', name, file: 'src/a.mjs', status: 'changed', refs: paths.map((path, i) => ({ path, line: i + 1, text: 'x' })), refFiles: paths.length, generic: false, ...extra });
+const mentions = (terms, extra = {}) => ({ terms, scanned: 3, truncated: false, ...extra });
+
+test('unaddressedDocs: a document cited in a finding, an axis line, a "Not verified" note or "Documents checked" is addressed; one the review never names is not', () => {
+  const m = mentions([docTerm('applyDiscount', ['docs/pricing.md']), docTerm('legacyFlag', ['docs/flags.md'], { status: 'removed' })]);
+  assert.deepEqual(unaddressedDocs('- [High] stale — File: `docs/pricing.md` Lines: 3', m), { count: 1, files: ['docs/flags.md'], generic_terms: 0 });
+  assert.equal(unaddressedDocs('- **Side effects** — docs/pricing.md:3 and docs/flags.md:9 describe the old contract', m).count, 0);
+  assert.equal(unaddressedDocs('Not verified (diff truncated): docs/pricing.md, docs/flags.md', m).count, 0);
+  assert.equal(unaddressedDocs('Documents checked: docs/pricing.md, docs/flags.md', m).count, 0);
+  assert.deepEqual(unaddressedDocs('Looks fine.', m), { count: 2, files: ['docs/pricing.md', 'docs/flags.md'], generic_terms: 0 });
+  assert.equal(unaddressedDocs(undefined, m).count, 2);
+});
+
+test('unaddressedDocs: a document that two terms point at is counted once; a path that only prefixes or suffixes another name does not count as cited', () => {
+  const m = mentions([docTerm('applyDiscount', ['docs/pricing.md']), docTerm('src/a.mjs', ['docs/pricing.md'], { kind: 'file' })]);
+  assert.deepEqual(unaddressedDocs('nothing', m), { count: 1, files: ['docs/pricing.md'], generic_terms: 0 });
+  for (const text of ['docs/pricing.md.bak', 'docs/pricing.mdx', 'docs/pricing.md-old', 'x-docs/pricing.md']) assert.equal(unaddressedDocs(text, m).count, 1, text);
+  for (const text of ['`docs/pricing.md`', 'docs/pricing.md:3', '(docs/pricing.md).', 'see docs/pricing.md, then']) assert.equal(unaddressedDocs(text, m).count, 0, text);
+});
+
+test('unaddressedDocs: a generic term is excluded from the count and reported apart; regex characters in a path are literal', () => {
+  const m = mentions([docTerm('run', ['docs/a.md', 'docs/b.md', 'docs/c.md'], { generic: true, refFiles: 40 }), docTerm('applyDiscount', ['docs/p+q.md'])]);
+  assert.deepEqual(unaddressedDocs('nothing', m), { count: 1, files: ['docs/p+q.md'], generic_terms: 1 });
+  assert.equal(unaddressedDocs('docs/p+q.md', m).count, 0);
+  assert.equal(unaddressedDocs('docs/ppq.md', m).count, 1);
+  assert.deepEqual(unaddressedDocs('nothing', mentions([docTerm('run', ['docs/a.md'], { generic: true })])), { count: 0, files: [], generic_terms: 1 });
+});
+
+test('unaddressedDocs: a truncated scan, no term, or no mentions is not computed (null)', () => {
+  assert.equal(unaddressedDocs('nothing', mentions([docTerm('applyDiscount', ['docs/pricing.md'])], { truncated: true })), null);
+  assert.equal(unaddressedDocs('nothing', mentions([])), null);
+  for (const m of [null, undefined, {}, { terms: undefined }]) assert.equal(unaddressedDocs('nothing', m), null);
 });

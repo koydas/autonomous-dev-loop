@@ -138,3 +138,20 @@ export function formatDocMentionsContext(mentions, { maxChars = 4000 } = {}) {
   while (shown.length > 0 && render(shown).length > maxChars) shown = shown.slice(0, -1);
   return shown.length ? render(shown) : '';
 }
+
+/**
+ * Shadow check (#340, step 1): the documents of `docMentions` that a review neither cites nor lists under "Documents
+ * checked". A document counts once, however many terms point at it; a path is cited when the review text names it
+ * (finding, axis line, "Not verified" note or "Documents checked" line). Generic terms show only 3 of their
+ * documents, so they are counted apart (`generic_terms`) and never required: no one can cite what was not shown.
+ * Gates nothing. Null when the scan was truncated or found no term: nothing is known about the documents.
+ * @returns {{ count: number, files: string[], generic_terms: number } | null}
+ */
+export function unaddressedDocs(review, docMentions) {
+  const terms = docMentions?.terms;
+  if (!terms?.length || docMentions.truncated) return null;
+  const text = String(review ?? '');
+  const files = [...new Set(terms.filter((t) => !t.generic).flatMap((t) => (t.refs ?? []).map((r) => r.path)))]
+    .filter((path) => !new RegExp(`(?<![\\w$-])${escapeRe(path)}(?![\\w$-]|\\.[\\w$])`).test(text));
+  return { count: files.length, files, generic_terms: terms.filter((t) => t.generic).length };
+}

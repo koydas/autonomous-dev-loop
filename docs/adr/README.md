@@ -69,3 +69,4 @@ Architecture Decision Records (ADR) for the MVP Issue → AI → PR automation.
 - [ADR-0063: Every finding gets a verification status, and only substantiated findings request changes or reach the auto-fixer](./0063-finding-verification-statuses.md)
 - [ADR-0064: A review with no readable verdict is withheld, not a request for changes](./0064-unreadable-verdict-is-withheld.md)
 - [ADR-0065: The adversarial protocol gates on verified coverage of the four axes, not on a count of named risks](./0065-adversarial-protocol-by-coverage.md)
+- [ADR-0066: An approval must address the documents that mention what the diff changes (shadow first, then gate)](./0066-approval-must-address-mentioning-documents.md)

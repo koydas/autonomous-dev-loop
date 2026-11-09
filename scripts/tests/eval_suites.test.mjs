@@ -1828,3 +1828,16 @@ test('review limits parity: without requires_cut the suite uses the limits pr_re
   assert.ok((await buildReviewPromptFields('scripts/pr_review.mjs')).has('maxDiffChars'));
   assert.ok((await buildReviewPromptFields('scripts/lib/eval_suites.mjs')).has('maxDiffChars'));
 });
+
+// #340 step 1 (shadow): the suite publishes how many documents of the case's doc_mentions the recorded answer leaves unaddressed; it gates nothing.
+test('reviewSuite.run publishes unaddressed_docs from input.doc_mentions without changing the verdict', async () => {
+  const text = (extra) => ['### 🏷️ Change Classification', 'Type: feature | Tests expected: yes — code', '', '### ✅ Summary', 'x', '', '### 🔬 Adversarial Analysis', '- **Robustness** — src/a.js:1 an empty value is not handled', '- **Side effects** — src/a.js:1 callers are not in the diff', '- **Type integrity** — none, checked', '- **Issue fit** — none, checked', '', '### ⚠️ Issues Found', 'None.', ...extra, '', '### 🚀 Verdict', 'APPROVED'].join('\n');
+  const doc_mentions = { terms: [{ kind: 'export', name: 'f', file: 'src/a.js', status: 'changed', refs: [{ path: 'docs/guide.md', line: 3, text: 'f takes one argument' }], refFiles: 1, generic: false }], scanned: 1, truncated: false };
+  const base = { title: 'T', body: 'B', diff: SMALL_DIFF };
+  const silent = await runReview({ ...base, doc_mentions }, text([]));
+  const cited = await runReview({ ...base, doc_mentions }, text(['Documents checked: docs/guide.md']));
+  const none = await runReview(base, text([]));
+  const cut = await runReview({ ...base, doc_mentions: { ...doc_mentions, truncated: true } }, text([]));
+  assert.deepEqual([silent.output.verdict, silent.output.unaddressed_docs, cited.output.verdict, cited.output.unaddressed_docs], ['APPROVE', 1, 'APPROVE', 0]);
+  assert.deepEqual([none.output.unaddressed_docs, cut.output.unaddressed_docs], [null, null]);
+});

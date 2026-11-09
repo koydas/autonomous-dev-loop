@@ -1,0 +1,2 @@
+### Added
+- Shadow check for approvals that ignore a document the diff changes (#340, ADR-0066, Proposed): `review.verdict` journals `unaddressed_docs` and `unaddressed_docs_generic` (counts only, on an `APPROVE`) and the `review` suite publishes `output.unaddressed_docs`. The review prompt asks for a `Documents checked: <paths>` line when the Documents block is present. No verdict changes; the gate is a separate step behind a published live run.

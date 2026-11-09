@@ -2484,3 +2484,26 @@ test('pr_review does not read the external review for a verdict that writes no P
   assert.equal(lines.filter((l) => l.type === 'pr').length, 0);
   assert.ok(!requests.some((r) => /\/pulls\/\d+\/reviews\?/.test(r.url)));
 });
+
+// #340 step 1 (shadow): an APPROVE journals how many documents of the Documents block it neither cites nor lists; counts only, the verdict is unchanged.
+const approvedWith = (extra) => `### 🔬 Adversarial Analysis\n- **Robustness** — src/pricing.mjs:1 a negative rate is not rejected\n- **Side effects** — src/pricing.mjs:1 callers still pass two arguments\n- **Type integrity** — none: \`applyDiscount\` in src/pricing.mjs keeps its return type\n- **Issue fit** — none: src/pricing.mjs is the file the issue names\n\n### ⚠️ Issues Found\nNone.\n${extra}\n### 🚀 Verdict\nAPPROVED`;
+const verdictMeta = (stderr) => JSON.parse(stderr.split('\n').find((l) => l.includes('"event":"review.verdict"'))).meta;
+
+test('pr_review journals unaddressed_docs on an APPROVE that never names the document, without changing the verdict (#340, shadow)', async () => {
+  const { result, review } = await runDocReview(approvedWith(''));
+  assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
+  assert.equal(review.event, 'APPROVE');
+  const meta = verdictMeta(result.stderr);
+  assert.deepEqual([meta.verdict, meta.unaddressed_docs, meta.unaddressed_docs_generic], ['APPROVE', 1, 0]);
+  assert.ok(!JSON.stringify(meta).includes('docs/pricing.md'), 'a number, never the path');
+});
+
+test('pr_review journals unaddressed_docs 0 when the approval lists the document under "Documents checked", and no key on a REQUEST_CHANGES (#340, shadow)', async () => {
+  const checked = await runDocReview(approvedWith('Documents checked: docs/pricing.md\n'));
+  assert.equal(checked.review.event, 'APPROVE');
+  assert.equal(verdictMeta(checked.result.stderr).unaddressed_docs, 0);
+  const changes = await runDocReview(docFinding('Evidence: docs/pricing.md:3 "`applyDiscount(price, rate)` takes two arguments and returns the price." '));
+  assert.equal(changes.review.event, 'REQUEST_CHANGES');
+  const meta = verdictMeta(changes.result.stderr);
+  assert.ok(!('unaddressed_docs' in meta) && !('unaddressed_docs_generic' in meta));
+});

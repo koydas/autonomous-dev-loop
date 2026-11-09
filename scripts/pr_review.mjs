@@ -19,7 +19,7 @@ import { parseReviewMarker, formatReviewMarker, eventHeadSha, decideReviewRun, i
 import { findStaleReferences, formatStaleRefsContext, formatStaleRefsSection } from './lib/stale_refs.mjs';
 import { findRelatedAdrs } from './lib/related_adrs.mjs';
 import { findImpact } from './lib/impact_context.mjs';
-import { findDocMentions } from './lib/doc_mentions.mjs';
+import { findDocMentions, unaddressedDocs } from './lib/doc_mentions.mjs';
 import { computePromptBudgetImpact, formatPromptBudgetContext, formatPromptBudgetSection } from './lib/prompt_budget.mjs';
 import { modelsFromContent, loadReviewGuidelines } from './lib/layered_config.mjs';
 import { repoConfigFile, configRelPath, isSelfTarget } from './lib/roots.mjs';
@@ -703,6 +703,9 @@ log('PR metrics checkpoint updated', { prNumber, review_cycles: updatedPrMetrics
 const externalReview = isApproved ? await readExternalReview() : null;
 if (externalReview) obsLog({ stage: 'review', event: 'review.external', level: 'info', meta: { prNumber, ...externalReview } });
 
+const unaddressed = isApproved ? unaddressedDocs(cleanReview, docMentions) : null;
+const unaddressedDocsMeta = unaddressed ? { unaddressed_docs: unaddressed.count, unaddressed_docs_generic: unaddressed.generic_terms } : {};
+
 const reviewDurationMs = Date.now() - _reviewStartMs;
 obsLog({
   stage: 'review',
@@ -712,9 +715,11 @@ obsLog({
   // withheld_from: the verdict the unseen-code backstop turned into WITHHELD (ADR-0038, #219), else null.
   // adversarial_points / adversarial_axes (ADR-0049): the closed axis ids that named a risk, never the model's text.
   // verified_axes (ADR-0065, shadow): how many of the four axis lines name something in the diff; a count, gates nothing yet.
+  // unaddressed_docs / unaddressed_docs_generic (#340, shadow): on an APPROVE, how many documents of the Documents block the review
+  // neither cites nor lists under "Documents checked", and how many generic terms were left out of that count; counts only, gates nothing.
   // withheld_for: 'protocol' when the adversarial protocol, not the evidence or the cut, withheld the approval; 'unproven_findings' (RV-04a);
   // 'unreadable_verdict' when the review had no readable verdict line.
-  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, guardrail_override: guardrailOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings || withheldForUnproven || withheldForUnreadable ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : withheldForUnproven ? 'unproven_findings' : withheldForUnreadable ? 'unreadable_verdict' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, verified_axes: verifyAxes(cleanReview, rawDiff).count, blocking_axes: blockingAxes, streak },
+  meta: { verdict, attempt: updatedPrMetrics.review_cycles, prNumber, evidence_state: evidence.state, evidence_override: evidenceOverride, guardrail_override: guardrailOverride, unreviewed_code_files: unreviewedCodeFiles.length, withheld_from: withheldForUnreviewedCode || withheldForProtocol ? 'APPROVE' : withheldForUnseenFindings || withheldForUnproven || withheldForUnreadable ? 'REQUEST_CHANGES' : null, withheld_for: withheldForProtocol ? 'protocol' : withheldForUnproven ? 'unproven_findings' : withheldForUnreadable ? 'unreadable_verdict' : null, adversarial_points: adversarial.criticalPoints, adversarial_axes: adversarial.atRisk, verified_axes: verifyAxes(cleanReview, rawDiff).count, ...unaddressedDocsMeta, blocking_axes: blockingAxes, streak },
 });
 tracer.endSpan('review', { outcome: 'success', meta: { verdict, attempt: updatedPrMetrics.review_cycles } });
 await tracer.finalize(isApproved ? 'success' : 'partial');
