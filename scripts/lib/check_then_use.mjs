@@ -61,6 +61,7 @@ const normal = (ident) => ident.replace(/\?\./g, '.');
 // The top-level arguments of the call whose `(` ends at `from`, as trimmed source text (strings are already opaque).
 function callArguments(code, from) {
   const args = [];
+  args.end = code.length;
   let depth = 0;
   let start = from;
   for (let i = from; i < code.length && i < from + MAX_ARGS_SPAN; i += 1) {
@@ -68,6 +69,7 @@ function callArguments(code, from) {
     if (c === '(' || c === '[' || c === '{') depth += 1;
     else if ((c === ')' || c === ']' || c === '}') && depth-- === 0) {
       args.push(code.slice(start, i).trim());
+      args.end = i + 1;
       return args;
     } else if (c === ',' && depth === 0) {
       args.push(code.slice(start, i).trim());
@@ -104,6 +106,19 @@ function parameterNames(before) {
 }
 
 const rootOf = (ident) => ident.split('.')[0];
+const escapeName = (name) => name.replace(/[$.]/g, '\\$&');
+const ASSIGN = String.raw`(?:\*\*|&&|\|\||\?\?|<<|>>>?|[-+*/%&|^])?=(?![=>])`;
+
+// Is the path (or the root or an intermediate member of it) given a new value in `between`? `a.b.c` is no longer the same
+// path once `a`, `a.b` or `a.b.c` is assigned (plain, compound or logical assignment, a destructuring target, a `for (a of …)`).
+function reassignedIn(between, ident) {
+  const parts = ident.split('.');
+  const root = escapeName(parts[0]);
+  const direct = parts.map((_, i) => escapeName(parts.slice(0, i + 1).join('.'))).map((name) => new RegExp(`(?<![\\w$.])${name}\\s*${ASSIGN}`));
+  const destructured = new RegExp(String.raw`[{\[][^;(){}\[\]]*(?<![\w$.])${root}(?![\w$])[^;(){}\[\]]*[}\]]\s*=(?![=>])`);
+  const loopTarget = new RegExp(String.raw`\bfor\s*\(\s*${root}\s+(?:of|in)\b`);
+  return [...direct, destructured, loopTarget].some((re) => re.test(between));
+}
 const declares = (text, name) => new RegExp(`\\b(?:const|let|var|function|class)\\s+${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(text);
 
 // Every check and use call of the masked code of a hunk, with the scope it stands in. A scope is a brace body or an
@@ -111,8 +126,11 @@ const declares = (text, name) => new RegExp(`\\b(?:const|let|var|function|class)
 function scan(code, rootName) {
   const calls = [];
   const byIndex = new Map();
+  // `function stat(p) {` and a method `readFile(p) {` have the shape of a call but run nothing: a `{` right after the
+  // closing parenthesis makes it a declaration header.
+  const isDeclaration = (m) => /^\s*\{/.test(code.slice(callArguments(code, m.index + m[0].indexOf('(') + 1).end));
   const add = (kind, m, idents) => {
-    if (idents.length === 0) return;
+    if (idents.length === 0 || isDeclaration(m)) return;
     const call = { kind, fn: m[2], idents, index: m.index + m[1].length, chain: [] };
     calls.push(call);
     byIndex.set(call.index, call);
@@ -199,8 +217,7 @@ export function findCheckThenUse(hunks, { mentionText = '' } = {}) {
       const second = lineAt(use.index);
       if (!first.added && !second.added) continue;
       const ident = check.idents[0];
-      const reassigned = new RegExp(`(?<![\\w$.])${ident.replace(/[$.]/g, '\\$&')}\\s*=(?![=>])`).test(code.slice(check.index, use.index));
-      if (reassigned) continue;
+      if (reassignedIn(code.slice(check.index, use.index), ident)) continue;
       const names = [...new Set([...check.chain, ...use.chain].map((s) => s.name).filter(Boolean))];
       if (names.some((n) => isWaived(mentionText, n))) continue;
       found.push({

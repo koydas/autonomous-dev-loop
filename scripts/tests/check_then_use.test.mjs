@@ -142,3 +142,25 @@ test('a control-flow header binds nothing: an if / while condition on the checke
   assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+  for (const p of list) {', '+    fs.readFileSync(p);', '+  }', '}']), [], 'for (const p of ...) rebinds p');
   assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+  try { x(); } catch (p) {', '+    fs.readFileSync(p);', '+  }', '}']), [], 'catch (p) rebinds p');
 });
+
+test('a function or method declaration header is not a call', () => {
+  assert.deepEqual(pairs(['+function stat(p) { return 1; }', '+function readFile(p) { return "data"; }']), [], 'two helper declarations');
+  assert.deepEqual(pairs(['+const o = { stat(p) { return 1; }, readFile(p) { return 2; } };']), [], 'object methods');
+  assert.deepEqual(pairs(['+class A {', '+  stat(p) { return 1; }', '+  async readFile(p) { return 2; }', '+}']), [], 'class methods');
+  assert.deepEqual(pairs(['+function stat(p)', '+{', '+  return 1;', '+}', '+function* readFile(p)', '+{', '+  yield 1;', '+}']), [], 'the brace on the next line');
+  assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+}', '+class A { readFile(p) { return 1; } }']), [], 'a method after a real check');
+  assert.equal(pairs(['function f(p) {', '+  fs.stat(p, (e) => { log(e); });', '+  fs.readFile(p, (e, d) => { use(d); });', '}']).length, 1, 'real calls whose callback has a body are still calls');
+});
+
+test('reassigning the root or an intermediate member of a path ends the pair, in every assignment form', () => {
+  assert.deepEqual(pairs(['function f(opts, other) {', '+  fs.statSync(opts.path);', '+  opts = other;', '+  fs.readFileSync(opts.path);', '}']), [], 'root');
+  assert.deepEqual(pairs(['function f(a, x) {', '+  fs.statSync(a.b.c);', '+  a.b = x;', '+  fs.readFileSync(a.b.c);', '}']), [], 'intermediate member');
+  assert.deepEqual(pairs(['function f(opts) {', '+  fs.statSync(opts.path);', '+  opts.path = "x";', '+  fs.readFileSync(opts.path);', '}']), [], 'leaf');
+  assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+  p ||= fallback;', '+  fs.readFileSync(p);', '}']), [], 'logical assignment');
+  assert.deepEqual(pairs(['function f(p) {', '+  fs.statSync(p);', '+  p += ".bak";', '+  fs.readFileSync(p);', '}']), [], 'compound assignment');
+  assert.deepEqual(pairs(['function f(opts, x) {', '+  fs.statSync(opts.path);', '+  ({ opts } = x);', '+  fs.readFileSync(opts.path);', '}']), [], 'object destructuring target');
+  assert.deepEqual(pairs(['function f(p, xs) {', '+  fs.statSync(p);', '+  [p] = xs;', '+  fs.readFileSync(p);', '}']), [], 'array destructuring target');
+  assert.deepEqual(pairs(['function f(p, xs) {', '+  fs.statSync(p);', '+  for (p of xs) {}', '+  fs.readFileSync(p);', '}']), [], 'for (p of …)');
+  assert.equal(pairs(['function f(opts) {', '+  fs.statSync(opts.path);', '+  if (opts.path === "x" && opts.n >= 1 && opts.n != 2 && opts.n => 0) log();', '+  fs.readFileSync(opts.path);', '}']).length, 1, 'comparisons and an arrow are not assignments');
+  assert.equal(pairs(['function f(opts) {', '+  fs.statSync(opts.path);', '+  opts.other = 1;', '+  fs.readFileSync(opts.path);', '}']).length, 1, 'another member of the same root does not end the pair');
+});
