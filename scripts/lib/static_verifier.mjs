@@ -62,7 +62,9 @@ function readTemplate(src, start) {
   return { end: Math.min(i + 1, src.length), exprs };
 }
 
-function mask(src, strings) {
+const lineBreaks = (text) => text.split('\n').length - 1;
+
+function mask(src, strings, keepLines = false) {
   let out = '';
   let i = 0;
   while (i < src.length) {
@@ -72,8 +74,9 @@ function mask(src, strings) {
       i = eol === -1 ? src.length : eol;
     } else if (c === '/' && src[i + 1] === '*') {
       const close = src.indexOf('*/', i + 2);
+      const from = i;
       i = close === -1 ? src.length : close + 2;
-      out += ' ';
+      out += keepLines ? ` ${'\n'.repeat(lineBreaks(src.slice(from, i)))}` : ' ';
     } else if (c === '"' || c === "'") {
       const end = stringEnd(src, i);
       if (end === -1) {
@@ -87,7 +90,8 @@ function mask(src, strings) {
     } else if (c === '`') {
       // The literal text is never a specifier, but the code in its `${…}` is.
       const { end, exprs } = readTemplate(src, i);
-      out += `\`\`${exprs.map((e) => `;${mask(e, strings)};`).join('')}`;
+      const piece = `\`\`${exprs.map((e) => `;${mask(e, strings, keepLines)};`).join('')}`;
+      out += keepLines ? piece + '\n'.repeat(Math.max(0, lineBreaks(src.slice(i, end)) - lineBreaks(piece))) : piece;
       i = end;
     } else {
       out += c;
@@ -100,11 +104,12 @@ function mask(src, strings) {
 /**
  * Removes comments and replaces each quoted string with `"S<n>"`, so the regexes below only see
  * code. A template literal keeps only its `${…}` expressions (nesting included), masked the same
- * way. Heuristic lexer: a regex literal containing a quote, a backtick or `//` can mask the code after it.
+ * way. `keepLines` keeps the line breaks of block comments and template literals, so a position in the
+ * masked code stays on its source line. Heuristic lexer: a regex literal containing a quote, a backtick or `//` can mask the code after it.
  */
-export function maskSource(source) {
+export function maskSource(source, { keepLines = false } = {}) {
   const strings = [];
-  const code = mask(String(source ?? ''), strings);
+  const code = mask(String(source ?? ''), strings, keepLines);
   return { code, strings };
 }
 

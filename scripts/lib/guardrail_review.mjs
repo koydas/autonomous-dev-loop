@@ -6,32 +6,38 @@
 import path from 'node:path';
 import { parseFindings, pathMatches } from './review_findings.mjs';
 import { isTestFile, normalizeRepoPath } from './autofix_guard.mjs';
+import { findCheckThenUse } from './check_then_use.mjs';
 import { MIN_TITLE_CHARS, assertionDrops, casesChange, compareCases, isWaived, lineCases } from './test_cases.mjs';
 import {
   RULES, isJsFile, maskSource, extractExportedSignatures, findModuleSystemViolation, findSignatureViolations, findUnresolvedImports, mentions,
 } from './static_verifier.mjs';
 
-export const GUARDRAIL_RULES = Object.freeze({ ...RULES, TEST_COUNT_DROP: 'test_count_drop', ASSERTION_COUNT_DROP: 'assertion_count_drop' });
+export const GUARDRAIL_RULES = Object.freeze({ ...RULES, TEST_COUNT_DROP: 'test_count_drop', ASSERTION_COUNT_DROP: 'assertion_count_drop', CHECK_THEN_USE: 'check_then_use' });
 export const MAX_FILES = 40;
 export const MAX_FINDINGS = 12;
 export { MIN_TITLE_CHARS };
 const MAX_TEXT_CHARS = 160;
 
 // Test cases are read by test_cases.mjs (shared with the auto-fix write guard): only active cases count (issue #339).
-const SEVERITY = { module_system: 'High', unresolved_import: 'High', test_count_drop: 'High', assertion_count_drop: 'High', exported_signature: 'Medium' };
+const SEVERITY = { module_system: 'High', unresolved_import: 'High', test_count_drop: 'High', assertion_count_drop: 'High', exported_signature: 'Medium', check_then_use: 'Medium' };
 const plain = (text) => String(text ?? '').replace(/[\u0000-\u001f\u007f`]/g, ' ').replace(/\s+/g, ' ').trim();
 const clip = (text) => plain(text).slice(0, MAX_TEXT_CHARS);
 
-/** The files a diff touches: before/after paths, status and the test-case lines it adds and removes. */
+/** The files a diff touches: before/after paths, status, the lines it adds and removes, and per hunk its new-side lines (added or context) with their line numbers. */
 export function parseDiffChanges(rawDiff) {
   const files = [];
   for (const part of String(rawDiff ?? '').split(/^(?=diff --git )/m)) {
     const head = /^diff --git a\/(.+?) b\/(.+)$/m.exec(part);
     if (!head) continue;
-    const file = { before: head[1], after: head[2], isNew: false, isDeleted: false, added: [], removed: [] };
+    const file = { before: head[1], after: head[2], isNew: false, isDeleted: false, added: [], removed: [], hunks: [] };
     let inHunk = false;
     for (const line of part.split('\n').slice(1)) {
-      if (line.startsWith('@@')) { inHunk = true; continue; }
+      if (line.startsWith('@@')) {
+        inHunk = true;
+        const at = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/.exec(line);
+        file.hunks.push({ next: at ? Number(at[1]) : null, context: at?.[2] ?? '', lines: [] });
+        continue;
+      }
       if (!inHunk) {
         if (line.startsWith('new file mode')) file.isNew = true;
         else if (line.startsWith('deleted file mode')) file.isDeleted = true;
@@ -39,8 +45,12 @@ export function parseDiffChanges(rawDiff) {
         else if (line.startsWith('rename to ')) file.after = line.slice('rename to '.length);
         continue;
       }
-      if (line.startsWith('+')) file.added.push(line.slice(1));
-      else if (line.startsWith('-')) file.removed.push(line.slice(1));
+      const hunk = file.hunks[file.hunks.length - 1];
+      if (line.startsWith('+')) {
+        file.added.push(line.slice(1));
+        hunk.lines.push({ text: line.slice(1), added: true, no: hunk.next === null ? null : hunk.next + hunk.lines.length });
+      } else if (line.startsWith('-')) file.removed.push(line.slice(1));
+      else if (line.startsWith(' ')) hunk.lines.push({ text: line.slice(1), added: false, no: hunk.next === null ? null : hunk.next + hunk.lines.length });
     }
     files.push(file);
   }
@@ -146,6 +156,29 @@ export function findAssertionCountDrops(rawDiff, { mentionText = '', readBase = 
       severity: SEVERITY.assertion_count_drop,
       reason: `${drops.length} kept test case${drops.length === 1 ? '' : 's'} lost assertions (${shown}${drops.length > 3 ? ', …' : ''})`,
     });
+  }
+  return findings;
+}
+
+/**
+ * Rule: no check-then-use on a path (TOCTOU, issue #341). Reads only the hunks of the diff (see check_then_use.mjs), so it
+ * runs in the `review` eval suite too. Added `.mjs` / `.js` / `.cjs` files that are not tests; the finding cites both lines.
+ * A pair is waived when the PR title or body names a function it stands in. No flow between functions, no alias.
+ * @returns {{ rule: string, path: string, severity: string, reason: string }[]}
+ */
+export function findCheckThenUseFindings(rawDiff, { mentionText = '' } = {}) {
+  const findings = [];
+  const files = parseDiffChanges(rawDiff).filter((f) => !f.isDeleted && isJsFile(f.after) && /\.(?:mjs|js|cjs)$/.test(f.after) && !isTestFile(f.after));
+  for (const f of files.slice(0, MAX_FILES)) {
+    const at = (n) => (n === null ? '' : ` (line ${n})`);
+    for (const p of findCheckThenUse(f.hunks, { mentionText })) {
+      findings.push({
+        rule: GUARDRAIL_RULES.CHECK_THEN_USE,
+        path: normalizeRepoPath(f.after),
+        severity: SEVERITY.check_then_use,
+        reason: `\`${p.check.fn}(${p.check.ident})\`${at(p.check.line)} is followed by \`${p.use.fn}(${p.use.ident})\`${at(p.use.line)} on the same path${p.scope ? ` in ${p.scope}` : ''}: the path can change between the two calls (TOCTOU)`,
+      });
+    }
   }
   return findings;
 }
@@ -305,6 +338,7 @@ const FIX_HINT = {
   exported_signature: 'Keep the contract, or name the function in the PR description if changing it is the request.',
   module_system: 'Keep the file’s module format.',
   unresolved_import: 'Add the file or the dependency, or drop the import.',
+  check_then_use: 'Open the file once and check the handle (`open` then `fh.stat()`), or name the function in the PR description if the check is intended.',
 };
 
 const bullet = (f) => `- [${f.severity}] Guardrail ${f.rule} — File: \`${plain(f.path)}\` Root cause: ${f.reason}. Fix: ${FIX_HINT[f.rule] ?? 'resolve it in this change.'}`;
@@ -316,6 +350,7 @@ const SAME_DEFECT = {
   exported_signature: /signature|arity|param|argument|export|remov|breaking|caller|contract/i,
   module_system: /require|import|esm|commonjs|module|\.mjs|\.cjs/i,
   unresolved_import: /import|resolve|depend|package|module|manifest/i,
+  check_then_use: /toctou|race|symlink|check|stat|time-of-check|swap/i,
 };
 
 /** Whether a High or Medium finding of the model, on the file, talks about the defect this guardrail finding reports. */

@@ -25,6 +25,7 @@ export const LESSONS = Object.freeze({
   'rule:mass_deletion': 'Make targeted edits: removing more than half of an existing file is rejected, so keep every line the task does not ask to remove.',
   'rule:test_count_drop': 'A test file keeps every existing test: only add cases, or change the one the task names; never turn a test into skip or todo.',
   'rule:assertion_count_drop': 'A kept test keeps every assertion: fix the code under test, never delete, comment out or weaken an assert to make it pass.',
+  'rule:check_then_use': 'Never check a path then use it (stat, lstat or access, then readFile, open or unlink on the same path): open the file once and call stat on the handle.',
   'axis:robustness': 'Reviews blocked patches for robustness: handle empty, null, boundary and failing inputs explicitly, and cover each with a test.',
   'axis:side_effects': 'Reviews blocked patches for side effects: before changing a function, check its callers and shared state, and touch nothing the task does not ask for.',
   'axis:types': 'Reviews blocked patches for type integrity: keep signatures, return shapes and coercions consistent with their callers and with the existing code.',
