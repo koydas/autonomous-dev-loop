@@ -445,11 +445,10 @@ describe('hasBlockedBySection', () => {
     assert.equal(hasBlockedBySection('## Not blocked by\n- x'), false);
   });
 
-  test('ignores a heading inside a fenced code block or an HTML comment', () => {
+  test('ignores a heading inside a fenced code block', () => {
     assert.equal(hasBlockedBySection('```md\n## Blocked by\n- x\n```'), false);
     assert.equal(hasBlockedBySection('~~~\n## Blocked by\n- x\n~~~'), false);
-    assert.equal(hasBlockedBySection('<!--\n## Blocked by\n- x\n-->'), false);
-    assert.equal(hasBlockedBySection('<!-- list here -->\n## Blocked by\n<!-- - placeholder -->'), false);
+    assert.equal(hasBlockedBySection('## Blocked by\n<!-- - placeholder -->'), false, 'a comment line is not a list item');
   });
 
   test('a fence closes only on a marker of the same kind', () => {
@@ -473,29 +472,17 @@ describe('hasBlockedBySection', () => {
     assert.equal(hasBlockedBySection('    ```\n## Blocked by\n- x'), true);
   });
 
-  test('an unclosed HTML comment hides the rest of the body', () => {
-    assert.equal(hasBlockedBySection('<!--\n## Blocked by\n- Pending approval'), false);
-    assert.equal(hasBlockedBySection('## Blocked by\n<!-- never closed\n- x'), false);
-  });
-
-  test('a comment opener inside a fence is code and cannot erase a later real section', () => {
-    assert.equal(hasBlockedBySection('```html\n<!--\n```\n## Blocked by\n- x\n<!-- note -->'), true);
+  test('HTML comments and inline code are not interpreted (documented limit, ADR-0067)', () => {
+    assert.equal(hasBlockedBySection('<!--\n## Blocked by\n- Pending approval'), true, 'a heading hidden in a comment counts as declared');
+    assert.equal(hasBlockedBySection('Render the literal `<!--` marker.\n## Blocked by\n- x'), true, 'inline code never hides the section');
+    assert.equal(hasBlockedBySection('```html\n<!--\n```\n## Blocked by\n- x\n<!-- note -->'), true, 'a comment opener in a fence is code');
+    assert.equal(hasBlockedBySection('## Blocked by <!-- note -->\n- x'), false, 'trailing text makes it another heading');
   });
 
   test('a comment opener or closer in an opening fence info string is not markup', () => {
     assert.equal(hasBlockedBySection('```html <!--\ncode\n```\n## Blocked by\n- x'), true);
     assert.equal(hasBlockedBySection('~~~ <!-- a\ncode\n~~~\n## Blocked by\n- x'), true);
     assert.equal(hasBlockedBySection('<!--\nhidden\n-->\n```html -->\n## Blocked by\n- x\n```'), false, 'the heading stays inside the fence');
-  });
-
-  test('a fence marker inside a comment is hidden and opens no fence', () => {
-    assert.equal(hasBlockedBySection('<!--\n```\n-->\n## Blocked by\n- x'), true);
-  });
-
-  test('a section resumes after a multi-line comment closes mid-line', () => {
-    assert.equal(hasBlockedBySection('<!-- a\nb --> ## not a heading\n## Blocked by\n- x'), true);
-    assert.equal(hasBlockedBySection('## Blocked by\n<!-- a\nb -->\n- x'), true);
-    assert.equal(hasBlockedBySection('## Blocked by <!-- note -->\n- x'), true);
   });
 
   test('is false for a missing or non-string body', () => {

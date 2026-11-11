@@ -27,36 +27,24 @@ export function isMeaningfulTitle(title) {
 }
 
 // ADR-0067: a `Blocked by` section is the author's declaration that an external precondition (a run,
-// an approval, a decision) is still to come. Recognised here, in code, never by the model: a
-// heading line `## Blocked by` or `### Blocked by` (case-insensitive) outside fenced code blocks
-// and HTML comments, followed before the next heading by at least one list item. The items are data.
+// an approval, a decision) is still to come. Recognised here, in code, never by the model: a heading
+// line `## Blocked by` or `### Blocked by` (case-insensitive) outside fenced code blocks, followed
+// before the next heading by at least one list item. The items are data. Deliberately line-based and
+// small: HTML comments and inline code are not interpreted, so a heading hidden in a comment counts as
+// declared. The worst outcome of any misreading is the BLOCKED label on an issue that stays invalid.
 export function hasBlockedBySection(issueBody) {
   if (typeof issueBody !== 'string') return false;
   let fence = null;
-  let inComment = false;
   let inSection = false;
-  for (let line of issueBody.split(/\r?\n/)) {
-    // HTML comments and fences are tracked in reading order: a comment opener inside a fence is code,
-    // a fence marker inside a comment is hidden, and an unclosed comment runs to the end of the body.
-    if (inComment) {
-      const close = line.indexOf('-->');
-      if (close === -1) continue;
-      inComment = false;
-      line = line.slice(close + 3);
-    }
+  for (const line of issueBody.split(/\r?\n/)) {
     // CommonMark: a closing fence carries nothing after the marker; a backtick opening fence has no
     // backtick in its info string (` ```a``` ` is inline code, not a fence).
+    const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
     if (fence) {
-      const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
       if (marker && marker[0] === fence[0] && marker.length >= fence.length && rest.trim() === '') fence = null;
       continue;
     }
-    // An opening fence is recognised first: its info string is not markup (```` ```html <!-- ````).
-    const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
     if (marker && !(marker[0] === '`' && rest.includes('`'))) { fence = marker; continue; }
-    line = line.replace(/<!--.*?-->/g, '');
-    const open = line.indexOf('<!--');
-    if (open !== -1) { inComment = true; line = line.slice(0, open); }
     if (/^ {0,3}#{1,6}[ \t]/.test(line)) {
       inSection = /^ {0,3}#{2,3}[ \t]+blocked by[ \t]*$/i.test(line);
       continue;
