@@ -457,6 +457,22 @@ describe('hasBlockedBySection', () => {
     assert.equal(hasBlockedBySection('```\ncode\n```\n## Blocked by\n- x'), true);
   });
 
+  test('a closing fence has nothing after the marker (CommonMark)', () => {
+    assert.equal(hasBlockedBySection('```md\n```example\n## Blocked by\n- x\n```'), false, 'a fence line with an info string does not close');
+    assert.equal(hasBlockedBySection('~~~\n~~~ not closing\n## Blocked by\n- x\n~~~'), false);
+    assert.equal(hasBlockedBySection('```\n```   \n## Blocked by\n- x'), true, 'trailing whitespace still closes');
+    assert.equal(hasBlockedBySection('````\n```\n## Blocked by\n- x\n````'), false, 'a shorter marker does not close a longer fence');
+  });
+
+  test('a backtick line with a backtick after the marker is inline code, not a fence', () => {
+    assert.equal(hasBlockedBySection('```inline``` text\n## Blocked by\n- x'), true);
+    assert.equal(hasBlockedBySection('~~~a`b\n## Blocked by\n- x\n~~~'), false, 'a tilde fence may carry a backtick in its info string');
+  });
+
+  test('an indented marker of four spaces is not a fence', () => {
+    assert.equal(hasBlockedBySection('    ```\n## Blocked by\n- x'), true);
+  });
+
   test('is false for a missing or non-string body', () => {
     for (const body of [undefined, null, '', 42, {}]) assert.equal(hasBlockedBySection(body), false);
   });

@@ -36,12 +36,14 @@ export function hasBlockedBySection(issueBody) {
   let fence = null;
   let inSection = false;
   for (const line of text.split(/\r?\n/)) {
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
+    // CommonMark: a closing fence carries nothing after the marker; a backtick opening fence has no
+    // backtick in its info string (` ```a``` ` is inline code, not a fence).
+    const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
     if (fence) {
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length && rest.trim() === '') fence = null;
       continue;
     }
-    if (marker) { fence = marker; continue; }
+    if (marker && !(marker[0] === '`' && rest.includes('`'))) { fence = marker; continue; }
     if (/^ {0,3}#{1,6}[ \t]/.test(line)) {
       inSection = /^ {0,3}#{2,3}[ \t]+blocked by[ \t]*$/i.test(line);
       continue;
