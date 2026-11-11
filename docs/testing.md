@@ -159,7 +159,7 @@ All AI prompts live in `prompts/` as `.md` files, one per prompt:
 | File | Used by | Notes |
 |------|---------|-------|
 | `validation-system.md` | `issue_validator.mjs` | Must exceed 4 000 chars for prompt caching |
-| `validation-user.md` | `issue_validator.mjs` | Placeholders: `{{issueTitle}}`, `{{issueBody}}` |
+| `validation-user.md` | `issue_validator.mjs` | Placeholders: `{{issueTitle}}`, `{{bodyFence}}`, `{{issueBody}}` |
 | `generation-system.md` | `generate_issue_change.mjs` | System instruction for code generation |
 | `generation-user.md` | `config.mjs` | Placeholders: `{{issueNumber}}`, `{{issueTitle}}`, `{{issueBody}}`, `{{fileContents}}` |
 | `pr-review-system.md` | `scripts/pr_review.mjs` | Reviewer persona, target-neutral core with `{{repository_kind}}` and `{{repository_rules_N}}` placeholders (ADR-0045) |
