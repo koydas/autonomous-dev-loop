@@ -141,7 +141,7 @@ test('manage_labels falls back to PATCH when label POST returns 422', async () =
     const patches = server.requests.filter(
       (r) => r.method === 'PATCH' && /\/repos\/[^/]+\/[^/]+\/labels\//.test(r.url),
     );
-    assert.equal(patches.length, 2, 'expected PATCH for both labels');
+    assert.equal(patches.length, 3, 'expected PATCH for the three issue labels');
   } finally {
     server.close();
   }
@@ -209,8 +209,53 @@ test('manage_labels logs issue_validation.labels_applied with the labels added a
     assert.equal(result.code, 0, result.stderr);
     const event = result.stderr.split('\n').filter((l) => l.includes('"issue_validation.labels_applied"')).map((l) => JSON.parse(l))[0];
     assert.ok(event, result.stderr);
-    assert.deepEqual(event.meta, { issueNumber: '1', added: ['needs-refinement'], removed: ['ready-for-dev'] });
+    assert.deepEqual(event.meta, { issueNumber: '1', added: ['needs-refinement'], removed: ['ready-for-dev', 'blocked'] });
   } finally {
     server.close();
+  }
+});
+
+// ADR-0067: `blocked` refines an invalid verdict into a third label; exactly one of the three is applied.
+const applied = (server) => server.requests
+  .filter((r) => r.method === 'POST' && /\/issues\/\d+\/labels$/.test(r.url)).flatMap((r) => JSON.parse(r.body).labels);
+const removed = (server) => server.requests
+  .filter((r) => r.method === 'DELETE').map((r) => decodeURIComponent(r.url.split('/labels/')[1])).sort();
+
+test('manage_labels IS_VALID=false IS_BLOCKED=true applies blocked and removes the two others', async () => {
+  const server = await startMockServer(makeHandler());
+  try {
+    const result = await runManageLabels(server.address().port, { IS_VALID: 'false', IS_BLOCKED: 'true' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(applied(server), [LABELS.issue.blocked.name]);
+    assert.deepEqual(removed(server), [LABELS.issue.invalid.name, LABELS.issue.valid.name].sort());
+    const event = result.stderr.split('\n').filter((l) => l.includes('"issue_validation.labels_applied"')).map((l) => JSON.parse(l))[0];
+    assert.deepEqual(event.meta, { issueNumber: '1', added: ['blocked'], removed: ['ready-for-dev', 'needs-refinement'] });
+  } finally {
+    server.close();
+  }
+});
+
+test('manage_labels never applies blocked to a valid issue, whatever IS_BLOCKED says', async () => {
+  const server = await startMockServer(makeHandler());
+  try {
+    const result = await runManageLabels(server.address().port, { IS_VALID: 'true', IS_BLOCKED: 'true' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(applied(server), [LABELS.issue.valid.name]);
+    assert.deepEqual(removed(server), [LABELS.issue.blocked.name, LABELS.issue.invalid.name].sort());
+  } finally {
+    server.close();
+  }
+});
+
+test('manage_labels keeps needs-refinement when IS_BLOCKED is absent, empty or not "true"', async () => {
+  for (const extra of [{}, { IS_BLOCKED: '' }, { IS_BLOCKED: 'false' }, { IS_BLOCKED: 'yes' }]) {
+    const server = await startMockServer(makeHandler());
+    try {
+      const result = await runManageLabels(server.address().port, { IS_VALID: 'false', ...extra });
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(applied(server), [LABELS.issue.invalid.name], JSON.stringify(extra));
+    } finally {
+      server.close();
+    }
   }
 });

@@ -65,6 +65,8 @@ export function stepDecision(run, step) {
     // validate_issue.mjs emits the same event at error level when validation throws (provider, parser): no verdict.
     if (e.level === 'error' || (e.meta.error != null && e.meta.score == null)) return { key: 'error', label: 'Validation error', tone: 'bad', reason: 'no verdict: the validation did not complete', url: null };
     const parts = [e.meta.score != null ? `score ${e.meta.score}` : null, e.meta.blockers_count != null ? `${e.meta.blockers_count} blocker(s)` : null].filter(Boolean);
+    // ADR-0067: a blocked issue waits on a declared precondition; the decision key stays `fail` (counts and item state unchanged).
+    if (e.meta.blocked === true) return { key: 'fail', label: 'Blocked', tone: 'warn', reason: ['waiting on a declared precondition', ...parts].join(', '), url: null };
     return { key: 'fail', label: 'Rejected', tone: 'warn', reason: parts.join(', ') || null, url: null };
   }
   if (step === 'code_gen') {

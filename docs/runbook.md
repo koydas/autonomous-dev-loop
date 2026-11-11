@@ -423,7 +423,8 @@ A later `models.yaml (…): unknown key` or `ADL_CONFIG_DIR … must be an absol
 | API key missing | Add `ANTHROPIC_API_KEY` or `GROQ_API_KEY` in **Settings → Secrets → Actions**, re-run workflow |
 | Label creation 403 | Ensure `GITHUB_TOKEN` or `AI_PR_TOKEN` has `issues: write`; re-run workflow |
 | Workflow never triggered | Check **Settings → Actions → General → Actions permissions**; confirm `issues` trigger in `validate-issue.yml` |
-| Manual label override needed | Apply `ready-for-dev` or `needs-refinement` directly from the issue Labels panel; `code-generation` will trigger on the next `labeled` event |
+| An issue is `blocked`, not `needs-refinement` | Its only blockers are B4 and its body has a `## Blocked by` section (ADR-0067). Resolve the precondition it lists (or delete the section if it is not one), then edit and save the issue: validation re-runs and the labels flip. A heading hidden in an HTML comment also counts as declared |
+| Manual label override needed | Apply `ready-for-dev`, `needs-refinement` or `blocked` directly from the issue Labels panel; `code-generation` will trigger on the next `labeled` event |
 | Run fails with `Groq response contained invalid JSON` or `Response missing "valid" boolean` (or `"score"`, `"blockers"`, `"warnings"`) | The model broke the validation answer contract (`parseGroqResponse`, `issue_validator.mjs`): one JSON object with `valid`, `score`, `blockers`, `warnings`. Whitespace around a key (`" warnings"`) is trimmed and accepted since #325; a missing or misspelled key, a wrong type, or prose inside the object still fails: the job exits 1 with an `issue_validation.fail` event (`meta.error` holds the message) and no label is applied. Re-run by editing the issue; recurring on one model: check `validation-system.md` still asks for that object and the stage's `max_tokens` (a cut answer is invalid JSON) |
 
 ### `code-generation`

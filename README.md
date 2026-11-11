@@ -47,6 +47,7 @@ The second table is what these static checks cannot catch. A type-check pass for
 graph LR
     A[Issue created] --> B[Validator]
     B -->|invalid| Z[needs-refinement — no PR]
+    B -->|invalid, B4 only, Blocked by section| Y[blocked — no PR]
     B -->|valid| C[label: ready-for-dev]
     C --> D[Code Generation]
     D --> E[PR opened / push]
@@ -62,7 +63,7 @@ graph LR
 ## Quick start
 
 1. Add `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`) in **Settings → Secrets and variables → Actions**. `AI_PR_TOKEN` is recommended for PR/label/review writes.
-2. Open an issue. The validator scores it and applies `ready-for-dev` or `needs-refinement`; labels are created automatically.
+2. Open an issue. The validator scores it and applies `ready-for-dev`, `needs-refinement`, or `blocked` (an issue that waits on a precondition declared under `## Blocked by`, ADR-0067); labels are created automatically.
 3. Watch the PR appear, get reviewed, and get fixed. Merge it yourself.
 
 Full setup, permissions, per-stage model keys and the end-to-end test: [docs/code-generation.md](docs/code-generation.md). Failure triage: [docs/runbook.md](docs/runbook.md).
