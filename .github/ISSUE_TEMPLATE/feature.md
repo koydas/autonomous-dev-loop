@@ -29,5 +29,5 @@ Describe what the feature does and the value it provides.
 ## ⚙️ Constraints
 Describe constraints (performance, compatibility, security).
 
-## ⛓️ Blocked by
+## Blocked by
 _Delete this section unless the work waits on something that does not exist yet (a published run, an approval, a decision). Then list each precondition as a bullet: the issue is labelled `blocked` instead of `needs-refinement` while its acceptance criteria depend on it (ADR-0067). Keep the heading out of HTML comments._
