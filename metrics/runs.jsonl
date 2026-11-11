@@ -310,3 +310,4 @@
 {"type":"issue","run_id":"43100307264-1","issue_number":334,"verdict":"MANUAL","score":85,"started_at":"2026-11-11T21:07:18.602Z","ended_at":"2026-11-11T21:07:28.779Z","duration_ms":10173,"input_tokens_est":4487,"output_tokens_est":655}
 {"type":"issue","run_id":"43100328007-1","issue_number":336,"verdict":"MANUAL","score":85,"started_at":"2026-11-11T21:07:25.894Z","ended_at":"2026-11-11T21:07:35.474Z","duration_ms":9576,"input_tokens_est":4485,"output_tokens_est":597}
 {"type":"issue","run_id":"43100554335-1","issue_number":332,"verdict":"MANUAL","score":85,"started_at":"2026-11-11T21:09:02.020Z","ended_at":"2026-11-11T21:09:13.293Z","duration_ms":11268,"input_tokens_est":5351,"output_tokens_est":565}
+{"type":"issue","run_id":"43100637406-1","issue_number":330,"verdict":"MANUAL","score":85,"started_at":"2026-11-11T21:09:43.441Z","ended_at":"2026-11-11T21:09:57.283Z","duration_ms":13838,"input_tokens_est":7260,"output_tokens_est":691}
