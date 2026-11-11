@@ -202,3 +202,16 @@ test('stageCosts: recorded stage, then adl.stage, then the run\'s only stage, el
   assert.ok(rows[0].usd > 0 && rows[2].usd === 0);
   assert.deepEqual(stageCosts([]), []);
 });
+
+// ADR-0067 follow-up (#352): blocked is a state of its own and still needs a person.
+test('overview counts a blocked issue under by_state.blocked and in needs_attention, apart from a rejected one', () => {
+  const validation = (id, n, t, meta) => run(id, { stage: 'issue_validation', outcome: 'failed', runOutcome: 'partial', t, pr: null, events: [{ event: 'issue_validation.fail', level: 'warn', meta }] });
+  const runs = [validation('1', 7, T, { score: 60, blockers_count: 1, blocked: true }), validation('2', 8, T, { score: 40, blockers_count: 2 })];
+  const traces = runs.map((r, i) => ({ trace_id: String(i), item: { kind: 'issue', number: 7 + i }, runs: [{ run: r }], lead_time_ms: 1000, running_ms: 500, waiting_ms: 500 }));
+  const o = computeOverview({ model: { runs, months: ['2026-10'] }, journeys: traces.map(workItemJourney) });
+  assert.equal(o.items.by_state.blocked, 1);
+  assert.equal(o.items.by_state.rejected, 1);
+  assert.equal(o.items.needs_attention, 2);
+  assert.match(DEFINITIONS.needs_attention.method, /blocked on a declared precondition/);
+  assert.equal(computeOverview({ model: { runs: [], months: [] }, journeys: [] }).items.by_state.blocked, 0, 'no blocked item: the key is present and 0');
+});

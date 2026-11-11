@@ -297,3 +297,25 @@ test('pipeline list: newest rows first with a limit, links under the given root;
  assert.match(info, /<dt>Total cost \(est\.\)<\/dt><dd>—<\/dd>/);
  assert.match(keyInformation({ runs: [] }, workItemJourney({ runs: [] }), { calls: 0 }), /No linked issue.*Not recorded.*<dt>Started<\/dt><dd>Not recorded/s);
 });
+
+// ADR-0067 follow-up (#352): a blocked item is its own state, listed right after the rejected one.
+test('a blocked and a rejected issue are two distinct states, chips and facets (blocked right after rejected)', async () => {
+ const { pipelineFacets } = await import('../lib/flow_dashboard.mjs');
+ const { workItemJourney } = await import('../lib/pipeline_journey.mjs');
+ const validation = (n, meta) => ({ trace_id: String(n).repeat(32), item: { kind: 'issue', number: n }, runs: [{ run: { run_id: `${n}-1`, workflow: 'validate', started_at: n, stages: [{ stage: 'issue_validation', outcome: 'failed' }], events: [{ stage: 'issue_validation', event: 'issue_validation.fail', level: 'warn', ts: n, meta }], llm: [], outcome: 'partial' } }], running_ms: 1, waiting_ms: 1, runs_overflow: 0 });
+ const traces = [validation(7, { score: 60, blockers_count: 1, blocked: true }), validation(8, { score: 40, blockers_count: 2 })];
+ const html = flowDashboard({ traces });
+ assert.match(html, /data-state="blocked attention"/);
+ assert.match(html, /data-state="rejected attention"/);
+ assert.match(html, /data-chip-value="rejected">Issue rejected by validation <span class="n">1</);
+ assert.match(html, /data-chip-value="blocked">Issue blocked on a declared precondition <span class="n">1</);
+ assert.ok(html.indexOf('data-chip-value="rejected"') < html.indexOf('data-chip-value="blocked"'), 'blocked is listed right after rejected');
+ assert.match(html, /<option value="blocked">Issue blocked on a declared precondition<\/option>/);
+ const facets = pipelineFacets(traces.map(workItemJourney));
+ assert.match(facets, /data-facet="state" value="blocked" checked>Issue blocked on a declared precondition<span class="n">1<\/span>/);
+ assert.match(facets, /data-facet="state" value="rejected" checked>Issue rejected by validation<span class="n">1<\/span>/);
+ assert.ok(facets.indexOf('value="rejected"') < facets.indexOf('value="blocked"'));
+ // Without a blocked item there is no blocked chip or facet: a state is listed only when an item is in it.
+ assert.doesNotMatch(flowDashboard({ traces: [traces[1]] }), /data-chip-value="blocked"/);
+ assert.doesNotMatch(pipelineFacets([workItemJourney(traces[1])]), /value="blocked"/);
+});

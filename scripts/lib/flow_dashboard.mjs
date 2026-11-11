@@ -92,7 +92,7 @@ export function pipelineRow(trace, root = '') {
 const ROW_HEAD = '<div class="pl-head" aria-hidden="true"><span>Work item</span><span>Status</span><span>Stages</span><span>Duration</span><span>Attempts</span><span>Cost (est.)</span><span>Updated</span><span></span></div>';
 
 const option = (v, l) => `<option value="${e(v)}">${e(l)}</option>`;
-const STATE_ORDER = ['failed', 'escalated', 'withheld', 'rejected', 'changes_requested', 'approved', 'in_progress', 'merged', 'closed', 'no_data'];
+const STATE_ORDER = ['failed', 'escalated', 'withheld', 'rejected', 'blocked', 'changes_requested', 'approved', 'in_progress', 'merged', 'closed', 'no_data'];
 
 /** Sidebar facets (status, stage, provider) with counts; every box checked shows everything. */
 export function pipelineFacets(journeys) {

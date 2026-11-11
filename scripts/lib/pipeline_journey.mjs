@@ -27,6 +27,9 @@ export const STATES = Object.freeze({
   escalated: { label: 'Escalated to a human', tone: 'warn', attention: true },
   withheld: { label: 'Approval withheld', tone: 'warn', attention: true },
   rejected: { label: 'Issue rejected by validation', tone: 'warn', attention: true },
+  // ADR-0067: the last validation waits on a precondition the author declared (a run, an approval, a decision). A person
+  // has to act outside the pipeline, so it needs attention like a rejection does.
+  blocked: { label: 'Issue blocked on a declared precondition', tone: 'warn', attention: true },
   changes_requested: { label: 'Changes requested', tone: 'warn', attention: false },
   approved: { label: 'Approved by review', tone: 'good', attention: false },
   in_progress: { label: 'No decision recorded yet', tone: 'neutral', attention: false },
@@ -65,8 +68,9 @@ export function stepDecision(run, step) {
     // validate_issue.mjs emits the same event at error level when validation throws (provider, parser): no verdict.
     if (e.level === 'error' || (e.meta.error != null && e.meta.score == null)) return { key: 'error', label: 'Validation error', tone: 'bad', reason: 'no verdict: the validation did not complete', url: null };
     const parts = [e.meta.score != null ? `score ${e.meta.score}` : null, e.meta.blockers_count != null ? `${e.meta.blockers_count} blocker(s)` : null].filter(Boolean);
-    // ADR-0067: a blocked issue waits on a declared precondition; the decision key stays `fail` (counts and item state unchanged).
-    if (e.meta.blocked === true) return { key: 'fail', label: 'Blocked', tone: 'warn', reason: ['waiting on a declared precondition', ...parts].join(', '), url: null };
+    // ADR-0067: a blocked issue waits on a declared precondition. The decision key stays `fail` (counts unchanged);
+    // `blocked: true` (only for the boolean `true`) is what makes the item state `blocked` instead of `rejected`.
+    if (e.meta.blocked === true) return { key: 'fail', label: 'Blocked', tone: 'warn', reason: ['waiting on a declared precondition', ...parts].join(', '), url: null, blocked: true };
     return { key: 'fail', label: 'Rejected', tone: 'warn', reason: parts.join(', ') || null, url: null };
   }
   if (step === 'code_gen') {
@@ -222,7 +226,7 @@ function itemState(steps, escalated, runs, closing) {
   if (closing) return closing.merged ? 'merged' : 'closed';
   // A rejection is the validation's decision even when its span is closed as failed (the run is partial).
   const validation = steps.find((s) => s.key === 'issue_validation');
-  if (validation.final?.decision?.key === 'fail' && steps.every((s) => s.key === 'issue_validation' || !s.attempts.length)) return 'rejected';
+  if (validation.final?.decision?.key === 'fail' && steps.every((s) => s.key === 'issue_validation' || !s.attempts.length)) return validation.final.decision.blocked === true ? 'blocked' : 'rejected';
   // A failed run fails the item only while nothing superseded it: it attempted no step, or it is the final
   // attempt of one (a later successful attempt of the same step is a recovery, not a failure).
   const finalRuns = new Set(steps.map((s) => s.final?.run_id).filter(Boolean));
