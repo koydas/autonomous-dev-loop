@@ -51,11 +51,12 @@ export function hasBlockedBySection(issueBody) {
       if (marker && marker[0] === fence[0] && marker.length >= fence.length && rest.trim() === '') fence = null;
       continue;
     }
+    // An opening fence is recognised first: its info string is not markup (```` ```html <!-- ````).
+    const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
+    if (marker && !(marker[0] === '`' && rest.includes('`'))) { fence = marker; continue; }
     line = line.replace(/<!--.*?-->/g, '');
     const open = line.indexOf('<!--');
     if (open !== -1) { inComment = true; line = line.slice(0, open); }
-    const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
-    if (marker && !(marker[0] === '`' && rest.includes('`'))) { fence = marker; continue; }
     if (/^ {0,3}#{1,6}[ \t]/.test(line)) {
       inSection = /^ {0,3}#{2,3}[ \t]+blocked by[ \t]*$/i.test(line);
       continue;

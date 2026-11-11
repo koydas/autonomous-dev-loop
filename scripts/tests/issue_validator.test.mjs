@@ -482,6 +482,12 @@ describe('hasBlockedBySection', () => {
     assert.equal(hasBlockedBySection('```html\n<!--\n```\n## Blocked by\n- x\n<!-- note -->'), true);
   });
 
+  test('a comment opener or closer in an opening fence info string is not markup', () => {
+    assert.equal(hasBlockedBySection('```html <!--\ncode\n```\n## Blocked by\n- x'), true);
+    assert.equal(hasBlockedBySection('~~~ <!-- a\ncode\n~~~\n## Blocked by\n- x'), true);
+    assert.equal(hasBlockedBySection('<!--\nhidden\n-->\n```html -->\n## Blocked by\n- x\n```'), false, 'the heading stays inside the fence');
+  });
+
   test('a fence marker inside a comment is hidden and opens no fence', () => {
     assert.equal(hasBlockedBySection('<!--\n```\n-->\n## Blocked by\n- x'), true);
   });
