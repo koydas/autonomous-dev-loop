@@ -31,7 +31,7 @@ Teams lose time on repetitive starter tasks (small fixes, doc updates, scaffoldi
 - Multi-model orchestration.
 
 ## Functional Requirements
-1. On `issues.opened` or `issues.edited`, the validation workflow runs and applies either `ready-for-dev` or `needs-refinement`.
+1. On `issues.opened` or `issues.edited`, the validation workflow runs and applies one of `ready-for-dev`, `needs-refinement` or `blocked` (ADR-0067; `blocked` never starts generation).
 2. On `issues.labeled`, the generation workflow runs only when the applied label is `ready-for-dev`.
 3. Workflow sends deterministic prompt template to AI.
 4. AI output is applied as a minimal patch (1–6 files, safe relative paths only).

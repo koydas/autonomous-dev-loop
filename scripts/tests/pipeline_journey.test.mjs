@@ -17,6 +17,10 @@ test('decisions per step: every recorded decision event, its tone and reason', (
   assert.deepEqual([d('issue_validation', [ev('issue_validation.pass')]).key, d('issue_validation', [ev('issue_validation.pass')]).tone], ['pass', 'good']);
   assert.deepEqual(d('issue_validation', [ev('issue_validation.fail', { score: 70, blockers_count: 3 })]), { key: 'fail', label: 'Rejected', tone: 'warn', reason: 'score 70, 3 blocker(s)', url: null });
   assert.equal(d('issue_validation', [ev('issue_validation.fail')]).reason, null);
+  // ADR-0067: a blocked issue reads Blocked; the decision key stays `fail`, so counts and the item state are unchanged.
+  assert.deepEqual(d('issue_validation', [ev('issue_validation.fail', { score: 60, blockers_count: 1, blocked: true })]), { key: 'fail', label: 'Blocked', tone: 'warn', reason: 'waiting on a declared precondition, score 60, 1 blocker(s)', url: null });
+  assert.equal(d('issue_validation', [ev('issue_validation.fail', { score: 60, blocked: false })]).label, 'Rejected');
+  assert.equal(d('issue_validation', [ev('issue_validation.fail', { blocked: true })]).reason, 'waiting on a declared precondition');
   assert.deepEqual(d('code_gen', [ev('code_gen.complete', { changes_count: 2 })]), { key: 'generated', label: 'Patch generated', tone: 'good', reason: '2 change(s)', url: null });
   assert.equal(d('code_gen', [ev('code_gen.complete')]).reason, null);
   assert.deepEqual(d('code_gen', [ev('code_gen.skipped', { reason: 'blocked', source: 'model' })]), { key: 'blocked', label: 'Blocked', tone: 'warn', reason: 'blocked, source model', url: null });

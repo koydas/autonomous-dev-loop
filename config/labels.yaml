@@ -10,6 +10,10 @@ issue:
     name: needs-refinement
     color: e4e669
     description: Issue requires clearer acceptance criteria before automation
+  blocked:
+    name: blocked
+    color: d4c5f9
+    description: Issue waits on a precondition declared under Blocked by; resolve it, then save the issue (ADR-0067)
 
 review:
   approved:

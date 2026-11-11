@@ -1,5 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   VALIDATION_SYSTEM_PROMPT,
   buildValidationUserPrompt,
@@ -588,5 +589,18 @@ describe('VALIDATION_SYSTEM_PROMPT — Blocked by', () => {
     assert.ok(VALIDATION_SYSTEM_PROMPT.includes('`Blocked by`'));
     assert.ok(VALIDATION_SYSTEM_PROMPT.includes('not acceptance criteria'));
     assert.ok(VALIDATION_SYSTEM_PROMPT.includes('does not relax B4'));
+  });
+});
+
+describe('issue template — Blocked by (ADR-0067)', () => {
+  const template = readFileSync(new URL('../../.github/ISSUE_TEMPLATE/feature.md', import.meta.url), 'utf8');
+
+  test('the shipped template declares nothing: its section has no list item', () => {
+    assert.ok(/^## Blocked by$/m.test(template), 'the heading is the plain form the parser accepts');
+    assert.equal(hasBlockedBySection(template), false);
+  });
+
+  test('a bullet added under the template heading is recognised', () => {
+    assert.equal(hasBlockedBySection(`${template}\n- a published run of the suite\n`), true);
   });
 });

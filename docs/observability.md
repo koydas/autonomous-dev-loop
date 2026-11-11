@@ -59,7 +59,7 @@ Every literal event name emitted under `scripts/` (tests excluded) must have a r
 | `issue_validation.pass`     | info   | ✓             | `score`, `issueNumber`, `warnings_count`        |
 | `issue_validation.fail`     | warn   | ✓             | `score`, `issueNumber`, `blockers_count`, `blocked` (ADR-0067: every blocker is a B4 and the body declares a `Blocked by` section) |
 | `issue_validation.comment_posted` | info | —           | `issueNumber`, `action` (`created` \| `updated`), `url` (comment `html_url`) — `upsert_issue_validation_comment.mjs` |
-| `issue_validation.labels_applied` | info | —           | `issueNumber`, `added`, `removed` — `manage_labels.mjs` |
+| `issue_validation.labels_applied` | info | —           | `issueNumber`, `added`, `removed` (the two labels of the issue trio that were not applied, ADR-0067) — `manage_labels.mjs` |
 
 > `fail` is `warn` for a rejected issue (expected business outcome) and `error` for an unexpected exception.
 > The comment and label steps run as separate processes in the same job: they attach to the same trace (`GITHUB_RUN_ID`) so their events join the validation run journal.

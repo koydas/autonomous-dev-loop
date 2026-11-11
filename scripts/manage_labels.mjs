@@ -15,7 +15,7 @@ process.on('unhandledRejection', (reason) => {
 createTracer({ runId: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`, traceDir: path.join(process.cwd(), 'observability', 'traces') });
 
 const issueLabels = loadLabelsConfig('issue');
-const LABELS = [issueLabels.valid, issueLabels.invalid];
+const LABELS = [issueLabels.valid, issueLabels.invalid, issueLabels.blocked];
 
 function getHeaders(token) {
   return {
@@ -80,6 +80,7 @@ async function main() {
   const issueNumber = requireEnv('ISSUE_NUMBER');
   const repo = requireEnv('GITHUB_REPOSITORY');
   const isValid = requireEnv('IS_VALID') === 'true';
+  const isBlocked = (process.env.IS_BLOCKED || '').trim() === 'true';
   const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
 
   if (!token) throw new Error('Missing GH_TOKEN or GITHUB_TOKEN');
@@ -92,13 +93,16 @@ async function main() {
     log('Label upserted', { label: label.name });
   }
 
-  const apply = isValid ? issueLabels.valid.name : issueLabels.invalid.name;
-  const remove = isValid ? issueLabels.invalid.name : issueLabels.valid.name;
+  // ADR-0067: exactly one of the three labels. `blocked` refines an invalid verdict and never applies to a valid
+  // one; a caller that does not export IS_BLOCKED keeps the two-label behaviour.
+  const target = isValid ? issueLabels.valid : isBlocked ? issueLabels.blocked : issueLabels.invalid;
+  const apply = target.name;
+  const remove = LABELS.filter((label) => label !== target).map((label) => label.name);
 
   await addLabel(owner, name, token, issueNumber, apply);
-  await removeLabel(owner, name, token, issueNumber, remove);
+  for (const labelName of remove) await removeLabel(owner, name, token, issueNumber, labelName);
   log('Labels applied', { issueNumber, added: apply, removed: remove });
-  obsLog({ stage: 'issue_validation', event: 'issue_validation.labels_applied', level: 'info', meta: { issueNumber, added: [apply], removed: [remove] } });
+  obsLog({ stage: 'issue_validation', event: 'issue_validation.labels_applied', level: 'info', meta: { issueNumber, added: [apply], removed: remove } });
 }
 
 main().catch((err) => {

@@ -181,6 +181,7 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           IS_VALID: ${{ steps.validate.outputs.valid }}
+          IS_BLOCKED: ${{ steps.validate.outputs.blocked }}
         run: node "$RUNNER_TEMP/pipeline/scripts/manage_labels.mjs"
 
       - name: Upload checkpoint artifact
