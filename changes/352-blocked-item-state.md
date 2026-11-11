@@ -1,0 +1,2 @@
+### Changed
+- Flow dashboards and KPIs show a work item whose last validation is blocked on a declared precondition (ADR-0067) as its own state, `blocked` ("Issue blocked on a declared precondition"), instead of `rejected`: new `STATES.blocked` (still needs a person), a chip and a facet listed right after `rejected`, `items.by_state.blocked` and a count in `needs_attention`. Only the boolean `meta.blocked: true` on the last `issue_validation.fail` makes it blocked; records without it read as before (#352).

@@ -18,9 +18,13 @@ test('decisions per step: every recorded decision event, its tone and reason', (
   assert.deepEqual(d('issue_validation', [ev('issue_validation.fail', { score: 70, blockers_count: 3 })]), { key: 'fail', label: 'Rejected', tone: 'warn', reason: 'score 70, 3 blocker(s)', url: null });
   assert.equal(d('issue_validation', [ev('issue_validation.fail')]).reason, null);
   // ADR-0067: a blocked issue reads Blocked; the decision key stays `fail`, so counts and the item state are unchanged.
-  assert.deepEqual(d('issue_validation', [ev('issue_validation.fail', { score: 60, blockers_count: 1, blocked: true })]), { key: 'fail', label: 'Blocked', tone: 'warn', reason: 'waiting on a declared precondition, score 60, 1 blocker(s)', url: null });
+  assert.deepEqual(d('issue_validation', [ev('issue_validation.fail', { score: 60, blockers_count: 1, blocked: true })]), { key: 'fail', label: 'Blocked', tone: 'warn', reason: 'waiting on a declared precondition, score 60, 1 blocker(s)', url: null, blocked: true });
   assert.equal(d('issue_validation', [ev('issue_validation.fail', { score: 60, blocked: false })]).label, 'Rejected');
   assert.equal(d('issue_validation', [ev('issue_validation.fail', { blocked: true })]).reason, 'waiting on a declared precondition');
+  // `blocked: true` on the decision only for the boolean true; the other decisions carry no such field.
+  for (const flag of [false, 'true', 1, null]) assert.equal('blocked' in d('issue_validation', [ev('issue_validation.fail', { blocked: flag })]), false, String(flag));
+  assert.equal(d('issue_validation', [ev('issue_validation.fail', { blocked: true })]).blocked, true);
+  assert.equal('blocked' in d('issue_validation', [ev('issue_validation.pass')]), false);
   assert.deepEqual(d('code_gen', [ev('code_gen.complete', { changes_count: 2 })]), { key: 'generated', label: 'Patch generated', tone: 'good', reason: '2 change(s)', url: null });
   assert.equal(d('code_gen', [ev('code_gen.complete')]).reason, null);
   assert.deepEqual(d('code_gen', [ev('code_gen.skipped', { reason: 'blocked', source: 'model' })]), { key: 'blocked', label: 'Blocked', tone: 'warn', reason: 'blocked, source model', url: null });
@@ -243,4 +247,28 @@ test('an attempt ends at its workflow-stage decision event: a late git push fail
   assert.equal(attemptOf(pr, 'pr_prepare').ended_at, 7);
   // A workflow event of another step does not move the end.
   assert.equal(attemptOf(pr, 'review').ended_at, 1);
+});
+
+// ADR-0067 follow-up (#352): a blocked validation is its own item state; the last validation decision wins.
+test('blocked state: only the boolean true, only while the last validation decision stands', () => {
+  const fail = (id, t, meta, level = 'warn') => run(id, 'issue_validation', 'failed', t, [{ event: 'issue_validation.fail', level, meta }]);
+  const state = (runs) => workItemJourney(trace(runs)).state;
+  assert.deepEqual(STATES.blocked, { label: 'Issue blocked on a declared precondition', tone: 'warn', attention: true });
+  assert.deepEqual(STATES.rejected, { label: 'Issue rejected by validation', tone: 'warn', attention: true });
+  const blocked = workItemJourney(trace([fail('1', 1, { score: 60, blockers_count: 1, blocked: true })]));
+  assert.equal(blocked.state, 'blocked');
+  assert.equal(blocked.attention, true);
+  // Absent, false and look-alike values are a rejection, as records written before ADR-0067.
+  for (const flag of [{}, { blocked: false }, { blocked: 'true' }, { blocked: 1 }, { blocked: null }]) {
+    assert.equal(state([fail('1', 1, { score: 60, blockers_count: 1, ...flag })]), 'rejected', JSON.stringify(flag));
+  }
+  // The last validation decision wins, in both directions.
+  assert.equal(state([fail('1', 1, { score: 60, blocked: true }), fail('2', 2, { score: 40 })]), 'rejected', 'a later rejection without the flag');
+  assert.equal(state([fail('1', 1, { score: 60, blocked: true }), fail('2', 2, { score: 40, blocked: false })]), 'rejected', 'a later rejection with blocked false');
+  assert.equal(state([fail('1', 1, { score: 40 }), fail('2', 2, { score: 60, blocked: true })]), 'blocked', 'a rejection later blocked');
+  assert.equal(state([fail('1', 1, { score: 60, blocked: true }), run('2', 'issue_validation', 'success', 2, [ev('issue_validation.pass')])]), 'in_progress', 'validated afterwards');
+  // A later step attempt means the item moved on: not blocked.
+  assert.notEqual(state([fail('1', 1, { score: 60, blocked: true }), verdictRun('2', 2, 'APPROVE')]), 'blocked');
+  // An error event is no verdict, whatever the flag says.
+  assert.equal(state([fail('1', 1, { error: 'x', blocked: true }, 'error')]), 'failed');
 });
