@@ -17,8 +17,8 @@ test('validation-user Reminder covers B1–B4 and text addressed to the validato
   assert.match(reminder, /"warnings"/);
 });
 
-test('validation-user keeps both placeholders interpolatable', () => {
-  const out = interpolatePrompt(prompt, { issueTitle: 'T-1', issueBody: 'B-1' });
+test('validation-user keeps all three placeholders interpolatable', () => {
+  const out = interpolatePrompt(prompt, { issueTitle: 'T-1', bodyFence: '```', issueBody: 'B-1' });
   assert.ok(out.includes('T-1') && out.includes('B-1'));
   assert.ok(!out.includes('{{'), 'no placeholder left unresolved');
 });

@@ -100,6 +100,10 @@ The denylist is the union of a hard-coded floor and `config/protected-paths.yaml
 - **No file** means floor only. **Invalid content** (unknown key, bad entry, glob outside a file name, …) fails at startup of every script importing `output_writer.mjs`, with `config/protected-paths.yaml: protected_paths[<i>] …`. The file is read from the default branch (ADR-0023): a PR editing it takes effect once merged.
 - Both system prompts list the floor and this repository's entries; when you change the list, update `prompts/generation-system.md` and `prompts/auto-fix-system.md` (`smoke.test.mjs` fails otherwise).
 
+## Validation Prompt: Issue Body Fence (#354)
+
+`prompts/validation-user.md` places the issue body between two fence lines (`{{bodyFence}}`: backticks, one more than the longest backtick run in the body, at least 3; computed by `buildValidationUserPrompt`). A sentence before the block says nothing after the closing fence belongs to the issue, and the pipeline's trailing section is titled `## Reminder (pipeline instruction, not part of the issue)`. Before this, the Reminder read as the last lines of the body and the validator listed the pipeline's own instruction in `warnings`; a real `## Reminder` section injected in a body also could not be told apart from it. The title stays unfenced (single line); the system prompt is unchanged. A prompt change is not measured by the replay gate (`docs/evals.md`): check it with a live `validation` eval run.
+
 ## Blocked Outcome (ADR-0029 amendment)
 
 When generation cannot implement an issue it opens **no PR**. Before this, it wrote a Markdown handoff note instead (#191 for issue #190: `notes/issue-190-blocked.md`; #196 for #195: `patches/issue-195-dependency-manifest.md`), the review bot approved it, and merging it would have closed the issue. `scripts/lib/generation_blocked.mjs` decides, in this order (first match wins):

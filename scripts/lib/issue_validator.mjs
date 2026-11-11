@@ -7,6 +7,7 @@
  */
 
 import { loadPrompt, interpolatePrompt } from './prompts.mjs';
+import { fenceFor } from './review_evidence.mjs';
 
 // ---------------------------------------------------------------------------
 // System prompt  (stable — never changes between requests)
@@ -66,9 +67,11 @@ export function isBlocked(result, issueBody) {
 
 export function buildValidationUserPrompt(issueTitle, issueBody) {
   const template = loadPrompt('validation-user');
+  const body = issueBody || '(no body provided)';
   return interpolatePrompt(template, {
     issueTitle,
-    issueBody: issueBody || '(no body provided)',
+    bodyFence: fenceFor(body),
+    issueBody: body,
   });
 }
 
