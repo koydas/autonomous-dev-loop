@@ -1,7 +1,7 @@
 # ADR-0067: An issue waiting on a declared external precondition is BLOCKED, not INVALID
 
 - **Date:** 2026-11-11
-- **Status:** Proposed
+- **Status:** Accepted
 
 ## Context
 
@@ -52,4 +52,4 @@ Separate PRs, each with its own tests and docs (AGENTS.md → Review Hygiene):
 2. `issue_validator.mjs` (`isBlocked`, comment format), `validate_issue.mjs` output, prompt clause, dataset cases, `run_record` allowlist, unit tests.
 3. `labels.yaml`, `manage_labels.mjs`, workflow wiring and interface, issue template, `pipeline_journey`, `docs/code-generation.md`, `docs/runbook.md`.
 
-The ADR moves to `Accepted` with PR 2, once the owner has decided it.
+The owner accepted the ADR with PR 2.
