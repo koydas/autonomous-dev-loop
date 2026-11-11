@@ -473,6 +473,25 @@ describe('hasBlockedBySection', () => {
     assert.equal(hasBlockedBySection('    ```\n## Blocked by\n- x'), true);
   });
 
+  test('an unclosed HTML comment hides the rest of the body', () => {
+    assert.equal(hasBlockedBySection('<!--\n## Blocked by\n- Pending approval'), false);
+    assert.equal(hasBlockedBySection('## Blocked by\n<!-- never closed\n- x'), false);
+  });
+
+  test('a comment opener inside a fence is code and cannot erase a later real section', () => {
+    assert.equal(hasBlockedBySection('```html\n<!--\n```\n## Blocked by\n- x\n<!-- note -->'), true);
+  });
+
+  test('a fence marker inside a comment is hidden and opens no fence', () => {
+    assert.equal(hasBlockedBySection('<!--\n```\n-->\n## Blocked by\n- x'), true);
+  });
+
+  test('a section resumes after a multi-line comment closes mid-line', () => {
+    assert.equal(hasBlockedBySection('<!-- a\nb --> ## not a heading\n## Blocked by\n- x'), true);
+    assert.equal(hasBlockedBySection('## Blocked by\n<!-- a\nb -->\n- x'), true);
+    assert.equal(hasBlockedBySection('## Blocked by <!-- note -->\n- x'), true);
+  });
+
   test('is false for a missing or non-string body', () => {
     for (const body of [undefined, null, '', 42, {}]) assert.equal(hasBlockedBySection(body), false);
   });

@@ -32,17 +32,29 @@ export function isMeaningfulTitle(title) {
 // and HTML comments, followed before the next heading by at least one list item. The items are data.
 export function hasBlockedBySection(issueBody) {
   if (typeof issueBody !== 'string') return false;
-  const text = issueBody.replace(/<!--[\s\S]*?-->/g, '');
   let fence = null;
+  let inComment = false;
   let inSection = false;
-  for (const line of text.split(/\r?\n/)) {
+  for (let line of issueBody.split(/\r?\n/)) {
+    // HTML comments and fences are tracked in reading order: a comment opener inside a fence is code,
+    // a fence marker inside a comment is hidden, and an unclosed comment runs to the end of the body.
+    if (inComment) {
+      const close = line.indexOf('-->');
+      if (close === -1) continue;
+      inComment = false;
+      line = line.slice(close + 3);
+    }
     // CommonMark: a closing fence carries nothing after the marker; a backtick opening fence has no
     // backtick in its info string (` ```a``` ` is inline code, not a fence).
-    const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
     if (fence) {
+      const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
       if (marker && marker[0] === fence[0] && marker.length >= fence.length && rest.trim() === '') fence = null;
       continue;
     }
+    line = line.replace(/<!--.*?-->/g, '');
+    const open = line.indexOf('<!--');
+    if (open !== -1) { inComment = true; line = line.slice(0, open); }
+    const [, marker, rest] = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/) ?? [];
     if (marker && !(marker[0] === '`' && rest.includes('`'))) { fence = marker; continue; }
     if (/^ {0,3}#{1,6}[ \t]/.test(line)) {
       inSection = /^ {0,3}#{2,3}[ \t]+blocked by[ \t]*$/i.test(line);
