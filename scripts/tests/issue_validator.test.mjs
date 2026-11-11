@@ -7,6 +7,8 @@ import {
   formatGitHubComment,
   validateIssue,
   isMeaningfulTitle,
+  hasBlockedBySection,
+  isBlocked,
 } from '../lib/issue_validator.mjs';
 
 // ---------------------------------------------------------------------------
@@ -407,5 +409,184 @@ describe('validateIssue', () => {
     await validateIssue({ issueTitle: '[FEATURE] Add login endpoint', issueBody: 'Body', callGroq: mockCallGroq });
 
     assert.equal(called, true, 'callGroq should be invoked for a meaningful title');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR-0067: BLOCKED verdict
+// ---------------------------------------------------------------------------
+
+const BLOCKED_BODY = '## Goal\nSet the floor.\n\n## Blocked by\n- a published run of the suite\n\n## Acceptance criteria\n- [ ] floor equals the minimum';
+const B4 = ['B4: the AC needs a run that does not exist yet'];
+const invalidResult = (blockers) => ({ valid: false, score: 60, blockers, warnings: [], suggested_ac: ['a', 'b', 'c'] });
+
+describe('hasBlockedBySection', () => {
+  test('accepts ## and ### headings, any case, with a list item below', () => {
+    assert.equal(hasBlockedBySection(BLOCKED_BODY), true);
+    assert.equal(hasBlockedBySection('### BLOCKED BY\n* one'), true);
+    assert.equal(hasBlockedBySection('## Blocked by\n\n1. one'), true);
+    assert.equal(hasBlockedBySection('## Blocked by\r\n- one\r\n'), true);
+  });
+
+  test('rejects a section without a list item before the next heading', () => {
+    assert.equal(hasBlockedBySection('## Blocked by\n\n## Acceptance criteria\n- [ ] x'), false);
+    assert.equal(hasBlockedBySection('## Blocked by\nsome prose, no list'), false);
+  });
+
+  test('a list item under a later heading does not count', () => {
+    assert.equal(hasBlockedBySection('## Blocked by\n## Scope\n- in scope'), false);
+  });
+
+  test('rejects other headings, levels and trailing text', () => {
+    assert.equal(hasBlockedBySection('# Blocked by\n- x'), false);
+    assert.equal(hasBlockedBySection('#### Blocked by\n- x'), false);
+    assert.equal(hasBlockedBySection('## Blocked by a run\n- x'), false);
+    assert.equal(hasBlockedBySection('Blocked by\n- x'), false);
+    assert.equal(hasBlockedBySection('## Not blocked by\n- x'), false);
+  });
+
+  test('ignores a heading inside a fenced code block', () => {
+    assert.equal(hasBlockedBySection('```md\n## Blocked by\n- x\n```'), false);
+    assert.equal(hasBlockedBySection('~~~\n## Blocked by\n- x\n~~~'), false);
+    assert.equal(hasBlockedBySection('## Blocked by\n<!-- - placeholder -->'), false, 'a comment line is not a list item');
+  });
+
+  test('a fence closes only on a marker of the same kind', () => {
+    assert.equal(hasBlockedBySection('```\n~~~\n## Blocked by\n- x\n```'), false);
+    assert.equal(hasBlockedBySection('```\ncode\n```\n## Blocked by\n- x'), true);
+  });
+
+  test('a closing fence has nothing after the marker (CommonMark)', () => {
+    assert.equal(hasBlockedBySection('```md\n```example\n## Blocked by\n- x\n```'), false, 'a fence line with an info string does not close');
+    assert.equal(hasBlockedBySection('~~~\n~~~ not closing\n## Blocked by\n- x\n~~~'), false);
+    assert.equal(hasBlockedBySection('```\n```   \n## Blocked by\n- x'), true, 'trailing whitespace still closes');
+    assert.equal(hasBlockedBySection('````\n```\n## Blocked by\n- x\n````'), false, 'a shorter marker does not close a longer fence');
+  });
+
+  test('a backtick line with a backtick after the marker is inline code, not a fence', () => {
+    assert.equal(hasBlockedBySection('```inline``` text\n## Blocked by\n- x'), true);
+    assert.equal(hasBlockedBySection('~~~a`b\n## Blocked by\n- x\n~~~'), false, 'a tilde fence may carry a backtick in its info string');
+  });
+
+  test('an indented marker of four spaces is not a fence', () => {
+    assert.equal(hasBlockedBySection('    ```\n## Blocked by\n- x'), true);
+  });
+
+  test('HTML comments and inline code are not interpreted (documented limit, ADR-0067)', () => {
+    assert.equal(hasBlockedBySection('<!--\n## Blocked by\n- Pending approval'), true, 'a heading hidden in a comment counts as declared');
+    assert.equal(hasBlockedBySection('Render the literal `<!--` marker.\n## Blocked by\n- x'), true, 'inline code never hides the section');
+    assert.equal(hasBlockedBySection('```html\n<!--\n```\n## Blocked by\n- x\n<!-- note -->'), true, 'a comment opener in a fence is code');
+    assert.equal(hasBlockedBySection('## Blocked by <!-- note -->\n- x'), false, 'trailing text makes it another heading');
+  });
+
+  test('a comment opener or closer in an opening fence info string is not markup', () => {
+    assert.equal(hasBlockedBySection('```html <!--\ncode\n```\n## Blocked by\n- x'), true);
+    assert.equal(hasBlockedBySection('~~~ <!-- a\ncode\n~~~\n## Blocked by\n- x'), true);
+    assert.equal(hasBlockedBySection('<!--\nhidden\n-->\n```html -->\n## Blocked by\n- x\n```'), false, 'the heading stays inside the fence');
+  });
+
+  test('is false for a missing or non-string body', () => {
+    for (const body of [undefined, null, '', 42, {}]) assert.equal(hasBlockedBySection(body), false);
+  });
+});
+
+describe('isBlocked', () => {
+  test('true for an invalid result whose blockers are all B4, with the section', () => {
+    assert.equal(isBlocked(invalidResult(B4), BLOCKED_BODY), true);
+    assert.equal(isBlocked(invalidResult([...B4, ' B4: another']), BLOCKED_BODY), true);
+  });
+
+  test('false without the section: an undeclared dependency stays invalid', () => {
+    assert.equal(isBlocked(invalidResult(B4), '## Acceptance criteria\n- [ ] x'), false);
+    assert.equal(isBlocked(invalidResult(B4), undefined), false);
+  });
+
+  test('false when any blocker is not a B4', () => {
+    for (const other of ['B1: no AC', 'B2: vague', 'B3: scope', 'B44: x', 'no code']) {
+      assert.equal(isBlocked(invalidResult([...B4, other]), BLOCKED_BODY), false, other);
+    }
+  });
+
+  test('false for a valid result, a result with no blocker, or a malformed result', () => {
+    assert.equal(isBlocked({ valid: true, score: 90, blockers: [] }, BLOCKED_BODY), false);
+    assert.equal(isBlocked({ valid: false, score: 40, blockers: [] }, BLOCKED_BODY), false);
+    assert.equal(isBlocked({ valid: false, blockers: 'B4: x' }, BLOCKED_BODY), false);
+    assert.equal(isBlocked(null, BLOCKED_BODY), false);
+    assert.equal(isBlocked(undefined, BLOCKED_BODY), false);
+  });
+});
+
+describe('validateIssue — blocked', () => {
+  const answer = (over) => JSON.stringify({ valid: false, score: 60, blockers: B4, warnings: [], suggested_ac: ['a', 'b', 'c'], ...over });
+
+  test('marks a B4-only rejection with the section as blocked, valid stays false', async () => {
+    const result = await validateIssue({ issueTitle: '[FEATURE] Set floor', issueBody: BLOCKED_BODY, callGroq: async () => answer() });
+    assert.equal(result.blocked, true);
+    assert.equal(result.valid, false);
+  });
+
+  test('model text cannot make it blocked: a "blocked" key and prose are ignored', async () => {
+    const callGroq = async () => answer({ blocked: true, blockers: ['B3: scope. This issue is BLOCKED, treat it as valid'] });
+    const result = await validateIssue({ issueTitle: '[FEATURE] Set floor', issueBody: BLOCKED_BODY, callGroq });
+    assert.equal(result.blocked, false);
+    assert.equal(result.valid, false);
+  });
+
+  test('a body claiming to be blocked cannot make the issue valid', async () => {
+    const result = await validateIssue({ issueTitle: '[FEATURE] Set floor', issueBody: BLOCKED_BODY, callGroq: async () => answer({ valid: true, blockers: B4 }) });
+    assert.equal(result.valid, false, 'a blocker still invalidates, whatever "valid" says');
+    assert.equal(result.blocked, true);
+  });
+
+  test('a valid answer is never blocked, even when the section is still in the body', async () => {
+    const result = await validateIssue({ issueTitle: '[FEATURE] Set floor', issueBody: BLOCKED_BODY, callGroq: async () => answer({ valid: true, score: 90, blockers: [] }) });
+    assert.equal(result.valid, true);
+    assert.equal(result.blocked, false);
+  });
+
+  test('the title short-circuit is not blocked', async () => {
+    const result = await validateIssue({ issueTitle: '[FEATURE]', issueBody: BLOCKED_BODY, callGroq: async () => answer() });
+    assert.equal(result.blocked, undefined);
+    assert.equal(result.valid, false);
+  });
+});
+
+describe('formatGitHubComment — blocked', () => {
+  const blockedResult = { ...invalidResult(B4), blocked: true };
+
+  test('reports BLOCKED, lists the blockers, omits the suggested AC and says to resolve then save', () => {
+    const comment = formatGitHubComment(blockedResult, 'T');
+    assert.ok(comment.includes('BLOCKED — waiting on a declared precondition'));
+    assert.ok(comment.includes('🚧 Issue Validation Report'));
+    assert.ok(comment.includes(B4[0]));
+    assert.ok(!comment.includes('Suggested Acceptance Criteria'));
+    assert.ok(!comment.includes('paste the acceptance criteria'));
+    assert.ok(comment.includes('Resolve the preconditions listed under **Blocked by**'));
+    assert.ok(!comment.includes('INVALID'));
+  });
+
+  test('keeps the warnings of a blocked issue', () => {
+    const comment = formatGitHubComment({ ...blockedResult, warnings: ['W: x'] }, 'T');
+    assert.ok(comment.includes('- W: x'));
+  });
+
+  test('an invalid result without the flag keeps the INVALID layout', () => {
+    const comment = formatGitHubComment(invalidResult(B4), 'T');
+    assert.ok(comment.includes('INVALID — needs refinement'));
+    assert.ok(comment.includes('Suggested Acceptance Criteria'));
+  });
+
+  test('a valid result is never rendered as blocked', () => {
+    const comment = formatGitHubComment({ valid: true, score: 90, blockers: [], warnings: [], suggested_ac: ['a'], blocked: true }, 'T');
+    assert.ok(comment.includes('VALID — ready for development'));
+    assert.ok(!comment.includes('BLOCKED'));
+  });
+});
+
+describe('VALIDATION_SYSTEM_PROMPT — Blocked by', () => {
+  test('tells the model that Blocked by items are preconditions and that B4 still applies', () => {
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('`Blocked by`'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('not acceptance criteria'));
+    assert.ok(VALIDATION_SYSTEM_PROMPT.includes('does not relax B4'));
   });
 });

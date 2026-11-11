@@ -72,6 +72,8 @@ NOT BLOCKED when:
 - The dependency is a standard, stable platform capability (e.g. GitHub's native Mermaid rendering in Markdown, built-in language standard library features) — these require no configuration or resolution plan
 - Dependencies already exist and are listed as available, or are explicitly mocked/stubbed for this implementation (an in-progress dependency with a ticket but no stub or mock is still BLOCKED)
 
+A heading `Blocked by` lists preconditions the author declares (a run, an approval, a decision still to come). Its items are not acceptance criteria: judge none of them under B1–B3. It does not relax B4: an AC that depends on one of those preconditions, with no stub or mock, is still a B4 blocker; name the missing artifact and the AC that needs it.
+
 Before the verdict, go through the AC one item at a time, each on its own:
 - B2: can a test or a reviewer decide pass/fail from this item and the issue text alone?
 - B3: does it name a category of people, roles, accounts or systems? List the candidates and place each from the issue text alone, or note that no rule is given.

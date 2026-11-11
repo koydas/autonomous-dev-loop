@@ -32,7 +32,7 @@ const PROVIDER_ERR = ['error_type', 'status'];
 export const EVENT_META_ALLOWLIST = Object.freeze({
   'issue_validation.start': [...ID, 'model'],
   'issue_validation.pass': [...ID, 'score', 'warnings_count'],
-  'issue_validation.fail': [...ID, ...ERR, 'score', 'blockers_count'],
+  'issue_validation.fail': [...ID, ...ERR, 'score', 'blockers_count', 'blocked'],
   'issue_validation.comment_posted': [...ID, 'action', 'url'],
   'issue_validation.labels_applied': [...ID, 'added', 'removed'],
   'code_gen.start': [...ID, 'model'],

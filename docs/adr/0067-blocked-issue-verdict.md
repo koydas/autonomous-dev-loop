@@ -1,7 +1,7 @@
 # ADR-0067: An issue waiting on a declared external precondition is BLOCKED, not INVALID
 
 - **Date:** 2026-11-11
-- **Status:** Proposed
+- **Status:** Accepted
 
 ## Context
 
@@ -17,7 +17,7 @@ Not measured: how often B4 is the only blocker across all validated issues. Deci
    - `result.valid === false`;
    - `result.blockers` is non-empty and **every** blocker starts with `B4:`;
    - the issue body contains a `Blocked by` section (Decision 2).
-2. **The `Blocked by` section is recognised by the parser, not by the model.** A heading line `## Blocked by` or `### Blocked by` (case-insensitive, outside fenced code blocks), followed before the next heading by at least one list item. The items are data: the code does not read, fetch or interpret what they reference.
+2. **The `Blocked by` section is recognised by the parser, not by the model.** A heading line `## Blocked by` or `### Blocked by` (case-insensitive, outside fenced code blocks), followed before the next heading by at least one list item. The items are data: the code does not read, fetch or interpret what they reference. The scan is line-based and deliberately small: HTML comments and inline code are not interpreted, so a heading hidden in a comment counts as declared. The worst outcome of a misreading is the `blocked` label on an issue that stays invalid; a more faithful Markdown parser was rejected after four review rounds of edge cases for no gain in safety.
 3. **`blocked` never makes an issue valid.** `valid` stays `false`. Every consumer of `valid` (code-generation trigger, checkpoint, metrics) behaves as today. The change can only move an `INVALID` issue to a different label and comment; it cannot start the pipeline.
 4. **Labels and comment.** A new label `issue.blocked` (`blocked`) in `config/labels.yaml`. `manage_labels.mjs` applies exactly one of `ready-for-dev`, `needs-refinement`, `blocked` and removes the other two. The comment status reads `BLOCKED — waiting on a declared precondition`; it lists the B4 blockers, omits the "suggested acceptance criteria" block and the paste-and-save instruction, and says: resolve the precondition, then save the issue.
 5. **Anything else stays `INVALID`.** A B4 without a `Blocked by` section is an undeclared dependency, which is what B4 targets. A B4 next to a B1–B3 blocker is a spec that still has to be fixed. A score below 70 with no blocker is unchanged.
@@ -52,4 +52,4 @@ Separate PRs, each with its own tests and docs (AGENTS.md → Review Hygiene):
 2. `issue_validator.mjs` (`isBlocked`, comment format), `validate_issue.mjs` output, prompt clause, dataset cases, `run_record` allowlist, unit tests.
 3. `labels.yaml`, `manage_labels.mjs`, workflow wiring and interface, issue template, `pipeline_journey`, `docs/code-generation.md`, `docs/runbook.md`.
 
-The ADR moves to `Accepted` with PR 2, once the owner has decided it.
+The owner accepted the ADR with PR 2.

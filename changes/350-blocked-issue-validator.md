@@ -1,0 +1,2 @@
+### Added
+- Issue validation derives a `BLOCKED` outcome in code (ADR-0067): an invalid verdict whose blockers are all B4 and whose body has a `Blocked by` section is reported as waiting on a declared precondition, without suggested acceptance criteria. `validate_issue.mjs` exports a `blocked` step output and `issue_validation.fail` carries `meta.blocked`. `valid` is unchanged, so code generation never starts from a blocked issue; the dedicated label is a later step.

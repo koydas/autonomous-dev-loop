@@ -59,7 +59,7 @@ async function main() {
     obsLog({ stage: 'issue_validation', event: 'issue_validation.pass', level: 'info', duration_ms, meta: { score: result.score, issueNumber, warnings_count: (result.warnings ?? []).length } });
     tracer.endSpan('issue_validation', { outcome: 'success', meta: { score: result.score, valid: true } });
   } else {
-    obsLog({ stage: 'issue_validation', event: 'issue_validation.fail', level: 'warn', duration_ms, meta: { score: result.score, issueNumber, blockers_count: (result.blockers ?? []).length } });
+    obsLog({ stage: 'issue_validation', event: 'issue_validation.fail', level: 'warn', duration_ms, meta: { score: result.score, issueNumber, blockers_count: (result.blockers ?? []).length, blocked: result.blocked === true } });
     tracer.endSpan('issue_validation', { outcome: 'failed', meta: { score: result.score, valid: false } });
   }
 
@@ -67,8 +67,8 @@ async function main() {
 
   if (process.env.GITHUB_OUTPUT) {
     // The comment embeds model text: random heredoc delimiter, written before valid/score (F04).
-    appendOutputs([['comment', comment], ['valid', result.valid], ['score', result.score]]);
-    log('Exported workflow outputs: valid, score, comment');
+    appendOutputs([['comment', comment], ['valid', result.valid], ['score', result.score], ['blocked', result.blocked === true]]);
+    log('Exported workflow outputs: valid, score, blocked, comment');
   }
 
   const cpRunId = process.env.CHECKPOINT_RUN_ID ?? `issue-${issueNumber}`;
