@@ -368,7 +368,8 @@ test('validate_issue.mjs: a blocker carrying a forged EOF/valid=true sequence ca
     assert.equal(result.code, 0, `expected exit 0, stderr: ${result.stderr}`);
     const output = await fs.readFile(outputFile, 'utf8');
     const outputs = parseGithubOutput(output);
-    assert.deepEqual(Object.keys(outputs).sort(), ['comment', 'score', 'valid']);
+    assert.deepEqual(Object.keys(outputs).sort(), ['blocked', 'comment', 'score', 'valid']);
+    assert.equal(outputs.blocked, 'false');
     assert.equal(outputs.valid, 'false');
     assert.equal(outputs.score, '20');
     assert.ok(outputs.comment.includes(`- ${forgedBlocker}`), `forged text must stay verbatim in the comment:\n${outputs.comment}`);

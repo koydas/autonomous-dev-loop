@@ -26,6 +26,41 @@ export function isMeaningfulTitle(title) {
   return withoutPrefix.length > 0;
 }
 
+// ADR-0067: a `Blocked by` section is the author's declaration that an external precondition (a run,
+// an approval, a decision) is still to come. Recognised here, in code, never by the model: a
+// heading line `## Blocked by` or `### Blocked by` (case-insensitive) outside fenced code blocks
+// and HTML comments, followed before the next heading by at least one list item. The items are data.
+export function hasBlockedBySection(issueBody) {
+  if (typeof issueBody !== 'string') return false;
+  const text = issueBody.replace(/<!--[\s\S]*?-->/g, '');
+  let fence = null;
+  let inSection = false;
+  for (const line of text.split(/\r?\n/)) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
+    if (fence) {
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = null;
+      continue;
+    }
+    if (marker) { fence = marker; continue; }
+    if (/^ {0,3}#{1,6}[ \t]/.test(line)) {
+      inSection = /^ {0,3}#{2,3}[ \t]+blocked by[ \t]*$/i.test(line);
+      continue;
+    }
+    if (inSection && /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\S/.test(line)) return true;
+  }
+  return false;
+}
+
+// ADR-0067: blocked = invalid, every blocker is a B4 (undocumented dependency), and the body declares
+// its precondition under `Blocked by`. Derived from the parsed result, never from a model assertion;
+// it only relabels an INVALID issue — `valid` stays false, so nothing downstream of it changes.
+export function isBlocked(result, issueBody) {
+  if (!result || result.valid !== false) return false;
+  if (!Array.isArray(result.blockers) || result.blockers.length === 0) return false;
+  if (!result.blockers.every((b) => /^\s*B4:/.test(String(b)))) return false;
+  return hasBlockedBySection(issueBody);
+}
+
 export function buildValidationUserPrompt(issueTitle, issueBody) {
   const template = loadPrompt('validation-user');
   return interpolatePrompt(template, {
@@ -75,8 +110,11 @@ export function parseGroqResponse(rawText) {
 }
 
 export function formatGitHubComment(result, issueTitle) {
-  const statusEmoji = result.valid ? '✅' : '🚫';
-  const statusText = result.valid ? 'VALID — ready for development' : 'INVALID — needs refinement';
+  const blocked = result.blocked === true && !result.valid;
+  const statusEmoji = result.valid ? '✅' : blocked ? '🚧' : '🚫';
+  const statusText = result.valid
+    ? 'VALID — ready for development'
+    : blocked ? 'BLOCKED — waiting on a declared precondition' : 'INVALID — needs refinement';
   const filledBars = Math.round(result.score / 10);
   const scoreBar = '█'.repeat(filledBars) + '░'.repeat(10 - filledBars);
 
@@ -93,7 +131,11 @@ export function formatGitHubComment(result, issueTitle) {
   if (result.blockers.length > 0) {
     lines.push('### 🚫 Blockers');
     lines.push('');
-    lines.push('The following issues **must** be resolved before this issue can proceed:');
+    lines.push(
+      blocked
+        ? 'These depend on the preconditions declared under **Blocked by**; no rewording of the issue clears them:'
+        : 'The following issues **must** be resolved before this issue can proceed:',
+    );
     lines.push('');
     result.blockers.forEach((b) => lines.push(`- ${b}`));
     lines.push('');
@@ -106,20 +148,29 @@ export function formatGitHubComment(result, issueTitle) {
     lines.push('');
   }
 
-  lines.push('### 💡 Suggested Acceptance Criteria');
-  lines.push('');
-  lines.push(
-    'Copy the block below and paste it into the issue description, then save. ' +
-    'Saving will re-trigger validation automatically.',
-  );
-  lines.push('');
-  lines.push('```markdown');
-  lines.push('## Acceptance Criteria');
-  lines.push('');
-  result.suggested_ac.forEach((ac) => lines.push(`- [ ] ${ac}`));
-  lines.push('```');
+  if (!blocked) {
+    lines.push('### 💡 Suggested Acceptance Criteria');
+    lines.push('');
+    lines.push(
+      'Copy the block below and paste it into the issue description, then save. ' +
+      'Saving will re-trigger validation automatically.',
+    );
+    lines.push('');
+    lines.push('```markdown');
+    lines.push('## Acceptance Criteria');
+    lines.push('');
+    result.suggested_ac.forEach((ac) => lines.push(`- [ ] ${ac}`));
+    lines.push('```');
+  }
 
-  if (!result.valid) {
+  if (blocked) {
+    lines.push('---');
+    lines.push('');
+    lines.push(
+      '> **Next step:** Resolve the preconditions listed under **Blocked by**, then edit this issue ' +
+      'and click **Save**. This re-runs validation; once nothing is missing the issue becomes valid.',
+    );
+  } else if (!result.valid) {
     lines.push('');
     lines.push('---');
     lines.push('');
@@ -149,5 +200,6 @@ export async function validateIssue({ issueTitle, issueBody, callGroq }) {
   }
   const prompt = buildValidationUserPrompt(issueTitle, issueBody);
   const rawResponse = await callGroq({ prompt });
-  return parseGroqResponse(rawResponse);
+  const parsed = parseGroqResponse(rawResponse);
+  return { ...parsed, blocked: isBlocked(parsed, issueBody) };
 }

@@ -847,3 +847,12 @@ test('review.verdict publishes unaddressed_docs and unaddressed_docs_generic (#3
   assert.deepEqual(record.events[0].meta, { prNumber: 5, verdict: 'APPROVE', unaddressed_docs: 2, unaddressed_docs_generic: 1 });
   assert.ok(!JSON.stringify(record).match(/pricing|applyDiscount|two arguments/));
 });
+
+test('issue_validation.fail publishes the blocked flag and no issue text (ADR-0067)', () => {
+  const record = redactTrace(trace({
+    events: [ev('issue_validation.fail', { issueNumber: 7, score: 60, blockers_count: 1, blocked: true, issueTitle: PROMPT_BODY, blockers: [PROMPT_BODY] })],
+  }), { env: ENV });
+  assert.deepEqual(record.events[0].meta, { issueNumber: 7, score: 60, blockers_count: 1, blocked: true });
+  assert.ok(!JSON.stringify(record).includes('marker-7f3a'));
+  assert.ok(EVENT_META_ALLOWLIST['issue_validation.fail'].includes('blocked'));
+});

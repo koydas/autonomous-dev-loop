@@ -49,6 +49,8 @@ The validation workflow creates and manages these labels automatically:
 - `ready-for-dev` — applied when issue quality is sufficient; triggers PR generation.
 - `needs-refinement` — applied when the issue requires clearer acceptance criteria.
 
+An issue that waits on a declared external precondition is reported as **BLOCKED** (ADR-0067, Proposed). The validator marks it from code, never from the model: the verdict is invalid, every blocker is a `B4:`, and the body has a `## Blocked by` (or `###`) heading with at least one list item below it, outside code fences and HTML comments. The comment then says `BLOCKED — waiting on a declared precondition`, lists the blockers, and leaves out the suggested acceptance criteria; saving the issue re-runs the validation, and once no B4 is raised the issue is valid and the section is ignored. `valid` stays `false`, so code generation never starts from a blocked issue. `validate_issue.mjs` exports a `blocked` step output and `issue_validation.fail` carries `meta.blocked`. The dedicated `blocked` label is a separate step: until then a blocked issue still gets `needs-refinement`.
+
 The PR review workflow creates and manages these labels automatically:
 
 - `review-approved` — applied when the automated code review verdict is APPROVED.
