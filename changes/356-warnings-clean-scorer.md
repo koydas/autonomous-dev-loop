@@ -1,0 +1,2 @@
+### Added
+- The `validation` eval suite scores spurious `warnings`: a case may list `expected.warnings_absent` (lowercase substrings) and the new `warnings_clean` scorer gives 1 when no output warning contains one of them and 0 otherwise (also 0 when the output has no `warnings` array; not scored for cases that list none). One case reproduces the "Reminder" warning of #354. No threshold yet: it follows from a live baseline.

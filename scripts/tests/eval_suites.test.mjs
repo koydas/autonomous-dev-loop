@@ -178,6 +178,48 @@ test('blocker_match scores the Jaccard overlap of expected and returned blocker 
   assert.equal(blocker_match({ blockers: [] }, { blockers: [] }), 1);
 });
 
+test('warnings_clean scores 0 when an output warning holds a listed substring, 1 when none does, null when not opted in', () => {
+  const { warnings_clean } = validationSuite.scorers;
+  const exp = { valid: true, warnings_absent: ['reminder'] };
+  assert.equal(warnings_clean(exp, { warnings: [] }), 1);
+  assert.equal(warnings_clean(exp, { warnings: ['The body has no tests'] }), 1);
+  assert.equal(warnings_clean(exp, { warnings: ['ok', 'A "Reminder" block is addressed to the validator'] }), 0);
+  assert.equal(warnings_clean(exp, { warnings: ['REMINDER section'] }), 0);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: ['Reminder'] }, { warnings: ['reminder'] }), 0);
+  assert.equal(warnings_clean({ valid: true }, { warnings: ['Reminder'] }), null);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: [] }, { warnings: ['Reminder'] }), null);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: 'reminder' }, { warnings: ['Reminder'] }), null);
+});
+
+test('warnings_clean never scores clean without a warnings array, and ignores unusable list and warning items', () => {
+  const { warnings_clean } = validationSuite.scorers;
+  const exp = { warnings_absent: ['reminder'] };
+  assert.equal(warnings_clean(exp, null), 0);
+  assert.equal(warnings_clean(exp, undefined), 0);
+  assert.equal(warnings_clean(exp, {}), 0);
+  assert.equal(warnings_clean(exp, { warnings: 'Reminder' }), 0);
+  assert.equal(warnings_clean(exp, { warnings: null }), 0);
+  assert.equal(warnings_clean({ warnings_absent: ['', 3, null] }, { warnings: ['anything'] }), null);
+  assert.equal(warnings_clean({ warnings_absent: ['', 'reminder'] }, { warnings: ['anything'] }), 1);
+  assert.equal(warnings_clean(exp, { warnings: [null, 42, { text: 'Reminder' }] }), 1);
+});
+
+test('validation dataset: warnings_absent is a lowercase string list, only on valid cases, and the #354 case is present', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  const withList = cases.filter((c) => c.expected.warnings_absent !== undefined);
+  assert.ok(withList.length >= 1);
+  for (const c of withList) {
+    const list = c.expected.warnings_absent;
+    assert.ok(Array.isArray(list) && list.length > 0 && list.every((t) => typeof t === 'string' && t !== '' && t === t.toLowerCase()), `${c.id}: warnings_absent`);
+    assert.equal(c.expected.valid, true, `${c.id}: warnings_absent on a case that may fairly raise warnings`);
+    assert.equal(typeof c.source, 'string', `${c.id}: source`);
+  }
+  const incident = cases.find((c) => c.id === 'valid-no-validator-text-no-warning');
+  assert.equal(incident.source, 'PR #355');
+  assert.deepEqual(incident.expected.warnings_absent, ['reminder']);
+  assert.ok(!/reminder/i.test(incident.input.body), 'the body must contain no Reminder text');
+});
+
 test('validation system prompt asks for the blocker code prefix that blocker_match reads', () => {
   assert.match(VALIDATION_SYSTEM_PROMPT, /prefixed with the code of the rule it breaks: "B1: …", "B2: …", "B3: …" or "B4: …"/);
 });

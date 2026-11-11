@@ -81,6 +81,19 @@ export const validationSuite = {
       if (union.size === 0) return 1;
       return [...want].filter((c) => got.has(c)).length / union.size;
     },
+    // A spurious warning (e.g. the pipeline's own trailer read as issue text): 1 when no `output.warnings`
+    // entry contains any expected.warnings_absent substring (case-insensitive), 0 otherwise. Opt-in per
+    // case (null when it lists no usable substring: empty and non-string items are ignored). An output
+    // without a `warnings` array cannot show the case is clean, so it scores 0. Not gated yet.
+    warnings_clean: (expected, output) => {
+      const banned = Array.isArray(expected.warnings_absent)
+        ? expected.warnings_absent.filter((s) => typeof s === 'string' && s !== '').map((s) => s.toLowerCase())
+        : [];
+      if (banned.length === 0) return null;
+      if (!Array.isArray(output?.warnings)) return 0;
+      const hit = output.warnings.some((w) => typeof w === 'string' && banned.some((s) => w.toLowerCase().includes(s)));
+      return hit ? 0 : 1;
+    },
     // Prompt contract: 3–5 suggested AC whenever the LLM was consulted.
     suggested_ac_count: (expected, output, { calls }) => {
       if (calls.length === 0) return null;

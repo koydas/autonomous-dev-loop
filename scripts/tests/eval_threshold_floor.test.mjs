@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const FLOOR = {
   validation: {
-    cases: 43,
+    cases: 44,
     thresholds: {
       'scores.verdict_match.mean': { min: 0.8 },
       'per_class.invalid.recall': { min: 0.8 },
@@ -94,6 +94,8 @@ const PINNED = {
     "valid-b2-pair-ranked": ["valid", "312f51f2e184"],
     "invalid-b3-pair-audit-admins": ["invalid", "b3bf35502ec9"],
     "valid-b3-pair-audit-org-admin": ["valid", "1f10de3e5f6f"],
+    // Issue #356: advisory for `warnings_clean` until a published run holds it; its verdict is gated like any case.
+    "valid-no-validator-text-no-warning": ["valid", "45ba45161d63"],
     // ADR-0067: preconditions declared under `Blocked by`; the B4 verdict is the model's, `blocked` is derived in code.
     "invalid-b4-blocked-by-benchmark-runs": ["invalid", "d5f97a7194b8"],
     "invalid-b4-blocked-by-maintainer-approval": ["invalid", "a761a80545f2"],
