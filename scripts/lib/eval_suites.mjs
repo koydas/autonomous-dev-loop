@@ -81,6 +81,18 @@ export const validationSuite = {
       if (union.size === 0) return 1;
       return [...want].filter((c) => got.has(c)).length / union.size;
     },
+    // No spurious warning (#356): 0 when an entry of output.warnings contains a substring the case lists in
+    // expected.warnings_absent (case-insensitive), 1 otherwise. Applies only to cases that list one; an errored
+    // run (no output) is not scored (error_rate counts it), and an output whose warnings is not an array scores 0:
+    // a shape that cannot be read is never clean. Not gated yet.
+    warnings_clean: (expected, output) => {
+      const absent = (Array.isArray(expected.warnings_absent) ? expected.warnings_absent : [])
+        .filter((s) => typeof s === 'string' && s !== '').map((s) => s.toLowerCase());
+      if (absent.length === 0 || output == null) return null;
+      if (!Array.isArray(output.warnings)) return 0;
+      const hit = output.warnings.some((w) => absent.some((s) => String(w).toLowerCase().includes(s)));
+      return hit ? 0 : 1;
+    },
     // Prompt contract: 3–5 suggested AC whenever the LLM was consulted.
     suggested_ac_count: (expected, output, { calls }) => {
       if (calls.length === 0) return null;
