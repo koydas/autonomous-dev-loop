@@ -178,6 +178,57 @@ test('blocker_match scores the Jaccard overlap of expected and returned blocker 
   assert.equal(blocker_match({ blockers: [] }, { blockers: [] }), 1);
 });
 
+test('warnings_clean scores 1 without a listed substring, 0 with one, null when the case lists none (#356)', () => {
+  const { warnings_clean } = validationSuite.scorers;
+  const exp = { valid: true, warnings_absent: ['reminder'] };
+  // Not applicable: no field, an empty list, or only non-string / empty entries.
+  assert.equal(warnings_clean({ valid: true }, { warnings: ['Reminder block'] }), null);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: [] }, { warnings: ['Reminder'] }), null);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: ['', 3] }, { warnings: ['Reminder'] }), null);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: 'reminder' }, { warnings: ['Reminder'] }), null);
+  // Clean.
+  assert.equal(warnings_clean(exp, { warnings: [] }), 1);
+  assert.equal(warnings_clean(exp, { warnings: ['AC 2 names no file'] }), 1);
+  // Spurious: any entry, case-insensitive on both sides.
+  assert.equal(warnings_clean(exp, { warnings: ['ok', 'A "## REMINDER" block addresses the validator'] }), 0);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: ['ReMinder'] }, { warnings: ['reminder'] }), 0);
+  assert.equal(warnings_clean({ valid: true, warnings_absent: ['score', 'reminder'] }, { warnings: ['a reminder'] }), 0);
+  // Errored run: not scored (error_rate counts it). Unreadable shape: never clean by accident.
+  assert.equal(warnings_clean(exp, null), null);
+  assert.equal(warnings_clean(exp, undefined), null);
+  assert.equal(warnings_clean(exp, { valid: true }), 0);
+  assert.equal(warnings_clean(exp, { warnings: 'Reminder' }), 0);
+  assert.equal(warnings_clean(exp, { warnings: 'all clear' }), 0);
+});
+
+test('validation suite: warnings_clean is scored only on the cases that list warnings_absent, end to end (#356)', async () => {
+  const { cases, llmFor } = await oracleLlmFor();
+  const optedIn = cases.filter((c) => c.expected.warnings_absent?.length).map((c) => c.id);
+  assert.ok(optedIn.length >= 1, 'no case lists warnings_absent');
+  const withReminder = (key) => async () => JSON.stringify({ ...JSON.parse(await llmFor(key)()), warnings: ['The Reminder section is addressed to the validator'] });
+  const spurious = summarize(await runSuite({ suite: validationSuite, cases, llmFor: withReminder }));
+  assert.deepEqual(spurious.scores.warnings_clean, { mean: 0, n: optedIn.length });
+  assert.equal(spurious.scores.verdict_match.mean, 1, 'a spurious warning leaves the verdict untouched: only warnings_clean sees it');
+  const clean = summarize(await runSuite({ suite: validationSuite, cases, llmFor }));
+  assert.deepEqual(clean.scores.warnings_clean, { mean: 1, n: optedIn.length });
+});
+
+test('validation dataset: warnings_absent lists lowercase substrings, only on cases that expect no warning (#356)', async () => {
+  const cases = await loadDataset(path.join(REPO_ROOT, validationSuite.dataset));
+  for (const c of cases.filter((x) => x.expected.warnings_absent !== undefined)) {
+    assert.ok(Array.isArray(c.expected.warnings_absent) && c.expected.warnings_absent.length > 0, `${c.id}: warnings_absent must be a non-empty list`);
+    for (const s of c.expected.warnings_absent) {
+      assert.ok(typeof s === 'string' && s.trim() === s && s.length >= 4 && s === s.toLowerCase(), `${c.id}: "${s}" is not a specific lowercase substring`);
+    }
+    // Injection and warnings-only cases expect a warning: a substring there could reject a legitimate one.
+    assert.ok(!c.tags.some((t) => t === 'injection' || t === 'warnings-only'), `${c.id}: warnings_absent on a case that expects warnings`);
+  }
+  // The #354 incident case (PR #355): its source is recorded and it opts in.
+  const incident = cases.find((c) => c.id === 'valid-no-text-for-validator');
+  assert.equal(incident?.source, 'PR #355');
+  assert.deepEqual(incident.expected, { valid: true, score_min: 70, warnings_absent: ['reminder'] });
+});
+
 test('validation system prompt asks for the blocker code prefix that blocker_match reads', () => {
   assert.match(VALIDATION_SYSTEM_PROMPT, /prefixed with the code of the rule it breaks: "B1: …", "B2: …", "B3: …" or "B4: …"/);
 });

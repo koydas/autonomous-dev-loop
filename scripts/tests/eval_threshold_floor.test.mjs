@@ -99,6 +99,8 @@ const PINNED = {
     "invalid-b4-blocked-by-maintainer-approval": ["invalid", "a761a80545f2"],
     "valid-blocked-by-already-met": ["valid", "c4d810220124"],
     "invalid-b2-with-blocked-by-section": ["invalid", "8fc648d15f68"],
+    // #356: the #354 incident (PR #355), scored by warnings_clean; its verdict is gated like any other case.
+    "valid-no-text-for-validator": ["valid", "4f8fd28ae26a"],
   },
   review: {
     "bug-off-by-one-chunk": ["request_changes", "c993d360ae21"],
